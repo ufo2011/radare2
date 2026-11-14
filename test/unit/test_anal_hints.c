@@ -23,6 +23,7 @@ const RAnalHint empty_hint = {
 	.high = 0,
 	.nword = 0,
 	.stackframe = UT64_MAX,
+	.enum_name = NULL,
 };
 
 bool hint_equals(const RAnalHint *a, const RAnalHint *b) {
@@ -47,6 +48,7 @@ bool hint_equals(const RAnalHint *a, const RAnalHint *b) {
 	CHECK_STREQ (syntax);
 	CHECK_STREQ (esil);
 	CHECK_STREQ (offset);
+	CHECK_STREQ (enum_name);
 #undef CHECK_STREQ
 	return true;
 }
@@ -58,7 +60,7 @@ bool hint_equals(const RAnalHint *a, const RAnalHint *b) {
 		mu_assert ("hint", hint_equals (actual, expected)); \
 } while (0)
 
-bool test_r_anal_addr_hints() {
+bool test_r_anal_addr_hints(void) {
 	RAnal *anal = r_anal_new ();
 	RAnalHint *hint = r_anal_hint_get (anal, 0x1337);
 	assert_hint_eq (hint, &empty_hint);
@@ -104,6 +106,10 @@ bool test_r_anal_addr_hints() {
 
 	r_anal_hint_set_immbase (anal, 0x1337, 7);
 	cur.immbase = 7;
+	CHECK
+
+	r_anal_hint_set_enum (anal, 0x1337, "MyEnum");
+	cur.enum_name = "MyEnum";
 	CHECK
 
 	r_anal_hint_set_size (anal, 0x1337, 0x123);
@@ -172,6 +178,10 @@ bool test_r_anal_addr_hints() {
 	cur.immbase = 0;
 	CHECK
 
+	r_anal_hint_unset_enum (anal, 0x1337);
+	cur.enum_name = NULL;
+	CHECK
+
 	r_anal_hint_unset_size (anal, 0x1337);
 	cur.size = 0;
 	CHECK
@@ -217,7 +227,7 @@ bool test_r_anal_addr_hints() {
 }
 
 #define RANGED_TEST(name, val, resetval, assert_val) \
-bool test_r_anal_hints_##name() { \
+bool test_r_anal_hints_##name(void) { \
 	RAnal *anal = r_anal_new (); \
 	\
 	ut64 hint_addr = 0xdead; \
@@ -330,16 +340,16 @@ bool test_r_anal_hints_##name() { \
 	mu_end; \
 }
 
-RANGED_TEST(arch, "6502", NULL, mu_assert_nullable_streq)
-RANGED_TEST(bits, 16, 0, mu_assert_eq)
+RANGED_TEST (arch, "6502", NULL, mu_assert_nullable_streq)
+RANGED_TEST (bits, 16, 0, mu_assert_eq)
 
-bool all_tests() {
-	mu_run_test(test_r_anal_addr_hints);
-	mu_run_test(test_r_anal_hints_arch);
-	mu_run_test(test_r_anal_hints_bits);
+bool all_tests(void) {
+	mu_run_test (test_r_anal_addr_hints);
+	mu_run_test (test_r_anal_hints_arch);
+	mu_run_test (test_r_anal_hints_bits);
 	return tests_passed != tests_run;
 }
 
 int main(int argc, char **argv) {
-	return all_tests();
+	return all_tests ();
 }

@@ -1,0 +1,182 @@
+NAME=aeg keeps the source of an op without a dedicated dfg handler
+FILE=--
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aeg r0,r2,F+,r1,=~generative
+EOF
+EXPECT=<<EOF
+         | generative:r0,r2,F+ |        |
+                | generative:result_8,r1,= |
+EOF
+RUN
+
+NAME=aeg fused multiply add keeps all three sources
+FILE=--
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aeg d3,d2,d1,F*+,d0,=~generative
+EOF
+EXPECT=<<EOF
+                                 | generative:d3,d2,d1,F*+ |       |
+                                          | generative:result_11,d0,= |
+EOF
+RUN
+
+NAME=aeg float op keeps both sources
+FILE=malloc://64
+ARGS=-w -a arm -b 64
+CMDS=<<EOF
+wx 2028621e
+aeg~generative
+EOF
+EXPECT=<<EOF
+             | generative:d2,d1,F+ |                           |                           | generative:0,v0h,= |
+                             | generative:result_8,d0,= |
+EOF
+RUN
+
+NAME=aeg 16 byte memory write
+FILE=--
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aeg xmm0,rdi,=[16]~generative,mem_var
+EOF
+EXPECT=<<EOF
+          | generative:xmm0,rdi,=[16] |
+         | [16]@<rdi:var_5>:mem_var_8 |
+EOF
+RUN
+
+NAME=aeg vector memory write keeps both register chunks
+FILE=malloc://64
+ARGS=-w -a x86 -b 64
+CMDS=<<EOF
+wx 0f1107
+aeg~generative,mem_var
+EOF
+EXPECT=<<EOF
+                                | generative:0,rdi,+ |                    |    | generative:8,rdi,+ |    |
+                                        | generative:xmm0[0],result_8,=[8] |    | generative:xmm0[1],result_19,=[8] |
+                                            | [8]@<result_8>:mem_var_14 |          | [8]@<result_19>:mem_var_25 |
+EOF
+RUN
+
+NAME=aegf resolves indexed registers and overlapping vector aliases
+FILE=--
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aegf xmm1[1],xmm0[1],= xmm0[1]
+aegf xmm1[1],xmm0[1],= xmm0
+aegf 1,xmm0[0],=,2,xmm0[1],= xmm0[0]
+aegf 1,xmm0[0],=,2,xmm0[1],= xmm0[1]
+aegf 1,xmm0[0],=,2,xmm0[1],= xmm0
+aegf 1,ymm0[3],=,2,zmm0[3],= ymm0[3]
+EOF
+EXPECT=<<EOF
+xmm1[1],xmm0[1],=
+xmm1[1],xmm0[1],=
+1,xmm0[0],=
+2,xmm0[1],=
+1,xmm0[0],=,2,xmm0[1],=
+2,zmm0[3],=
+EOF
+RUN
+
+NAME=aegf resolves indexed vbank registers and fixed aliases
+FILE=--
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aegf z1[1],z0[1],= q0h
+aegf z1[1],q0h,= z0[1]
+EOF
+EXPECT=<<EOF
+z1[1],z0[1],=
+z1[1],q0h,=
+EOF
+RUN
+
+NAME=aeg 3 byte memory read
+FILE=--
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+aeg eax,[3],ebx,=~generative,mem_var
+EOF
+EXPECT=<<EOF
+| generative:eax,[3] |         |
+       | generative:result_5,ebx,= |
+EOF
+RUN
+
+NAME=aeg resolves vbank registers created on lookup
+FILE=--
+ARGS=-a wasm -b 32
+CMDS=<<EOF
+aeg l5,!,l0,=~l5
+aeg l5,[4],l0,=~l5
+EOF
+EXPECT=<<EOF
+    | l5                 |    | l0                 |
+    | l5:var_3           |    | l0:var_8           |
+| generative:l5,!    |         |
+    | l5                 |    | l0                 |
+    | l5:var_3           |    | l0:var_8           |
+| generative:l5,[4]  |         |
+EOF
+RUN
+
+NAME=aeg resolves register aliases and rejects unknown tokens
+FILE=--
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+aeg foo,++~ok
+aeg foo,!~ok
+aeg foo,DUP,+~ok
+aeg foo,[4]~ok
+aeg 1,foo,=[4]~ok
+aeg foo,$c~ok
+?e ok
+aeg PC,1,+,eax,=~eip
+aeg PC,!,eax,=~eip
+aeg PC,[4],eax,=~eip
+aeg eax,PC,=[4]~eip
+aeg 1,PC,=~eip
+aeg 1.5,1,+,eax,=~eax
+aegf 1,PC,= eip
+aegf PC,1,+,ebx,= ebx
+aegf 1,eip,= eip
+EOF
+EXPECT=<<EOF
+ok
+| 1                  |    | eip                |    | eax                |
+| 1:const_3          |    | eip:var_6          |    | eax:var_11         |
+    | eip                |    | eax                |
+    | eip:var_3          |    | eax:var_8          |
+    | eip                |    | eax                |
+    | eip:var_3          |    | eax:var_8          |
+| eax                |    | eip                |
+| eax:var_2          |    | eip:var_5          |
+          | [4]@<eip:var_5>:mem_var_8 |
+| 1                  |    | eip                |
+| 1:const_2          |    | eip:var_5          |
+    | 1                  |    | eax                |
+    | 1:const_3          |    | eax:var_8          |
+       | generative:result_5,eax,= |
+          | eax:var_11         |
+1,PC,=
+PC,1,+,ebx,=
+1,eip,=
+EOF
+RUN
+
+NAME=aegf finds big endian sub-byte registers written in the graph
+FILE=--
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+aegf 1,ca,= ca
+aegf 1,so,= so
+EOF
+EXPECT=<<EOF
+1,ca,=
+1,so,=
+EOF
+RUN

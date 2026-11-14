@@ -1,0 +1,72 @@
+# https://github.com/marketplace/actions/run-on-architecture
+name: qemu
+
+on:
+  push:
+    tags:
+      - 5.*
+
+jobs:
+  linux-arm64:
+    runs-on: ubuntu-22.04
+    name: Build on qemu-arm64
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: uraimo/run-on-arch-action@fa1f3e7de95534497266c7265950b5188355fbfb # v3.2.1
+      name: Run commands
+      with:
+        arch: aarch64
+        distro: ubuntu22.04
+        run: |
+          uname -a
+          apt update ; apt install --assume-yes gcc make git patch zip xz-utils
+          sys/debian.sh
+          make -C dist/debian
+    - name: Pub
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: linux-acr-deb-arm64
+        path: dist/debian/*/*.deb
+  linux-rv64:
+    runs-on: ubuntu-22.04
+    name: Build on qemu-riscv64
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: uraimo/run-on-arch-action@fa1f3e7de95534497266c7265950b5188355fbfb # v3.2.1
+      name: Run commands
+      with:
+        arch: riscv64
+        distro: ubuntu22.04
+        run: |
+          uname -a
+          apt update ; apt install --assume-yes gcc make git patch zip xz-utils
+          sys/debian.sh
+          make -C dist/debian
+    - name: Pub
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: linux-acr-deb-riscv64
+        path: dist/debian/*/*.deb
+  linux-s390x:
+    runs-on: ubuntu-22.04
+    name: Build on qemu-s390x
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: uraimo/run-on-arch-action@fa1f3e7de95534497266c7265950b5188355fbfb # v3.2.1
+      name: Run commands
+      with:
+        arch: s390x
+        distro: ubuntu22.04
+        run: |
+          uname -a
+          apt update ; apt install --assume-yes gcc make git patch zip xz-utils
+          sys/debian.sh
+          make -C dist/debian
+    - name: Pub
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: linux-acr-deb-s390x
+        path: dist/debian/*/*.deb

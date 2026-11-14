@@ -8,12 +8,22 @@ extern "C" {
 #include <r_types.h>
 #include <r_cons.h>
 #include <r_util/r_graph.h>
+#include <r_vec.h>
+#include <sdb/ht_uu.h>
+
+typedef struct r_agraph_location {
+	int x;
+	int y;
+} RAGraphLocation;
+
+R_VEC_TYPE (RVecAGraphLocation, RAGraphLocation);
 
 typedef struct r_ascii_node_t {
 	RGraphNode *gnode;
 	char *title;
 	char *body;
 	char *color;
+	char *shortcut;
 
 	int x;
 	int y;
@@ -33,7 +43,7 @@ typedef struct r_ascii_node_t {
 
 typedef struct r_core_graph_hits_t {
 	char *old_word ;
-	RVector word_list;
+	RVecAGraphLocation word_list;
 	int word_nth;
 } RAGraphHits;
 
@@ -55,18 +65,20 @@ typedef struct r_ascii_graph_t {
 	const RGraphNode *curnode;
 	char *title;
 	Sdb *db;
-	Sdb *nodes; // Sdb with title(key)=RANode*(value)
+	HtPP *nodes; // title -> RANode *
 
 	int layout;
 	int is_instep;
 	bool is_tiny;
 	bool is_dis;
+	bool is_handmade;
 	int edgemode;
 	int mode;
 	bool is_callgraph;
 	bool is_interactive;
 	int zoom;
 	int movspeed;
+	int discroll;
 	bool hints;
 
 	RANode *update_seek_on;
@@ -82,6 +94,7 @@ typedef struct r_ascii_graph_t {
 	bool show_node_titles;
 	bool show_node_body;
 	bool show_node_bubble;
+	int bb_maxwidth;
 
 	int x, y;
 	int w, h;
@@ -91,10 +104,16 @@ typedef struct r_ascii_graph_t {
 	RList *long_edges;
 	struct layer_t *layers;
 	unsigned int n_layers;
-	RList *dists; /* RList<struct dist_t> */
+	HtUU *dists; // explicit node distances, keyed by node index pair
 	RList *edges; /* RList<AEdge> */
 	RAGraphHits ghits;
+	struct r_agraph_edge_routes_t *edge_routes; // cached edge drawing after layout
 } RAGraph;
+
+typedef struct r_ascii_graph_transition_callbacks_t {
+	char *(*get_title)(void *data, void *user);
+	char *(*get_body)(void *data, void *user);
+} RAGraphTransitionCBs;
 
 #ifdef R_API
 R_API RAGraph *r_agraph_new(RConsCanvas *can);
@@ -108,13 +127,14 @@ R_API bool r_agraph_del_node(const RAGraph *g, const char *title);
 R_API void r_agraph_add_edge(const RAGraph *g, RANode *a, RANode *b, bool highlight);
 R_API void r_agraph_add_edge_at(const RAGraph *g, RANode *a, RANode *b, int nth);
 R_API void r_agraph_del_edge(const RAGraph *g, RANode *a, RANode *b);
-R_API void r_agraph_print(RAGraph *g);
+R_API void r_agraph_print(RAGraph *g, void *core);
+R_API char *r_agraph_tostring(RAGraph *g, void *core);
 R_API void r_agraph_print_json(RAGraph *g, PJ *pj);
 R_API Sdb *r_agraph_get_sdb(RAGraph *g);
 R_API void r_agraph_foreach(RAGraph *g, RANodeCallback cb, void *user);
 R_API void r_agraph_foreach_edge(RAGraph *g, RAEdgeCallback cb, void *user);
 R_API void r_agraph_set_curnode(RAGraph *g, RANode *node);
-R_API RAGraph *create_agraph_from_graph(const RGraph/*<RGraphNodeInfo>*/ *graph);
+R_API RAGraph *r_agraph_new_from_graph(void *core, const RGraph *graph, RAGraphTransitionCBs *cbs, void *user);
 #endif
 
 #ifdef __cplusplus

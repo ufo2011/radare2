@@ -1,11 +1,7 @@
-/* radare - LGPLv3- Copyright 2017-2021 - xarkes */
+/* radare - LGPLv3- Copyright 2017-2026 - xarkes */
 
 #include <r_io.h>
-#include <r_lib.h>
-#include <r_util.h>
-#include <r_cons.h>
-#include "ar.h"
-
+#include "ar/ar.h"
 
 static const char *r_io_get_individual_schema(const char *file) {
 	if (r_str_startswith (file, "arall://")) {
@@ -18,41 +14,46 @@ static const char *r_io_get_individual_schema(const char *file) {
 }
 
 static bool r_io_ar_plugin_open(RIO *io, const char *file, bool many) {
-	r_return_val_if_fail (io && file, false);
+	R_RETURN_VAL_IF_FAIL (io && file, false);
 	if (many) {
-		return (r_io_get_individual_schema (file) != NULL);
+		return (r_io_get_individual_schema (file));
 	}
-	return !strncmp ("ar://", file, 5) || !strncmp ("lib://", file, 6);
+	return r_str_startswith (file, "ar://") || r_str_startswith (file, "lib://");
 }
 
 static bool r_io_ar_close(RIODesc *fd) {
 	if (!fd || !fd->data) {
 		return false;
 	}
-	return ar_close ((RArFp *)fd->data);
+	// ar_close returns 0 like close(2), but RIO expects true when the desc is closed
+	ar_close ((RArFp *)fd->data);
+	fd->data = NULL;
+	return true;
 }
 
 static RIODesc *r_io_ar_open(RIO *io, const char *file, int rw, int mode) {
-	r_return_val_if_fail (r_io_ar_plugin_open (io, file, false), NULL);
+	R_RETURN_VAL_IF_FAIL (r_io_ar_plugin_open (io, file, false), NULL);
 	char *uri = strdup (file);
 	if (!uri) {
 		return NULL;
 	}
 	RIODesc *res = NULL;
-	const char *arname = strstr (uri, "://");
+	char *arname = strstr (uri, "://");
 	if (arname) {
 		arname += 3;
 		char *filename = strstr (arname, "//");
-		if (filename) {
-			*filename = 0;
-			filename += 2;
+		if (!filename) {
+			free (uri);
+			return NULL;
 		}
-
+		*filename = 0;
+		filename += 2;
 		RArFp *arf = ar_open_file (arname, filename);
 		if (arf) {
 			res = r_io_desc_new (io, &r_io_plugin_ar, file, rw, mode, arf);
 			if (res) {
-				res->name = strdup (filename);
+				// The binary loader may reopen descriptor names as URIs.
+				res->name = strdup (file);
 			}
 		}
 	}
@@ -64,7 +65,7 @@ typedef struct ar_many_data {
 	const char *schema;
 	const char *arname;
 	RIO *io;
-	bool rw;
+	int rwx;
 	int mode;
 	RList *list;
 } ar_many_data;
@@ -72,7 +73,7 @@ typedef struct ar_many_data {
 static int __io_ar_list(RArFp *arf, void *user) {
 	ar_many_data *data = (ar_many_data *)user;
 	char *uri = r_str_newf ("%s%s//%s", data->schema, data->arname, arf->name);
-	RIODesc *des = r_io_desc_new (data->io, &r_io_plugin_ar, uri, data->rw, data->mode, arf);
+	RIODesc *des = r_io_desc_new (data->io, &r_io_plugin_ar, uri, data->rwx, data->mode, arf);
 	free (uri);
 
 	if (!des) {
@@ -80,7 +81,7 @@ static int __io_ar_list(RArFp *arf, void *user) {
 		return -1; // stop error
 	}
 
-	des->name = strdup (arf->name);
+	des->name = strdup (des->uri);
 	if (!r_list_append (data->list, des)) {
 		r_io_ar_close (des);
 		return -1; // stop error
@@ -89,14 +90,16 @@ static int __io_ar_list(RArFp *arf, void *user) {
 }
 
 static RList *r_io_ar_open_many(RIO *io, const char *file, int rw, int mode) {
-	r_return_val_if_fail (io && file, NULL);
-	ar_many_data data;
-	if ((data.schema = r_io_get_individual_schema (file)) == NULL) {
-		r_warn_if_reached ();
+	R_RETURN_VAL_IF_FAIL (io && file, NULL);
+	ar_many_data data = {
+		.schema = r_io_get_individual_schema (file)
+	};
+	if (!data.schema) {
+		R_WARN_IF_REACHED ();
 		return NULL;
 	}
 	data.io = io;
-	data.rw = rw;
+	data.rwx = rw;
 	data.mode = mode;
 	data.arname = strstr (file, "://") + 3;
 	data.list = r_list_newf ((RListFree)r_io_ar_close);
@@ -108,18 +111,18 @@ static RList *r_io_ar_open_many(RIO *io, const char *file, int rw, int mode) {
 }
 
 static ut64 r_io_ar_lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
-	r_return_val_if_fail (io && fd && fd->data, -1);
+	R_RETURN_VAL_IF_FAIL (io && fd && fd->data, -1);
 
 	RArFp *arf = (RArFp *) fd->data;
 	ut64 size = arf->end - arf->start;
 	switch (whence) {
-	case SEEK_SET:
+	case R_IO_SEEK_SET:
 		io->off = R_MIN (size, offset);
 		break;
-	case SEEK_CUR:
+	case R_IO_SEEK_CUR:
 		io->off = R_MIN (size, io->off + offset);
 		break;
-	case SEEK_END:
+	case R_IO_SEEK_END:
 		io->off = size;
 		break;
 	default:
@@ -144,9 +147,12 @@ static int r_io_ar_write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 }
 
 RIOPlugin r_io_plugin_ar = {
-	.name = "ar",
-	.desc = "Open ar/lib files",
-	.license = "LGPL3",
+	.meta = {
+		.name = "ar",
+		.desc = "Open ar/lib files",
+		.license = "LGPL-3.0-only",
+		.author = "xarkes"
+	},
 	.uris = "ar://,lib://,arall://,liball://",
 	.open = r_io_ar_open,
 	.open_many = r_io_ar_open_many,

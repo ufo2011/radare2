@@ -1,13 +1,14 @@
-OBJ_SH=asm_sh.o
-OBJ_SH+=../arch/sh/gnu/sh-dis.o
+OBJ_SHPSEUDO+=$(LIBR)/arch/p/sh/pseudo.o
 
-STATIC_OBJ+=${OBJ_SH}
+TARGET_SHPSEUDO=parse_sh_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_SHPSEUDO}
+STATIC_OBJ+=${OBJ_SHPSEUDO}
 
-TARGET_SH=asm_sh.${EXT_SO}
-
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_SH}
-
-${TARGET_SH}: ${OBJ_SH}
-	${CC} $(call libname,asm_sh) ${LDFLAGS} ${CFLAGS} -o ${TARGET_SH} ${OBJ_SH}
+${TARGET_SHPSEUDO}: ${OBJ_SHPSEUDO}
+ifeq ($(CC),cccl)
+	${CC} $(call libname,parse_sh_pseudo) -L../../util -llibr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_SHPSEUDO} ${OBJ_SHPSEUDO} $(LINK)
+else
+	${CC} $(call libname,parse_sh_pseudo) -L../../util -lr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_SHPSEUDO} ${OBJ_SHPSEUDO} $(LINK)
 endif

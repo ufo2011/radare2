@@ -2,65 +2,103 @@
 
 static int iscallret(RDebug *dbg, ut64 addr) {
 	ut8 buf[32];
-	if (addr == 0LL || addr == UT64_MAX)
+	RAnalOp op = {0};
+	int i;
+	if (addr == 0LL || addr == UT64_MAX) {
 		return 0;
+	}
 	/* check if region is executable */
 	/* check if previous instruction is a call */
-	/* if x86 expect CALL to be 5 byte length */
+	/* try looking back up to 16 bytes to find a call instruction */
 	if (dbg->arch && !strcmp (dbg->arch, "x86")) {
-		(void)dbg->iob.read_at (dbg->iob.io, addr-5, buf, 5);
-		if (buf[0] == 0xe8) {
-			return 1;
+		// On x86, try to find CALL instructions of various lengths
+		// Check for common patterns
+		int maxdist = (dbg->bits == 64) ? 16 : 8;
+		if (dbg->iob.read_at (dbg->iob.io, addr - maxdist, buf, maxdist) != maxdist) {
+			return 0;
 		}
-		if (buf[3] == 0xff  /* bits 4-5 (from right) of next byte must be 01 */
-		    && ((buf[4] & 0xf0) == 0xd0  /* Mod is 11 */
-		        || ((buf[4] & 0xf0) == 0x10  /* Mod is 00 */
-		            && (buf[4] & 0x06) != 0x04))) {  /* R/M not 10x */
-			return 1;
+		// Look backwards for CALL instructions
+		for (i = maxdist - 1; i >= 0; i--) {
+			// Direct CALL (e8 xx xx xx xx)
+			if (buf[i] == 0xe8 && (i + 5 == maxdist)) {
+				return 1;
+			}
+			// Indirect CALL (ff /2)
+			if (buf[i] == 0xff) {
+				int modrm = (i + 1 < maxdist) ? buf[i + 1] : 0;
+				int reg = (modrm >> 3) & 7;
+				if (reg == 2) { // CALL r/m
+					// Estimate instruction length based on ModR/M
+					int mod = (modrm >> 6) & 3;
+					int rm = modrm & 7;
+					int len = 2;
+					if (mod == 0 && rm == 5) {
+						len = 6; // disp32
+					} else if (mod == 1) {
+						len = 3; // disp8
+					} else if (mod == 2) {
+						len = 6; // disp32
+					}
+					if (i + len == maxdist) {
+						return 1;
+					}
+				}
+			}
 		}
-		// IMMAMISSINGANYOP
 	} else {
-		RAnalOp op;
-		(void) dbg->iob.read_at (dbg->iob.io, addr-8, buf, 8);
-		(void) r_anal_op (dbg->anal, &op, addr-8, buf, 8, R_ANAL_OP_MASK_BASIC);
-		if (op.type == R_ANAL_OP_TYPE_CALL || op.type == R_ANAL_OP_TYPE_UCALL) {
-			return 1;
+		// For non-x86, use anal to check
+		int maxdist = 16;
+		if (dbg->iob.read_at (dbg->iob.io, addr - maxdist, buf, maxdist) != maxdist) {
+			return 0;
 		}
-		/* delay slot */
-		(void) r_anal_op (dbg->anal, &op, addr-4, buf, 4, R_ANAL_OP_MASK_BASIC);
-		if (op.type == R_ANAL_OP_TYPE_CALL || op.type == R_ANAL_OP_TYPE_UCALL) {
-			return 1;
+		// Try different positions
+		for (i = maxdist - 1; i >= maxdist - 8 && i >= 0; i--) {
+			if (r_anal_op (dbg->anal, &op, addr - (maxdist - i), buf + i, maxdist - i, R_ARCH_OP_MASK_BASIC) > 0) {
+				const bool call = op.type == R_ANAL_OP_TYPE_CALL || op.type == R_ANAL_OP_TYPE_UCALL;
+				const bool adjacent = addr - (maxdist - i) + op.size == addr;
+				r_anal_op_fini (&op);
+				if (call && adjacent) {
+					return 1;
+				}
+			}
 		}
 	}
 	return 0;
 }
 
 static RList *backtrace_fuzzy(RDebug *dbg, ut64 at) {
-	ut8 *stack, *ptr;
-	int wordsize = dbg->bits; // XXX, dbg->bits is wordsize not bits
+	ut8 *ptr;
+	const int wordsize = dbg->bits / 8;
 	ut64 sp;
 	RIOBind *bio = &dbg->iob;
-	int i, stacksize;
+	int i;
 	ut64 *p64, addr = 0LL;
 	ut32 *p32;
 	ut16 *p16;
 	ut64 cursp, oldsp;
 	RList *list;
 
-	stacksize = 1024*512; // 512KB .. should get the size from the regions if possible
-	stack = malloc (stacksize);
+	const int stacksize = 1024 * 512; // 512KB .. should get the size from the regions if possible
+	if (wordsize != 2 && wordsize != 4 && wordsize != 8) {
+		R_LOG_ERROR ("Invalid word size with asm.bits");
+		return NULL;
+	}
+	ut8 *stack = malloc (stacksize);
+	if (!stack) {
+		return NULL;
+	}
 	if (at == UT64_MAX) {
 		RRegItem *ri;
 		RReg *reg = dbg->reg;
-		const char *spname = r_reg_get_name (reg, R_REG_NAME_SP);
+		const char *spname = r_reg_alias_getname (reg, R_REG_ALIAS_SP);
 		if (!spname) {
-			eprintf ("Cannot find stack pointer register\n");
+			R_LOG_ERROR ("Cannot find stack pointer register");
 			free (stack);
 			return NULL;
 		}
 		ri = r_reg_get (reg, spname, R_REG_TYPE_GPR);
 		if (!ri) {
-			eprintf ("Cannot find stack pointer register\n");
+			R_LOG_ERROR ("Cannot find stack pointer register");
 			free (stack);
 			return NULL;
 		}
@@ -72,9 +110,9 @@ static RList *backtrace_fuzzy(RDebug *dbg, ut64 at) {
 	list = r_list_new ();
 	list->free = free;
 	cursp = oldsp = sp;
-	(void)bio->read_at (bio->io, sp, stack, stacksize);
+	const int nread = bio->read_at (bio->io, sp, stack, stacksize);
 	ptr = stack;
-	for (i=0; i<dbg->btdepth; i++) {
+	for (i = 0; i < dbg->options.btdepth && i < nread / wordsize; i++) {
 		p64 = (ut64*)ptr;
 		p32 = (ut32*)ptr;
 		p16 = (ut16*)ptr;
@@ -83,9 +121,7 @@ static RList *backtrace_fuzzy(RDebug *dbg, ut64 at) {
 		case 4: addr = *p32; break;
 		case 2: addr = *p16; break;
 		default:
-			eprintf ("Invalid word size with asm.bits\n");
-			r_list_free (list);
-			return NULL;
+			break;
 		}
 		if (iscallret (dbg, addr)) {
 			RDebugFrame *frame = R_NEW0 (RDebugFrame);
@@ -93,12 +129,13 @@ static RList *backtrace_fuzzy(RDebug *dbg, ut64 at) {
 			frame->size = cursp - oldsp;
 			frame->sp = cursp;
 			frame->bp = oldsp; //addr + (i * wordsize); // -4 || -8
-			// eprintf ("--------------> 0x%llx (%d)\n", addr, frame->size);
+			// R_LOG_DEBUG ("--------------> 0x%llx (%d)", addr, frame->size);
 			r_list_append (list, frame);
 			oldsp = cursp;
 		}
 		ptr += wordsize;
 		cursp += wordsize;
 	}
+	free (stack);
 	return list;
 }

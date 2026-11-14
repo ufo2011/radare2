@@ -1,62 +1,51 @@
-/* radare - LGPL3 - 2015-2019 - maijin */
+/* radare - LGPL3 - 2015-2023 - maijin */
 
 #include <r_bin.h>
-#include <r_lib.h>
 #include "nes/nes_specs.h"
 
-
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	if (r_buf_size (b) > 4) {
 		ut8 buf[4];
-		r_buf_read_at (b, 0, buf, sizeof (buf));
-		return (!memcmp (buf, INES_MAGIC, sizeof (buf)));
+		if (r_buf_read_at (b, 0, buf, sizeof (buf)) == sizeof (buf)) {
+			return (!memcmp (buf, INES_MAGIC, sizeof (buf)));
+		}
 	}
 	return false;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	return check_buffer (bf, buf);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	return check (bf, buf);
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	RBinInfo *ret = NULL;
-	ines_hdr ihdr;
-	memset (&ihdr, 0, INES_HDR_SIZE);
+	ines_hdr ihdr = {0};
 	int reat = r_buf_read_at (bf->buf, 0, (ut8*)&ihdr, INES_HDR_SIZE);
 	if (reat != INES_HDR_SIZE) {
-		eprintf ("Truncated Header\n");
+		R_LOG_ERROR ("Truncated Header");
 		return NULL;
 	}
-	if (!(ret = R_NEW0 (RBinInfo))) {
-		return NULL;
+	RBinInfo *ret = R_NEW0 (RBinInfo);
+	if (R_LIKELY (ret)) {
+		ret->file = strdup (bf->file);
+		ret->type = strdup ("ROM");
+		ret->machine = strdup ("Nintendo NES");
+		ret->os = strdup ("nes");
+		ret->arch = strdup ("6502");
+		ret->bits = 8;
+		ret->has_va = 1;
 	}
-	ret->file = strdup (bf->file);
-	ret->type = strdup ("ROM");
-	ret->machine = strdup ("Nintendo NES");
-	ret->os = strdup ("nes");
-	ret->arch = strdup ("6502");
-	ret->bits = 8;
-	ret->has_va = 1;
 	return ret;
 }
 
-static void addsym(RList *ret, const char *name, ut64 addr, ut32 size) {
-	RBinSymbol *ptr = R_NEW0 (RBinSymbol);
-	if (!ptr) {
-		return;
-	}
-	ptr->name = strdup (r_str_get (name));
+static void addsym(RVecRBinSymbol *ret, const char *name, ut64 addr, ut32 size) {
+	RBinSymbol *ptr = RVecRBinSymbol_emplace_back (ret);
+	ptr->name = r_bin_name_new (r_str_get (name));
 	ptr->paddr = ptr->vaddr = addr;
-	ptr->size = size;
-	ptr->ordinal = 0;
-	r_list_append (ret, ptr);
+	ptr->attr.size = size;
 }
 
-static RList* symbols(RBinFile *bf) {
-	RList *ret = NULL;
-	if (!(ret = r_list_newf (free))) {
-		return NULL;
-	}
+static bool symbols_vec(RBinFile *bf) {
+	RVecRBinSymbol *ret = &bf->bo->symbols_vec;
 	addsym (ret, "NMI_VECTOR_START_ADDRESS", NMI_VECTOR_START_ADDRESS,2);
 	addsym (ret, "RESET_VECTOR_START_ADDRESS", RESET_VECTOR_START_ADDRESS,2);
 	addsym (ret, "IRQ_VECTOR_START_ADDRESS", IRQ_VECTOR_START_ADDRESS,2);
@@ -79,89 +68,72 @@ static RList* symbols(RBinFile *bf) {
 	addsym (ret, "JOYPAD_PORT", JOYPAD_PORT,0x1);
 	addsym (ret, "JOYPAD_PORT1", JOYPAD_PORT1,0x1);
 	addsym (ret, "JOYPAD_PORT2", JOYPAD_PORT2,0x1);
-	return ret;
+	return true;
 }
 
-static RList* sections(RBinFile *bf) {
-	RList *ret = NULL;
-	RBinSection *ptr = NULL;
+static bool sections_vec(RBinFile *bf) {
 	ines_hdr ihdr;
 	memset (&ihdr, 0, INES_HDR_SIZE);
 	int reat = r_buf_read_at (bf->buf, 0, (ut8*)&ihdr, INES_HDR_SIZE);
 	if (reat != INES_HDR_SIZE) {
-		eprintf ("Truncated Header\n");
-		return NULL;
+		R_LOG_ERROR ("Truncated Header");
+		return false;
 	}
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	RVecRBinSection_clear (&bf->bo->sections_vec);
+	const ut64 rom_size = ihdr.prg_page_count_16k * PRG_PAGE_SIZE;
+	RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("ROM");
 	ptr->paddr = INES_HDR_SIZE;
-	ptr->size = ihdr.prg_page_count_16k * PRG_PAGE_SIZE;
+	ptr->size = rom_size;
 	ptr->vaddr = ROM_START_ADDRESS;
 	ptr->vsize = ROM_SIZE;
 	ptr->perm = R_PERM_RX;
 	ptr->add = true;
-	r_list_append (ret, ptr);
-	if (ROM_START_ADDRESS + ptr->size <= ROM_MIRROR_ADDRESS) {
+	if (ROM_START_ADDRESS + rom_size <= ROM_MIRROR_ADDRESS) {
 		// not a 256bit ROM, mapper 0 mirrors the complete ROM in this case
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
+		ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ptr->name = strdup ("ROM_MIRROR");
 		ptr->paddr = INES_HDR_SIZE;
-		ptr->size = ihdr.prg_page_count_16k * PRG_PAGE_SIZE;
+		ptr->size = rom_size;
 		ptr->vaddr = ROM_MIRROR_ADDRESS;
 		ptr->vsize = ROM_MIRROR_SIZE;
 		ptr->perm = R_PERM_RX;
 		ptr->add = true;
-		r_list_append (ret, ptr);
 	}
-	return ret;
+	return true;
 }
 
 static RList *mem(RBinFile *bf) {
-	RList *ret;
-	RBinMem *m, *n;
-	if (!(ret = r_list_new ())) {
+	RList *ret = r_list_new ();
+	if (R_UNLIKELY (!ret)) {
 		return NULL;
 	}
-	ret->free = free;
-	if (!(m = R_NEW0 (RBinMem))) {
-		r_list_free (ret);
-		return NULL;
+	RBinMem *m = R_NEW0 (RBinMem);
+	if (R_LIKELY (m)) {
+		m->name = strdup ("RAM");
+		m->addr = RAM_START_ADDRESS;
+		m->size = RAM_SIZE;
+		m->perms = r_str_rwx ("rwx");
+		r_list_append (ret, m);
 	}
-	m->name = strdup ("RAM");
-	m->addr = RAM_START_ADDRESS;
-	m->size = RAM_SIZE;
-	m->perms = r_str_rwx ("rwx");
-	r_list_append (ret, m);
-	if (!(n = R_NEW0 (RBinMem))) {
-		return ret;
+	RBinMem *n = R_NEW0 (RBinMem);
+	if (R_LIKELY (n)) {
+		m->mirrors = r_list_new ();
+		n->name = strdup ("RAM_MIRROR_2");
+		n->addr = RAM_MIRROR_2_ADDRESS;
+		n->size = RAM_MIRROR_2_SIZE;
+		n->perms = r_str_rwx ("rwx");
+		r_list_append (m->mirrors, n);
 	}
-	m->mirrors = r_list_new ();
-	n->name = strdup ("RAM_MIRROR_2");
-	n->addr = RAM_MIRROR_2_ADDRESS;
-	n->size = RAM_MIRROR_2_SIZE;
-	n->perms = r_str_rwx ("rwx");
-	r_list_append (m->mirrors, n);
-	if (!(n = R_NEW0 (RBinMem))) {
-		r_list_free (m->mirrors);
-		m->mirrors = NULL;
-		return ret;
+	n = R_NEW0 (RBinMem);
+	if (R_LIKELY (n)) {
+		n->name = strdup ("RAM_MIRROR_3");
+		n->addr = RAM_MIRROR_3_ADDRESS;
+		n->size = RAM_MIRROR_3_SIZE;
+		n->perms = r_str_rwx ("rwx");
+		r_list_append (m->mirrors, n);
 	}
-	n->name = strdup ("RAM_MIRROR_3");
-	n->addr = RAM_MIRROR_3_ADDRESS;
-	n->size = RAM_MIRROR_3_SIZE;
-	n->perms = r_str_rwx ("rwx");
-	r_list_append (m->mirrors, n);
-	if (!(m = R_NEW0 (RBinMem))) {
-		r_list_free (ret);
-		return NULL;
-	}
+	m = R_NEW0 (RBinMem);
 	m->name = strdup ("PPU_REG");
 	m->addr = PPU_REG_ADDRESS;
 	m->size = PPU_REG_SIZE;
@@ -170,30 +142,23 @@ static RList *mem(RBinFile *bf) {
 	m->mirrors = r_list_new ();
 	int i;
 	for (i = 1; i < 1024; i++) {
-		if (!(n = R_NEW0 (RBinMem))) {
-			r_list_free (m->mirrors);
-			m->mirrors = NULL;
-			return ret;
+		n = R_NEW0 (RBinMem);
+		if (R_UNLIKELY (!n)) {
+			break;
 		}
 		n->name = r_str_newf ("PPU_REG_MIRROR_%d", i);
-		n->addr = PPU_REG_ADDRESS+i*PPU_REG_SIZE;
+		n->addr = PPU_REG_ADDRESS + i * PPU_REG_SIZE;
 		n->size = PPU_REG_SIZE;
 		n->perms = r_str_rwx ("rwx");
 		r_list_append (m->mirrors, n);
 	}
-	if (!(m = R_NEW0 (RBinMem))) {
-		r_list_free (ret);
-		return NULL;
-	}
+	m = R_NEW0 (RBinMem);
 	m->name = strdup ("APU_AND_IOREGS");
 	m->addr = APU_AND_IOREGS_START_ADDRESS;
 	m->size = APU_AND_IOREGS_SIZE;
 	m->perms = r_str_rwx ("rwx");
 	r_list_append (ret, m);
-	if (!(m = R_NEW0 (RBinMem))) {
-		r_list_free (ret);
-		return NULL;
-	}
+	m = R_NEW0 (RBinMem);
 	m->name = strdup ("SRAM");
 	m->addr = SRAM_START_ADDRESS;
 	m->size = SRAM_SIZE;
@@ -203,35 +168,28 @@ static RList *mem(RBinFile *bf) {
 }
 
 static RList* entries(RBinFile *bf) { //Should be 3 offsets pointed by NMI, RESET, IRQ after mapping && default = 1st CHR
-	RList *ret;
-	RBinAddr *ptr = NULL;
-	if (!(ret = r_list_new ())) {
-		return NULL;
+	RList *ret = r_list_new ();
+	if (R_LIKELY (ret)) {
+		RBinAddr *ptr = R_NEW0 (RBinAddr);
+		ptr->paddr = INES_HDR_SIZE;
+		ptr->vaddr = ROM_START_ADDRESS;
+		r_list_append (ret, ptr);
 	}
-	if (!(ptr = R_NEW0 (RBinAddr))) {
-		return ret;
-	}
-	ptr->paddr = INES_HDR_SIZE;
-	ptr->vaddr = ROM_START_ADDRESS;
-	r_list_append (ret, ptr);
 	return ret;
 }
 
-static ut64 baddr(RBinFile *bf) {
-	// having this we make r2 -B work, otherwise it doesnt works :??
-	return 0;
-}
-
 RBinPlugin r_bin_plugin_nes = {
-	.name = "nes",
-	.desc = "NES",
-	.license = "MIT",
-	.load_buffer = &load_buffer,
-	.baddr = &baddr,
-	.check_buffer = &check_buffer,
+	.meta = {
+		.name = "nes",
+		.desc = "Nintendo Entertainment System",
+		.license = "MIT",
+		.author = "pancake",
+	},
+	.load = &load,
+	.check = &check,
 	.entries = &entries,
-	.sections = sections,
-	.symbols = &symbols,
+	.sections_vec = &sections_vec,
+	.symbols_vec = &symbols_vec,
 	.info = &info,
 	.mem = &mem,
 };

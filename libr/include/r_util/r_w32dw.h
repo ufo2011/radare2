@@ -3,7 +3,10 @@
 
 #include <r_types.h>
 
-#if __WINDOWS__
+#ifdef __cplusplus
+extern "C" {
+#endif
+#if R2__WINDOWS__
 
 typedef enum r_w32dw_request {
 	W32_NONE,
@@ -50,6 +53,10 @@ R_API RW32Dw *r_w32dw_new(void);
 R_API int r_w32dw_waitret(RW32Dw *inst);
 R_API void r_w32dw_free(RW32Dw *inst);
 
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif

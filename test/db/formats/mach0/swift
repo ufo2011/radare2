@@ -1,75 +1,4791 @@
 NAME=mach0 swift demangle methods
-FILE=bins/mach0/swift-main
-CMDS=isq~&FooClass,method
-EXPECT=<<EOF
-0x1000047a0 0 FooClass.bar.method__Swift.String..init.witnesstable
-0x100004788 0 FooClass.foo.method__Swift.Int..init.witnesstable
-0x1000017a0 0 main.FooClass.foo.method__Swift.Int
-0x100001860 0 main.FooClass.bar.method__Swift.String
-EOF
-RUN
-
-NAME=mach0 swift-x86-64 aav
-FILE=bins/mach0/swift-main
+FILE=bins/mach0/swift/klass.orig
 CMDS=<<EOF
-C*~?^Cd
-aav
-C*~?^Cd
-Cd~?
+icc
 EOF
 EXPECT=<<EOF
-114
-134
-134
+class klass.SomeClass : klass.SuperKlass {
+  var meh : Swift.Int
+  var cow : Swift.Int
+  var meh { get }  // 0x100002470
+  var meh { set }  // 0x1000024d0
+  func meh() {}  // 0x100002530
+  var cow { get }  // 0x100002590
+  var cow { set }  // 0x1000025f0
+  func cow() {}  // 0x100002650
+  func instanceMethod() {}  // 0x1000026a0
+  func deinit() {}  // 0x1000026c0
+  func deinit() {}  // 0x100002700
+  init()  // 0x100002740
+  init()  // 0x100002770
+}
+class klass.SuperKlass {
+  var superfield : Swift.Int
+  var superfield { get }  // 0x1000028f0
+  var superfield { set }  // 0x100002950
+  func superfield() {}  // 0x1000029b0
+  init()  // 0x100002a10
+  func deinit() {}  // 0x1000026e0
+  init()  // 0x100002880
+  func deinit() {}  // 0x100002a40
+}
+@objc
+class klass.SomeClass : klass.SuperKlass {
+  var isa : struct objc_class *
+  var meh
+  var cow
+}
+@objc
+class klass.SuperKlass : Swift._SwiftObject {
+  var isa : struct objc_class *
+  var superfield
+}
+class SuperKlass {
+  func symbolic klass.SuperKlass.allocator() {}  // 0x100003e7e
+}
+class SomeClass {
+  func symbolic klass.SomeClass.allocator() {}  // 0x100003e84
+}
 EOF
 RUN
 
-NAME=swift-x86-64 calling convention
+NAME=mach0 swift skip unnamed methods
+ARGS=-e bin.unnamed=false
+FILE=bins/mach0/swift/klass.orig
+CMDS=<<EOF
+icc~func 0()~?
+icc~func 1()~?
+icc~class klass.SomeClass~?
+EOF
+EXPECT=<<EOF
+0
+0
+2
+EOF
+RUN
+
+NAME=swift-x86-64 calling convention json
+ARGS=-e bin.demangle=false
 FILE=bins/mach0/swift5.1-throwError
 CMDS=<<EOF
+e anal.cc
+k anal/cc/cc.swift.clobber
 s sym.__s10throwError7ThrowerC0a2MyB0yyKF
 af
-afc swift
 afva
-afcr
-afv
+afcrj
+afvj
+afcf~[1]
+afcfj
+aaft
+afsj~{argc}
+afsj~{args}
+afv~self,error
+af @ 0x100001b50
+af @ 0x100001b70
+afv @ 0x100001b70~arg
+s 0x100001990
+af
+afvn ctx self
+afvn self arg1
+afs
 EOF
 EXPECT=<<EOF
-cc.swift.ret: rax
-cc.swift.arg0: rdi
-cc.swift.arg1: rsi
-cc.swift.arg2: rdx
-cc.swift.arg3: rcx
-cc.swift.arg4: r8
-cc.swift.arg5: r9
-cc.swift.arg6: xmm0
-cc.swift.arg7: xmm1
-cc.swift.arg8: xmm2
-cc.swift.arg9: xmm3
-cc.swift.arg10: xmm4
-cc.swift.self: r13
-cc.swift.error: r12
-var int64_t var_28h @ rbp-0x28
-var int64_t var_20h @ rbp-0x20
-var int64_t var_18h @ rbp-0x18
-var int64_t var_10h @ rbp-0x10
+swift
+rax,rcx,rdx,rsi,rdi,r8,r9,r10,r11,r12,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,xmm7,xmm8,xmm9,xmm10,xmm11,xmm12,xmm13,xmm14,xmm15
+{"ret":"rax","args":["rdi","rsi","rdx","rcx","r8","r9"],"self":"r13","error":"r12"}
+{"reg":[{"name":"self","kind":"reg","type":"int64_t","ref":"r13"},{"name":"error","kind":"reg","type":"int64_t","ref":"r12"}],"sp":[],"bp":[{"name":"var_10h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-16}},{"name":"var_18h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-24}},{"name":"var_20h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-32}},{"name":"var_28h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-40}}]}
+()
+[{"name":"method.throwError.Thrower.throwError.Thrower.allocator.My...B0yyKF","args":[],"count":0}]
+0
+[]
+arg int64_t self @ r13
+arg int64_t error @ r12
+arg int64_t self @ r13
+void sym.__s10throwError02MyB0V1xSivs (int64_t self);
+EOF
+RUN
+
+NAME=swift cc gives self to the getter of an indirect struct
+FILE=bins/mach0/iGoat-Swift.arm_64.1
+CMDS=<<EOF
+e anal.cc=swift
+af @ 0x1000e1020
+afv @ 0x1000e1020~self
+EOF
+EXPECT=<<EOF
+arg int64_t self @ x20
+EOF
+RUN
+
+NAME=swift cc lets usage decide for a stripped function
+FILE=bins/mach0/iGoat-Swift.arm_64.1
+CMDS=<<EOF
+e anal.cc=swift
+af @ 0x1000d808c
+afv @ 0x1000d808c~self,error
+EOF
+EXPECT=<<EOF
+arg int64_t self @ x20
+EOF
+RUN
+
+NAME=swift cc does not read self from a callee-save spill
+FILE=bins/mach0/iGoat-Swift.arm_64.1
+CMDS=<<EOF
+e anal.cc=swift
+af @ 0x1000e1348
+afv @ 0x1000e1348~arg
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ x0
+EOF
+RUN
+
+NAME=swift cc does not read error from a register save and restore
+FILE=bins/mach0/MASTestApp
+CMDS=<<EOF
+e anal.cc=swift
+af @ 0x100004000
+afv @ 0x100004000~error,arg1
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ x0
+EOF
+RUN
+
+NAME=swift cc gives self to subscripts and observers
+FILE=bins/mach0/Alamofire-stripped
+ARGS=-e bin.demangle=false
+CMDS=<<EOF
+e anal.cc=swift
+af @ sym.__s9Alamofire15SessionDelegateCyAA7RequestCSgSo16NSURLSessionTaskCcig
+afv @ sym.__s9Alamofire15SessionDelegateCyAA7RequestCSgSo16NSURLSessionTaskCcig~self,error
+o bins/mach0/WheresMyBrowser
+e anal.cc=swift
+af @ sym.__s15WheresMyBrowser17WKOptionsViewCellC10optionNameSSSgvW
+afv @ sym.__s15WheresMyBrowser17WKOptionsViewCellC10optionNameSSSgvW~self,error
+EOF
+EXPECT=<<EOF
+arg int64_t self @ x20
+arg int64_t self @ x20
+EOF
+RUN
+
+NAME=swift cc lets usage decide for a closure
+FILE=bins/mach0/WheresMyBrowser
+ARGS=-e bin.demangle=false
+CMDS=<<EOF
+e anal.cc=swift
+af @ 0x10000fd84
+afv @ 0x10000fd84~self,error
+EOF
+EXPECT=<<EOF
+arg int64_t error @ x21
+EOF
+RUN
+
+NAME=swift cc clobbers like the platform cc
+FILE=bins/mach0/swift-main3
+CMDS=<<EOF
+e anal.cc=swift
+k anal/cc/cc.swift.clobber
+k anal/cc/cc.swift.preserve
+aaa
+axq~?
+EOF
+EXPECT=<<EOF
+x0,x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13,x14,x15,x16,x17,x21,x30,v0,v1,v2,v3,v4,v5,v6,v7,v16,v17,v18,v19,v20,v21,v22,v23,v24,v25,v26,v27,v28,v29,v30,v31
+x19,x20,x22,x23,x24,x25,x26,x27,x28,x29,sp,v8,v9,v10,v11,v12,v13,v14,v15
+47
+EOF
+RUN
+
+NAME=swift binaries keep the arch cc when it has no swift cc
+FILE=bins/mach0/swift5.1-throwError
+# no fixture has an arch without a swift cc; drop it and reload the bin
+CMDS=<<EOF
+k anal/cc/swift=
+e anal.cc=amd64
+o-*
+o bins/mach0/swift5.1-throwError
+e bin.lang
+e anal.cc
+EOF
+EXPECT=<<EOF
+swift
+amd64
+EOF
+RUN
+
+NAME=objc binaries keep the arch cc
+FILE=bins/mach0/hello-macos-arm64-chained
+CMDS=<<EOF
+e bin.lang
+e anal.cc
+i*~anal.cc
+EOF
+EXPECT=<<EOF
+objc
+arm64
+EOF
+RUN
+
+NAME=swift cxx lambda thunk with deep substitution
+FILE=-
+CMDS=!rabin2 -D cxx '__ZZZL26getExistentialTypeMetadataN5swift23ProtocolClassConstraintEPKNS_14TargetMetadataINS_9InProcessEEEmPKNS_27TargetProtocolDescriptorRefIS2_EEENK3$_3clEvENUlPvE_8__invokeESB_'
+EXPECT=<<EOF
+getExistentialTypeMetadata(swift::ProtocolClassConstraint, swift::TargetMetadata<swift::InProcess> const*, unsigned long, swift::TargetProtocolDescriptorRef<swift::InProcess> const*)::$_3::operator()() const::{lambda(void*)#1}::__invoke(void*)
+EOF
+RUN
+
+NAME=swift field types
+FILE=bins/mach0/WheresMyBrowser
+CMDS=<<EOF
+icj~{}
+EOF
+EXPECT=<<EOF
+[
+  {
+    "classname": "WheresMyBrowser.WKWebViewController",
+    "addr": 4295117188,
+    "lang": "swift",
+    "index": 0,
+    "super": [
+      "__C.UIViewController"
+    ],
+    "rawsuper": [
+      "__C.UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "urlBar",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewController.urlBar",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC6urlBarSo11UITextFieldCSgvg",
+        "lang": "swift",
+        "addr": 4294973772
+      },
+      {
+        "name": "urlBar",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewController.urlBar",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC6urlBarSo11UITextFieldCSgvs",
+        "lang": "swift",
+        "addr": 4294973948
+      },
+      {
+        "name": "urlBar",
+        "flag": "func.100001b64",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC6urlBarSo11UITextFieldCSgvM",
+        "lang": "swift",
+        "addr": 4294974308
+      },
+      {
+        "name": "progressBar",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewController.progressBar",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC11progressBarSo010UIProgressE0CSgvg",
+        "lang": "swift",
+        "addr": 4294974748
+      },
+      {
+        "name": "progressBar",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewController.progressBar",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC11progressBarSo010UIProgressE0CSgvs",
+        "lang": "swift",
+        "addr": 4294974924
+      },
+      {
+        "name": "progressBar",
+        "flag": "func.100001f34",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC11progressBarSo010UIProgressE0CSgvM",
+        "lang": "swift",
+        "addr": 4294975284
+      },
+      {
+        "name": "backButton",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewController.backButton",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC10backButtonSo8UIButtonCSgvg",
+        "lang": "swift",
+        "addr": 4294975724
+      },
+      {
+        "name": "backButton",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewController.backButton",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC10backButtonSo8UIButtonCSgvs",
+        "lang": "swift",
+        "addr": 4294975900
+      },
+      {
+        "name": "backButton",
+        "flag": "func.100002304",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC10backButtonSo8UIButtonCSgvM",
+        "lang": "swift",
+        "addr": 4294976260
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.100002560",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE0So0dE0CSgvg",
+        "lang": "swift",
+        "addr": 4294976864
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.1000025c4",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE0So0dE0CSgvs",
+        "lang": "swift",
+        "addr": 4294976964
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.100002640",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE0So0dE0CSgvM",
+        "lang": "swift",
+        "addr": 4294977088
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.1000027c0",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE18PreferencesManagerAA0deiJ0CSgvg",
+        "lang": "swift",
+        "addr": 4294977472
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.100002824",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE18PreferencesManagerAA0deiJ0CSgvs",
+        "lang": "swift",
+        "addr": 4294977572
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.1000028a0",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE18PreferencesManagerAA0deiJ0CSgvM",
+        "lang": "swift",
+        "addr": 4294977696
+      },
+      {
+        "name": "progressBarTimer",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewController.progressBarTimer",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC16progressBarTimerSo7NSTimerCvg",
+        "lang": "swift",
+        "addr": 4294978264
+      },
+      {
+        "name": "progressBarTimer",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewController.progressBarTimer",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC16progressBarTimerSo7NSTimerCvs",
+        "lang": "swift",
+        "addr": 4294978364
+      },
+      {
+        "name": "progressBarTimer",
+        "flag": "method.WheresMyBrowser.WKWebViewController.progressBarTimer",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC16progressBarTimerSo7NSTimerCvM",
+        "lang": "swift",
+        "addr": 4294978492
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewController.progressBarPageLoaded",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC21progressBarPageLoadedSbvg",
+        "lang": "swift",
+        "addr": 4294978872
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewController.progressBarPageLoaded",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC21progressBarPageLoadedSbvs",
+        "lang": "swift",
+        "addr": 4294978972
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "flag": "method.WheresMyBrowser.WKWebViewController.progressBarPageLoaded",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC21progressBarPageLoadedSbvM",
+        "lang": "swift",
+        "addr": 4294979100
+      },
+      {
+        "name": "wkWeb",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewController.wkWeb",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE11PlaceholderSo6UIViewCSgvg",
+        "lang": "swift",
+        "addr": 4294979320
+      },
+      {
+        "name": "wkWeb",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewController.wkWeb",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE11PlaceholderSo6UIViewCSgvs",
+        "lang": "swift",
+        "addr": 4294979496
+      },
+      {
+        "name": "wkWeb",
+        "flag": "method.WheresMyBrowser.WKWebViewController.wkWeb",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC05wkWebE11PlaceholderSo6UIViewCSgvM",
+        "lang": "swift",
+        "addr": 4294979856
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewController.scenarioButton",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC14scenarioButtonSo05UIBarH4ItemCSgvg",
+        "lang": "swift",
+        "addr": 4294980296
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewController.scenarioButton",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC14scenarioButtonSo05UIBarH4ItemCSgvs",
+        "lang": "swift",
+        "addr": 4294980472
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "func.1000034e0",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC14scenarioButtonSo05UIBarH4ItemCSgvM",
+        "lang": "swift",
+        "addr": 4294980832
+      },
+      {
+        "name": "showOkAlert",
+        "flag": "method.WheresMyBrowser.WKWebViewController.showOkAlert",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC11showOkAlert5title7messageySS_SStF",
+        "lang": "swift",
+        "addr": 4294985372
+      },
+      {
+        "name": "web",
+        "flag": "func.100004adc",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC03webE0_29didStartProvisionalNavigationySo0dE0C_So12WKNavigationCSgtF",
+        "lang": "swift",
+        "addr": 4294986460
+      },
+      {
+        "name": "web",
+        "flag": "func.100004e30",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC03webE0_9didFinishySo0dE0C_So12WKNavigationCSgtF",
+        "lang": "swift",
+        "addr": 4294987312
+      },
+      {
+        "name": "web",
+        "flag": "func.100005524",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC03webE0_7didFail9withErrorySo0dE0C_So12WKNavigationCSgs0K0_ptF",
+        "lang": "swift",
+        "addr": 4294989092
+      },
+      {
+        "name": "web",
+        "flag": "method.WheresMyBrowser.WKWebViewController.web",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC03webE0_28didFailProvisionalNavigation9withErrorySo0dE0C_So12WKNavigationCSgs0M0_ptF",
+        "lang": "swift",
+        "addr": 4294991292
+      },
+      {
+        "name": "loadUrlFromBar",
+        "flag": "method.WheresMyBrowser.WKWebViewController.loadUrlFromBar",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC14loadUrlFromBaryyF",
+        "lang": "swift",
+        "addr": 4294993644
+      },
+      {
+        "name": "unwindTo",
+        "flag": "method.WheresMyBrowser.WKWebViewController.unwindTo",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC08unwindTodE05segueySo17UIStoryboardSegueC_tF",
+        "lang": "swift",
+        "addr": 4294996224
+      },
+      {
+        "name": "progressBarTimerCallback",
+        "flag": "func.10000745c",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC24progressBarTimerCallbackyyF",
+        "lang": "swift",
+        "addr": 4294997084
+      },
+      {
+        "name": "showScenarioSelection",
+        "flag": "method.WheresMyBrowser.WKWebViewController.showScenarioSelection",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC21showScenarioSelectionyyF",
+        "lang": "swift",
+        "addr": 4294997888
+      },
+      {
+        "name": "loadScenario1",
+        "flag": "method.WheresMyBrowser.WKWebViewController.loadScenario1",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC13loadScenario1yyF",
+        "lang": "swift",
+        "addr": 4294999460
+      },
+      {
+        "name": "loadScenario2",
+        "flag": "method.WheresMyBrowser.WKWebViewController.loadScenario2",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC13loadScenario2yyF",
+        "lang": "swift",
+        "addr": 4295000952
+      },
+      {
+        "name": "loadScenario3",
+        "flag": "method.WheresMyBrowser.WKWebViewController.loadScenario3",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC13loadScenario3yyF",
+        "lang": "swift",
+        "addr": 4295003248
+      },
+      {
+        "name": "goToUrl",
+        "flag": "method.WheresMyBrowser.WKWebViewController.goToUrl",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC7goToUrlyyypF",
+        "lang": "swift",
+        "addr": 4295005020
+      },
+      {
+        "name": "backButtonPressed",
+        "flag": "method.WheresMyBrowser.WKWebViewController.backButtonPressed",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC17backButtonPressedyyypF",
+        "lang": "swift",
+        "addr": 4295005200
+      },
+      {
+        "name": "urlBarEditingGo",
+        "flag": "method.WheresMyBrowser.WKWebViewController.urlBarEditingGo",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC15urlBarEditingGoyySo11UITextFieldCF",
+        "lang": "swift",
+        "addr": 4295005816
+      },
+      {
+        "name": "selectScenarioButtonPressed",
+        "flag": "method.WheresMyBrowser.WKWebViewController.selectScenarioButtonPressed",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC27selectScenarioButtonPressedyySo05UIBarI4ItemCF",
+        "lang": "swift",
+        "addr": 4295005972
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "flag": "method.WheresMyBrowser.WKWebViewController.loadContentButtonPressed",
+        "rawname": "_$s15WheresMyBrowser19WKWebViewControllerC24loadContentButtonPressedyySo05UIBarI4ItemCF",
+        "lang": "swift",
+        "addr": 4295006128
+      },
+      {
+        "name": "load",
+        "flag": "method.WheresMyBrowser.WKWebViewController.load",
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC04loadE0yyF",
+        "lang": "swift",
+        "addr": 4294981192
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "func.100004604",
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC11viewDidLoadyyF",
+        "lang": "swift",
+        "addr": 4294985220
+      },
+      {
+        "name": "didReceiveMemoryWarning",
+        "flag": "func.100006654",
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC23didReceiveMemoryWarningyyF",
+        "lang": "swift",
+        "addr": 4294993492
+      },
+      {
+        "name": "init",
+        "flag": "func.100009c64",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295007332
+      },
+      {
+        "name": "init",
+        "flag": "func.100009cac",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295007404
+      },
+      {
+        "name": "init",
+        "flag": "func.100009820",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfC",
+        "lang": "swift",
+        "addr": 4295006240
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.WKWebViewController.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfc",
+        "lang": "swift",
+        "addr": 4295006440
+      },
+      {
+        "name": "prepare",
+        "flag": "method.WheresMyBrowser.WKWebViewController.prepare",
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerC7prepare3for6senderySo17UIStoryboardSegueC_ypSgtF",
+        "lang": "swift",
+        "addr": 4294995448
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.WKWebViewController.deinit",
+        "rawname": "$s15WheresMyBrowser19WKWebViewControllerCfD",
+        "lang": "swift",
+        "addr": 4295008076
+      }
+    ],
+    "fields": [
+      {
+        "name": "urlBar",
+        "kind": "property",
+        "type": "__C.UITextField?",
+        "addr": 4295135308
+      },
+      {
+        "name": "progressBar",
+        "kind": "property",
+        "type": "__C.UIProgressView?",
+        "addr": 4295135320
+      },
+      {
+        "name": "backButton",
+        "kind": "property",
+        "type": "__C.UIButton?",
+        "addr": 4295135332
+      },
+      {
+        "name": "wkWebView",
+        "kind": "property",
+        "type": "__C.WKWebView?",
+        "addr": 4295135344
+      },
+      {
+        "name": "wkWebViewPreferencesManager",
+        "kind": "property",
+        "type": "WheresMyBrowser.WKWebViewPreferencesManager?",
+        "addr": 4295135356
+      },
+      {
+        "name": "progressBarTimer",
+        "kind": "property",
+        "type": "__C.NSTimer",
+        "addr": 4295135368
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "kind": "property",
+        "type": "Swift.Bool",
+        "addr": 4295135380
+      },
+      {
+        "name": "wkWebViewPlaceholder",
+        "kind": "property",
+        "type": "__C.UIView?",
+        "addr": 4295135392
+      },
+      {
+        "name": "scenarioButton",
+        "kind": "property",
+        "type": "__C.UIBarButtonItem?",
+        "addr": 4295135404
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.AppDelegate",
+    "addr": 4295117608,
+    "lang": "swift",
+    "index": 1,
+    "super": [
+      "__C.UIResponder"
+    ],
+    "rawsuper": [
+      "__C.UIResponder"
+    ],
+    "methods": [
+      {
+        "name": "window",
+        "flag": "method.getter.WheresMyBrowser.AppDelegate.window",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC6windowSo8UIWindowCSgvg",
+        "lang": "swift",
+        "addr": 4295011092
+      },
+      {
+        "name": "window",
+        "flag": "method.setter.WheresMyBrowser.AppDelegate.window",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC6windowSo8UIWindowCSgvs",
+        "lang": "swift",
+        "addr": 4295011268
+      },
+      {
+        "name": "window",
+        "flag": "func.10000ad2c",
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC6windowSo8UIWindowCSgvM",
+        "lang": "swift",
+        "addr": 4295011628
+      },
+      {
+        "name": "application",
+        "flag": "method.WheresMyBrowser.AppDelegate.application",
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC11application_29didFinishLaunchingWithOptionsSbSo13UIApplicationC_SDySo0l6LaunchK3KeyaypGSgtF",
+        "lang": "swift",
+        "addr": 4295011768
+      },
+      {
+        "name": "applicationWillResignActive",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationWillResignActive",
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC27applicationWillResignActiveyySo13UIApplicationCF",
+        "lang": "swift",
+        "addr": 4295017256
+      },
+      {
+        "name": "applicationDidEnterBackground",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationDidEnterBackground",
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC29applicationDidEnterBackgroundyySo13UIApplicationCF",
+        "lang": "swift",
+        "addr": 4295017368
+      },
+      {
+        "name": "applicationWillEnterForeground",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationWillEnterForeground",
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC30applicationWillEnterForegroundyySo13UIApplicationCF",
+        "lang": "swift",
+        "addr": 4295017480
+      },
+      {
+        "name": "applicationDidBecomeActive",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationDidBecomeActive",
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC26applicationDidBecomeActiveyySo13UIApplicationCF",
+        "lang": "swift",
+        "addr": 4295017592
+      },
+      {
+        "name": "applicationWillTerminate",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationWillTerminate",
+        "rawname": "_$s15WheresMyBrowser11AppDelegateC24applicationWillTerminateyySo13UIApplicationCF",
+        "lang": "swift",
+        "addr": 4295017704
+      },
+      {
+        "name": "init",
+        "flag": "func.10000c558",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser11AppDelegateCACycfC",
+        "lang": "swift",
+        "addr": 4295017816
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.AppDelegate.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser11AppDelegateCACycfc",
+        "lang": "swift",
+        "addr": 4295017852
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.AppDelegate.deinit",
+        "rawname": "$s15WheresMyBrowser11AppDelegateCfD",
+        "lang": "swift",
+        "addr": 4295018076
+      }
+    ],
+    "fields": [
+      {
+        "name": "window",
+        "kind": "property",
+        "type": "__C.UIWindow?",
+        "addr": 4295135432
+      }
+    ]
+  },
+  {
+    "classname": "__C.LaunchOptionsKey",
+    "addr": 4295117796,
+    "lang": "swift",
+    "attr": [
+      "struct"
+    ],
+    "index": 2,
+    "fields": [
+      {
+        "name": "_rawValue",
+        "kind": "property",
+        "type": "__C.NSString",
+        "addr": 4295135460
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.JavaScriptBridgeMessageHandler",
+    "addr": 4295118240,
+    "lang": "swift",
+    "index": 3,
+    "super": [
+      "__C.NSObject"
+    ],
+    "rawsuper": [
+      "__C.NSObject"
+    ],
+    "methods": [
+      {
+        "name": "userContentController",
+        "flag": "method.WheresMyBrowser.JavaScriptBridgeMessageHandler.userContentController",
+        "rawname": "_$s15WheresMyBrowser30JavaScriptBridgeMessageHandlerC21userContentController_10didReceiveySo06WKUserjK0C_So08WKScriptG0CtF",
+        "lang": "swift",
+        "addr": 4295020128
+      },
+      {
+        "name": "init",
+        "flag": "func.10000d5e8",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser30JavaScriptBridgeMessageHandlerCACycfC",
+        "lang": "swift",
+        "addr": 4295022056
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.JavaScriptBridgeMessageHandler.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser30JavaScriptBridgeMessageHandlerCACycfc",
+        "lang": "swift",
+        "addr": 4295022092
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.JavaScriptBridgeMessageHandler.deinit",
+        "rawname": "$s15WheresMyBrowser30JavaScriptBridgeMessageHandlerCfD",
+        "lang": "swift",
+        "addr": 4295022232
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.AboutViewController",
+    "addr": 4295118324,
+    "lang": "swift",
+    "index": 4,
+    "super": [
+      "__C.UIViewController"
+    ],
+    "rawsuper": [
+      "__C.UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "versionLabel",
+        "flag": "method.getter.WheresMyBrowser.AboutViewController.versionLabel",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19AboutViewControllerC12versionLabelSo7UILabelCSgvg",
+        "lang": "swift",
+        "addr": 4295022416
+      },
+      {
+        "name": "versionLabel",
+        "flag": "method.setter.WheresMyBrowser.AboutViewController.versionLabel",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19AboutViewControllerC12versionLabelSo7UILabelCSgvs",
+        "lang": "swift",
+        "addr": 4295022592
+      },
+      {
+        "name": "versionLabel",
+        "flag": "func.10000d968",
+        "rawname": "_$s15WheresMyBrowser19AboutViewControllerC12versionLabelSo7UILabelCSgvM",
+        "lang": "swift",
+        "addr": 4295022952
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "func.10000dad0",
+        "rawname": "$s15WheresMyBrowser19AboutViewControllerC11viewDidLoadyyF",
+        "lang": "swift",
+        "addr": 4295023312
+      },
+      {
+        "name": "init",
+        "flag": "func.10000e1cc",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19AboutViewControllerC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295025100
+      },
+      {
+        "name": "init",
+        "flag": "func.10000e214",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19AboutViewControllerC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295025172
+      },
+      {
+        "name": "init",
+        "flag": "func.10000def0",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19AboutViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfC",
+        "lang": "swift",
+        "addr": 4295024368
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.AboutViewController.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19AboutViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfc",
+        "lang": "swift",
+        "addr": 4295024568
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.AboutViewController.deinit",
+        "rawname": "$s15WheresMyBrowser19AboutViewControllerCfD",
+        "lang": "swift",
+        "addr": 4295025484
+      }
+    ],
+    "fields": [
+      {
+        "name": "versionLabel",
+        "kind": "property",
+        "type": "__C.UILabel?",
+        "addr": 4295135504
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.DocumentationViewController",
+    "addr": 4295118428,
+    "lang": "swift",
+    "index": 5,
+    "super": [
+      "__C.UIViewController"
+    ],
+    "rawsuper": [
+      "__C.UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "init",
+        "flag": "func.10000e6c4",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27DocumentationViewControllerC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295026372
+      },
+      {
+        "name": "init",
+        "flag": "func.10000e70c",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27DocumentationViewControllerC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295026444
+      },
+      {
+        "name": "init",
+        "flag": "func.10000e3f8",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27DocumentationViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfC",
+        "lang": "swift",
+        "addr": 4295025656
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.DocumentationViewController.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27DocumentationViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfc",
+        "lang": "swift",
+        "addr": 4295025856
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.DocumentationViewController.deinit",
+        "rawname": "$s15WheresMyBrowser27DocumentationViewControllerCfD",
+        "lang": "swift",
+        "addr": 4295026704
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.MainTabBarViewController",
+    "addr": 4295118604,
+    "lang": "swift",
+    "index": 6,
+    "super": [
+      "__C.UITabBarController"
+    ],
+    "rawsuper": [
+      "__C.UITabBarController"
+    ],
+    "methods": [
+      {
+        "name": "checkedForUpdates",
+        "flag": "method.getter.WheresMyBrowser.MainTabBarViewController.checkedForUpdates",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser24MainTabBarViewControllerC17checkedForUpdatesSbvg",
+        "lang": "swift",
+        "addr": 4295027016
+      },
+      {
+        "name": "checkedForUpdates",
+        "flag": "method.setter.WheresMyBrowser.MainTabBarViewController.checkedForUpdates",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser24MainTabBarViewControllerC17checkedForUpdatesSbvs",
+        "lang": "swift",
+        "addr": 4295027116
+      },
+      {
+        "name": "checkedForUpdates",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.checkedForUpdates",
+        "rawname": "_$s15WheresMyBrowser24MainTabBarViewControllerC17checkedForUpdatesSbvM",
+        "lang": "swift",
+        "addr": 4295027244
+      },
+      {
+        "name": "checkForUpdates",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.checkForUpdates",
+        "rawname": "_$s15WheresMyBrowser24MainTabBarViewControllerC15checkForUpdatesyyF",
+        "lang": "swift",
+        "addr": 4295030992
+      },
+      {
+        "name": "updatesURL",
+        "flag": "method.getter.WheresMyBrowser.MainTabBarViewController.updatesURL",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10updatesURLSSvg",
+        "lang": "swift",
+        "addr": 4295027428
+      },
+      {
+        "name": "viewDidAppear",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.viewDidAppear",
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC13viewDidAppearyySbF",
+        "lang": "swift",
+        "addr": 4295030832
+      },
+      {
+        "name": "init",
+        "flag": "func.100010d60",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295036256
+      },
+      {
+        "name": "init",
+        "flag": "func.100010da8",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295036328
+      },
+      {
+        "name": "init",
+        "flag": "func.100010a28",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfC",
+        "lang": "swift",
+        "addr": 4295035432
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.MainTabBarViewController.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfc",
+        "lang": "swift",
+        "addr": 4295035632
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.deinit",
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerCfD",
+        "lang": "swift",
+        "addr": 4295036700
+      }
+    ],
+    "fields": [
+      {
+        "name": "checkedForUpdates",
+        "kind": "property",
+        "type": "Swift.Bool",
+        "addr": 4295135548
+      },
+      {
+        "name": "updatesURL",
+        "kind": "property",
+        "type": "Swift.String",
+        "attr": [
+          "const"
+        ],
+        "addr": 4295135560
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.MainTabBarViewController.UpdateData",
+    "addr": 4295118700,
+    "lang": "swift",
+    "attr": [
+      "struct"
+    ],
+    "index": 7,
+    "methods": [
+      {
+        "name": "download_url",
+        "flag": "method.getter.WheresMyBrowser.MainTabBarViewController.UpdateData.download_url",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV12download_urlSSvg",
+        "lang": "swift",
+        "addr": 4295027548
+      },
+      {
+        "name": "init",
+        "flag": "func.10000f738",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV14latest_version12download_urlAESS_SStcfC",
+        "lang": "swift",
+        "addr": 4295030584
+      },
+      {
+        "name": "latest_version",
+        "flag": "method.getter.WheresMyBrowser.MainTabBarViewController.UpdateData.latest_version",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV14latest_versionSSvg",
+        "lang": "swift",
+        "addr": 4295027500
+      },
+      {
+        "name": "init",
+        "flag": "func.10000f384",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV4fromAEs7Decoder_p_tKcfC",
+        "lang": "swift",
+        "addr": 4295029636
+      },
+      {
+        "name": "encode",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.UpdateData.encode",
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV6encode2toys7Encoder_p_tKF",
+        "lang": "swift",
+        "addr": 4295028904
+      },
+      {
+        "name": "CodingKeys",
+        "flag": "method.static.WheresMyBrowser.MainTabBarViewController.UpdateData.CodingKeys",
+        "flags": [
+          "static"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLO21__derived_enum_equalsySbAH_AHtFZ",
+        "lang": "swift",
+        "addr": 4295027596
+      },
+      {
+        "name": "CodingKeys",
+        "flag": "func.10000ec18",
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLO4hash4intoys6HasherVz_tF",
+        "lang": "swift",
+        "addr": 4295027736
+      },
+      {
+        "name": "init",
+        "flag": "func.10000ec98",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLO11stringValueAHSgSS_tcfC",
+        "lang": "swift",
+        "addr": 4295027864
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.MainTabBarViewController.UpdateData.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLO8intValueAHSgSi_tcfC",
+        "lang": "swift",
+        "addr": 4295028276
+      },
+      {
+        "name": "CodingKeys",
+        "flag": "func.10000ee4c",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLO9hashValueSivg",
+        "lang": "swift",
+        "addr": 4295028300
+      },
+      {
+        "name": "CodingKeys",
+        "flag": "func.10000eea4",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLO8intValueSiSgvg",
+        "lang": "swift",
+        "addr": 4295028388
+      },
+      {
+        "name": "CodingKeys",
+        "flag": "method.getter.WheresMyBrowser.MainTabBarViewController.UpdateData.CodingKeys",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLO11stringValueSSvg",
+        "lang": "swift",
+        "addr": 4295028424
+      },
+      {
+        "name": "CodingKeys",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.UpdateData.CodingKeys",
+        "rawname": "$s15WheresMyBrowser24MainTabBarViewControllerC10UpdateDataV10CodingKeys33_60F9CE1417ACA0AFA4D8B149128E141ELLOMF",
+        "lang": "swift",
+        "addr": 4295135612
+      }
+    ],
+    "fields": [
+      {
+        "name": "latest_version",
+        "kind": "property",
+        "type": "Swift.String",
+        "attr": [
+          "const"
+        ],
+        "offset": 0,
+        "addr": 4295135588
+      },
+      {
+        "name": "download_url",
+        "kind": "property",
+        "type": "Swift.String",
+        "attr": [
+          "const"
+        ],
+        "offset": 16,
+        "addr": 4295135600
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.MainTabBarViewController.UpdateData.CodingKeys",
+    "addr": 4295118872,
+    "lang": "swift",
+    "attr": [
+      "enum"
+    ],
+    "index": 8,
+    "fields": [
+      {
+        "name": "latest_version",
+        "kind": "property",
+        "attr": [
+          "enum"
+        ],
+        "addr": 4295135628
+      },
+      {
+        "name": "download_url",
+        "kind": "property",
+        "attr": [
+          "enum"
+        ],
+        "addr": 4295135640
+      }
+    ]
+  },
+  {
+    "classname": "__C.ComparisonResult",
+    "addr": 4295119224,
+    "lang": "swift",
+    "attr": [
+      "enum"
+    ],
+    "index": 9
+  },
+  {
+    "classname": "WheresMyBrowser.WKOptionsViewCell",
+    "addr": 4295119444,
+    "lang": "swift",
+    "index": 10,
+    "super": [
+      "__C.UITableViewCell"
+    ],
+    "rawsuper": [
+      "__C.UITableViewCell"
+    ],
+    "methods": [
+      {
+        "name": "optionsSwitch",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.optionsSwitch",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC13optionsSwitchSo8UISwitchCSgvg",
+        "lang": "swift",
+        "addr": 4295041108
+      },
+      {
+        "name": "optionsSwitch",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.optionsSwitch",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC13optionsSwitchSo8UISwitchCSgvs",
+        "lang": "swift",
+        "addr": 4295041284
+      },
+      {
+        "name": "optionsSwitch",
+        "flag": "func.10001226c",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC13optionsSwitchSo8UISwitchCSgvM",
+        "lang": "swift",
+        "addr": 4295041644
+      },
+      {
+        "name": "optionsNameLabel",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.optionsNameLabel",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC16optionsNameLabelSo7UILabelCSgvg",
+        "lang": "swift",
+        "addr": 4295042084
+      },
+      {
+        "name": "optionsNameLabel",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.optionsNameLabel",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC16optionsNameLabelSo7UILabelCSgvs",
+        "lang": "swift",
+        "addr": 4295042260
+      },
+      {
+        "name": "optionsNameLabel",
+        "flag": "func.10001263c",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC16optionsNameLabelSo7UILabelCSgvM",
+        "lang": "swift",
+        "addr": 4295042620
+      },
+      {
+        "name": "optionsDescriptionLabel",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.optionsDescriptionLabel",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC23optionsDescriptionLabelSo7UILabelCSgvg",
+        "lang": "swift",
+        "addr": 4295043020
+      },
+      {
+        "name": "optionsDescriptionLabel",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.optionsDescriptionLabel",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC23optionsDescriptionLabelSo7UILabelCSgvs",
+        "lang": "swift",
+        "addr": 4295043196
+      },
+      {
+        "name": "optionsDescriptionLabel",
+        "flag": "func.1000129e4",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC23optionsDescriptionLabelSo7UILabelCSgvM",
+        "lang": "swift",
+        "addr": 4295043556
+      },
+      {
+        "name": "delegate",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.delegate",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC8delegateAA0dF8Delegate_pSgvg",
+        "lang": "swift",
+        "addr": 4295044140
+      },
+      {
+        "name": "delegate",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.delegate",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC8delegateAA0dF8Delegate_pSgvs",
+        "lang": "swift",
+        "addr": 4295044360
+      },
+      {
+        "name": "delegate",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.delegate",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC8delegateAA0dF8Delegate_pSgvM",
+        "lang": "swift",
+        "addr": 4295044768
+      },
+      {
+        "name": "optionId",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.optionId",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC8optionIdSSSgvg",
+        "lang": "swift",
+        "addr": 4295045172
+      },
+      {
+        "name": "optionId",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.optionId",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC8optionIdSSSgvs",
+        "lang": "swift",
+        "addr": 4295045284
+      },
+      {
+        "name": "optionId",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.optionId",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC8optionIdSSSgvM",
+        "lang": "swift",
+        "addr": 4295045436
+      },
+      {
+        "name": "optionName",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.optionName",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC10optionNameSSSgvg",
+        "lang": "swift",
+        "addr": 4295046288
+      },
+      {
+        "name": "optionName",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.optionName",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC10optionNameSSSgvs",
+        "lang": "swift",
+        "addr": 4295046400
+      },
+      {
+        "name": "optionName",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.optionName",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC10optionNameSSSgvM",
+        "lang": "swift",
+        "addr": 4295046556
+      },
+      {
+        "name": "optionDescription",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.optionDescription",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC17optionDescriptionSSSgvg",
+        "lang": "swift",
+        "addr": 4295047428
+      },
+      {
+        "name": "optionDescription",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.optionDescription",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC17optionDescriptionSSSgvs",
+        "lang": "swift",
+        "addr": 4295047540
+      },
+      {
+        "name": "optionDescription",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.optionDescription",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC17optionDescriptionSSSgvM",
+        "lang": "swift",
+        "addr": 4295047696
+      },
+      {
+        "name": "enabled",
+        "flag": "method.getter.WheresMyBrowser.WKOptionsViewCell.enabled",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC7enabledSbvg",
+        "lang": "swift",
+        "addr": 4295049176
+      },
+      {
+        "name": "enabled",
+        "flag": "method.setter.WheresMyBrowser.WKOptionsViewCell.enabled",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC7enabledSbvs",
+        "lang": "swift",
+        "addr": 4295049276
+      },
+      {
+        "name": "enabled",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.enabled",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC7enabledSbvM",
+        "lang": "swift",
+        "addr": 4295049408
+      },
+      {
+        "name": "switchToggle",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.switchToggle",
+        "rawname": "_$s15WheresMyBrowser17WKOptionsViewCellC12switchToggleyyypF",
+        "lang": "swift",
+        "addr": 4295049568
+      },
+      {
+        "name": "init",
+        "flag": "func.10001470c",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser17WKOptionsViewCellC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295051020
+      },
+      {
+        "name": "init",
+        "flag": "func.100014754",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser17WKOptionsViewCellC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295051092
+      },
+      {
+        "name": "init",
+        "flag": "func.100014314",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser17WKOptionsViewCellC5style15reuseIdentifierACSo07UITableeF5StyleV_SSSgtcfC",
+        "lang": "swift",
+        "addr": 4295050004
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.WKOptionsViewCell.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser17WKOptionsViewCellC5style15reuseIdentifierACSo07UITableeF5StyleV_SSSgtcfc",
+        "lang": "swift",
+        "addr": 4295050196
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.deinit",
+        "rawname": "$s15WheresMyBrowser17WKOptionsViewCellCfD",
+        "lang": "swift",
+        "addr": 4295051688
+      }
+    ],
+    "fields": [
+      {
+        "name": "optionsSwitch",
+        "kind": "property",
+        "type": "__C.UISwitch?",
+        "addr": 4295135684
+      },
+      {
+        "name": "optionsNameLabel",
+        "kind": "property",
+        "type": "__C.UILabel?",
+        "addr": 4295135696
+      },
+      {
+        "name": "optionsDescriptionLabel",
+        "kind": "property",
+        "type": "__C.UILabel?",
+        "addr": 4295135708
+      },
+      {
+        "name": "delegate",
+        "kind": "property",
+        "type": "WheresMyBrowser.WKOptionsCellDelegate",
+        "addr": 4295135720
+      },
+      {
+        "name": "optionId",
+        "kind": "property",
+        "type": "Swift.String?",
+        "addr": 4295135732
+      },
+      {
+        "name": "optionName",
+        "kind": "property",
+        "type": "Swift.String?",
+        "addr": 4295135744
+      },
+      {
+        "name": "optionDescription",
+        "kind": "property",
+        "type": "Swift.String?",
+        "addr": 4295135756
+      },
+      {
+        "name": "enabled",
+        "kind": "property",
+        "type": "Swift.Bool",
+        "addr": 4295135768
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKPreferencesViewController",
+    "addr": 4295119724,
+    "lang": "swift",
+    "index": 11,
+    "super": [
+      "__C.UITableViewController"
+    ],
+    "rawsuper": [
+      "__C.UITableViewController"
+    ],
+    "methods": [
+      {
+        "name": "preferencesManager",
+        "flag": "method.getter.WheresMyBrowser.WKPreferencesViewController.preferencesManager",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKPreferencesViewControllerC18preferencesManagerAA05WKWebe11PreferencesH0CSgvg",
+        "lang": "swift",
+        "addr": 4295052216
+      },
+      {
+        "name": "preferencesManager",
+        "flag": "method.setter.WheresMyBrowser.WKPreferencesViewController.preferencesManager",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKPreferencesViewControllerC18preferencesManagerAA05WKWebe11PreferencesH0CSgvs",
+        "lang": "swift",
+        "addr": 4295052316
+      },
+      {
+        "name": "preferencesManager",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.preferencesManager",
+        "rawname": "_$s15WheresMyBrowser27WKPreferencesViewControllerC18preferencesManagerAA05WKWebe11PreferencesH0CSgvM",
+        "lang": "swift",
+        "addr": 4295052440
+      },
+      {
+        "name": "preferencesTable",
+        "flag": "method.getter.WheresMyBrowser.WKPreferencesViewController.preferencesTable",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKPreferencesViewControllerC016preferencesTableE0So07UITableE0CSgvg",
+        "lang": "swift",
+        "addr": 4295052660
+      },
+      {
+        "name": "preferencesTable",
+        "flag": "method.setter.WheresMyBrowser.WKPreferencesViewController.preferencesTable",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKPreferencesViewControllerC016preferencesTableE0So07UITableE0CSgvs",
+        "lang": "swift",
+        "addr": 4295052836
+      },
+      {
+        "name": "preferencesTable",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.preferencesTable",
+        "rawname": "_$s15WheresMyBrowser27WKPreferencesViewControllerC016preferencesTableE0So07UITableE0CSgvM",
+        "lang": "swift",
+        "addr": 4295053196
+      },
+      {
+        "name": "didChangeSwitchValue",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.didChangeSwitchValue",
+        "rawname": "_$s15WheresMyBrowser27WKPreferencesViewControllerC20didChangeSwitchValue_7enabledySS_SbtF",
+        "lang": "swift",
+        "addr": 4295055668
+      },
+      {
+        "name": "table",
+        "flag": "func.1000153a0",
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC05tableE0_12cellForRowAtSo07UITableE4CellCSo0lE0C_10Foundation9IndexPathVtF",
+        "lang": "swift",
+        "addr": 4295054240
+      },
+      {
+        "name": "table",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.table",
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC05tableE0_21numberOfRowsInSectionSiSo07UITableE0C_SitF",
+        "lang": "swift",
+        "addr": 4295053656
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "func.100015018",
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC11viewDidLoadyyF",
+        "lang": "swift",
+        "addr": 4295053336
+      },
+      {
+        "name": "init",
+        "flag": "func.100015e40",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295056960
+      },
+      {
+        "name": "init",
+        "flag": "func.100015e88",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295057032
+      },
+      {
+        "name": "init",
+        "flag": "func.100015a14",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC5styleACSo07UITableE5StyleV_tcfC",
+        "lang": "swift",
+        "addr": 4295055892
+      },
+      {
+        "name": "init",
+        "flag": "func.100015a48",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC5styleACSo07UITableE5StyleV_tcfc",
+        "lang": "swift",
+        "addr": 4295055944
+      },
+      {
+        "name": "init",
+        "flag": "func.100015b40",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfC",
+        "lang": "swift",
+        "addr": 4295056192
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.WKPreferencesViewController.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfc",
+        "lang": "swift",
+        "addr": 4295056392
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.deinit",
+        "rawname": "$s15WheresMyBrowser27WKPreferencesViewControllerCfD",
+        "lang": "swift",
+        "addr": 4295057380
+      }
+    ],
+    "fields": [
+      {
+        "name": "preferencesManager",
+        "kind": "property",
+        "type": "WheresMyBrowser.WKWebViewPreferencesManager?",
+        "addr": 4295135796
+      },
+      {
+        "name": "preferencesTableView",
+        "kind": "property",
+        "type": "__C.UITableView?",
+        "addr": 4295135808
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKWebViewPreferencesManager",
+    "addr": 4295119932,
+    "lang": "swift",
+    "index": 12,
+    "methods": [
+      {
+        "name": "options",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewPreferencesManager.options",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC7optionsSayAC03WebE7SettingCGvg",
+        "lang": "swift",
+        "addr": 4295060060
+      },
+      {
+        "name": "options",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewPreferencesManager.options",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC7optionsSayAC03WebE7SettingCGvs",
+        "lang": "swift",
+        "addr": 4295060136
+      },
+      {
+        "name": "options",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.options",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC7optionsSayAC03WebE7SettingCGvM",
+        "lang": "swift",
+        "addr": 4295060228
+      },
+      {
+        "name": "option_ids",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewPreferencesManager.option_ids",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC10option_idsSaySSGvg",
+        "lang": "swift",
+        "addr": 4295060588
+      },
+      {
+        "name": "option_ids",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewPreferencesManager.option_ids",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC10option_idsSaySSGvs",
+        "lang": "swift",
+        "addr": 4295060664
+      },
+      {
+        "name": "option_ids",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.option_ids",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC10option_idsSaySSGvM",
+        "lang": "swift",
+        "addr": 4295060756
+      },
+      {
+        "name": "options_dict",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewPreferencesManager.options_dict",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC12options_dictSDySSAC03WebE7SettingCGvg",
+        "lang": "swift",
+        "addr": 4295061180
+      },
+      {
+        "name": "options_dict",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewPreferencesManager.options_dict",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC12options_dictSDySSAC03WebE7SettingCGvs",
+        "lang": "swift",
+        "addr": 4295061256
+      },
+      {
+        "name": "options_dict",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.options_dict",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC12options_dictSDySSAC03WebE7SettingCGvM",
+        "lang": "swift",
+        "addr": 4295061348
+      },
+      {
+        "name": "init",
+        "flag": "method.static.constructor.WheresMyBrowser.WKWebViewPreferencesManager.init",
+        "flags": [
+          "static constructor"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC05wkWebE0ACSo0dE0C_tcfC",
+        "lang": "swift",
+        "addr": 4295061472
+      },
+      {
+        "name": "enableOption",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.enableOption",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC12enableOption_7enabledySS_SbtF",
+        "lang": "swift",
+        "addr": 4295062948
+      },
+      {
+        "name": "isOptionEnabled",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.isOptionEnabled",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC15isOptionEnabledySbSSF",
+        "lang": "swift",
+        "addr": 4295063828
+      },
+      {
+        "name": "enableJavaScript",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.enableJavaScript",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC16enableJavaScriptyySbF",
+        "lang": "swift",
+        "addr": 4295064368
+      },
+      {
+        "name": "enableJavaScriptBridge",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.enableJavaScriptBridge",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC22enableJavaScriptBridgeyySbF",
+        "lang": "swift",
+        "addr": 4295064932
+      },
+      {
+        "name": "enableUndocumentedAllowAccessFromFileURLs",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.enableUndocumentedAllowAccessFromFileURLs",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC41enableUndocumentedAllowAccessFromFileURLsyySbF",
+        "lang": "swift",
+        "addr": 4295065552
+      },
+      {
+        "name": "Web",
+        "flag": "func.100016310",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC11descriptionSSvg",
+        "lang": "swift",
+        "addr": 4295058192
+      },
+      {
+        "name": "init",
+        "flag": "method.static.constructor.WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting.WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.SS_...cfC_",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC2id4name11description5valueAESS_S2SSbtcfC",
+        "lang": "swift",
+        "addr": 4295058728
+      },
+      {
+        "name": "init",
+        "flag": "func.1000165a4",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC2id4name11description5valueAESS_S2SSbtcfc",
+        "lang": "swift",
+        "addr": 4295058852
+      },
+      {
+        "name": "Web",
+        "flag": "func.1000162a8",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC2idSSvg",
+        "lang": "swift",
+        "addr": 4295058088
+      },
+      {
+        "name": "Web",
+        "flag": "func.1000162dc",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC4nameSSvg",
+        "lang": "swift",
+        "addr": 4295058140
+      },
+      {
+        "name": "Web",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting.WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting.value_...vM_",
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC5valueSbvM",
+        "lang": "swift",
+        "addr": 4295058604
+      },
+      {
+        "name": "Web",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewPreferencesManager.Web",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC5valueSbvg",
+        "lang": "swift",
+        "addr": 4295058452
+      },
+      {
+        "name": "Web",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewPreferencesManager.Web",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC5valueSbvs",
+        "lang": "swift",
+        "addr": 4295058528
+      },
+      {
+        "name": "deinit",
+        "flag": "func.10001671c",
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingCfD",
+        "lang": "swift",
+        "addr": 4295059228
+      },
+      {
+        "name": "deinit",
+        "flag": "func.1000166d4",
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingCfd",
+        "lang": "swift",
+        "addr": 4295059156
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.WKWebViewPreferencesManager.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC05wkWebE0ACSo0dE0C_tcfc",
+        "lang": "swift",
+        "addr": 4295061544
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.100016230",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC05wkWebE0So0dE0Cvg",
+        "lang": "swift",
+        "addr": 4295057968
+      },
+      {
+        "name": "wkWeb",
+        "flag": "func.100016280",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC05wkWebE13ConfigurationSo0deJ0Cvg",
+        "lang": "swift",
+        "addr": 4295058048
+      },
+      {
+        "name": "wkWeb",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewPreferencesManager.wkWeb",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC05wkWebeF0So13WKPreferencesCvg",
+        "lang": "swift",
+        "addr": 4295058008
+      },
+      {
+        "name": "deinit",
+        "flag": "func.1000182d0",
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerCfD",
+        "lang": "swift",
+        "addr": 4295066320
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.deinit",
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerCfd",
+        "lang": "swift",
+        "addr": 4295066228
+      },
+      {
+        "name": "Web",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.Web",
+        "rawname": "$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingCMF",
+        "lang": "swift",
+        "addr": 4295135908
+      }
+    ],
+    "fields": [
+      {
+        "name": "wkWebView",
+        "kind": "property",
+        "type": "__C.WKWebView",
+        "attr": [
+          "const"
+        ],
+        "addr": 4295135836
+      },
+      {
+        "name": "wkWebViewPreferences",
+        "kind": "property",
+        "type": "__C.WKPreferences",
+        "attr": [
+          "const"
+        ],
+        "addr": 4295135848
+      },
+      {
+        "name": "wkWebViewConfiguration",
+        "kind": "property",
+        "type": "__C.WKWebViewConfiguration",
+        "attr": [
+          "const"
+        ],
+        "addr": 4295135860
+      },
+      {
+        "name": "options",
+        "kind": "property",
+        "type": "[WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting]",
+        "addr": 4295135872
+      },
+      {
+        "name": "option_ids",
+        "kind": "property",
+        "type": "[Swift.String]",
+        "addr": 4295135884
+      },
+      {
+        "name": "options_dict",
+        "kind": "property",
+        "type": "[Swift.String: WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting]",
+        "addr": 4295135896
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting",
+    "addr": 4295120152,
+    "lang": "swift",
+    "index": 13,
+    "methods": [
+      {
+        "name": "WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting.value(...vg)",
+        "flag": "method.getter.WheresMyBrowser.WKWebViewPreferencesManager.Web",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC5valueSbvg",
+        "lang": "swift",
+        "addr": 4295058452
+      },
+      {
+        "name": "WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting.value(...vs)",
+        "flag": "method.setter.WheresMyBrowser.WKWebViewPreferencesManager.Web",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC5valueSbvs",
+        "lang": "swift",
+        "addr": 4295058528
+      },
+      {
+        "name": "WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting.value(...vM)",
+        "flag": "method.WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting.WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting.value_...vM_",
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC5valueSbvM",
+        "lang": "swift",
+        "addr": 4295058604
+      },
+      {
+        "name": "WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.SS(...cfC)",
+        "flag": "method.static.constructor.WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting.WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.SS_...cfC_",
+        "flags": [
+          "static constructor"
+        ],
+        "rawname": "_$s15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC2id4name11description5valueAESS_S2SSbtcfC",
+        "lang": "swift",
+        "addr": 4295058728
+      }
+    ],
+    "fields": [
+      {
+        "name": "id",
+        "kind": "property",
+        "type": "Swift.String",
+        "attr": [
+          "const"
+        ],
+        "addr": 4295135924
+      },
+      {
+        "name": "name",
+        "kind": "property",
+        "type": "Swift.String",
+        "attr": [
+          "const"
+        ],
+        "addr": 4295135936
+      },
+      {
+        "name": "description",
+        "kind": "property",
+        "type": "Swift.String",
+        "attr": [
+          "const"
+        ],
+        "addr": 4295135948
+      },
+      {
+        "name": "value",
+        "kind": "property",
+        "type": "Swift.Bool",
+        "addr": 4295135960
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.LoadContentViewController",
+    "addr": 4295120268,
+    "lang": "swift",
+    "index": 14,
+    "super": [
+      "__C.UIViewController"
+    ],
+    "rawsuper": [
+      "__C.UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "baseUrlTextField",
+        "flag": "method.getter.WheresMyBrowser.LoadContentViewController.baseUrlTextField",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC16baseUrlTextFieldSo06UITextK0CSgvg",
+        "lang": "swift",
+        "addr": 4295066768
+      },
+      {
+        "name": "baseUrlTextField",
+        "flag": "method.setter.WheresMyBrowser.LoadContentViewController.baseUrlTextField",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC16baseUrlTextFieldSo06UITextK0CSgvs",
+        "lang": "swift",
+        "addr": 4295066944
+      },
+      {
+        "name": "baseUrlTextField",
+        "flag": "func.1000186a8",
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC16baseUrlTextFieldSo06UITextK0CSgvM",
+        "lang": "swift",
+        "addr": 4295067304
+      },
+      {
+        "name": "contentText",
+        "flag": "method.getter.WheresMyBrowser.LoadContentViewController.contentText",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC011contentTextF0So06UITextF0CSgvg",
+        "lang": "swift",
+        "addr": 4295067704
+      },
+      {
+        "name": "contentText",
+        "flag": "method.setter.WheresMyBrowser.LoadContentViewController.contentText",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC011contentTextF0So06UITextF0CSgvs",
+        "lang": "swift",
+        "addr": 4295067880
+      },
+      {
+        "name": "contentText",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.contentText",
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC011contentTextF0So06UITextF0CSgvM",
+        "lang": "swift",
+        "addr": 4295068240
+      },
+      {
+        "name": "parentWeb",
+        "flag": "method.getter.WheresMyBrowser.LoadContentViewController.parentWeb",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC09parentWebF0So06UIViewG0CSgvg",
+        "lang": "swift",
+        "addr": 4295068844
+      },
+      {
+        "name": "parentWeb",
+        "flag": "method.setter.WheresMyBrowser.LoadContentViewController.parentWeb",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC09parentWebF0So06UIViewG0CSgvs",
+        "lang": "swift",
+        "addr": 4295068944
+      },
+      {
+        "name": "parentWeb",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.parentWeb",
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC09parentWebF0So06UIViewG0CSgvM",
+        "lang": "swift",
+        "addr": 4295069068
+      },
+      {
+        "name": "htmlData",
+        "flag": "method.getter.WheresMyBrowser.LoadContentViewController.htmlData",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC8htmlDataSSvg",
+        "lang": "swift",
+        "addr": 4295069504
+      },
+      {
+        "name": "htmlData",
+        "flag": "method.setter.WheresMyBrowser.LoadContentViewController.htmlData",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC8htmlDataSSvs",
+        "lang": "swift",
+        "addr": 4295069616
+      },
+      {
+        "name": "htmlData",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.htmlData",
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC8htmlDataSSvM",
+        "lang": "swift",
+        "addr": 4295069772
+      },
+      {
+        "name": "htmlOrigin",
+        "flag": "method.getter.WheresMyBrowser.LoadContentViewController.htmlOrigin",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC10htmlOriginSSvg",
+        "lang": "swift",
+        "addr": 4295070204
+      },
+      {
+        "name": "htmlOrigin",
+        "flag": "method.setter.WheresMyBrowser.LoadContentViewController.htmlOrigin",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC10htmlOriginSSvs",
+        "lang": "swift",
+        "addr": 4295070316
+      },
+      {
+        "name": "htmlOrigin",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.htmlOrigin",
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC10htmlOriginSSvM",
+        "lang": "swift",
+        "addr": 4295070472
+      },
+      {
+        "name": "doneButtonPressed",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.doneButtonPressed",
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC17doneButtonPressedyyypF",
+        "lang": "swift",
+        "addr": 4295070612
+      },
+      {
+        "name": "cancelButtonPressed",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.cancelButtonPressed",
+        "rawname": "_$s15WheresMyBrowser25LoadContentViewControllerC19cancelButtonPressedyyypF",
+        "lang": "swift",
+        "addr": 4295072412
+      },
+      {
+        "name": "init",
+        "flag": "func.10001a134",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser25LoadContentViewControllerC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295074100
+      },
+      {
+        "name": "init",
+        "flag": "func.10001a17c",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser25LoadContentViewControllerC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295074172
+      },
+      {
+        "name": "unwind",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.unwind",
+        "rawname": "$s15WheresMyBrowser25LoadContentViewControllerC6unwind3for07towardsfG0ySo17UIStoryboardSegueC_So06UIViewG0CtF",
+        "lang": "swift",
+        "addr": 4295072604
+      },
+      {
+        "name": "init",
+        "flag": "func.100019d44",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser25LoadContentViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfC",
+        "lang": "swift",
+        "addr": 4295073092
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.LoadContentViewController.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser25LoadContentViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfc",
+        "lang": "swift",
+        "addr": 4295073292
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.deinit",
+        "rawname": "$s15WheresMyBrowser25LoadContentViewControllerCfD",
+        "lang": "swift",
+        "addr": 4295074728
+      }
+    ],
+    "fields": [
+      {
+        "name": "baseUrlTextField",
+        "kind": "property",
+        "type": "__C.UITextField?",
+        "addr": 4295135988
+      },
+      {
+        "name": "contentTextView",
+        "kind": "property",
+        "type": "__C.UITextView?",
+        "addr": 4295136000
+      },
+      {
+        "name": "parentWebView",
+        "kind": "property",
+        "type": "__C.UIViewController?",
+        "addr": 4295136012
+      },
+      {
+        "name": "htmlData",
+        "kind": "property",
+        "type": "Swift.String",
+        "addr": 4295136024
+      },
+      {
+        "name": "htmlOrigin",
+        "kind": "property",
+        "type": "Swift.String",
+        "addr": 4295136036
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.UIWebViewController",
+    "addr": 4295120484,
+    "lang": "swift",
+    "index": 15,
+    "super": [
+      "__C.UIViewController"
+    ],
+    "rawsuper": [
+      "__C.UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "urlBar",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.urlBar",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC6urlBarSo11UITextFieldCSgvg",
+        "lang": "swift",
+        "addr": 4295075216
+      },
+      {
+        "name": "urlBar",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.urlBar",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC6urlBarSo11UITextFieldCSgvs",
+        "lang": "swift",
+        "addr": 4295075392
+      },
+      {
+        "name": "urlBar",
+        "flag": "func.10001a7a8",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC6urlBarSo11UITextFieldCSgvM",
+        "lang": "swift",
+        "addr": 4295075752
+      },
+      {
+        "name": "uiWeb",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.uiWeb",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC05uiWebE0So0dE0CSgvg",
+        "lang": "swift",
+        "addr": 4295076152
+      },
+      {
+        "name": "uiWeb",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.uiWeb",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC05uiWebE0So0dE0CSgvs",
+        "lang": "swift",
+        "addr": 4295076328
+      },
+      {
+        "name": "uiWeb",
+        "flag": "method.WheresMyBrowser.UIWebViewController.uiWeb",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC05uiWebE0So0dE0CSgvM",
+        "lang": "swift",
+        "addr": 4295076688
+      },
+      {
+        "name": "progressBar",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.progressBar",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC11progressBarSo010UIProgressE0CSgvg",
+        "lang": "swift",
+        "addr": 4295077128
+      },
+      {
+        "name": "progressBar",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.progressBar",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC11progressBarSo010UIProgressE0CSgvs",
+        "lang": "swift",
+        "addr": 4295077304
+      },
+      {
+        "name": "progressBar",
+        "flag": "func.10001af20",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC11progressBarSo010UIProgressE0CSgvM",
+        "lang": "swift",
+        "addr": 4295077664
+      },
+      {
+        "name": "backButton",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.backButton",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC10backButtonSo8UIButtonCSgvg",
+        "lang": "swift",
+        "addr": 4295078064
+      },
+      {
+        "name": "backButton",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.backButton",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC10backButtonSo8UIButtonCSgvs",
+        "lang": "swift",
+        "addr": 4295078240
+      },
+      {
+        "name": "backButton",
+        "flag": "func.10001b2c8",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC10backButtonSo8UIButtonCSgvM",
+        "lang": "swift",
+        "addr": 4295078600
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.scenarioButton",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC14scenarioButtonSo05UIBarH4ItemCSgvg",
+        "lang": "swift",
+        "addr": 4295079000
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.scenarioButton",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC14scenarioButtonSo05UIBarH4ItemCSgvs",
+        "lang": "swift",
+        "addr": 4295079176
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "func.10001b670",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC14scenarioButtonSo05UIBarH4ItemCSgvM",
+        "lang": "swift",
+        "addr": 4295079536
+      },
+      {
+        "name": "progressBarTimer",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.progressBarTimer",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC16progressBarTimerSo7NSTimerCvg",
+        "lang": "swift",
+        "addr": 4295080144
+      },
+      {
+        "name": "progressBarTimer",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.progressBarTimer",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC16progressBarTimerSo7NSTimerCvs",
+        "lang": "swift",
+        "addr": 4295080244
+      },
+      {
+        "name": "progressBarTimer",
+        "flag": "method.WheresMyBrowser.UIWebViewController.progressBarTimer",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC16progressBarTimerSo7NSTimerCvM",
+        "lang": "swift",
+        "addr": 4295080372
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.progressBarPageLoaded",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC21progressBarPageLoadedSbvg",
+        "lang": "swift",
+        "addr": 4295080752
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.progressBarPageLoaded",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC21progressBarPageLoadedSbvs",
+        "lang": "swift",
+        "addr": 4295080852
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "flag": "method.WheresMyBrowser.UIWebViewController.progressBarPageLoaded",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC21progressBarPageLoadedSbvM",
+        "lang": "swift",
+        "addr": 4295080980
+      },
+      {
+        "name": "htmlData",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.htmlData",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC8htmlDataSSSgvg",
+        "lang": "swift",
+        "addr": 4295081384
+      },
+      {
+        "name": "htmlData",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.htmlData",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC8htmlDataSSSgvs",
+        "lang": "swift",
+        "addr": 4295081496
+      },
+      {
+        "name": "htmlData",
+        "flag": "method.WheresMyBrowser.UIWebViewController.htmlData",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC8htmlDataSSSgvM",
+        "lang": "swift",
+        "addr": 4295081648
+      },
+      {
+        "name": "loadUrlFromBar",
+        "flag": "method.WheresMyBrowser.UIWebViewController.loadUrlFromBar",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC14loadUrlFromBaryyF",
+        "lang": "swift",
+        "addr": 4295082372
+      },
+      {
+        "name": "showOkAlert",
+        "flag": "method.WheresMyBrowser.UIWebViewController.showOkAlert",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC11showOkAlert5title7messageySS_SStF",
+        "lang": "swift",
+        "addr": 4295084124
+      },
+      {
+        "name": "goToUrl",
+        "flag": "method.WheresMyBrowser.UIWebViewController.goToUrl",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC7goToUrlyyypF",
+        "lang": "swift",
+        "addr": 4295084424
+      },
+      {
+        "name": "backButtonPressed",
+        "flag": "method.WheresMyBrowser.UIWebViewController.backButtonPressed",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC17backButtonPressedyyypF",
+        "lang": "swift",
+        "addr": 4295084604
+      },
+      {
+        "name": "urlBarEditingGo",
+        "flag": "method.WheresMyBrowser.UIWebViewController.urlBarEditingGo",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC15urlBarEditingGoyySo11UITextFieldCF",
+        "lang": "swift",
+        "addr": 4295085196
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "flag": "func.10001cd28",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC24loadContentButtonPressedyySo05UIBarI4ItemCF",
+        "lang": "swift",
+        "addr": 4295085352
+      },
+      {
+        "name": "selectScenarioButtonPressed",
+        "flag": "method.WheresMyBrowser.UIWebViewController.selectScenarioButtonPressed",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC27selectScenarioButtonPressedyySo05UIBarI4ItemCF",
+        "lang": "swift",
+        "addr": 4295085464
+      },
+      {
+        "name": "unwindTo",
+        "flag": "method.WheresMyBrowser.UIWebViewController.unwindTo",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC08unwindTodE05segueySo17UIStoryboardSegueC_tF",
+        "lang": "swift",
+        "addr": 4295086136
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "flag": "method.getter.WheresMyBrowser.UIWebViewController.loadContentButtonPressed",
+        "flags": [
+          "getter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC24loadContentButtonPressedSo05UIBarI4ItemCSgvg",
+        "lang": "swift",
+        "addr": 4295087052
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "flag": "method.setter.WheresMyBrowser.UIWebViewController.loadContentButtonPressed",
+        "flags": [
+          "setter"
+        ],
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC24loadContentButtonPressedSo05UIBarI4ItemCSgvs",
+        "lang": "swift",
+        "addr": 4295087228
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "flag": "func.10001d5e4",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC24loadContentButtonPressedSo05UIBarI4ItemCSgvM",
+        "lang": "swift",
+        "addr": 4295087588
+      },
+      {
+        "name": "web",
+        "flag": "func.10001d724",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC03webE12DidStartLoadyySo0dE0CF",
+        "lang": "swift",
+        "addr": 4295087908
+      },
+      {
+        "name": "web",
+        "flag": "func.10001da58",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC03webE13DidFinishLoadyySo0dE0CF",
+        "lang": "swift",
+        "addr": 4295088728
+      },
+      {
+        "name": "web",
+        "flag": "func.10001e374",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC03webE0_20didFailLoadWithErrorySo0dE0C_s0L0_ptF",
+        "lang": "swift",
+        "addr": 4295091060
+      },
+      {
+        "name": "web",
+        "flag": "method.WheresMyBrowser.UIWebViewController.web",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC03webE0_19shouldStartLoadWith14navigationTypeSbSo0dE0C_10Foundation10URLRequestVSo0de10NavigationM0VtF",
+        "lang": "swift",
+        "addr": 4295093548
+      },
+      {
+        "name": "progressBarTimerCallback",
+        "flag": "func.100020120",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC24progressBarTimerCallbackyyF",
+        "lang": "swift",
+        "addr": 4295098656
+      },
+      {
+        "name": "showScenarioSelection",
+        "flag": "method.WheresMyBrowser.UIWebViewController.showScenarioSelection",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC21showScenarioSelectionyyF",
+        "lang": "swift",
+        "addr": 4295100140
+      },
+      {
+        "name": "loadScenario1",
+        "flag": "method.WheresMyBrowser.UIWebViewController.loadScenario1",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC13loadScenario1yyF",
+        "lang": "swift",
+        "addr": 4295101800
+      },
+      {
+        "name": "loadScenario2",
+        "flag": "method.WheresMyBrowser.UIWebViewController.loadScenario2",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC13loadScenario2yyF",
+        "lang": "swift",
+        "addr": 4295102644
+      },
+      {
+        "name": "loadScenario3",
+        "flag": "method.WheresMyBrowser.UIWebViewController.loadScenario3",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC13loadScenario3yyF",
+        "lang": "swift",
+        "addr": 4295104220
+      },
+      {
+        "name": "loadScenario4",
+        "flag": "method.WheresMyBrowser.UIWebViewController.loadScenario4",
+        "rawname": "_$s15WheresMyBrowser19UIWebViewControllerC13loadScenario4yyF",
+        "lang": "swift",
+        "addr": 4295105812
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "func.10001bf3c",
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerC11viewDidLoadyyF",
+        "lang": "swift",
+        "addr": 4295081788
+      },
+      {
+        "name": "didReceiveMemoryWarning",
+        "flag": "func.10001c0ec",
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerC23didReceiveMemoryWarningyyF",
+        "lang": "swift",
+        "addr": 4295082220
+      },
+      {
+        "name": "init",
+        "flag": "func.100022590",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerC5coderACSgSo7NSCoderC_tcfC",
+        "lang": "swift",
+        "addr": 4295107984
+      },
+      {
+        "name": "init",
+        "flag": "func.1000225d8",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerC5coderACSgSo7NSCoderC_tcfc",
+        "lang": "swift",
+        "addr": 4295108056
+      },
+      {
+        "name": "init",
+        "flag": "func.100022138",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfC",
+        "lang": "swift",
+        "addr": 4295106872
+      },
+      {
+        "name": "init",
+        "flag": "method.constructor.WheresMyBrowser.UIWebViewController.init",
+        "flags": [
+          "constructor"
+        ],
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerC7nibName6bundleACSSSg_So8NSBundleCSgtcfc",
+        "lang": "swift",
+        "addr": 4295107072
+      },
+      {
+        "name": "prepare",
+        "flag": "method.WheresMyBrowser.UIWebViewController.prepare",
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerC7prepare3for6senderySo17UIStoryboardSegueC_ypSgtF",
+        "lang": "swift",
+        "addr": 4295085620
+      },
+      {
+        "name": "deinit",
+        "flag": "method.WheresMyBrowser.UIWebViewController.deinit",
+        "rawname": "$s15WheresMyBrowser19UIWebViewControllerCfD",
+        "lang": "swift",
+        "addr": 4295108752
+      }
+    ],
+    "fields": [
+      {
+        "name": "urlBar",
+        "kind": "property",
+        "type": "__C.UITextField?",
+        "addr": 4295136064
+      },
+      {
+        "name": "uiWebView",
+        "kind": "property",
+        "type": "__C.UIWebView?",
+        "addr": 4295136076
+      },
+      {
+        "name": "progressBar",
+        "kind": "property",
+        "type": "__C.UIProgressView?",
+        "addr": 4295136088
+      },
+      {
+        "name": "backButton",
+        "kind": "property",
+        "type": "__C.UIButton?",
+        "addr": 4295136100
+      },
+      {
+        "name": "scenarioButton",
+        "kind": "property",
+        "type": "__C.UIBarButtonItem?",
+        "addr": 4295136112
+      },
+      {
+        "name": "progressBarTimer",
+        "kind": "property",
+        "type": "__C.NSTimer",
+        "addr": 4295136124
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "kind": "property",
+        "type": "Swift.Bool",
+        "addr": 4295136136
+      },
+      {
+        "name": "htmlData",
+        "kind": "property",
+        "type": "Swift.String?",
+        "addr": 4295136148
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "kind": "property",
+        "type": "__C.UIBarButtonItem?",
+        "addr": 4295136160
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKOptionsCellDelegate",
+    "addr": 4295119384,
+    "lang": "swift",
+    "attr": [
+      "interface"
+    ],
+    "index": 16
+  },
+  {
+    "classname": "WheresMyBrowser.WKWebViewController",
+    "rawclassname": "WheresMyBrowser.WKWebViewController_1",
+    "addr": 4295176568,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 17,
+    "super": [
+      "UIViewController"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "urlBar",
+        "flag": "method.WheresMyBrowser.WKWebViewController.urlBar",
+        "lang": "objc",
+        "addr": 4294973700
+      },
+      {
+        "name": "setUrlBar:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.setUrlBar:",
+        "lang": "objc",
+        "addr": 4294973872
+      },
+      {
+        "name": "progressBar",
+        "flag": "method.WheresMyBrowser.WKWebViewController.progressBar",
+        "lang": "objc",
+        "addr": 4294974676
+      },
+      {
+        "name": "setProgressBar:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.setProgressBar:",
+        "lang": "objc",
+        "addr": 4294974848
+      },
+      {
+        "name": "backButton",
+        "flag": "method.WheresMyBrowser.WKWebViewController.backButton",
+        "lang": "objc",
+        "addr": 4294975652
+      },
+      {
+        "name": "setBackButton:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.setBackButton:",
+        "lang": "objc",
+        "addr": 4294975824
+      },
+      {
+        "name": "wkWebViewPlaceholder",
+        "flag": "method.WheresMyBrowser.WKWebViewController.wkWebViewPlaceholder",
+        "lang": "objc",
+        "addr": 4294979248
+      },
+      {
+        "name": "setWkWebViewPlaceholder:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.setWkWebViewPlaceholder:",
+        "lang": "objc",
+        "addr": 4294979420
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "method.WheresMyBrowser.WKWebViewController.scenarioButton",
+        "lang": "objc",
+        "addr": 4294980224
+      },
+      {
+        "name": "setScenarioButton:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.setScenarioButton:",
+        "lang": "objc",
+        "addr": 4294980396
+      },
+      {
+        "name": "loadView",
+        "flag": "method.WheresMyBrowser.WKWebViewController.loadView",
+        "lang": "objc",
+        "addr": 4294985160
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "method.WheresMyBrowser.WKWebViewController.viewDidLoad",
+        "lang": "objc",
+        "addr": 4294985312
+      },
+      {
+        "name": "webView:didStartProvisionalNavigation:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.webView:didStartProvisionalNavigation:",
+        "lang": "objc",
+        "addr": 4294987204
+      },
+      {
+        "name": "webView:didFinishNavigation:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.webView:didFinishNavigation:",
+        "lang": "objc",
+        "addr": 4294988984
+      },
+      {
+        "name": "webView:didFailNavigation:withError:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.webView:didFailNavigation:withError:",
+        "lang": "objc",
+        "addr": 4294991160
+      },
+      {
+        "name": "webView:didFailProvisionalNavigation:withError:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.webView:didFailProvisionalNavigation:withError:",
+        "lang": "objc",
+        "addr": 4294993360
+      },
+      {
+        "name": "didReceiveMemoryWarning",
+        "flag": "method.WheresMyBrowser.WKWebViewController.didReceiveMemoryWarning",
+        "lang": "objc",
+        "addr": 4294993584
+      },
+      {
+        "name": "prepareForSegue:sender:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.prepareForSegue:sender:",
+        "lang": "objc",
+        "addr": 4294996016
+      },
+      {
+        "name": "unwindToWKWebViewWithSegue:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.unwindToWKWebViewWithSegue:",
+        "lang": "objc",
+        "addr": 4294997000
+      },
+      {
+        "name": "progressBarTimerCallback",
+        "flag": "method.WheresMyBrowser.WKWebViewController.progressBarTimerCallback",
+        "lang": "objc",
+        "addr": 4294997828
+      },
+      {
+        "name": "goToUrl:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.goToUrl:",
+        "lang": "objc",
+        "addr": 4295005092
+      },
+      {
+        "name": "backButtonPressed:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.backButtonPressed:",
+        "lang": "objc",
+        "addr": 4295005708
+      },
+      {
+        "name": "urlBarEditingGo:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.urlBarEditingGo:",
+        "lang": "objc",
+        "addr": 4295005888
+      },
+      {
+        "name": "selectScenarioButtonPressed:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.selectScenarioButtonPressed:",
+        "lang": "objc",
+        "addr": 4295006044
+      },
+      {
+        "name": "loadContentButtonPressed:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.loadContentButtonPressed:",
+        "lang": "objc",
+        "addr": 4295006156
+      },
+      {
+        "name": "initWithNibName:bundle:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.initWithNibName:bundle:",
+        "lang": "objc",
+        "addr": 4295007148
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.WKWebViewController.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295008020
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.WKWebViewController..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295008148
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "urlBar",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295176432
+      },
+      {
+        "name": "progressBar",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295176440
+      },
+      {
+        "name": "backButton",
+        "kind": "var",
+        "offset": 24,
+        "addr": 4295176448
+      },
+      {
+        "name": "wkWebView",
+        "kind": "var",
+        "offset": 32,
+        "addr": 4295176456
+      },
+      {
+        "name": "wkWebViewPreferencesManager",
+        "kind": "var",
+        "offset": 40,
+        "addr": 4295176464
+      },
+      {
+        "name": "progressBarTimer",
+        "kind": "var",
+        "offset": 48,
+        "addr": 4295176480
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "kind": "var",
+        "offset": 56,
+        "addr": 4295176488
+      },
+      {
+        "name": "wkWebViewPlaceholder",
+        "kind": "var",
+        "offset": 64,
+        "addr": 4295176496
+      },
+      {
+        "name": "scenarioButton",
+        "kind": "var",
+        "offset": 72,
+        "addr": 4295176504
+      },
+      {
+        "name": "urlBar",
+        "kind": "property",
+        "addr": 0
+      },
+      {
+        "name": "progressBar",
+        "kind": "property",
+        "offset": 1,
+        "addr": 0
+      },
+      {
+        "name": "backButton",
+        "kind": "property",
+        "offset": 2,
+        "addr": 0
+      },
+      {
+        "name": "wkWebViewPlaceholder",
+        "kind": "property",
+        "offset": 3,
+        "addr": 0
+      },
+      {
+        "name": "scenarioButton",
+        "kind": "property",
+        "offset": 4,
+        "addr": 0
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.AppDelegate",
+    "rawclassname": "WheresMyBrowser.AppDelegate_1",
+    "addr": 4295177008,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 18,
+    "super": [
+      "UIResponder"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UIResponder"
+    ],
+    "methods": [
+      {
+        "name": "window",
+        "flag": "method.WheresMyBrowser.AppDelegate.window",
+        "lang": "objc",
+        "addr": 4295011020
+      },
+      {
+        "name": "setWindow:",
+        "flag": "method.WheresMyBrowser.AppDelegate.setWindow:",
+        "lang": "objc",
+        "addr": 4295011192
+      },
+      {
+        "name": "application:didFinishLaunchingWithOptions:",
+        "flag": "method.WheresMyBrowser.AppDelegate.application:didFinishLaunchingWithOptions:",
+        "lang": "objc",
+        "addr": 4295016996
+      },
+      {
+        "name": "applicationWillResignActive:",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationWillResignActive:",
+        "lang": "objc",
+        "addr": 4295017284
+      },
+      {
+        "name": "applicationDidEnterBackground:",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationDidEnterBackground:",
+        "lang": "objc",
+        "addr": 4295017396
+      },
+      {
+        "name": "applicationWillEnterForeground:",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationWillEnterForeground:",
+        "lang": "objc",
+        "addr": 4295017508
+      },
+      {
+        "name": "applicationDidBecomeActive:",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationDidBecomeActive:",
+        "lang": "objc",
+        "addr": 4295017620
+      },
+      {
+        "name": "applicationWillTerminate:",
+        "flag": "method.WheresMyBrowser.AppDelegate.applicationWillTerminate:",
+        "lang": "objc",
+        "addr": 4295017732
+      },
+      {
+        "name": "init",
+        "flag": "method.WheresMyBrowser.AppDelegate.init",
+        "lang": "objc",
+        "addr": 4295018044
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.AppDelegate..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295018148
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "window",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295176896
+      },
+      {
+        "name": "window",
+        "kind": "property",
+        "addr": 0
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.JavaScriptBridgeMessageHandler",
+    "rawclassname": "WheresMyBrowser.JavaScriptBridgeMessageHandler_1",
+    "addr": 4295177216,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 19,
+    "super": [
+      "NSObject"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_NSObject"
+    ],
+    "methods": [
+      {
+        "name": "userContentController:didReceiveScriptMessage:",
+        "flag": "method.WheresMyBrowser.JavaScriptBridgeMessageHandler.userContentController:didReceiveScriptMessage:",
+        "lang": "objc",
+        "addr": 4295021948
+      },
+      {
+        "name": "init",
+        "flag": "method.WheresMyBrowser.JavaScriptBridgeMessageHandler.init",
+        "lang": "objc",
+        "addr": 4295022200
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.AboutViewController",
+    "rawclassname": "WheresMyBrowser.AboutViewController_1",
+    "addr": 4295177368,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 20,
+    "super": [
+      "UIViewController"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "versionLabel",
+        "flag": "method.WheresMyBrowser.AboutViewController.versionLabel",
+        "lang": "objc",
+        "addr": 4295022344
+      },
+      {
+        "name": "setVersionLabel:",
+        "flag": "method.WheresMyBrowser.AboutViewController.setVersionLabel:",
+        "lang": "objc",
+        "addr": 4295022516
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "method.WheresMyBrowser.AboutViewController.viewDidLoad",
+        "lang": "objc",
+        "addr": 4295024308
+      },
+      {
+        "name": "initWithNibName:bundle:",
+        "flag": "method.WheresMyBrowser.AboutViewController.initWithNibName:bundle:",
+        "lang": "objc",
+        "addr": 4295024916
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.AboutViewController.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295025428
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.AboutViewController..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295025556
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "versionLabel",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295177360
+      },
+      {
+        "name": "versionLabel",
+        "kind": "property",
+        "addr": 0
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.DocumentationViewController",
+    "rawclassname": "WheresMyBrowser.DocumentationViewController_1",
+    "addr": 4295177408,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 21,
+    "super": [
+      "UIViewController"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "initWithNibName:bundle:",
+        "flag": "method.WheresMyBrowser.DocumentationViewController.initWithNibName:bundle:",
+        "lang": "objc",
+        "addr": 4295026188
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.DocumentationViewController.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295026648
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.MainTabBarViewController",
+    "rawclassname": "WheresMyBrowser.MainTabBarViewController_1",
+    "addr": 4295177496,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 22,
+    "super": [
+      "UITabBarController"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UITabBarController"
+    ],
+    "methods": [
+      {
+        "name": "viewDidAppear:",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.viewDidAppear:",
+        "lang": "objc",
+        "addr": 4295030912
+      },
+      {
+        "name": "initWithNibName:bundle:",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.initWithNibName:bundle:",
+        "lang": "objc",
+        "addr": 4295036072
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295036644
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.MainTabBarViewController..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295036772
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "checkedForUpdates",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295177448
+      },
+      {
+        "name": "updatesURL",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295177456
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKOptionsViewCell",
+    "rawclassname": "WheresMyBrowser.WKOptionsViewCell_1",
+    "addr": 4295177656,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 23,
+    "super": [
+      "UITableViewCell"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UITableViewCell"
+    ],
+    "methods": [
+      {
+        "name": "optionsSwitch",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.optionsSwitch",
+        "lang": "objc",
+        "addr": 4295041036
+      },
+      {
+        "name": "setOptionsSwitch:",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.setOptionsSwitch:",
+        "lang": "objc",
+        "addr": 4295041208
+      },
+      {
+        "name": "optionsNameLabel",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.optionsNameLabel",
+        "lang": "objc",
+        "addr": 4295042012
+      },
+      {
+        "name": "setOptionsNameLabel:",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.setOptionsNameLabel:",
+        "lang": "objc",
+        "addr": 4295042184
+      },
+      {
+        "name": "optionsDescriptionLabel",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.optionsDescriptionLabel",
+        "lang": "objc",
+        "addr": 4295042948
+      },
+      {
+        "name": "setOptionsDescriptionLabel:",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.setOptionsDescriptionLabel:",
+        "lang": "objc",
+        "addr": 4295043120
+      },
+      {
+        "name": "switchToggle:",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.switchToggle:",
+        "lang": "objc",
+        "addr": 4295049896
+      },
+      {
+        "name": "initWithStyle:reuseIdentifier:",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.initWithStyle:reuseIdentifier:",
+        "lang": "objc",
+        "addr": 4295050844
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295051632
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.WKOptionsViewCell..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295051760
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "optionsSwitch",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295177568
+      },
+      {
+        "name": "optionsNameLabel",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295177576
+      },
+      {
+        "name": "optionsDescriptionLabel",
+        "kind": "var",
+        "offset": 24,
+        "addr": 4295177584
+      },
+      {
+        "name": "delegate",
+        "kind": "var",
+        "offset": 32,
+        "addr": 4295177592
+      },
+      {
+        "name": "optionId",
+        "kind": "var",
+        "offset": 72,
+        "addr": 4295177600
+      },
+      {
+        "name": "optionName",
+        "kind": "var",
+        "offset": 88,
+        "addr": 4295177608
+      },
+      {
+        "name": "optionDescription",
+        "kind": "var",
+        "offset": 104,
+        "addr": 4295177616
+      },
+      {
+        "name": "enabled",
+        "kind": "var",
+        "offset": 120,
+        "addr": 4295177624
+      },
+      {
+        "name": "optionsSwitch",
+        "kind": "property",
+        "addr": 0
+      },
+      {
+        "name": "optionsNameLabel",
+        "kind": "property",
+        "offset": 1,
+        "addr": 0
+      },
+      {
+        "name": "optionsDescriptionLabel",
+        "kind": "property",
+        "offset": 2,
+        "addr": 0
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKPreferencesViewController",
+    "rawclassname": "WheresMyBrowser.WKPreferencesViewController_1",
+    "addr": 4295177696,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 24,
+    "super": [
+      "UITableViewController"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UITableViewController"
+    ],
+    "methods": [
+      {
+        "name": "preferencesTableView",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.preferencesTableView",
+        "lang": "objc",
+        "addr": 4295052588
+      },
+      {
+        "name": "setPreferencesTableView:",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.setPreferencesTableView:",
+        "lang": "objc",
+        "addr": 4295052760
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.viewDidLoad",
+        "lang": "objc",
+        "addr": 4295053596
+      },
+      {
+        "name": "tableView:numberOfRowsInSection:",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.tableView:numberOfRowsInSection:",
+        "lang": "objc",
+        "addr": 4295054136
+      },
+      {
+        "name": "tableView:cellForRowAtIndexPath:",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.tableView:cellForRowAtIndexPath:",
+        "lang": "objc",
+        "addr": 4295055460
+      },
+      {
+        "name": "initWithStyle:",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.initWithStyle:",
+        "lang": "objc",
+        "addr": 4295056156
+      },
+      {
+        "name": "initWithNibName:bundle:",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.initWithNibName:bundle:",
+        "lang": "objc",
+        "addr": 4295056776
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295057324
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.WKPreferencesViewController..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295057452
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "preferencesManager",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295177640
+      },
+      {
+        "name": "preferencesTableView",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295177648
+      },
+      {
+        "name": "preferencesTableView",
+        "kind": "property",
+        "addr": 0
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKWebViewPreferencesManager",
+    "rawclassname": "WheresMyBrowser.WKWebViewPreferencesManager_1",
+    "addr": 4295177784,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 25,
+    "super": [
+      "Swift._SwiftObject"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$__TtCs12_SwiftObject"
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "wkWebView",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295119848
+      },
+      {
+        "name": "wkWebViewPreferences",
+        "kind": "var",
+        "offset": 24,
+        "addr": 4295119856
+      },
+      {
+        "name": "wkWebViewConfiguration",
+        "kind": "var",
+        "offset": 32,
+        "addr": 4295119864
+      },
+      {
+        "name": "options",
+        "kind": "var",
+        "offset": 40,
+        "addr": 4295119872
+      },
+      {
+        "name": "option_ids",
+        "kind": "var",
+        "offset": 48,
+        "addr": 4295119880
+      },
+      {
+        "name": "options_dict",
+        "kind": "var",
+        "offset": 56,
+        "addr": 4295119888
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting",
+    "rawclassname": "WheresMyBrowser.WKWebViewPreferencesManager.WebViewSetting_1",
+    "addr": 4295178088,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 26,
+    "super": [
+      "Swift._SwiftObject"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$__TtCs12_SwiftObject"
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "id",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295120104
+      },
+      {
+        "name": "name",
+        "kind": "var",
+        "offset": 32,
+        "addr": 4295120112
+      },
+      {
+        "name": "description",
+        "kind": "var",
+        "offset": 48,
+        "addr": 4295120120
+      },
+      {
+        "name": "value",
+        "kind": "var",
+        "offset": 64,
+        "addr": 4295120128
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.LoadContentViewController",
+    "rawclassname": "WheresMyBrowser.LoadContentViewController_1",
+    "addr": 4295178328,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 27,
+    "super": [
+      "UIViewController"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "baseUrlTextField",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.baseUrlTextField",
+        "lang": "objc",
+        "addr": 4295066696
+      },
+      {
+        "name": "setBaseUrlTextField:",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.setBaseUrlTextField:",
+        "lang": "objc",
+        "addr": 4295066868
+      },
+      {
+        "name": "contentTextView",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.contentTextView",
+        "lang": "objc",
+        "addr": 4295067632
+      },
+      {
+        "name": "setContentTextView:",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.setContentTextView:",
+        "lang": "objc",
+        "addr": 4295067804
+      },
+      {
+        "name": "doneButtonPressed:",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.doneButtonPressed:",
+        "lang": "objc",
+        "addr": 4295072304
+      },
+      {
+        "name": "cancelButtonPressed:",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.cancelButtonPressed:",
+        "lang": "objc",
+        "addr": 4295072496
+      },
+      {
+        "name": "unwindForSegue:towardsViewController:",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.unwindForSegue:towardsViewController:",
+        "lang": "objc",
+        "addr": 4295072984
+      },
+      {
+        "name": "initWithNibName:bundle:",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.initWithNibName:bundle:",
+        "lang": "objc",
+        "addr": 4295073916
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.LoadContentViewController.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295074672
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.LoadContentViewController..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295074800
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "baseUrlTextField",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295178288
+      },
+      {
+        "name": "contentTextView",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295178296
+      },
+      {
+        "name": "parentWebView",
+        "kind": "var",
+        "offset": 24,
+        "addr": 4295178304
+      },
+      {
+        "name": "htmlData",
+        "kind": "var",
+        "offset": 32,
+        "addr": 4295178312
+      },
+      {
+        "name": "htmlOrigin",
+        "kind": "var",
+        "offset": 48,
+        "addr": 4295178320
+      },
+      {
+        "name": "baseUrlTextField",
+        "kind": "property",
+        "addr": 0
+      },
+      {
+        "name": "contentTextView",
+        "kind": "property",
+        "offset": 1,
+        "addr": 0
+      }
+    ]
+  },
+  {
+    "classname": "WheresMyBrowser.UIWebViewController",
+    "rawclassname": "WheresMyBrowser.UIWebViewController_1",
+    "addr": 4295178472,
+    "lang": "objc",
+    "attr": [
+      "public"
+    ],
+    "index": 28,
+    "super": [
+      "UIViewController"
+    ],
+    "rawsuper": [
+      "_OBJC_CLASS_$_UIViewController"
+    ],
+    "methods": [
+      {
+        "name": "urlBar",
+        "flag": "method.WheresMyBrowser.UIWebViewController.urlBar",
+        "lang": "objc",
+        "addr": 4295075144
+      },
+      {
+        "name": "setUrlBar:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.setUrlBar:",
+        "lang": "objc",
+        "addr": 4295075316
+      },
+      {
+        "name": "uiWebView",
+        "flag": "method.WheresMyBrowser.UIWebViewController.uiWebView",
+        "lang": "objc",
+        "addr": 4295076080
+      },
+      {
+        "name": "setUiWebView:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.setUiWebView:",
+        "lang": "objc",
+        "addr": 4295076252
+      },
+      {
+        "name": "progressBar",
+        "flag": "method.WheresMyBrowser.UIWebViewController.progressBar",
+        "lang": "objc",
+        "addr": 4295077056
+      },
+      {
+        "name": "setProgressBar:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.setProgressBar:",
+        "lang": "objc",
+        "addr": 4295077228
+      },
+      {
+        "name": "backButton",
+        "flag": "method.WheresMyBrowser.UIWebViewController.backButton",
+        "lang": "objc",
+        "addr": 4295077992
+      },
+      {
+        "name": "setBackButton:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.setBackButton:",
+        "lang": "objc",
+        "addr": 4295078164
+      },
+      {
+        "name": "scenarioButton",
+        "flag": "method.WheresMyBrowser.UIWebViewController.scenarioButton",
+        "lang": "objc",
+        "addr": 4295078928
+      },
+      {
+        "name": "setScenarioButton:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.setScenarioButton:",
+        "lang": "objc",
+        "addr": 4295079100
+      },
+      {
+        "name": "viewDidLoad",
+        "flag": "method.WheresMyBrowser.UIWebViewController.viewDidLoad",
+        "lang": "objc",
+        "addr": 4295082160
+      },
+      {
+        "name": "didReceiveMemoryWarning",
+        "flag": "method.WheresMyBrowser.UIWebViewController.didReceiveMemoryWarning",
+        "lang": "objc",
+        "addr": 4295082312
+      },
+      {
+        "name": "goToUrl:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.goToUrl:",
+        "lang": "objc",
+        "addr": 4295084496
+      },
+      {
+        "name": "backButtonPressed:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.backButtonPressed:",
+        "lang": "objc",
+        "addr": 4295085088
+      },
+      {
+        "name": "urlBarEditingGo:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.urlBarEditingGo:",
+        "lang": "objc",
+        "addr": 4295085268
+      },
+      {
+        "name": "loadContentButtonPressed:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.loadContentButtonPressed:",
+        "lang": "objc",
+        "addr": 4295085380
+      },
+      {
+        "name": "selectScenarioButtonPressed:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.selectScenarioButtonPressed:",
+        "lang": "objc",
+        "addr": 4295085536
+      },
+      {
+        "name": "prepareForSegue:sender:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.prepareForSegue:sender:",
+        "lang": "objc",
+        "addr": 4295085928
+      },
+      {
+        "name": "unwindToUIWebViewWithSegue:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.unwindToUIWebViewWithSegue:",
+        "lang": "objc",
+        "addr": 4295086888
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "flag": "method.WheresMyBrowser.UIWebViewController.loadContentButtonPressed",
+        "lang": "objc",
+        "addr": 4295086980
+      },
+      {
+        "name": "setLoadContentButtonPressed:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.setLoadContentButtonPressed:",
+        "lang": "objc",
+        "addr": 4295087152
+      },
+      {
+        "name": "webViewDidStartLoad:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.webViewDidStartLoad:",
+        "lang": "objc",
+        "addr": 4295088644
+      },
+      {
+        "name": "webViewDidFinishLoad:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.webViewDidFinishLoad:",
+        "lang": "objc",
+        "addr": 4295090976
+      },
+      {
+        "name": "webView:didFailLoadWithError:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.webView:didFailLoadWithError:",
+        "lang": "objc",
+        "addr": 4295093440
+      },
+      {
+        "name": "webView:shouldStartLoadWithRequest:navigationType:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.webView:shouldStartLoadWithRequest:navigationType:",
+        "lang": "objc",
+        "addr": 4295098428
+      },
+      {
+        "name": "progressBarTimerCallback",
+        "flag": "method.WheresMyBrowser.UIWebViewController.progressBarTimerCallback",
+        "lang": "objc",
+        "addr": 4295100080
+      },
+      {
+        "name": "initWithNibName:bundle:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.initWithNibName:bundle:",
+        "lang": "objc",
+        "addr": 4295107800
+      },
+      {
+        "name": "initWithCoder:",
+        "flag": "method.WheresMyBrowser.UIWebViewController.initWithCoder:",
+        "lang": "objc",
+        "addr": 4295108696
+      },
+      {
+        "name": ".cxx_destruct",
+        "flag": "method.WheresMyBrowser.UIWebViewController..cxx_destruct",
+        "lang": "objc",
+        "addr": 4295108824
+      }
+    ],
+    "fields": [
+      {
+        "name": "isa",
+        "kind": "var",
+        "type": "struct objc_class *",
+        "size": 8,
+        "addr": 0
+      },
+      {
+        "name": "urlBar",
+        "kind": "var",
+        "offset": 8,
+        "addr": 4295178368
+      },
+      {
+        "name": "uiWebView",
+        "kind": "var",
+        "offset": 16,
+        "addr": 4295178376
+      },
+      {
+        "name": "progressBar",
+        "kind": "var",
+        "offset": 24,
+        "addr": 4295178384
+      },
+      {
+        "name": "backButton",
+        "kind": "var",
+        "offset": 32,
+        "addr": 4295178392
+      },
+      {
+        "name": "scenarioButton",
+        "kind": "var",
+        "offset": 40,
+        "addr": 4295178400
+      },
+      {
+        "name": "progressBarTimer",
+        "kind": "var",
+        "offset": 48,
+        "addr": 4295178416
+      },
+      {
+        "name": "progressBarPageLoaded",
+        "kind": "var",
+        "offset": 56,
+        "addr": 4295178424
+      },
+      {
+        "name": "htmlData",
+        "kind": "var",
+        "offset": 64,
+        "addr": 4295178432
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "kind": "var",
+        "offset": 80,
+        "addr": 4295178448
+      },
+      {
+        "name": "urlBar",
+        "kind": "property",
+        "addr": 0
+      },
+      {
+        "name": "uiWebView",
+        "kind": "property",
+        "offset": 1,
+        "addr": 0
+      },
+      {
+        "name": "progressBar",
+        "kind": "property",
+        "offset": 2,
+        "addr": 0
+      },
+      {
+        "name": "backButton",
+        "kind": "property",
+        "offset": 3,
+        "addr": 0
+      },
+      {
+        "name": "scenarioButton",
+        "kind": "property",
+        "offset": 4,
+        "addr": 0
+      },
+      {
+        "name": "loadContentButtonPressed",
+        "kind": "property",
+        "offset": 5,
+        "addr": 0
+      }
+    ]
+  },
+  {
+    "classname": "WKWebViewController",
+    "addr": 0,
+    "index": 29,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.WKWebViewController.allocator",
+        "flag": "method.WKWebViewController.symbolic_WheresMyBrowser.WKWebViewController.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser19WKWebViewControllerC",
+        "addr": 4295133316
+      }
+    ]
+  },
+  {
+    "classname": "WKWebViewPreferencesManager",
+    "addr": 0,
+    "index": 30,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.WKWebViewPreferencesManager.allocator",
+        "flag": "sym.WKWebViewPreferencesManager._symbolic______Sg_15WheresMyBrowser27WKWebViewPreferencesManagerC",
+        "rawname": "_symbolic _____Sg 15WheresMyBrowser27WKWebViewPreferencesManagerC",
+        "addr": 4295133424
+      },
+      {
+        "name": "symbolic WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting",
+        "flag": "sym.WKWebViewPreferencesManager._symbolic_SS______t_15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC",
+        "rawname": "_symbolic SS______t 15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC",
+        "addr": 4295134038
+      },
+      {
+        "name": "symbolic WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting",
+        "flag": "sym.WKWebViewPreferencesManager._symbolic_Say_____G_15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC",
+        "rawname": "_symbolic Say_____G 15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC",
+        "addr": 4295134048
+      },
+      {
+        "name": "symbolic WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting",
+        "flag": "sym.WKWebViewPreferencesManager._symbolic_SDySS_____G_15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC",
+        "rawname": "_symbolic SDySS_____G 15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC",
+        "addr": 4295134076
+      },
+      {
+        "name": "symbolic WheresMyBrowser.WKWebViewPreferencesManager.allocator",
+        "flag": "method.WKWebViewPreferencesManager.symbolic_WheresMyBrowser.WKWebViewPreferencesManager.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser27WKWebViewPreferencesManagerC",
+        "addr": 4295134088
+      },
+      {
+        "name": "symbolic WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting",
+        "flag": "method.WKWebViewPreferencesManager.symbolic_WheresMyBrowser.WKWebViewPreferencesManager.Web.allocator.Setting",
+        "rawname": "_symbolic _____ 15WheresMyBrowser27WKWebViewPreferencesManagerC03WebE7SettingC",
+        "addr": 4295134156
+      }
+    ]
+  },
+  {
+    "classname": "AppDelegate",
+    "addr": 0,
+    "index": 31,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.AppDelegate.allocator",
+        "flag": "method.AppDelegate.symbolic_WheresMyBrowser.AppDelegate.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser11AppDelegateC",
+        "addr": 4295133606
+      }
+    ]
+  },
+  {
+    "classname": "JavaScriptBridgeMessageHandler",
+    "addr": 0,
+    "index": 32,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.JavaScriptBridgeMessageHandler.allocator",
+        "flag": "method.JavaScriptBridgeMessageHandler.symbolic_WheresMyBrowser.JavaScriptBridgeMessageHandler.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser30JavaScriptBridgeMessageHandlerC",
+        "addr": 4295133732
+      }
+    ]
+  },
+  {
+    "classname": "AboutViewController",
+    "addr": 0,
+    "index": 33,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.AboutViewController.allocator",
+        "flag": "method.AboutViewController.symbolic_WheresMyBrowser.AboutViewController.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser19AboutViewControllerC",
+        "addr": 4295133738
+      }
+    ]
+  },
+  {
+    "classname": "DocumentationViewController",
+    "addr": 0,
+    "index": 34,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.DocumentationViewController.allocator",
+        "flag": "method.DocumentationViewController.symbolic_WheresMyBrowser.DocumentationViewController.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser27DocumentationViewControllerC",
+        "addr": 4295133760
+      }
+    ]
+  },
+  {
+    "classname": "MainTabBarViewController",
+    "addr": 0,
+    "index": 35,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.MainTabBarViewController.allocator",
+        "flag": "method.MainTabBarViewController.symbolic_WheresMyBrowser.MainTabBarViewController.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser24MainTabBarViewControllerC",
+        "addr": 4295133794
+      }
+    ]
+  },
+  {
+    "classname": "WKOptionsCellDelegate",
+    "addr": 0,
+    "index": 36,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.WKOptionsCellDelegate.",
+        "flag": "sym.WKOptionsCellDelegate._symbolic__s15WheresMyBrowser21WKOptionsCellDelegateP",
+        "rawname": "_symbolic $s15WheresMyBrowser21WKOptionsCellDelegateP",
+        "addr": 4295133878
+      },
+      {
+        "name": "symbolic WheresMyBrowser.WKOptionsCellDelegate.",
+        "flag": "method.WKOptionsCellDelegate.symbolic_WheresMyBrowser.WKOptionsCellDelegate.",
+        "rawname": "_symbolic ______pSg 15WheresMyBrowser21WKOptionsCellDelegateP",
+        "addr": 4295133968
+      }
+    ]
+  },
+  {
+    "classname": "WKOptionsViewCell",
+    "addr": 0,
+    "index": 37,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.WKOptionsViewCell.allocator",
+        "flag": "method.WKOptionsViewCell.symbolic_WheresMyBrowser.WKOptionsViewCell.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser17WKOptionsViewCellC",
+        "addr": 4295133944
+      }
+    ]
+  },
+  {
+    "classname": "WKPreferencesViewController",
+    "addr": 0,
+    "index": 38,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.WKPreferencesViewController.allocator",
+        "flag": "method.WKPreferencesViewController.symbolic_WheresMyBrowser.WKPreferencesViewController.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser27WKPreferencesViewControllerC",
+        "addr": 4295134012
+      }
+    ]
+  },
+  {
+    "classname": "LoadContentViewController",
+    "addr": 0,
+    "index": 39,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.LoadContentViewController.allocator",
+        "flag": "method.LoadContentViewController.symbolic_WheresMyBrowser.LoadContentViewController.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser25LoadContentViewControllerC",
+        "addr": 4295134162
+      }
+    ]
+  },
+  {
+    "classname": "UIWebViewController",
+    "addr": 0,
+    "index": 40,
+    "methods": [
+      {
+        "name": "symbolic WheresMyBrowser.UIWebViewController.allocator",
+        "flag": "method.UIWebViewController.symbolic_WheresMyBrowser.UIWebViewController.allocator",
+        "rawname": "_symbolic _____ 15WheresMyBrowser19UIWebViewControllerC",
+        "addr": 4295134220
+      }
+    ]
+  }
+]
+EOF
+RUN
+
+NAME=mach0 swift type descriptors repeated in __swift5_types are listed once
+FILE=bins/mach0/Alamofire-stripped
+CMDS=<<EOF
+icq~__C.sockaddr,__C.FileAttributeKey
+EOF
+EXPECT=<<EOF
+0x0006f7e8 [0x0006f7e8 - 0x0006f7e8] swift __C.sockaddr
+0x0006ebf8 [0x0006ebf8 - 0x0006ebf8] swift __C.sockaddr_in
+0x0006ec4c [0x0006ec4c - 0x0006ec4c] swift __C.FileAttributeKey
+EOF
+RUN
+
+NAME=mach0 swift field lists shared by many types do not add up to more than the file
+# synthetic, six struct descriptors point at the same field descriptor of 16 records
+FILE=bins/mach0/swift-shared-fields
+TIMEOUT=10
+CMDS=<<EOF
+icq~?
+ic~property?
+EOF
+EXPECT=<<EOF
+6
+96
+EOF
+RUN
+
+NAME=mach0 swift types repeated 1024 times in __swift5_types load once
+FILE=bins/mach0/swift-repeated-types
+TIMEOUT=10
+CMDS=<<EOF
+icq~?
+ic~property?
+EOF
+EXPECT=<<EOF
+1
+64
+EOF
+EXPECT_ERR=<<EOF
+WARN: The swift metadata adds up to more than 4 times the file size, ignoring the rest
+ERROR: Chopped classlist data
+EOF
+RUN
+
+NAME=swift symbols with deeply nested contexts load quickly
+FILE=bins/mach0/swift-nested-symbol-contexts
+TIMEOUT=40
+CMDS=<<EOF
+i~^lang
+is~?
+EOF
+EXPECT=<<EOF
+lang     swift
+682
+EOF
+RUN
+
+NAME=swift cc gives no self or error to the c main
+FILE=bins/mach0/swift5.1-throwError
+CMDS=<<EOF
+e anal.cc=swift
+aa
+afvr@main
+afvr@0x100001a70
+EOF
+EXPECT=<<EOF
+arg int argc @ rdi
+arg char ** argv @ rsi
 arg int64_t self @ r13
 arg int64_t error @ r12
 EOF
 RUN
 
-NAME=swift-x86-64 calling convention json
-FILE=bins/mach0/swift5.1-throwError
+NAME=swift cc gives no self or error to c++ helpers
+FILE=bins/mach0/swift-main
 CMDS=<<EOF
-s sym.__s10throwError7ThrowerC0a2MyB0yyKF
-af
-afc swift
-afva
-afcrj
-afvj
+e anal.cc=swift
+aa
+afvr @@F~self,error~?
 EOF
 EXPECT=<<EOF
-{"ret":"rax","args":["rdi","rsi","rdx","rcx","r8","r9","xmm0","xmm1","xmm2","xmm3","xmm4"],"self":"r13","error":"r12"}
-{"sp":[],"bp":[{"name":"var_28h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-40}},{"name":"var_20h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-32}},{"name":"var_18h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-24}},{"name":"var_10h","kind":"var","type":"int64_t","ref":{"base":"rbp","offset":-16}}],"reg":[{"name":"self","kind":"reg","type":"int64_t","ref":"r13"},{"name":"error","kind":"reg","type":"int64_t","ref":"r12"}]}
+0
+EOF
+RUN
+
+NAME=swift cc keeps usage roles when the bin only has a func start symbol
+FILE=bins/mach0/PasswordCheck-swift
+CMDS=<<EOF
+e anal.cc=swift
+aa
+is.@0x100002840~func.
+afvr@0x100002840
+EOF
+EXPECT=<<EOF
+405 0x00002840 0x100002840 LOCAL FUNC 0        func.100002840
+arg int64_t self @ x20
+EOF
+RUN
+
+NAME=swift cc roles look up the bin symbol of a rebased closure
+FILE=bins/mach0/WheresMyBrowser
+ARGS=-B 0xffffc978
+CMDS=<<EOF
+e bin.demangle=false
+e anal.cc=swift
+af@0x10000c6fc
+afvr@0x10000c6fc~self,error
+EOF
+EXPECT=<<EOF
+arg int64_t error @ x21
+EOF
+RUN
+
+NAME=function start symbol keeps a named symbol's rawname and names its own flag otherwise
+FILE=bins/mach0/WheresMyBrowser
+CMDS=<<EOF
+fu sym.WheresMyBrowser.MainTabBarViewController.checkForUpdates.allocator~rawn
+fu sym.func.10000a6b8~rawn
+EOF
+EXPECT=<<EOF
+rawn _$s15WheresMyBrowser24MainTabBarViewControllerC15checkForUpdatesyyFy10Foundation4DataVSg_So13NSURLResponseCSgs5Error_pSgtYbcfU_
+rawn func.10000a6b8
+EOF
+RUN
+
+NAME=function start symbol keeps its own flag without demangling
+FILE=bins/mach0/WheresMyBrowser
+ARGS=-e bin.demangle=false
+CMDS=<<EOF
+fu sym.func.10000fd84~rawn
+EOF
+EXPECT=<<EOF
+rawn func.10000fd84
 EOF
 RUN

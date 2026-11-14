@@ -44,11 +44,11 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=subhelp commands
 FILE=malloc://1024
 CMDS=<<EOF
 ?v
 ?=
-??
 ?e
 ?b
 ?f
@@ -65,13 +65,17 @@ EOF
 EXPECT=<<EOF
 0
 0x0
-0
 
 0b
+| ?f [num] [str]  map each bit of the number as flag string index
 0x00000000
 
 0
 0
+Usage: ?t[0,1] [cmd]
+| ?t pd 32  show time needed to run 'pd 32'
+| ?t0       select first visual tab
+| ?t1       select next visual tab
 0x0
 0x0
 0x0
@@ -148,9 +152,10 @@ unit    1
 segment 0000:0001
 string  "\x01"
 fvalue  1.0
-float   0.000000f
-double  0.000000
+float   0.000000000000000f
+double  0.000000000000000
 binary  0b00000001
+base36  0_1
 ternary 0t1
 1
 EOF
@@ -168,9 +173,10 @@ unit    0
 segment 0000:0000
 string  "\0"
 fvalue  0.0
-float   0.000000f
-double  0.000000
+float   0.000000000000000f
+double  0.000000000000000
 binary  0b00000000
+base36  0_0
 ternary 0t0
 0
 EOF
@@ -191,6 +197,7 @@ fvalue  -1.0
 float   nanf
 double  nan
 binary  0b1111111111111111111111111111111111111111111111111111111111111111
+base36  0_3w5e11264sgsf
 ternary 0t11112220022122120101211020120210210211220
 EOF
 RUN
@@ -207,9 +214,10 @@ unit    2
 segment 0000:0002
 string  "\x02"
 fvalue  3.0
-float   0.000000f
-double  0.000000
+float   0.000000000000000f
+double  0.000000000000000
 binary  0b00000010
+base36  0_2
 ternary 0t2
 EOF
 RUN
@@ -218,7 +226,7 @@ NAME="?*"
 FILE=--
 CMDS=<<EOF
 ?*~?display zignspace
-?*~?List all loaded types as json
+?*~?list all loaded types as json
 EOF
 EXPECT=<<EOF
 1
@@ -278,4 +286,103 @@ EXPECT=<<EOF
 0x0
 0x1
 EOF
+RUN
+
+NAME=?== strcmp
+CMDS=<<EOF
+?== test test; ?! echo ok
+$a=$test
+$b=$test
+?== `$a` `$b`; ?! echo ok
+EOF
+EXPECT=<<EOF
+ok
+ok
+EOF
+RUN
+
+NAME=?d help
+CMDS=<<EOF
+-a x86; -b 64
+?d 0x90
+EOF
+EXPECT=<<EOF
+bedec   nop
+ledec   add byte [rax], al
+EOF
+RUN
+
+NAME=agD help without a function
+FILE=malloc://1
+CMDS=<<EOF
+agD?
+EOF
+EXPECT=<<EOF
+Usage: agD[format]  Show the current function dominator tree
+| agD   print the dominator tree as ASCII art
+| agDd  print the dominator tree as Graphviz dot
+| agDj  print the dominator tree as JSON
+| agDv  show the dominator tree in interactive visual mode
+EOF
+RUN
+
+NAME=noninteractive input requests report JSON2 command failure
+FILE=--
+CMDS=<<EOF
+e scr.interactive=false
+{"cmd":"?ip"}
+{"cmd":"?iy test"}
+{"cmd":"?ik"}
+{"cmd":"?e recovered"}
+s 0
+EOF
+EXPECT=<<EOF
+{"res":"","error":true,"value":0,"logs":[{"type":"ERROR","origin":"cmd_help","message":"Not running in interactive mode"}],"code":1}
+{"res":"","error":true,"value":0,"logs":[{"type":"ERROR","origin":"cmd_help","message":"Not running in interactive mode"}],"code":1}
+{"res":"","error":true,"value":0,"logs":[{"type":"ERROR","origin":"cmd_help","message":"Not running in interactive mode"}],"code":1}
+{"res":"recovered\n","error":false,"value":0,"code":0}
+EOF
+RUN
+
+NAME=-V shows library versions through the console
+FILE=--
+ARGS=-NN
+CMDS=<<EOF
+env PATH=
+s 0x123
+f keep=0x456
+-V~r_core[1]
+-V~r_main[1]
+-V >$versions
+cat $versions~r_util[1]
+s
+?v keep
+?e after
+EOF
+EXPECT=<<EOF
+r_core
+r_main
+r_util
+0x123
+0x456
+after
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=-Vj shows detailed JSON while -vj keeps version JSON
+FILE=--
+ARGS=-NN
+CMDS=<<EOF
+env PATH=
+-Vj~{radare2.license}
+-vj~{}~arch~?
+?e after
+EOF
+EXPECT=<<EOF
+LGPL-3.0-only
+1
+after
+EOF
+EXPECT_ERR=
 RUN

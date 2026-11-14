@@ -17,9 +17,10 @@
 #define _winkd_H_
 
 #include <stdint.h>
+#include <r_bind.h>
+#include <r_th.h>
+#include <r_list.h>
 #include "kd.h"
-
-typedef struct _WindCtx WindCtx;
 
 typedef struct WindProc {
 	ut64 eprocess;
@@ -77,6 +78,26 @@ typedef struct {
 	int f[O_Max];
 } Profile;
 
+struct _WindCtx {
+	io_desc_t *desc;
+	uint32_t seq_id;
+	int syncd;
+	int cpu_count;
+	int cpu;
+	int pae;
+	bool is_x64;
+	int ptr_size; // 4 for 32-bit, 8 for 64-bit
+	Profile *os_profile;
+	RList *plist_cache;
+	RList *tlist_cache;
+	ut64 dbg_addr;
+	R_OWNED WindProc *target;
+	RThreadLock *dontmix;
+	RMutaBind *mb;
+};
+
+typedef struct _WindCtx WindCtx;
+
 // grep -e "^winkd_" shlr/wind/wind.c | sed -e 's/ {$/;/' -e 's/^/int /'
 int winkd_get_bits(WindCtx *ctx);
 ut64 winkd_get_target_base(WindCtx *ctx);
@@ -94,6 +115,7 @@ int winkd_wait_packet(WindCtx *ctx, const ut32 type, kd_packet_t **p);
 int winkd_sync(WindCtx *ctx);
 bool winkd_read_ver(WindCtx *ctx);
 int winkd_continue(WindCtx *ctx);
+int winkd_step(WindCtx *ctx);
 bool winkd_write_reg(WindCtx *ctx, const uint8_t *buf, int size);
 int winkd_read_reg(WindCtx *ctx, uint8_t *buf, int size);
 int winkd_query_mem(WindCtx *ctx, const ut64 addr, int *address_space, int *flags);

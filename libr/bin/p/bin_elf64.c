@@ -1,10 +1,9 @@
-/* radare - LGPL - Copyright 2009-2019 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2024 - pancake, nibble */
 
 #define R_BIN_ELF64 1
-#include "bin_elf.inc"
+#include "bin_elf.inc.c"
 
-
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 buf[5] = {0};
 	if (r_buf_size (b) > 4) {
 		r_buf_read_at (b, 0, buf, sizeof (buf));
@@ -15,17 +14,18 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 	return false;
 }
 
-extern struct r_bin_dbginfo_t r_bin_dbginfo_elf64;
+// extern struct r_bin_dbginfo_t r_bin_dbginfo_elf64;
 extern struct r_bin_write_t r_bin_write_elf64;
 
-static ut64 get_elf_vaddr64 (RBinFile *bf, ut64 baddr, ut64 paddr, ut64 vaddr) {
+static ut64 get_elf_vaddr64(RBinFile *bf, ut64 baddr, ut64 paddr, ut64 vaddr) {
 	//NOTE(aaSSfxxx): since RVA is vaddr - "official" image base, we just need to add imagebase to vaddr
-	struct Elf_(r_bin_elf_obj_t)* obj = bf->o->bin_obj;
+	struct Elf_(obj_t)* obj = bf->bo->bin_obj;
 	return obj->baddr - obj->boffset + vaddr;
 }
 
-static void headers64(RBinFile *bf) {
-#define p bf->rbin->cb_printf
+static char *headers64(RBinFile *bf, int mode) {
+	RStrBuf *sb = r_strbuf_new ("");
+#define p(f,...) r_strbuf_appendf (sb, f, ##__VA_ARGS__)
 	p ("0x00000000  ELF64       0x%08x\n", r_buf_read_le32_at (bf->buf, 0));
 	p ("0x00000010  Type        0x%04x\n", r_buf_read_le16_at (bf->buf, 0x10));
 	p ("0x00000012  Machine     0x%04x\n", r_buf_read_le16_at (bf->buf, 0x12));
@@ -40,6 +40,8 @@ static void headers64(RBinFile *bf) {
 	p ("0x0000003a  ShentSize   %d\n", r_buf_read_le16_at (bf->buf, 0x3a));
 	p ("0x0000003c  ShNum       %d\n", r_buf_read_le16_at (bf->buf, 0x3c));
 	p ("0x0000003e  ShrStrndx   %d\n", r_buf_read_le16_at (bf->buf, 0x3e));
+#undef p
+	return r_strbuf_drain (sb);
 }
 
 static RBuffer* create(RBin* bin, const ut8 *code, int codelen, const ut8 *data, int datalen, RBinArchOptions *opt) {
@@ -116,28 +118,32 @@ static RBuffer* create(RBin* bin, const ut8 *code, int codelen, const ut8 *data,
 	/* Append code */
 	B (code, codelen);
 
-	if (data && datalen>0) {
-		eprintf ("Warning: DATA section not support for ELF yet\n");
+	if (data && datalen > 0) {
+		R_LOG_WARN ("DATA section not support for ELF yet");
 		B (data, datalen);
 	}
 	return buf;
 }
 
 RBinPlugin r_bin_plugin_elf64 = {
-	.name = "elf64",
-	.desc = "elf64 bin plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "elf64",
+		.desc = "Executable Link Format for 64bit",
+		.author = "nibble",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.check_buffer = &check_buffer,
-	.load_buffer= &load_buffer,
+	.check = &check,
+	.load = &load,
 	.destroy = &destroy,
 	.baddr = &baddr,
-	.boffset = &boffset,
 	.binsym = &binsym,
 	.entries = &entries,
-	.sections = &sections,
-	.symbols = &symbols,
-	.imports = &imports,
+	.load_resources = &load_resources,
+	.sections_vec = &sections_vec,
+	.classes = &swift_classes,
+	.symbols_vec = symbols_vec,
+	.imports_vec = &imports_vec,
 	.minstrlen = 4,
 	.info = &info,
 	.fields = &fields,
@@ -146,11 +152,11 @@ RBinPlugin r_bin_plugin_elf64 = {
 	.libs = &libs,
 	.relocs = &relocs,
 	.patch_relocs = &patch_relocs,
-	.dbginfo = &r_bin_dbginfo_elf64,
+	.trycatch = &trycatch,
+//	.dbginfo = &r_bin_dbginfo_elf64,
 	.create = &create,
 	.write = &r_bin_write_elf64,
 	.get_vaddr = &get_elf_vaddr64,
-	.file_type = &get_file_type,
 	.regstate = &regstate,
 	.maps = &maps,
 };

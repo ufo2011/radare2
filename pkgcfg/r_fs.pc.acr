@@ -8,4 +8,5 @@ Description: radare foundation libraries
 Version: @VERSION@
 Requires: r_util r_io
 Libs: -L${libdir} -lr_fs  
+Libs.private: @PKGCFG_LIBZIPLIBS@
 Cflags: -I${includedir}/libr 

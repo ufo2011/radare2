@@ -1,3 +1,97 @@
+NAME=m1slice
+ARGS=-a x86 -b 64
+FILE=bins/mach0/ls-m1
+CMDS=<<EOF
+pd 2
+ie
+EOF
+EXPECT=<<EOF
+            ;-- main:
+            ;-- entry0:
+            ;-- func.100003c0c:
+            0x100003c0c      55             push rbp
+            0x100003c0d      4889e5         mov rbp, rsp
+paddr      vaddr       phaddr     vhaddr      type
+--------------------------------------------------
+0x00007c0c 0x100003c0c 0x00004658 0x100000658 program
+EOF
+RUN
+
+NAME=o3
+FILE=--
+CMDS=<<EOF
+on file://bins/elf/ezpz 0x4000 r
+?ee ok
+o
+om
+EOF
+EXPECT=<<EOF
+ 3 - r-- 0x0000c3ef bins/elf/ezpz
+- 1 fd: 3 +0x00000000 0x00004000 - 0x000103ee r-- r--
+EOF
+EXPECT_ERR=<<EOF
+ok
+EOF
+RUN
+
+# fat-pin: exempt -a arm.v35 names a plugin, not an arch: xtr_metadata_match never matches it, so the slice comes from the host; REQUIRE keeps it off hosts without v35
+NAME=m1slice.v35
+ARGS=-a arm.v35
+FILE=bins/mach0/ls-m1
+REQUIRE=arm.v35
+CMDS=<<EOF
+pd 2
+ie
+EOF
+EXPECT=<<EOF
+            ;-- main:
+            ;-- entry0:
+            ;-- func.100003a90:
+            0x100003a90      7f2303d5       pacibsp
+            0x100003a94      fc6fbaa9       stp x28, x27, [sp,  -0x60]!
+paddr      vaddr       phaddr     vhaddr      type
+--------------------------------------------------
+0x0001ba90 0x100003a90 0x00018600 0x100000600 program
+EOF
+RUN
+
+NAME=m1slice arm
+ARGS=-a arm -b 64
+FILE=bins/mach0/ls-m1
+CMDS=<<EOF
+pd 2
+ie
+EOF
+EXPECT=<<EOF
+            ;-- main:
+            ;-- entry0:
+            ;-- func.100003a90:
+            0x100003a90      7f2303d5       pacibsp
+            0x100003a94      fc6fbaa9       stp x28, x27, [sp, -0x60]!
+paddr      vaddr       phaddr     vhaddr      type
+--------------------------------------------------
+0x0001ba90 0x100003a90 0x00018600 0x100000600 program
+EOF
+RUN
+
+# fat-pin: exempt tests the fallback itself: -a arm with the host's bits forced to 32 by asm.bits must still land on the arm64 slice
+NAME=m1slice arm with 32-bit host default
+ARGS=-e asm.bits=32 -a arm
+FILE=bins/mach0/ls-m1
+CMDS=<<EOF
+iI~^arch
+iI~^bits
+?v entry0
+p8 8 @ entry0
+EOF
+EXPECT=<<EOF
+arch     arm
+bits     64
+0x100003a90
+7f2303d5fc6fbaa9
+EOF
+RUN
+
 NAME=oon
 FILE=bins/mach0/mac-ls2
 CMDS=<<EOF
@@ -5,13 +99,13 @@ oon
 o
 EOF
 EXPECT=<<EOF
- 4 * r-- 0x00009730 bins/mach0/mac-ls2
+ 5 * r-- 0x00009730 bins/mach0/mac-ls2
 EOF
 RUN
 
 NAME=oonn
 FILE=bins/mach0/mac-ls2
-ARGS=-n
+ARGS=-n -e bin.types=true
 CMDS=<<EOF
 pf.~?
 oonn
@@ -20,13 +114,14 @@ o~?
 EOF
 EXPECT=<<EOF
 0
-58
+59
 1
 EOF
 RUN
 
 NAME=oonn
 FILE=bins/mach0/mac-ls2
+ARGS=-e bin.types=true
 CMDS=<<EOF
 pf.~?
 oonn
@@ -34,22 +129,23 @@ pf.~?
 o~?
 EOF
 EXPECT=<<EOF
-58
-58
+59
+59
 1
 EOF
 RUN
 
 NAME=om=
 FILE=bins/mach0/mac-ls2
-BROKEN=1
 CMDS=om=
 EXPECT=<<EOF
 
-0*  0x100000000 ################-------------- 0x100005000 r-x   3     fmap.TEXT
-1   0x100005000 ---------------####----------- 0x100006000 r--   3     fmap.DATA
-2   0x100006000 ------------------############ 0x10000a000 r--   3     fmap.LINKEDIT
-=>  0x1000011e8 ------------------------------ 0x1000012e8             
+0*  0x100000000 ################-------------- 0x100005000 r-x   3     fmap.__TEXT
+1   0x100005000 ---------------####----------- 0x100006000 r--   3     fmap.__DATA
+2   0x100006000 ------------------###########- 0x100009730 r--   3     fmap.__LINKEDIT
+3   0x100009730 ----------------------------## 0x10000a000 r--   4     mmap.__LINKEDIT
+=>  0x1000011e8 ------------------------------ 0x1000012e8
+
 EOF
 RUN
 
@@ -62,7 +158,7 @@ o bins/mach0/mac-ls
 s
 obo 3
 s
-obo 4
+obo 5
 s
 EOF
 EXPECT=<<EOF
@@ -83,6 +179,51 @@ EOF
 EXPECT=<<EOF
 2
 1
+EOF
+RUN
+
+NAME=oom preserves descriptor data and fd
+FILE=bins/elf/ls-focal
+ARGS=-n -e io.va=false
+CMDS=<<EOF
+p8 4
+op
+oom
+o~malloc?
+op
+p8 4
+wx 41424344
+p8 4
+oom
+o~malloc?
+p8 4
+EOF
+EXPECT=<<EOF
+7f454c46
+3
+1
+3
+7f454c46
+41424344
+1
+41424344
+EOF
+RUN
+
+NAME=oom preserves URI descriptors
+FILE=hex://01020304
+ARGS=-nw
+CMDS=<<EOF
+oom
+oj~{[0].uri}
+p8 4
+wx aabb @ 2
+p8 4
+EOF
+EXPECT=<<EOF
+hex://01020304
+01020304
+0102aabb
 EOF
 RUN
 
@@ -151,50 +292,50 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: oo+ 10
 NAME=oob 10
 FILE=bins/elf/analysis/hello-linux-x86_64
 CMDS=<<EOF
 10oob
 pi 1
-EOF
-EXPECT=<<EOF
-xor ebp, ebp
-EOF
-RUN
-
-NAME=oo+ 10
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=<<EOF
+?e --
 10oo+
 pi 1
 EOF
 EXPECT=<<EOF
+xor ebp, ebp
+--
 xor ebp, ebp
 EOF
 RUN
 
 NAME=oob consider baddr
 FILE=bins/mach0/mac-ls
+ARGS=-e bin.types=true
 CMDS=<<EOF
 e bin.baddr = 0xf00000
 k old_v=`ieq`
 oob
 iI~baddr[1]
-ie~vaddr[1]
+ie
 p8 10 @ entry0
 p8 10 @ `k old_v`
+ie,:quiet
 EOF
 EXPECT=<<EOF
 0xf00000
-0x00f01058
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00001058 0x00f01058 0x00000648 0x00f00648 program
 554889e5415741564155
 ffffffffffffffffffff
+0x00001058 0x00f01058 0x00000648 0x00f00648 program
 EOF
 RUN
 
 NAME=oob consider laddr 32bit
 FILE=bins/mach0/fatmach0-3true
-ARGS=-a x86 -b 32
+ARGS=-a x86 -b 32 -e bin.types=true
 CMDS=<<EOF
 e bin.laddr = 0x5000
 e bin.baddr = -1
@@ -236,6 +377,76 @@ EOF
 EXPECT=<<EOF
 elf
 b32ae931000000000200
+EOF
+RUN
+
+NAME=oba loads default slice from fat macho header
+FILE=bins/mach0/libexpat.1.dylib
+ARGS=-n
+CMDS=<<EOF
+oba $$
+i~^arch[1]
+i~^bintype[1]
+EOF
+EXPECT=<<EOF
+x86
+mach0
+EOF
+RUN
+
+NAME=oba rejects malformed macho kernelcache load command
+FILE=malloc://41
+ARGS=-n -w
+CMDS=<<EOF
+e log.quiet=true
+wx cffaedfe0c0000010000000002000000ffffff7f00000000000020000000000000000000000000000000
+oba 0
+?e ok
+EOF
+EXPECT=<<EOF
+ok
+EOF
+RUN
+
+NAME=oba kernelcache with mistyped _PrelinkInfoDictionary
+FILE=malloc://0x1000
+ARGS=-n -w
+CMDS=<<EOF
+e log.quiet=true
+wx cffaedfe0c00000100000000020000000500000030030000000020000000000019000000480000005f5f544558540000000000000000000000400007f0ffffff0004000000000000000000000000000000040000000000000700000005000000000000000000000019000000980000005f5f5052454c494e4b5f54455854000000440007f0ffffff000100000000000000040000000000000001000000000000070000000500000001000000000000005f5f74657874000000000000000000005f5f5052454c494e4b5f54455854000000440007f0ffffff00010000000000000004 @ 0x0
+wx 19000000980000005f5f5052454c494e4b5f44415441000000450007f0ffffff000100000000000000050000000000000001000000000000070000000500000001000000000000005f5f64617461000000000000000000005f5f5052454c494e4b5f44415441000000450007f0ffffff00010000000000000005 @ 0x100
+wx 19000000980000005f5f5052454c494e4b5f494e464f000000480007f0ffffff800000000000000000080000000000008000000000000000070000000500000001000000000000005f5f696e666f000000000000000000005f5f5052454c494e4b5f494e464f000000480007f0ffffff80000000000000000008 @ 0x198
+wx 05000000200100000600000044 @ 0x230
+wx 440007f0ffffff @ 0x341
+wx 3c646963743e3c6b65793e5f5072656c696e6b496e666f44696374696f6e6172793c2f6b65793e3c696e74656765723e30783133333731333337313030303c2f696e74656765723e3c2f646963743e @ 0x800
+oba 0
+?e integer
+ob-*
+wx 3c646963743e3c6b65793e5f5072656c696e6b496e666f44696374696f6e6172793c2f6b65793e3c61727261793e3c696e74656765723e30783133333731333337313030303c2f696e74656765723e3c2f61727261793e3c2f646963743e @ 0x800
+oba 0
+?e array of integers
+EOF
+EXPECT=<<EOF
+integer
+array of integers
+EOF
+RUN
+
+NAME=oba kernelcache with an IOKit class that is its own parent
+FILE=malloc://0x4000
+ARGS=-n -w
+CMDS=<<EOF
+e log.quiet=true
+wx cffaedfe0c000001000000000c0000000500000028020000000000000000000019000000980000005f5f5052454c494e4b5f494e464f000000470007f0ffffff000100000000000000070000000000000001000000000000070000000500000001000000000000005f5f696e666f000000000000000000005f5f5052454c494e4b5f494e464f000000470007f0ffffff0000000000000000000700000000000000000000000000000000000000000000000000000000000019000000980000005f5f5052454c494e4b5f54455854000000480007f0ffffff000100000000000000080000000000000001000000000000070000000500000001000000000000005f5f74657874000000000000000000005f5f5052454c494e4b5f54455854000000480007f0ffffff1000000000000000000800000000000000000000000000000000000000000000000000000000000019000000980000005f5f5052454c494e4b5f44415441000000490007f0ffffff000100000000000000090000000000000001000000000000070000000500000001000000000000005f5f64617461000000000000000000005f5f5052454c494e4b5f44415441000000490007f0ffffff10000000000000000009000000000000000000000000000000000000000000000000000000000000350000803000000000500007f0ffffff00100000000000002000000000000000636f6d2e6578616d706c652e6f6e6500350000803000000000500007f0ffffff00100000000000002000000000000000636f6d2e6578616d706c652e74776f @ 0x0
+wx cffaedfe0c000001000000000b0000000200000030010000000000000000000019000000980000005f5f544558545f45584543000000000000600007f0ffffff000200000000000000200000000000000002000000000000070000000500000001000000000000005f5f74657874000000000000000000005f5f544558545f45584543000000000000600007f0ffffff0002000000000000002000000000000000000000000000000000000000000000000000000000000019000000980000005f5f444154415f434f4e53540000000000700007f0ffffff000400000000000000300000000000000004000000000000070000000500000001000000000000005f5f6d6f645f696e69745f66756e63005f5f444154415f434f4e53540000000000700007f0ffffff08000000000000000030 @ 0x1000
+wx 000000b0000008910100009021000491020000b0420008910308805210000094080000b008010c9108410091c0035fd6 @ 0x2000
+wx 4d79436c617373 @ 0x2100
+wx 00600007f0ffffff @ 0x3000
+oba 0
+ic~MyClass?
+EOF
+EXPECT=<<EOF
+2
 EOF
 RUN
 
@@ -331,7 +542,7 @@ px 16~:1
 ?e
 om
 ?e
-omp 1
+omr 1
 px 16~:1
 EOF
 EXPECT=<<EOF
@@ -339,8 +550,8 @@ EXPECT=<<EOF
 
 0x00000010  2021 2223 2425 2627 2829 2a2b 2c2d 2e2f   !"#$%&'()*+,-./
 
-* 2 fd: 4 +0x00000000 0x00000000 - 0x000000ff rwx 
-- 1 fd: 3 +0x00000000 0x00000000 - 0x000001ff rwx 
+* 2 fd: 4 +0x00000000 0x00000000 - 0x000000ff rwx rwx
+- 1 fd: 3 +0x00000000 0x00000000 - 0x000001ff rwx rwx
 
 0x00000010  1011 1213 1415 1617 1819 1a1b 1c1d 1e1f  ................
 EOF
@@ -361,9 +572,8 @@ RUN
 
 NAME=o: obj
 FILE=-
+ARGS=-a x86 -b 64
 CMDS=<<EOF
-e asm.arch=x86
-e asm.bits=64
 obj~{}
 EOF
 EXPECT=<<EOF
@@ -373,6 +583,7 @@ EXPECT=<<EOF
     "iofd": 3,
     "bfid": 0,
     "size": 512,
+    "addr": -1,
     "obj": {
       "arch": "x86",
       "bits": 64,
@@ -399,11 +610,11 @@ om
 # pv1
 EOF
 EXPECT=<<EOF
-- 5 fd: 3 +0x00000000 0x00000000 - 0x0000347f rwx fmap.LOAD0
-* 4 fd: 3 +0x00004000 0x00004000 - 0x00016790 rwx fmap.LOAD1
-- 3 fd: 3 +0x00017000 0x00017000 - 0x0001f7bf rwx fmap.LOAD2
-- 2 fd: 3 +0x00020050 0x00021050 - 0x00022267 rwx fmap.LOAD3
-- 1 fd: 4 +0x00000000 0x00022268 - 0x00023557 rw- mmap.LOAD3
+- 5 fd: 3 +0x00000000 0x00000000 - 0x0000347f rwx r-- fmap.LOAD0
+* 4 fd: 3 +0x00004000 0x00004000 - 0x00016790 rwx r-x fmap.LOAD1
+- 3 fd: 3 +0x00017000 0x00017000 - 0x0001f7bf rwx r-- fmap.LOAD2
+- 2 fd: 3 +0x00020050 0x00021050 - 0x00022267 rwx rw- fmap.LOAD3
+- 1 fd: 4 +0x00000000 0x00022268 - 0x00023557 rw- rw- mmap.LOAD3
 EOF
 RUN
 
@@ -413,8 +624,24 @@ CMDS=<<EOF
 o -
 o-*
 o~?
+om~?
+o-*
+on malloc://4
+wx 11223344
+p8 4
+o-*
+on malloc://4
+p8 4
+o--
+o~?
+om~?
 EOF
 EXPECT=<<EOF
+0
+0
+11223344
+00000000
+0
 0
 EOF
 RUN
@@ -434,9 +661,13 @@ RUN
 NAME=oc
 FILE=bins/elf/true32
 CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
 i
 oc -
 ?e --
+e asm.arch=x86
+e asm.bits=64
 i
 EOF
 EXPECT=<<EOF
@@ -444,9 +675,6 @@ fd       3
 file     bins/elf/true32
 size     0x560c
 humansz  21.5K
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     r-x
 format   elf
 iorw     false
@@ -458,6 +686,7 @@ binsz    20668
 bintype  elf
 bits     32
 canary   true
+injprot  false
 class    ELF32
 crypto   false
 endian   little
@@ -477,6 +706,7 @@ rpath    NONE
 sanitize false
 static   false
 stripped true
+uncaps   false
 subsys   linux
 va       true
 --
@@ -484,14 +714,10 @@ fd       3
 file     malloc://512
 size     0x200
 humansz  512
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     rwx
-format   any
+format   null
 iorw     true
 block    0x100
-
 EOF
 RUN
 
@@ -506,12 +732,12 @@ oa x86 64 bins/elf/ls
 oa x86 64 nonfile
 oa x86 
 EOF
-EXPECT=<<EOF
-More than one file is opened, specify the filename
-Cannot find file nonfile
-Missing argument
+EXPECT=
+EXPECT_ERR=<<EOF
+INFO: More than one file is opened, you must specify the filename
+ERROR: Cannot find file nonfile
+ERROR: Missing argument
 EOF
-BROKEN=1
 RUN
 
 NAME=ob *
@@ -530,12 +756,245 @@ ob 1
 is~?
 EOF
 EXPECT=<<EOF
-133
-134
+132
+138
 --
-267
+270
 --
-133
-134
+132
+138
+EOF
+RUN
+
+NAME=ob-* drops the current file name
+FILE=bins/elf/analysis/x86-simple
+CMDS=<<EOF
+ob-*
+iddi x
+?e done
+ob
+o bins/elf/analysis/x86-simple
+is~?
+EOF
+EXPECT=<<EOF
+done
+2
+EOF
+RUN
+
+NAME=obf
+FILE=--
+CMDS=<<EOF
+# pwd
+obf ./bins/mach0/test-arm32
+is~?
+e asm.arch=x86
+obf ./bins/mach0/ls-m1
+is~?
+ob 1
+is~?
+i
+?e -- o
+o
+?e -- ob
+ob
+EOF
+EXPECT=<<EOF
+7
+136
+7
+arch     arm
+baddr    0x4000
+binsz    49388
+bintype  mach0
+bits     32
+canary   false
+injprot  false
+class    MACH0
+compiler clang
+crypto   false
+endian   little
+havecode true
+intrp    /usr/lib/dyld
+laddr    0x0
+lang     c
+linenum  false
+lsyms    false
+machine  v7
+nx       true
+os       ios
+pic      true
+relocs   true
+sanitize false
+static   false
+stripped false
+uncaps   true
+subsys   darwin
+va       true
+-- o
+ 4 - r-- 0x00003f14 null://16148
+ 5 - r-- 0x000023a0 null://9120
+-- ob
+- 0 3 arm-32 ba:0x00000000 sz:49388 ./bins/mach0/test-arm32
+* 1 3 arm-32 ba:0x00004000 sz:49388 ./bins/mach0/test-arm32
+- 2 3 x86-64 ba:0x100000000 sz:72800 ./bins/mach0/ls-m1
+EOF
+RUN
+
+NAME=o* recognizes file maps of zero-padded Mach-O segments
+FILE=bins/mach0/ls-m1
+ARGS=-a x86 -b64
+CMDS=<<EOF
+om~?
+o*~^om
+om~?
+EOF
+EXPECT=<<EOF
+4
+4
+EOF
+RUN
+
+NAME=obf?
+FILE=--
+CMDS=obf?
+EXPECT=<<EOF
+| obf ([file|base64:file])  load bininfo for current file (useful for r2 -n)
+EOF
+RUN
+
+NAME=ob subcommand help suffixes
+FILE=--
+CMDS=<<EOF
+ob*?~?r2 commands
+ob-?~?delete all binfiles
+ob--?~?delete the last binfile
+ob.?~?show bfid at current address
+ob=?~?ascii art table
+oba?~?open bin info from the given address
+obf?~?load bininfo for current file
+obi?~?alias for 'i'
+obio?~?bin.io
+obj?~?JSON format
+obL?~?same as iL or Li
+obm?~?merge current selected binfile
+obm-?~?same as obm, but deletes the current binfile
+obo?~?fd number
+obr?~?rebase current bin object
+EOF
+EXPECT=<<EOF
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1
+EOF
+RUN
+
+NAME=obf reload does not duplicate bin objects or maps
+FILE=bins/elf/dwarf_lief_extrasec.elf
+ARGS=-e bin.relocs=false
+CMDS=<<EOF2
+?e ob=`ob~?` om=`om~?` iS=`iS~?`
+obf
+obf
+obf
+?e ob=`ob~?` om=`om~?` iS=`iS~?`
+s `iS~mysec1[3]`
+?e mysec1_at_seek=`iS.~mysec1[8]`
+EOF2
+EXPECT=<<EOF2
+ob=1 om=7 iS=40
+ob=1 om=7 iS=40
+mysec1_at_seek=.mysec1
+EOF2
+RUN
+
+NAME=obf reload does not duplicate bin objects (generic elf)
+FILE=bins/elf/analysis/hello-linux-x86_64
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF2
+ob~?
+obf
+obf
+obf
+ob~?
+iS~?
+EOF2
+EXPECT=<<EOF2
+1
+1
+32
+EOF2
+RUN
+
+NAME=obr after aa drops the cached class methods
+FILE=bins/mach0/objc-employee
+CMDS=<<EOF2
+aa
+obr 0x10000
+af-*
+aa
+afl~method.Employee?
+EOF2
+EXPECT=<<EOF2
+13
+EOF2
+RUN
+
+NAME=obr after aa drops the cached symbols
+FILE=bins/java/Hello.class
+CMDS=<<EOF2
+aa
+obr 0x10000
+af-*
+aa
+afl~?
+EOF2
+EXPECT=<<EOF2
+11
+EOF2
+RUN
+
+NAME=obr keeps bin/cur/info alive across o--
+FILE=bins/elf/ls
+CMDS=<<EOF2
+obr 0x10000
+iI~baddr
+k bin/cur/info/elf.relro
+o--
+k bin/cur/info/elf.relro
+o bins/elf/ls
+k bin/cur/info/elf.relro
+EOF2
+EXPECT=<<EOF2
+baddr    0x10000
+full
+full
+full
+EOF2
+RUN
+
+NAME=o* encodes uris that would inject commands
+FILE=--
+CMDS=<<EOF
+onn base64:bWFsbG9jOi8vMTYiOz9lIFBXTkVEOyM=
+o*
+.o*
+o
+EOF
+EXPECT=<<EOF
+onnu "base64:bWFsbG9jOi8vMTYiOz9lIFBXTkVEOyM=" rw-
+ 3 * rw- 0x00000010 malloc://16";?e PWNED;#
 EOF
 RUN

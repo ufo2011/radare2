@@ -1,30 +1,48 @@
-NAME=rax2 -I 3530468537
+NAME=rax2 zz
 FILE=-
-CMDS=!rax2 -I 3530468537
+CMDS=!rax2 zz
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: unknown symbol
+EOF
+RUN
+
+NAME=? zz
+FILE=-
+CMDS=? zz
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: unknown symbol
+EOF
+RUN
+
+NAME=rax2 -i 3530468537
+FILE=-
+CMDS=!rax2 -i 3530468537
 EXPECT=<<EOF
 185.172.110.210
 EOF
 RUN
 
-NAME=rax2 -I 185.172.110.210
+NAME=rax2 -i 185.172.110.210
 FILE=-
-CMDS=!rax2 -I 185.172.110.210
+CMDS=!rax2 -i 185.172.110.210
 EXPECT=<<EOF
 0xd26eacb9
 EOF
 RUN
 
-NAME=rax2 =10 0x46
+NAME=rax2 -b 10 0x46
 FILE=-
-CMDS=!rax2 =10 0x46
+CMDS=!rax2 -b 10 0x46
 EXPECT=<<EOF
 70
 EOF
 RUN
 
-NAME=rax2 =16 0x3+0x3
+NAME=rax2 -b 16 0x3+0x3
 FILE=-
-CMDS=!rax2 =16 0x3+0x3
+CMDS=!rax2 -b 16 0x3+0x3
 EXPECT=<<EOF
 0x6
 EOF
@@ -32,14 +50,16 @@ RUN
 
 NAME=rax2 -E | rax2 -D
 FILE=-
-CMDS=!rax2 -E hello |rax2 -D |rax2 -E | rax2 -D  |rax2 -E|rax2 -D |rax2 -E | rax2 -D
+CMDS=!rax2 -E hello | rax2 -D | rax2 -E | rax2 -D | rax2 -E | rax2 -D | rax2 -E | rax2 -D
 EXPECT=hello
 RUN
 
 NAME=rax2 -E | rax2 -D 2
 FILE=-
-CMDS=!rax2 -E hello |rax2 -D |rax2 -E | rax2 -D  |rax2 -E|rax2 -D |rax2 -E | rax2 -Dl
-EXPECT=hello
+CMDS=!rax2 -E hello | rax2 -D | rax2 -E | rax2 -D | rax2 -E | rax2 -D | rax2 -E | rax2 -nD
+EXPECT=<<EOF
+hello
+EOF
 RUN
 
 NAME=rax2 -E | rax2 -D 3
@@ -47,6 +67,28 @@ FILE=-
 CMDS=!echo hello | rax2 -E |rax2 -D |rax2 -E | rax2 -D  |rax2 -E|rax2 -D |rax2 -E | rax2 -D
 EXPECT=<<EOF
 hello
+EOF
+RUN
+
+NAME=r rax2 -D null byte
+FILE=-
+CMDS=rax2 -D ZQBlAA== |rax2 -S
+EXPECT=<<EOF
+65006500
+EOF
+RUN
+
+NAME=r rax2 -E null byte
+FILE=-
+CMDS=rax2 -E "\x60\x00\x66\x00\x67"
+EXPECT=YABmAGc=
+RUN
+
+NAME=r rax2 -D URL safe
+FILE=-
+CMDS=rax2 -D __-_ |rax2 -S
+EXPECT=<<EOF
+ffffbf
 EOF
 RUN
 
@@ -72,24 +114,21 @@ hello
 EOF
 RUN
 
-NAME=rax2 -E | rax2 -D -E
+NAME=rax2 -Z 01101000011001010110110001101100011011110111011101101111011100100110110001100100
 FILE=-
-CMDS=!echo hello | rax2 -E |rax2 -D |rax2 -E | rax2 -D  |rax2 -E|rax2 -D |rax2 -E | rax2 -D
+CMDS=!rax2 -Z 01101000011001010110110001101100011011110111011101101111011100100110110001100100
 EXPECT=<<EOF
-hello
+helloworld
 EOF
 RUN
 
-NAME=rax2 -b 01101000011001010110110001101100011011110111011101101111011100100110110001100100
+NAME=rax2 -z hello world
 FILE=-
-CMDS=!rax2 -b 01101000011001010110110001101100011011110111011101101111011100100110110001100100
-EXPECT=helloworld
-RUN
-
-NAME=rax2 -B hello world
-FILE=-
-CMDS=!rax2 -B hello world
-EXPECT=01101000011001010110110001101100011011110111011101101111011100100110110001100100
+CMDS=!rax2 -z hello world
+EXPECT=<<EOF
+0110100001100101011011000110110001101111
+0111011101101111011100100110110001100100
+EOF
 RUN
 
 NAME=rax2 10
@@ -160,7 +199,39 @@ NAME=rax2 Fx40551ed8
 FILE=-
 CMDS=!rax2 Fx40551ed8
 EXPECT=<<EOF
-3.330008f
+3.33000755f
+EOF
+RUN
+
+NAME=rax2 Fx small and large floats
+FILE=-
+CMDS=<<EOF
+!rax2 Fx33d6bf95
+!rax2 Fx00000001
+!rax2 Fx7f7fffff
+!rax2 Fx3f800000
+EOF
+EXPECT=<<EOF
+1.00000001e-07f
+1.40129846e-45f
+3.40282347e+38f
+1f
+EOF
+RUN
+
+NAME=rax2 1.5g
+FILE=-
+CMDS=!rax2 1.5g
+EXPECT=<<EOF
+Gx3fc0
+EOF
+RUN
+
+NAME=rax2 Gx3fc0
+FILE=-
+CMDS=!rax2 Gx3fc0
+EXPECT=<<EOF
+1.5
 EOF
 RUN
 
@@ -196,6 +267,22 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=rax2 Bxffff0000ffff0101
+FILE=-
+CMDS=!rax2 Bxffff0000ffff0101
+EXPECT=<<EOF
+1111111111111111000000000000000011111111111111110000000100000001b
+EOF
+RUN
+
+NAME=rax2 64bit binary number
+FILE=-
+CMDS=!rax2 1111111111111111000000000000000011111111111111110000000100000001b
+EXPECT=<<EOF
+0xffff0000ffff0101
+EOF
+RUN
+
 NAME=rax2 Tx23
 FILE=-
 CMDS=!rax2 Tx23
@@ -226,10 +313,75 @@ CMDS=!printf 414141 | rax2 -s
 EXPECT=AAA
 RUN
 
-NAME=rax2 -b 01000101 01110110
+NAME=rax2 converts every line read from stdin
 FILE=-
-CMDS=!rax2 -b 01000101 01110110
-EXPECT=Ev
+CMDS=<<EOF
+!printf '10\n0x20\n30\n' | rax2 -
+!printf '1f\r\n' | rax2 -
+EOF
+EXPECT=<<EOF
+0xa
+32
+0x1e
+Fx3f800000
+EOF
+RUN
+
+NAME=rax2 -s with C escapes on stdin
+FILE=-
+CMDS=!printf '%s' '\x41\x42' | rax2 -s
+EXPECT=AB
+RUN
+
+NAME=rax2 -s mixed plain and C escapes
+FILE=-
+CMDS=!printf '%s' '41\x42' | rax2 -s
+EXPECT=AB
+RUN
+
+NAME=rax2 -s binary C escapes
+FILE=-
+CMDS=!printf '%s' '\x00\xff' | rax2 -s | rax2 -S
+EXPECT=<<EOF
+00ff
+EOF
+RUN
+
+NAME=rax2 -s truncated C escape rejected
+FILE=-
+CMDS=!printf '%s' '\x41\x4' | rax2 -s
+EXPECT=
+RUN
+
+NAME=rax2 -s invalid C escape rejected
+FILE=-
+CMDS=!printf '%s' '\x4\x41' | rax2 -s
+EXPECT=
+RUN
+
+NAME=rax2 -s C escapes with endian swap
+FILE=-
+CMDS=!printf '%s' '\x11\x22\x33\x44\x55\x66\x77\x88' | rax2 -esb 32 | rax2 -S
+EXPECT=<<EOF
+4433221188776655
+EOF
+RUN
+
+NAME=rax2 endian swap hex stream
+FILE=-
+CMDS=!printf 1122334455667788 | rax2 -esb 32 | rax2 -S
+EXPECT=<<EOF
+4433221188776655
+EOF
+RUN
+
+NAME=rax2 -Z 01000101 01110110
+FILE=-
+CMDS=!rax2 -Z 01000101 01110110
+EXPECT=<<EOF
+E
+v
+EOF
 RUN
 
 NAME=rax2 -k 33+3
@@ -256,33 +408,33 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=rax2 -n 0x1234
+NAME=rax2 -x 0x1234
 FILE=-
-CMDS=!rax2 -n 0x1234
+CMDS=!rax2 -x 0x1234
 EXPECT=<<EOF
 34120000
 EOF
 RUN
 
-NAME=rax2 -n 0xFEDCBA9876543210
+NAME=rax2 -x 0xFEDCBA9876543210
 FILE=-
-CMDS=!rax2 -n 0xFEDCBA9876543210
+CMDS=!rax2 -x 0xFEDCBA9876543210
 EXPECT=<<EOF
 1032547698badcfe
 EOF
 RUN
 
-NAME=rax2 -N 0xFEDCBA9876543210
+NAME=rax2 -c 0xFEDCBA9876543210
 FILE=-
-CMDS=!rax2 -N 0xFEDCBA9876543210
+CMDS=!rax2 -c 0xFEDCBA9876543210
 EXPECT=<<EOF
 \x10\x32\x54\x76\x98\xba\xdc\xfe
 EOF
 RUN
 
-NAME=rax2 -N 0x1234
+NAME=rax2 -c 0x1234
 FILE=-
-CMDS=!rax2 -N 0x1234
+CMDS=!rax2 -c 0x1234
 EXPECT=<<EOF
 \x34\x12\x00\x00
 EOF
@@ -346,7 +498,7 @@ RUN
 
 NAME=Python string "\x33\x44\x88"
 FILE=-
-CMDS=echo foo = "\x33\x44\x88" | rax2 -F
+CMDS=echo 'foo = "\x33\x44\x88"' | rax2 -F
 EXPECT=<<EOF
 334488
 EOF
@@ -380,12 +532,12 @@ Fri Feb
 EOF
 RUN
 
-NAME=rax2 -x linux osx
+NAME=rax2 -H linux osx
 FILE=-
-CMDS=!rax2 -x linux osx
+CMDS=!rax2 -H linux osx
 EXPECT=<<EOF
-0x5ca62a43
-0xad593a1
+0x90d3ced7
+0xda90d7cd
 EOF
 RUN
 
@@ -406,11 +558,18 @@ EOF
 RUN
 
 NAME=long number conversion
-BROKEN=1
 FILE=-
 CMDS=!rax2 10000000000000000000000000000000000000000000000b
 EXPECT=<<EOF
-0x8000000000000000
+0x400000000000
+EOF
+RUN
+
+NAME=long number conversion with shift
+FILE=-
+CMDS=!rax2 b$(!rax2 "1<<46")
+EXPECT=<<EOF
+10000000000000000000000000000000000000000000000b
 EOF
 RUN
 
@@ -430,41 +589,63 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=rax2 -L 0
+NAME=rax2 flags with negative numbers
 FILE=-
-CMDS=!rax2 -L 0
+CMDS=<<EOF
+!rax2 -d -1
+!rax2 -k -0x10
+!rax2 -f -1.5
+!rax2 -1.5g
+!rax2 -101d
+!rax2 -r -1 | grep ^int64
+!rax2 -j -1 | grep -o '"int64":"[^"]*"'
+EOF
+EXPECT=<<EOF
+-1
+0xfffffffffffffff0
+-1.5
+Gxbfc0
+-5
+int64   -1
+"int64":"-1"
+EOF
+RUN
+
+NAME=rax2 -X 0
+FILE=-
+CMDS=!rax2 -X 0
 EXPECT=<<EOF
 0x0
 EOF
 RUN
 
-NAME=rax2 -L 1
+NAME=rax2 -X 1
 FILE=-
-CMDS=!rax2 -L 1
+CMDS=!rax2 -X 1
 EXPECT=<<EOF
 0x1
 EOF
 RUN
 
-NAME=rax2 -L 10000010100001001000011010001000100010101000110010001110100100001001001010010100100101101001100010011010100111001001111
+NAME=rax2 -X 10000010100001001000011010001000100010101000110010001110100100001001001010010100100101101001100010011010100111001001111
 FILE=-
-CMDS=!rax2 -L 10000010100001001000011010001000100010101000110010001110100100001001001010010100100101101001100010011010100111001001111
+CMDS=!rax2 -X 10000010100001001000011010001000100010101000110010001110100100001001001010010100100101101001100010011010100111001001111
 EXPECT=<<EOF
 0x4142434445464748494a4b4c4d4e4f
 EOF
 RUN
 
-NAME=rax2 -L 00000000000000000000000000000000000000000000000000000000000000000
+NAME=rax2 -X 00000000000000000000000000000000000000000000000000000000000000000
 FILE=-
-CMDS=!rax2 -L 00000000000000000000000000000000000000000000000000000000000000000
+CMDS=!rax2 -X 00000000000000000000000000000000000000000000000000000000000000000
 EXPECT=<<EOF
 0x0
 EOF
 RUN
 
-NAME=rax2 -L 11111111111111111111111111111111111111111111111111111111111111111
+NAME=rax2 -X 11111111111111111111111111111111111111111111111111111111111111111
 FILE=-
-CMDS=!rax2 -L 11111111111111111111111111111111111111111111111111111111111111111
+CMDS=!rax2 -X 11111111111111111111111111111111111111111111111111111111111111111
 EXPECT=<<EOF
 0x1ffffffffffffffff
 EOF
@@ -495,6 +676,30 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=rax2 -w picks the width that holds the value
+FILE=-
+CMDS=<<EOF
+!rax2 -w 0x7f 0x80 0xff 0x100 0x1234 0x8000 0xffff 0x10000
+!rax2 -w 0x7fffffff 0x80000000 0xffffffff 0x100000000 0x7fffffffffffffff 0xffffffffffffffff
+EOF
+EXPECT=<<EOF
+127
+-128
+-1
+256
+4660
+-32768
+-1
+65536
+2147483647
+-2147483648
+-1
+4294967296
+9223372036854775807
+-1
+EOF
+RUN
+
 NAME=rax2 -K
 FILE=-
 CMDS=!printf 1 | rax2 -K | grep -c 0x00000001
@@ -503,9 +708,9 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=rax2 -i
+NAME=rax2 -C
 FILE=-
-CMDS=!printf A | rax2 -i
+CMDS=!printf A | rax2 -C
 EXPECT=<<EOF
 unsigned char buf[] = {
   0x41
@@ -528,10 +733,178 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=rax2 -j 0x1234
+FILE=-
+CMDS=!rax2 -j 0x1234
+EXPECT=<<EOF
+{"int32":"4660","uint32":"4660","int64":"4660","uint64":"4660","hex":"0x00001234","octal":"011064","unit":"4.6K","segment":"0000:1234","fvalue":"4660.0","float":"0.000000f","bf16":"Gx0000","double":"0.000000","binary":"0b0001001000110100","base36":"0_3lg","ternary":"0t20101121"}
+EOF
+RUN
+
+NAME=rax2 -r segment
+FILE=-
+CMDS=!rax2 -r 0xfffff 0x12345 | grep segment
+EXPECT=<<EOF
+segment f000:ffff
+segment 1000:2345
+EOF
+RUN
+
+NAME=rax2 -j segment
+FILE=-
+CMDS=!rax2 -j 0xfffff | grep -o '"segment":"[^"]*"'
+EXPECT=<<EOF
+"segment":"f000:ffff"
+EOF
+RUN
+
 NAME=rax2 -v 
 FILE=-
-CMDS=!rax2 -v | grep -c build
+CMDS=!rax2 -v | grep -c birth
 EXPECT=<<EOF
 1
+EOF
+RUN
+
+NAME=rax2 unsigned hex literals and expressions
+FILE=-
+CMDS=!rax2 0x0u 0X1U 0x1_0000U '0x1U+0x2u' 0xffff_ffff_ffff_ffffU 0xff..abcd
+EXPECT=<<EOF
+0
+1
+65536
+3
+-1
+-21555
+EOF
+RUN
+
+NAME=rax2 rejects malformed hex literals
+FILE=-
+CMDS=<<EOF
+!rax2 0x0x123
+!rax2 0x0_x123U
+!rax2 0x0X1u
+!rax2 0x
+!rax2 0xU
+!rax2 0x1UU
+!rax2 0x1Ujunk
+!rax2 0x1_00U
+!rax2 0x10000000000000000U
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: misplaced underscore in hex literal
+ERROR: number won't fit into 64 bits
+EOF
+RUN
+
+NAME=rax2 hex float expressions
+FILE=-
+CMDS=!rax2 -b f 0x1.8 0X1.8P2 '0x1.8p2+0x1.8' 0.0 1.5 1.5K
+EXPECT=<<EOF
+1.5
+6.0
+7.5
+0.0
+1.5
+1.5
+EOF
+RUN
+
+NAME=rax2 rejects malformed and overflowing hex floats
+FILE=-
+CMDS=<<EOF
+!rax2 -b f 0x1.8p2junk
+!rax2 -b f 0x0x1.8
+!rax2 -b f 0x1.8U
+!rax2 -b f 0x1.0p64
+!rax2 -b f 0x1.0p9999
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: invalid hex number
+ERROR: number won't fit into 64 bits
+ERROR: number won't fit into 64 bits
+EOF
+RUN
+
+NAME=rax2 -K reads only the seed bytes it allocated
+FILE=-
+CMDS=!rax2 -K 0b
+EXPECT=<<EOF
++--[0x0000000b]---+
+|                 |
+|                 |
+|                 |
+|                 |
+|      E S        |
+|       . .       |
+|        .        |
+|                 |
+|                 |
++-----------------+
+EOF
+RUN
+
+NAME=rax2 -p pack 12bit le units
+FILE=-
+CMDS=<<EOF
+!printf 'bc0aef0d' | rax2 -s | rax2 -p 12 | rax2 -S
+!printf 'bc0aef0d' | rax2 -s | rax2 -p 12 | rax2 -P 12 | rax2 -S
+EOF
+EXPECT=<<EOF
+bcfade
+bc0aef0d
+EOF
+RUN
+
+NAME=rax2 -p pack 12bit be units
+FILE=-
+CMDS=<<EOF
+!printf '0abc0def' | rax2 -s | rax2 -ep 12 | rax2 -S
+!printf 'abcdef' | rax2 -s | rax2 -eP 12 | rax2 -S
+EOF
+EXPECT=<<EOF
+abcdef
+0abc0def
+EOF
+RUN
+
+NAME=rax2 -P unpack 9bit units
+FILE=-
+CMDS=<<EOF
+!printf 'abc' | rax2 -P 9 | rax2 -S
+!printf 'abc' | rax2 -eP 9 | rax2 -S
+EOF
+EXPECT=<<EOF
+6100b101
+00c20189
+EOF
+RUN
+
+NAME=rax2 -p errors
+FILE=-
+CMDS=<<EOF
+!printf 'abcd' | rax2 -p 12
+!printf 'abc' | rax2 -p 12
+!rax2 -p 65 < /dev/null
+!rax2 -p < /dev/null
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Input has values wider than 12 bits
+ERROR: Input size is not a multiple of 2 bytes
+ERROR: Invalid unit size, expected 1 to 64 bits
+ERROR: Packing with -p or -P requires the unit size in bits
 EOF
 RUN

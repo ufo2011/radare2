@@ -1,14 +1,16 @@
-WASM_ROOT=$(LIBR)/asm/arch/wasm
-OBJ_WASM=asm_wasm.o
-OBJ_WASM+=$(WASM_ROOT)/wasm.o
-CFLAGS+=-I$(WASM_ROOT)
+OBJ_WASMPSEUDO+=$(LIBR)/arch/p/wasm/pseudo.o
 
-TARGET_WASM=asm_wasm.${EXT_SO}
-STATIC_OBJ+=${OBJ_WASM}
+TARGET_WASMPSEUDO=parse_wasm_pseudo.${EXT_SO}
+STATIC_OBJ+=${OBJ_WASMPSEUDO}
+
+LIBDEPS=-L../../util -lr_util
+LIBDEPS+=-L../../flag -lr_flag
+LDFLAGS+=-L../../reg -lr_reg
+LDFLAGS+=-L../../cons -lr_cons
 
 ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_WASM}
-
-${TARGET_WASM}: ${OBJ_WASM}
-	${CC} $(call libname,asm_wasm) ${LDFLAGS} ${CFLAGS} -o ${TARGET_WASM} ${OBJ_WASM}
+ALL_TARGETS+=${TARGET_WASMPSEUDO}
+${TARGET_WASMPSEUDO}: ${OBJ_WASMPSEUDO}
+	${CC} $(call libname,parse_wasm_pseudo) ${LIBDEPS} $(LDFLAGS) \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_WASMPSEUDO} ${OBJ_WASMPSEUDO}
 endif

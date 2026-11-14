@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2020 - GustavoLCR */
+/* radare - LGPL - Copyright 2020-2025 - GustavoLCR */
 
 #define INITGUID
 #include <r_core.h>
@@ -25,17 +25,19 @@ typedef struct { // Keep in sync with debug_windbg.c
 	ULONG64 server;
 	ULONG64 processBase;
 	DWORD lastExecutionStatus;
-	PDEBUG_CLIENT5 dbgClient;
-	PDEBUG_CONTROL4 dbgCtrl;
-	PDEBUG_DATA_SPACES4 dbgData;
-	PDEBUG_REGISTERS2 dbgReg;
-	PDEBUG_SYSTEM_OBJECTS4 dbgSysObj;
-	PDEBUG_SYMBOLS3 dbgSymbols;
-	PDEBUG_ADVANCED3 dbgAdvanced;
+	PDEBUG_CLIENT4 dbgClient;
+	PDEBUG_CONTROL3 dbgCtrl;
+	PDEBUG_DATA_SPACES3 dbgData;
+	PDEBUG_REGISTERS dbgReg;
+	PDEBUG_SYSTEM_OBJECTS3 dbgSysObj;
+	PDEBUG_SYMBOLS2 dbgSymbols;
+	PDEBUG_ADVANCED dbgAdvanced;
 } DbgEngContext;
 
 #define THISCALL(dbginterface, function, ...) dbginterface->lpVtbl->function (dbginterface, __VA_ARGS__)
+#define THISCALL0(dbginterface, function) dbginterface->lpVtbl->function (dbginterface)
 #define ITHISCALL(dbginterface, function, ...) THISCALL (idbg->dbginterface, function, __VA_ARGS__)
+#define ITHISCALL0(dbginterface, function) THISCALL0 (idbg->dbginterface, function)
 
 #define DECLARE_CALLBACKS_IMPL(Type, IFace)           \
 typedef struct IFace##_impl {                         \
@@ -71,7 +73,7 @@ static P##IFace IFace##_impl_new(                     \
 }
 
 #define DECLARE_QUERYINTERFACE(IFace, IFaceIID)       \
-static STDMETHODIMP IFace##_QueryInterface_impl (     \
+static STDMETHODIMP IFace##_QueryInterface_impl(      \
 	P##IFace This,                                    \
 	_In_ REFIID InterfaceId,                          \
 	_Out_ PVOID *Interface) {                         \
@@ -79,7 +81,7 @@ static STDMETHODIMP IFace##_QueryInterface_impl (     \
 	if (IsEqualIID (InterfaceId, &IID_IUnknown) ||    \
 		IsEqualIID (InterfaceId, &IFaceIID)) {        \
 		*Interface = This;                            \
-		THISCALL (This, AddRef);                      \
+		THISCALL0 (This, AddRef);                     \
 		return S_OK;                                  \
 	} else {                                          \
 		return E_NOINTERFACE;                         \
@@ -155,8 +157,9 @@ static STDMETHODIMP __input_cb(PDEBUG_INPUT_CALLBACKS This, ULONG BufferSize) {
 	PDEBUG_INPUT_CALLBACKS_IMPL impl = (PDEBUG_INPUT_CALLBACKS_IMPL)This;
 	DbgEngContext *idbg = impl->m_idbg;
 	ITHISCALL (dbgCtrl, GetPromptText, prompt, sizeof (prompt), NULL);
-	r_line_set_prompt (prompt);
-	const char *str = r_line_readline ();
+	RCons *cons = r_cons_singleton ();
+	r_line_set_prompt (cons->line, prompt);
+	const char *str = r_line_readline (cons);
 	char *ret = r_str_ndup (str, R_MIN (strlen (str), BufferSize));
 	ITHISCALL (dbgCtrl, ReturnInput, ret);
 	return S_OK;
@@ -211,7 +214,7 @@ DECLARE_NEW (DEBUG_OUTPUT_CALLBACKS, IDebugOutputCallbacksVtbl)
 static void __free_context(DbgEngContext *idbg) {
 #define RELEASE(I)               \
 	if (idbg->I) {               \
-		ITHISCALL (I, Release);  \
+		ITHISCALL0 (I, Release);  \
 		idbg->I = NULL;          \
 	}
 	RELEASE (dbgAdvanced);
@@ -226,7 +229,7 @@ static void __free_context(DbgEngContext *idbg) {
 }
 
 static bool init_callbacks(DbgEngContext *idbg) {
-#define RELEASE(I) if (I) THISCALL (I, Release);
+#define RELEASE(I) if (I) THISCALL0 (I, Release);
 	if (!idbg->dbgClient) {
 		return false;
 	}
@@ -263,32 +266,28 @@ fail:
 static DbgEngContext *create_remote_context(const char *opts) {
 	DbgEngContext *idbg = R_NEW0 (DbgEngContext);
 
-	if (!idbg) {
-		return false;
-	}
-
 	LPWSTR wopts = (LPWSTR)r_utf8_to_utf16 (opts);
 
 	// Initialize interfaces
-	if (w32_DebugConnectWide (wopts, &IID_IDebugClient5, (PVOID *)&idbg->dbgClient) != S_OK) {
+	if (w32_DebugConnectWide (wopts, &IID_IDebugClient4, (PVOID *)&idbg->dbgClient) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugConnectWide (wopts, &IID_IDebugControl4, (PVOID *)&idbg->dbgCtrl) != S_OK) {
+	if (w32_DebugConnectWide (wopts, &IID_IDebugControl3, (PVOID *)&idbg->dbgCtrl) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugConnectWide (wopts, &IID_IDebugDataSpaces4, (PVOID *)&idbg->dbgData) != S_OK) {
+	if (w32_DebugConnectWide (wopts, &IID_IDebugDataSpaces3, (PVOID *)&idbg->dbgData) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugConnectWide (wopts, &IID_IDebugRegisters2, (PVOID *)&idbg->dbgReg) != S_OK) {
+	if (w32_DebugConnectWide (wopts, &IID_IDebugRegisters, (PVOID *)&idbg->dbgReg) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugConnectWide (wopts, &IID_IDebugSystemObjects4, (PVOID *)&idbg->dbgSysObj) != S_OK) {
+	if (w32_DebugConnectWide (wopts, &IID_IDebugSystemObjects3, (PVOID *)&idbg->dbgSysObj) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugConnectWide (wopts, &IID_IDebugAdvanced3, (PVOID *)&idbg->dbgAdvanced) != S_OK) {
+	if (w32_DebugConnectWide (wopts, &IID_IDebugAdvanced, (PVOID *)&idbg->dbgAdvanced) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugConnectWide (wopts, &IID_IDebugSymbols3, (PVOID *)&idbg->dbgSymbols) != S_OK) {
+	if (w32_DebugConnectWide (wopts, &IID_IDebugSymbols2, (PVOID *)&idbg->dbgSymbols) != S_OK) {
 		goto fail;
 	}
 	if (!init_callbacks (idbg)) {
@@ -304,30 +303,26 @@ fail:
 static DbgEngContext *create_context(void) {
 	DbgEngContext *idbg = R_NEW0 (DbgEngContext);
 
-	if (!idbg) {
-		return false;
-	}
-
 	// Initialize interfaces
-	if (w32_DebugCreate (&IID_IDebugClient5, (PVOID *)&idbg->dbgClient) != S_OK) {
+	if (w32_DebugCreate (&IID_IDebugClient4, (PVOID *)&idbg->dbgClient) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugCreate (&IID_IDebugControl4, (PVOID *)&idbg->dbgCtrl) != S_OK) {
+	if (w32_DebugCreate (&IID_IDebugControl3, (PVOID *)&idbg->dbgCtrl) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugCreate (&IID_IDebugDataSpaces4, (PVOID *)&idbg->dbgData) != S_OK) {
+	if (w32_DebugCreate (&IID_IDebugDataSpaces3, (PVOID *)&idbg->dbgData) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugCreate (&IID_IDebugRegisters2, (PVOID *)&idbg->dbgReg) != S_OK) {
+	if (w32_DebugCreate (&IID_IDebugRegisters, (PVOID *)&idbg->dbgReg) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugCreate (&IID_IDebugSystemObjects4, (PVOID *)&idbg->dbgSysObj) != S_OK) {
+	if (w32_DebugCreate (&IID_IDebugSystemObjects3, (PVOID *)&idbg->dbgSysObj) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugCreate (&IID_IDebugAdvanced3, (PVOID *)&idbg->dbgAdvanced) != S_OK) {
+	if (w32_DebugCreate (&IID_IDebugAdvanced, (PVOID *)&idbg->dbgAdvanced) != S_OK) {
 		goto fail;
 	}
-	if (w32_DebugCreate (&IID_IDebugSymbols3, (PVOID *)&idbg->dbgSymbols) != S_OK) {
+	if (w32_DebugCreate (&IID_IDebugSymbols2, (PVOID *)&idbg->dbgSymbols) != S_OK) {
 		goto fail;
 	}
 	if (!init_callbacks (idbg)) {
@@ -340,20 +335,21 @@ fail:
 	return NULL;
 }
 
-static bool windbg_init(void) {
+static bool windbg_init(RIODesc *desc) {
 	if (w32_DebugCreate && w32_DebugConnectWide) {
 		return true;
 	}
 	char *ext_path = r_sys_getenv ("_NT_DEBUGGER_EXTENSION_PATH");
 	HANDLE h = NULL;
+	char *save_ptr = NULL;
 	if (R_STR_ISNOTEMPTY (ext_path)) {
-		char *s = strtok (ext_path, ";");
+		char *s = r_str_tok_r (ext_path, ";", &save_ptr);
 		do {
 			PWCHAR dir = r_utf8_to_utf16 (s);
 			SetDllDirectoryW (dir);
 			free (dir);
 			h = LoadLibrary (TEXT ("dbgeng.dll"));
-		} while (!h && (s = strtok (NULL, ";")));
+		} while (!h && (s = r_str_tok_r (NULL, ";", &save_ptr)));
 		SetDllDirectoryW (NULL);
 	}
 	free (ext_path);
@@ -380,7 +376,7 @@ static bool windbg_init(void) {
 }
 
 static bool windbg_check(RIO *io, const char *uri, bool many) {
-	return !strncmp (uri, WINDBGURI, strlen (WINDBGURI));
+	return r_str_startswith (uri, WINDBGURI);
 }
 
 typedef enum {
@@ -395,12 +391,12 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 	if (!windbg_check (io, uri, 0)) {
 		return NULL;
 	}
-	if (!windbg_init ()) {
+	if (!windbg_init (NULL)) {
 		return NULL;
 	}
 	HRESULT hr = E_FAIL;
 	RIODesc *fd = NULL;
-	RCore *core = io->corebind.core;
+	RCore *core = io->coreb.core;
 	DbgEngContext *idbg = NULL;
 	const char *args = uri + strlen (WINDBGURI);
 	if (r_str_startswith (args, "-remote")) {
@@ -419,7 +415,7 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 			}
 			goto remote_client;
 		}
-	}	
+	}
 	if (!idbg) {
 		return NULL;
 	}
@@ -464,7 +460,7 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 			ITHISCALL (dbgCtrl, RemoveEngineOptions, DEBUG_ENGOPT_FINAL_BREAK);
 			break;
 		case 'h':
-			if (strcmp (opt.arg, "d")) {
+			if (!strcmp (opt.arg, "d")) {
 				spawn_options |= DEBUG_CREATE_PROCESS_NO_DEBUG_HEAP;
 			}
 			break;
@@ -473,10 +469,8 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 			image_path_set = true;
 			break;
 		case 'k':
-			if (strcmp (opt.arg, "l")) {
+			if (!strcmp (opt.arg, "l")) {
 				target = TARGET_LOCAL_KERNEL;
-			} else if (strcmp (opt.arg, "qm")) {
-				ITHISCALL (dbgCtrl, AddEngineOptions, DEBUG_ENGOPT_KD_QUIET_MODE);
 			} else {
 				target = TARGET_KERNEL;
 				args = opt.arg;
@@ -491,11 +485,11 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 				target = TARGET_LOCAL_ATTACH;
 				pid = atoi (opt.arg);
 			} else {
-				if (strcmp (opt.arg, "b")) {
+				if (!strcmp (opt.arg, "b")) {
 					attach_options |= DEBUG_ATTACH_INVASIVE_NO_INITIAL_BREAK;
-				} else if (strcmp (opt.arg, "e")) {
+				} else if (!strcmp (opt.arg, "e")) {
 					attach_options |= DEBUG_ATTACH_EXISTING;
-				} else if (strcmp (opt.arg, "v")) {
+				} else if (!strcmp (opt.arg, "v")) {
 					attach_options |= DEBUG_ATTACH_NONINVASIVE;
 				}
 			}
@@ -513,10 +507,10 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 		}
 	}
 	if (!symbol_path_set) {
-		const char *store = io->corebind.cfgGet (core, "pdb.symstore");
-		const char *server = io->corebind.cfgGet (core, "pdb.server");
+		const char *store = io->coreb.cfgGet (core, "pdb.symstore");
+		const char *server = io->coreb.cfgGet (core, "pdb.server");
 		char *s = strdup (server);
-		r_str_replace_ch (s, ';', '*', true);
+		r_str_replace_ch (s, ' ', '*', true);
 		char *sympath = r_str_newf ("cache*;srv*%s*%s", store, s);
 		ITHISCALL (dbgSymbols, SetSymbolPath, sympath);
 		free (s);
@@ -534,15 +528,15 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 			hr = ITHISCALL (dbgClient, CreateProcess, 0ULL, cmd, spawn_options);
 			free (cmd);
 		} else {
-			eprintf ("Missing argument for local spawn\n");
+			R_LOG_ERROR ("Missing argument for local spawn");
 		}
 		break;
 	case TARGET_LOCAL_ATTACH: // -p (PID)
 		hr = ITHISCALL (dbgClient, AttachProcess, 0ULL, pid, attach_options);
 		break;
 	case TARGET_LOCAL_KERNEL: // -kl
-		if (ITHISCALL (dbgClient, IsKernelDebuggerEnabled) == S_FALSE) {
-			eprintf ("Live Kernel debug not available. Set the /debug boot switch to enable it\n");
+		if (ITHISCALL0 (dbgClient, IsKernelDebuggerEnabled) == S_FALSE) {
+			R_LOG_ERROR ("Live Kernel debug not available. Set the /debug boot switch to enable it");
 		} else {
 			hr = ITHISCALL (dbgClient, AttachKernel, DEBUG_ATTACH_LOCAL_KERNEL, args);
 		}
@@ -561,20 +555,20 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 	}
 	ITHISCALL (dbgCtrl, WaitForEvent, DEBUG_WAIT_DEFAULT, INFINITE);
 	if (command) {
-		ITHISCALL (dbgCtrl, Execute, DEBUG_OUTCTL_ALL_CLIENTS, command, DEBUG_EXECUTE_DEFAULT);	
+		ITHISCALL (dbgCtrl, Execute, DEBUG_OUTCTL_ALL_CLIENTS, command, DEBUG_EXECUTE_DEFAULT);
 	}
 	r_str_argv_free (argv);
 remote_client:
 	fd = r_io_desc_new (io, &r_io_plugin_windbg, uri, perm | R_PERM_X, mode, idbg);
 	fd->name = strdup (args);
 	core->dbg->user = idbg;
-	io->corebind.cmd (io->corebind.core, "dL windbg");
+	io->coreb.cmd (io->coreb.core, "dL windbg");
 	return fd;
 }
 
 static bool windbg_close(RIODesc *fd) {
 	DbgEngContext *idbg = fd->data;
-	RCore *core = fd->io->corebind.core;
+	RCore *core = fd->io->coreb.core;
 	if (idbg->server) {
 		ITHISCALL (dbgClient, EndSession, DEBUG_END_DISCONNECT);
 		ITHISCALL (dbgClient, DisconnectProcessServer, idbg->server);
@@ -596,7 +590,7 @@ static ut64 windbg_lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 		io->off += (st64)offset;
 		break;
 	case R_IO_SEEK_END:
-		io->off = UT64_MAX;
+		io->off = UT64_MAX - 1; // UT64_MAX reserved for error case
 		break;
 	}
 	return io->off;
@@ -605,19 +599,21 @@ static ut64 windbg_lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 static int windbg_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	DbgEngContext *idbg = fd->data;
 	ULONG bytesRead = 0ULL;
-	if (FAILED (ITHISCALL (dbgData, ReadVirtual, io->off, (PVOID)buf, count, &bytesRead))) {
-		ULONG64 ValidBase;
-		ULONG ValidSize;
-		if (SUCCEEDED (ITHISCALL (dbgData, GetValidRegionVirtual, io->off, count, &ValidBase, &ValidSize))) {
-			if (ValidSize && ValidBase < io->off + count) {
-				const ULONG64 skipped = ValidBase - io->off;
-				const ULONG toRead = count - skipped;
-				ITHISCALL (dbgData, ReadVirtual, ValidBase, (PVOID)(buf + skipped), toRead, &bytesRead);
-				bytesRead += skipped;
-			}
+	ULONG pageSize = 1;
+	bool pageAligned = false;
+	ULONG64 skip = 0;
+
+	while (skip < count && (FAILED (ITHISCALL (dbgData, ReadVirtual, io->off + skip, buf + skip, count - skip, &bytesRead)) || bytesRead < count - skip)) {
+		if (!pageAligned) {
+			pageAligned = true;
+			ITHISCALL (dbgCtrl, GetPageSize, &pageSize);
+			skip = pageSize - io->off % pageSize;
+		} else {
+			skip += pageSize;
 		}
 	}
-	return bytesRead;
+
+	return count;
 }
 
 static int windbg_write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
@@ -661,7 +657,7 @@ static bool windbg_getbase(RIODesc *fd, ut64 *base) {
 
 static char *windbg_system(RIO *io, RIODesc *fd, const char *cmd) {
 	DbgEngContext *idbg = fd->data;
-	if (R_STR_ISEMPTY (cmd) || !strncmp ("pid", cmd, 3)) {
+	if (R_STR_ISEMPTY (cmd) || r_str_startswith (cmd, "pid")) {
 		return NULL;
 	}
 	ITHISCALL (dbgCtrl, Execute, DEBUG_OUTCTL_ALL_CLIENTS, cmd, DEBUG_EXECUTE_DEFAULT);
@@ -669,12 +665,14 @@ static char *windbg_system(RIO *io, RIODesc *fd, const char *cmd) {
 }
 
 RIOPlugin r_io_plugin_windbg = {
-	.name = "windbg",
-	.desc = "WinDBG (DbgEng.dll) based io plugin for Windows",
-	.license = "LGPL3",
+	.meta = {
+		.name = "windbg",
+		.author = "GustavoLCR",
+		.desc = "WinDBG (DbgEng.dll) based io plugin for Windows",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = WINDBGURI,
 	.isdbg = true,
-	.init = windbg_init,
 	.open = windbg_open,
 	.seek = windbg_lseek,
 	.read = windbg_read,

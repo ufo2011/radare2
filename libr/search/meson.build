@@ -4,15 +4,18 @@ r_search_sources = [
   'keyword.c',
   'regexp.c',
   'uds.c',
-  'privkey_find.c',
+  'privkey.c',
+  'karp.c',
   'search.c',
+  'tire.c',
+  'sm4_find.c',
   'strings.c'
 ]
 
 r_search = library('r_search', r_search_sources,
   include_directories: [platform_inc],
   c_args: library_cflags,
-  dependencies: [r_util_dep],
+  dependencies: [r_muta_dep, r_util_dep],
   install: true,
   implicit_include_directories: false,
   install_rpath: rpath_lib,
@@ -20,7 +23,20 @@ r_search = library('r_search', r_search_sources,
 )
 
 r_search_dep = declare_dependency(link_with: r_search,
-                                  include_directories: [platform_inc])
+  include_directories: [platform_inc])
+
+if get_option('blob')
+r_search_static = static_library('r_search_static', r_search_sources,
+  include_directories: [platform_inc],
+  c_args: library_cflags,
+  dependencies: [r_util_static_dep],
+  install: true,
+  implicit_include_directories: false,
+)
+
+r_search_static_dep = declare_dependency(link_with: r_search_static,
+  include_directories: [platform_inc])
+endif
 
 pkgconfig_mod.generate(r_search,
   subdirs: 'libr',

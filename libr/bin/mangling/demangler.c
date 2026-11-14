@@ -1,11 +1,7 @@
-/* radare - LGPL - Copyright 2015 - inisider */
+/* radare - LGPL - Copyright 2015-2023 - inisider */
 
-#include "demangler.h"
-#include <stdlib.h>
-
-#include <r_types.h> // eprintf()
-
-#include "microsoft_demangle.h"
+#include <r_types.h>
+#include "microsoft.h"
 
 typedef enum EManglingType {
 	eManglingMicrosoft = 0,
@@ -14,50 +10,39 @@ typedef enum EManglingType {
 	eManglingTypeMax
 } EManglingType;
 
-///////////////////////////////////////////////////////////////////////////////
-static EManglingType get_mangling_type(char *sym)
-{
+static EManglingType get_mangling_type(const char *sym) {
 	EManglingType mangling_type = eManglingUnsupported;
 	if (sym == 0) {
 		mangling_type = eManglingUnknown;
 		goto get_mangling_type_err;
 	}
-
-	switch (*sym) {
-	case '.':
-	case '?':
+	const char sym0 = *sym;
+	if (sym0 == '.' || sym0 == '?') {
 		mangling_type = eManglingMicrosoft;
-		break;
-	default:
-		break;
 	}
 
 get_mangling_type_err:
 	return mangling_type;
 }
 
-///////////////////////////////////////////////////////////////////////////////
-EDemanglerErr create_demangler(SDemangler **demangler)
-{
+EDemanglerErr create_demangler(SDemangler **demangler) {
 	EDemanglerErr err = eDemanglerErrOK;
-
-	*demangler = (SDemangler *) malloc(sizeof(SDemangler));
-
+	SDemangler *sd = R_NEW0 (SDemangler);
+	*demangler = sd;
 	if (!*demangler) {
 		err = eDemanglerErrMemoryAllocation;
 		goto create_demagler_err;
 	}
-
-	(*demangler)->demangle = 0;
-	(*demangler)->symbol = 0;
-
+	sd->demangle = 0;
+	sd->symbol = 0;
+	sd->abbr_types = r_list_newf (free);
+	sd->abbr_names = r_list_newf (free);
 create_demagler_err:
 	return err;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-EDemanglerErr init_demangler(SDemangler *demangler, char *sym)
-{
+EDemanglerErr init_demangler(SDemangler *demangler, char *sym) {
 	EManglingType mangling_type = eManglingUnsupported;
 	EDemanglerErr err = eDemanglerErrOK;
 
@@ -79,7 +64,7 @@ EDemanglerErr init_demangler(SDemangler *demangler, char *sym)
 		err = eDemanglerErrUnsupportedMangling;
 		break;
 	case eManglingUnknown:
-		err = eDemanglerErrUnkown;
+		err = eDemanglerErrUnknown;
 		break;
 	default:
 		break;
@@ -96,9 +81,9 @@ init_demangler_err:
 	return err;
 }
 
-///////////////////////////////////////////////////////////////////////////////
-void free_demangler(SDemangler *demangler)
-{
-	R_FREE(demangler->symbol);
-	R_FREE(demangler);
+void free_demangler(SDemangler *sd) {
+	r_list_free (sd->abbr_types);
+	r_list_free (sd->abbr_names);
+	free (sd->symbol);
+	free (sd);
 }

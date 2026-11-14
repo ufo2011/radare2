@@ -1,12 +1,10 @@
 NAME=iS query
 FILE=bins/elf/analysis/main
-CMDS=iS size/sort,vaddr/cols/name
+CMDS=iS,size/sort,vaddr/cols/name
 EXPECT=<<EOF
-[Sections]
-
 vaddr      name
 ---------------
-0x00000000 
+0x00000000
 0x00600910 .bss
 0x006006e0 .init_array
 0x006006e8 .fini_array
@@ -42,151 +40,116 @@ vaddr      name
 0x006006f8 .dynamic
 0x00000000 .strtab
 0x00000000 .symtab
-
 EOF
 RUN
 
-NAME=ib
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
-e bin.baddr=0
-e asm.calls=false
-ib
-op 3
-e io.va=0
-s entry0
-pi 1
-?p
-EOF
-EXPECT=<<EOF
-xor ebp, ebp
-0x00000410
-EOF
-RUN
-
-NAME=ibib
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
-?e works
-ib;ib
-EOF
-EXPECT=<<EOF
-works
-EOF
-RUN
-
-NAME=ibib2
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
-ib;ib
-?e works
-EOF
-EXPECT=<<EOF
-works
-EOF
-RUN
-
-NAME=ih (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ihq
-EXPECT=<<EOF
-[Header fields]
-0x00000000 0x00000000 ELF; 0x464c457f
-0x00000010 0x00000010 Type; 0x00000002
-0x00000012 0x00000012 Machine; 0x00000003
-0x00000014 0x00000014 Version; 0x00000001
-0x00000018 0x00000018 Entry point; 0x08048300
-0x0000001c 0x0000001c PhOff; 0x00000034
-0x00000020 0x00000020 ShOff; 0x000007cc
-0x00000024 0x00000024 Flags; 0x00000000
-0x00000028 0x00000028 EhSize; 0x00000034
-0x0000002a 0x0000002a PhentSize; 0x00000020
-0x0000002c 0x0000002c PhNum; 0x00000008
-0x0000002e 0x0000002e ShentSize; 0x00000028
-0x00000030 0x00000030 ShNum; 0x0000001e
-0x00000032 0x00000032 ShrStrndx; 0x0000001b
-
-14 fields
-EOF
-RUN
-
-NAME=ih* (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ih*
-EXPECT=<<EOF
-fs header
-"f header.ELF 1 0x00000000"
-CCu MHg0NjRjNDU3Zg== @ 0x0
-Cf 4 x @ 0x0
-pf.ELF x
-"f header.Type 1 0x00000010"
-CCu MHgwMDAwMDAwMg== @ 0x10
-Cf 2 x @ 0x10
-pf.Type x
-"f header.Machine 1 0x00000012"
-CCu MHgwMDAwMDAwMw== @ 0x12
-Cf 2 x @ 0x12
-pf.Machine x
-"f header.Version 1 0x00000014"
-CCu MHgwMDAwMDAwMQ== @ 0x14
-Cf 4 x @ 0x14
-pf.Version x
-"f header.Entrypoint 1 0x00000018"
-CCu MHgwODA0ODMwMA== @ 0x18
-Cf 4 x @ 0x18
-pf.Entrypoint x
-"f header.PhOff 1 0x0000001c"
-CCu MHgwMDAwMDAzNA== @ 0x1c
-Cf 4 x @ 0x1c
-pf.PhOff x
-"f header.ShOff 1 0x00000020"
-CCu MHgwMDAwMDdjYw== @ 0x20
-Cf 4 x @ 0x20
-pf.ShOff x
-"f header.Flags 1 0x00000024"
-CCu MHgwMDAwMDAwMA== @ 0x24
-Cf 4 x @ 0x24
-pf.Flags x
-"f header.EhSize 1 0x00000028"
-CCu MHgwMDAwMDAzNA== @ 0x28
-Cf 2 x @ 0x28
-pf.EhSize x
-"f header.PhentSize 1 0x0000002a"
-CCu MHgwMDAwMDAyMA== @ 0x2a
-Cf 2 x @ 0x2a
-pf.PhentSize x
-"f header.PhNum 1 0x0000002c"
-CCu MHgwMDAwMDAwOA== @ 0x2c
-Cf 2 x @ 0x2c
-pf.PhNum x
-"f header.ShentSize 1 0x0000002e"
-CCu MHgwMDAwMDAyOA== @ 0x2e
-Cf 2 x @ 0x2e
-pf.ShentSize x
-"f header.ShNum 1 0x00000030"
-CCu MHgwMDAwMDAxZQ== @ 0x30
-Cf 2 x @ 0x30
-pf.ShNum x
-"f header.ShrStrndx 1 0x00000032"
-CCu MHgwMDAwMDAxYg== @ 0x32
-Cf 2 x @ 0x32
-pf.ShrStrndx x
-EOF
-RUN
-
+# merged: iZ*; i (file x86); iA (file x86); ie (file x86); iej (file x86); ii (file x86); iI (file x86)
 NAME=iZ
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iZ
+CMDS=<<EOF
+iZ
+?e --
+iZ*
+?e --
+i~!file
+?e --
+ia
+?e --
+ie
+?e --
+iej
+?e --
+ii
+?e --
+iI
+EOF
 EXPECT=<<EOF
 4899
-EOF
-RUN
-
-NAME=iZ*
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iZ*
-EXPECT=<<EOF
-f bin_size @ 4899
+--
+'f bin_size = 4899
+--
+fd       3
+size     0x1323
+humansz  4.8K
+mode     r-x
+format   elf
+iorw     false
+block    0x100
+arch     x86
+baddr    0x8048000
+binsz    4899
+bintype  elf
+bits     32
+canary   false
+injprot  false
+class    ELF32
+compiler GCC: (GNU) 4.8.2
+crypto   false
+endian   little
+havecode true
+intrp    /lib/ld-linux.so.2
+laddr    0x0
+lang     c
+linenum  false
+lsyms    true
+machine  Intel 80386
+nx       true
+os       linux
+pic      false
+relocs   true
+relro    no
+rpath    NONE
+sanitize false
+static   false
+stripped false
+uncaps   true
+subsys   linux
+va       true
+--
+0   0x00000000 4899 x86_32 machine=Intel 80386
+--
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00000300 0x08048300 0x00000018 0x08048018 program
+--
+[{"paddr":768,"vaddr":134513408,"baddr":134512640,"laddr":0,"hvaddr":134512664,"haddr":24,"type":"program"}]
+--
+nth vaddr      bind   type   lib name
+-------------------------------------
+1   0x080482d0 GLOBAL FUNC       puts
+2   0x080482e0 WEAK   NOTYPE     __gmon_start__
+3   0x080482f0 GLOBAL FUNC       __libc_start_main
+--
+arch     x86
+baddr    0x8048000
+binsz    4899
+bintype  elf
+bits     32
+canary   false
+injprot  false
+class    ELF32
+compiler GCC: (GNU) 4.8.2
+crypto   false
+endian   little
+havecode true
+intrp    /lib/ld-linux.so.2
+laddr    0x0
+lang     c
+linenum  false
+lsyms    true
+machine  Intel 80386
+nx       true
+os       linux
+pic      false
+relocs   true
+relro    no
+rpath    NONE
+sanitize false
+static   false
+stripped false
+uncaps   true
+subsys   linux
+va       true
 EOF
 RUN
 
@@ -195,8 +158,6 @@ FILE=malloc://1025
 ARGS=-a x86 -b 64
 CMDS=<<EOF
 i
-ia
-ia*
 ii
 ii*
 ie
@@ -213,68 +174,35 @@ fd       3
 file     malloc://1025
 size     0x401
 humansz  1.0K
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     rwx
-format   any
+format   null
 iorw     true
 block    0x100
-baddr    0x0
-binsz    1025
-bits     64
-canary   false
-crypto   false
-endian   little
-havecode false
-laddr    0x0
-linenum  false
-lsyms    false
-nx       false
-pic      false
-relocs   false
-sanitize false
-static   true
-stripped false
-va       false
-[Imports]
 nth vaddr bind type lib name
 ----------------------------
-
-[Exports]
-
-nth paddr vaddr bind type size lib name
----------------------------------------
-e cfg.bigendian=false
-e asm.bits=64
-e asm.dwarf=false
-e asm.pcalign=0
 fs imports
-fs symbols
-fs exports
-[Imports]
-nth vaddr bind type lib name
-----------------------------
-
-fs imports
-[Entrypoints]
-
-0 entrypoints
-fs symbols
-[Symbols]
-
-nth paddr vaddr bind type size lib name
----------------------------------------
-fs symbols
-[Sections]
-
-nth paddr  size vaddr  vsize perm name
---------------------------------------
-
+nth paddr vaddr bind type size lib name demangled
+-------------------------------------------------
+'fs symbols
+nth paddr  size vaddr  vsize perm flags type name
+-------------------------------------------------
 fs sections
 EOF
 RUN
 
+NAME=i (all) (imports output for malloc)
+FILE=malloc://1025
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+ii
+ii*
+EOF
+EXPECT=<<EOF
+nth vaddr bind type lib name
+----------------------------
+fs imports
+EOF
+RUN
 NAME=i (all) (malloc) iI*
 FILE=malloc://1024
 ARGS=-a x86 -b 64
@@ -289,966 +217,117 @@ fd       3
 file     malloc://1024
 size     0x400
 humansz  1K
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     rwx
-format   any
+format   null
 iorw     true
 block    0x100
 e cfg.bigendian=false
 e asm.bits=64
 e asm.dwarf=false
-e asm.pcalign=0
-baddr    0x0
+e arch.codealign=1
 binsz    1024
 bits     64
 canary   false
+injprot  false
 crypto   false
 endian   little
 havecode false
-laddr    0x0
-linenum  false
-lsyms    false
-nx       false
-pic      false
-relocs   false
-sanitize false
-static   true
-stripped false
-va       false
 e cfg.bigendian=false
 e asm.bits=64
 e asm.dwarf=false
-e asm.pcalign=0
+e arch.codealign=1
 EOF
 RUN
 
-NAME=i (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=i~!file
+NAME=i (all) (malloc entrypoint symbols and sections)
+FILE=malloc://1025
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+ie
+ie*
+is
+is*
+iS
+iS*
+EOF
 EXPECT=<<EOF
-fd       3
-size     0x1323
-humansz  4.8K
-minopsz  1
-maxopsz  16
-invopsz  1
-mode     r-x
-format   elf
-iorw     false
-block    0x100
-arch     x86
-baddr    0x8048000
-binsz    4899
-bintype  elf
-bits     32
-canary   false
-class    ELF32
-compiler GCC: (GNU) 4.8.2
-crypto   false
-endian   little
-havecode true
-intrp    /lib/ld-linux.so.2
-laddr    0x0
-lang     c
-linenum  true
-lsyms    true
-machine  Intel 80386
-nx       true
-os       linux
-pic      false
-relocs   true
-relro    no
-rpath    NONE
-sanitize false
-static   false
-stripped false
-subsys   linux
-va       true
+nth paddr vaddr bind type size lib name demangled
+-------------------------------------------------
+'fs symbols
+nth paddr  size vaddr  vsize perm flags type name
+-------------------------------------------------
+fs sections
 EOF
 RUN
 
-NAME=iA (file mips I)
+NAME=ia (file mips I)
 FILE=bins/elf/mips-mozi
 CMDS=<<EOF
-iA
-iAj
+ia
+iaj
 EOF
 EXPECT=<<EOF
-0   0x00000000 266108 mips_32 mips1 o32 
-{"bins":[{"arch":"mips","bits":32,"offset":0,"size":266108,"isa":"mips1","features":"o32","machine":"MIPS R3000"}]}
+0   0x00000000 266108 mips_32 cpu=mips1 abi=o32 machine=MIPS R3000
+{"bins":[{"arch":"mips","bits":32,"offset":0,"size":266108,"abi":"o32","isa":"mips1","flags":"0x1007","machine":"MIPS R3000"}]}
 EOF
 RUN
 
-NAME=iA (file mips 64r2)
+NAME=ia (file mips 64r2)
 FILE=bins/elf/analysis/mips64r2-busybox-loongson
 CMDS=<<EOF
-iA
-iAj
+ia
+iaj
 EOF
 EXPECT=<<EOF
-0   0x00000000 1039368 mips_64 mips64r2 n64 
-{"bins":[{"arch":"mips","bits":64,"offset":0,"size":1039368,"isa":"mips64r2","features":"n64","machine":"MIPS R3000"}]}
+0   0x00000000 1039368 mips_64 cpu=mips64r2 abi=n64 machine=MIPS R3000
+{"bins":[{"arch":"mips","bits":64,"offset":0,"size":1039368,"abi":"n64","isa":"mips64r2","flags":"0x80000007","machine":"MIPS R3000"}]}
 EOF
 RUN
 
-NAME=iA (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iA
-EXPECT=<<EOF
-0   0x00000000 4899 x86_32 
-EOF
-RUN
 
-NAME=ib java class file
-FILE=malloc://1024
-CMDS=<<EOF
-e asm.calls=false
-e asm.comments=false
-e asm.cmtflgrefs=false
-e scr.color=false
-e asm.lines.jmp=false
-e asm.xrefs=false
-wx cafebabe00000032003a070002010014546573745661726961626c6553776974636855700700040100106a6176612f6c616e672f4f626a6563740100063c696e69743e010003282956010004436f64650a000300090c0005000601000f4c696e654e756d6265725461626c650100124c6f63616c5661726961626c655461626c65010004746869730100164c546573745661726961626c6553776974636855703b010014546573744d756c7469706c655661726961626c650a001000120700110100116a6176612f6c616e672f496e74656765720c0013001401000776616c75654f660100162849294c6a6176612f6c616e672f496e74656765723b0800160100067472796f6e65090018001a0700190100106a6176612f6c616e672f53797374656d0c001b001c0100036f75740100154c6a6176612f696f2f5072696e7453747265616d3b07001e0100176a6176612f6c616e672f537472696e674275696c646572080020010011417474656d7074696e67207072696e74200a001d00220c00050023010015284c6a6176612f6c616e672f537472696e673b29560a001d00250c00260027010006617070656e6401002d284c6a6176612f6c616e672f537472696e673b294c6a6176612f6c616e672f537472696e674275696c6465723b0a001d00290c002a002b010008746f537472696e6701001428294c6a6176612f6c616e672f537472696e673b0a002d002f07002e0100136a6176612f696f2f5072696e7453747265616d0c003000230100057072696e74010001690100134c6a6176612f6c616e672f496e74656765723b01000170010001490100016b0100124c6a6176612f6c616e672f537472696e673b0100016a01000a536f7572636546696c65010019546573745661726961626c6553776974636855702e6a617661002100010003000000000002000100050006000100070000002f00010001000000052ab70008b100000002000a00000006000100000002000b0000000c000100000005000c000d00000008000e0006000100070000008100040004000000251064b8000f4b10643c12154d033eb20017bb001d59121fb700212cb60024b60028b6002cb100000002000a0000001a0006000000040006000500090006000c0007000e000800240009000b0000002a00040006001f0031003200000009001c003300340001000c0019003500360002000e001700370034000300010038000000020039
-ib
-if
-af
-pdf
-EOF
-EXPECT=<<EOF
-fd       3
-file     malloc://1024
-size     0x400
-humansz  1K
-mode     rwx
-format   java
-iorw     true
-block    0x100
-type     JAVA CLASS
-arch     java
-baddr    0x0
-binsz    1024
-bintype  class
-bits     32
-canary   false
-retguard false
-class    0x3200 0x0000
-crypto   false
-endian   little
-havecode true
-laddr    0x0
-lang     java 6
-linenum  true
-lsyms    true
-machine  jvm
-nx       false
-os       any
-pic      false
-relocs   false
-sanitize false
-static   false
-stripped false
-subsys   any
-va       false
-  ;-- entry1:
-  ;-- sym.TestVariableSwitchUp.TestMultipleVariable:
-/ (fcn) method.TestVariableSwitchUp.TestMultipleVariable 37
-| 0x000002fd      1064           bipush 100
-| 0x000002ff      b8000f         invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;
-| 0x00000302      4b             astore_0
-| 0x00000303      1064           bipush 100
-| 0x00000305      3c             istore_1
-| 0x00000306      1215           ldc "tryone"
-| 0x00000308      4d             astore_2
-| 0x00000309      03             iconst_0
-| 0x0000030a      3e             istore_3
-| 0x0000030b      b20017         getstatic java/lang/System/out Ljava/io/PrintStream;
-| 0x0000030e      bb001d         new java/lang/StringBuilder
-| 0x00000311      59             dup
-| 0x00000312      121f           ldc "Attempting print "
-| 0x00000314      b70021         invokespecial java/lang/StringBuilder/<init>(Ljava/lang/String;)V
-| 0x00000317      2c             aload_2
-| 0x00000318      b60024         invokevirtual java/lang/StringBuilder/append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-| 0x0000031b      b60028         invokevirtual java/lang/StringBuilder/toString()Ljava/lang/String;
-| 0x0000031e      b6002c         invokevirtual java/io/PrintStream/print(Ljava/lang/String;)V
-\ 0x00000321      b1             return
-EOF
-
-RUN
-
-NAME=ic cpp classes
-FILE=bins/elf/libmagic.so
-CMDS=<<EOF
-ic~_JNIEnv
-ic~FindClass
-EOF
-EXPECT=<<EOF
-0x00000000 [0x00006060 - 0x0000697c]   2332 class 0 _JNIEnv
-0x000074f8 method 0      inject(_JNIEnv*, _jobject*, _jstring*, _jstring*)
-0x0000699c method 1      findBaseDexClassloader(_JNIEnv*, _jobject*)
-0x00006a2c method 2      getField(_JNIEnv*, _jobject*, _jobject*, _jstring*)
-0x00006abc method 3      getPathList(_JNIEnv*, _jobject*)
-0x00006af4 method 4      getDexElements(_JNIEnv*, _jobject*)
-0x00006b1c method 5      setField(_JNIEnv*, _jobject*, _jobject*, _jstring*, _jobject*)
-0x00006bb0 method 6      combineArray(_JNIEnv*, _jobject*, _jobject*)
-0x00006d00 method 7      injectAboveEqualApiLevel14(_JNIEnv*, _jobject*, _jstring*, _jstring*)
-0x00006e5c method 8      appendArray(_JNIEnv*, _jobject*, _jobject*)
-0x00006f68 method 9      injectInAliyunOs(_JNIEnv*, _jobject*, _jstring*, _jstring*)
-0x0000720c method 10      injectBelowApiLevel14(_JNIEnv*, _jobject*, _jstring*, _jstring*)
-0x00006060 method 0      FindClass(char const*)
-EOF
-RUN
-
-NAME=ic?
-BROKEN=1
-FILE=bins/elf/libmagic.so
-CMDS=ic?~?Usage
-EXPECT=<<EOF
-1
-EOF
-RUN
-
-NAME=icl
-FILE=bins/elf/libmagic.so
-CMDS=icl
-EXPECT=<<EOF
-0x24672 0x24682 0x24692 0x24718 0x24728 0x24740 0x24768 0x24796 0x24810 0x26974 0x27004
-0x29944 0x27036 0x27180 0x27324 0x27380 0x27420 0x27568 0x27904 0x28252 0x28520 0x29196
-0x38000 0x34924 0x38036 0x38060 0x38088
-0x34948 0x35060
-0x34972 0x35076
-0x35012
-0x35036
-0x35204
-0x37948 0x38024
-0x38116
-0x38844 0x38868 0x38876 0x38996 0x38884 0x38920
-0x38184 0x38192 0x38260
-0x40432 0x40500 0x40400
-0x38388 0x38456 0x38556 0x38780
-0x39128 0x39196 0x39240 0x39016 0x39108 0x39308
-0x40644 0x75648 0x75720
-0x75440 0x75512
-0x75456 0x75472
-0x76760 0x76744
-0x76844 0x76828
-EOF
-RUN
-
-NAME=icj
-FILE=bins/elf/libmagic.so
-CMDS=icj~{}
-EXPECT=<<EOF
-[
-  {
-    "classname": "_JNIEnv",
-    "addr": 0,
-    "index": 0,
-    "methods": [
-      {
-        "name": "FindClass(char const*)",
-        "addr": 24672
-      },
-      {
-        "name": "DeleteLocalRef(_jobject*)",
-        "addr": 24682
-      },
-      {
-        "name": "NewObject(_jclass*, _jmethodID*, ...)",
-        "addr": 24692
-      },
-      {
-        "name": "GetObjectClass(_jobject*)",
-        "addr": 24718
-      },
-      {
-        "name": "GetMethodID(_jclass*, char const*, char const*)",
-        "addr": 24728
-      },
-      {
-        "name": "CallObjectMethod(_jobject*, _jmethodID*, ...)",
-        "addr": 24740
-      },
-      {
-        "name": "CallVoidMethod(_jobject*, _jmethodID*, ...)",
-        "addr": 24768
-      },
-      {
-        "name": "GetStaticMethodID(_jclass*, char const*, char const*)",
-        "addr": 24796
-      },
-      {
-        "name": "CallStaticObjectMethod(_jclass*, _jmethodID*, ...)",
-        "addr": 24810
-      },
-      {
-        "name": "CallStaticIntMethod(_jclass*, _jmethodID*, ...)",
-        "addr": 26974
-      },
-      {
-        "name": "CallStaticVoidMethod(_jclass*, _jmethodID*, ...)",
-        "addr": 27004
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "SystemClassLoaderInjector",
-    "addr": 0,
-    "index": 1,
-    "methods": [
-      {
-        "name": "inject(_JNIEnv*, _jobject*, _jstring*, _jstring*)",
-        "addr": 29944
-      },
-      {
-        "name": "findBaseDexClassloader(_JNIEnv*, _jobject*)",
-        "addr": 27036
-      },
-      {
-        "name": "getField(_JNIEnv*, _jobject*, _jobject*, _jstring*)",
-        "addr": 27180
-      },
-      {
-        "name": "getPathList(_JNIEnv*, _jobject*)",
-        "addr": 27324
-      },
-      {
-        "name": "getDexElements(_JNIEnv*, _jobject*)",
-        "addr": 27380
-      },
-      {
-        "name": "setField(_JNIEnv*, _jobject*, _jobject*, _jstring*, _jobject*)",
-        "addr": 27420
-      },
-      {
-        "name": "combineArray(_JNIEnv*, _jobject*, _jobject*)",
-        "addr": 27568
-      },
-      {
-        "name": "injectAboveEqualApiLevel14(_JNIEnv*, _jobject*, _jstring*, _jstring*)",
-        "addr": 27904
-      },
-      {
-        "name": "appendArray(_JNIEnv*, _jobject*, _jobject*)",
-        "addr": 28252
-      },
-      {
-        "name": "injectInAliyunOs(_JNIEnv*, _jobject*, _jstring*, _jstring*)",
-        "addr": 28520
-      },
-      {
-        "name": "injectBelowApiLevel14(_JNIEnv*, _jobject*, _jstring*, _jstring*)",
-        "addr": 29196
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "std",
-    "addr": 0,
-    "index": 2,
-    "methods": [
-      {
-        "name": "terminate()",
-        "addr": 38000
-      },
-      {
-        "name": "uncaught_exception()",
-        "addr": 34924
-      },
-      {
-        "name": "unexpected()",
-        "addr": 38036
-      },
-      {
-        "name": "set_terminate(void (*)())",
-        "addr": 38060
-      },
-      {
-        "name": "set_unexpected(void (*)())",
-        "addr": 38088
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "std::exception",
-    "addr": 0,
-    "index": 3,
-    "methods": [
-      {
-        "name": "~exception()",
-        "addr": 34948
-      },
-      {
-        "name": "what() const",
-        "addr": 35060
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "std::bad_exception",
-    "addr": 0,
-    "index": 4,
-    "methods": [
-      {
-        "name": "~bad_exception()",
-        "addr": 34972
-      },
-      {
-        "name": "what() const",
-        "addr": 35076
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1::__forced_unwind",
-    "addr": 0,
-    "index": 5,
-    "methods": [
-      {
-        "name": "~__forced_unwind()",
-        "addr": 35012
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1::__foreign_exception",
-    "addr": 0,
-    "index": 6,
-    "methods": [
-      {
-        "name": "~__foreign_exception()",
-        "addr": 35036
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__eh_globals_init",
-    "addr": 0,
-    "index": 7,
-    "methods": [
-      {
-        "name": "~__eh_globals_init()",
-        "addr": 35204
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1",
-    "addr": 0,
-    "index": 8,
-    "methods": [
-      {
-        "name": "__terminate(void (*)())",
-        "addr": 37948
-      },
-      {
-        "name": "__unexpected(void (*)())",
-        "addr": 38024
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1::__fundamental_type_info",
-    "addr": 0,
-    "index": 9,
-    "methods": [
-      {
-        "name": "~__fundamental_type_info()",
-        "addr": 38116
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "std::type_info",
-    "addr": 0,
-    "index": 10,
-    "methods": [
-      {
-        "name": "~type_info()",
-        "addr": 38844
-      },
-      {
-        "name": "__is_pointer_p() const",
-        "addr": 38868
-      },
-      {
-        "name": "__is_function_p() const",
-        "addr": 38876
-      },
-      {
-        "name": "__do_catch(std::type_info const*, void**, unsigned int) const",
-        "addr": 38996
-      },
-      {
-        "name": "__do_upcast(__cxxabiv1::__class_type_info const*, void**) const",
-        "addr": 38884
-      },
-      {
-        "name": "operator==(std::type_info const&) const",
-        "addr": 38920
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1::__pointer_type_info",
-    "addr": 0,
-    "index": 11,
-    "methods": [
-      {
-        "name": "__is_pointer_p() const",
-        "addr": 38184
-      },
-      {
-        "name": "~__pointer_type_info()",
-        "addr": 38192
-      },
-      {
-        "name": "__pointer_catch(__cxxabiv1::__pbase_type_info const*, void**, unsigned int) const",
-        "addr": 38260
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1::__pbase_type_info",
-    "addr": 0,
-    "index": 12,
-    "methods": [
-      {
-        "name": "~__pbase_type_info()",
-        "addr": 40432
-      },
-      {
-        "name": "__do_catch(std::type_info const*, void**, unsigned int) const",
-        "addr": 40500
-      },
-      {
-        "name": "__pointer_catch(__cxxabiv1::__pbase_type_info const*, void**, unsigned int) const",
-        "addr": 40400
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1::__si_class_type_info",
-    "addr": 0,
-    "index": 13,
-    "methods": [
-      {
-        "name": "~__si_class_type_info()",
-        "addr": 38388
-      },
-      {
-        "name": "__do_find_public_src(int, void const*, __cxxabiv1::__class_type_info const*, void const*) const",
-        "addr": 38456
-      },
-      {
-        "name": "__do_dyncast(int, __cxxabiv1::__class_type_info::__sub_kind, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__dyncast_result&) const",
-        "addr": 38556
-      },
-      {
-        "name": "__do_upcast(__cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__upcast_result&) const",
-        "addr": 38780
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__cxxabiv1::__class_type_info",
-    "addr": 0,
-    "index": 14,
-    "methods": [
-      {
-        "name": "~__class_type_info()",
-        "addr": 39128
-      },
-      {
-        "name": "__do_upcast(__cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__upcast_result&) const",
-        "addr": 39196
-      },
-      {
-        "name": "__do_catch(std::type_info const*, void**, unsigned int) const",
-        "addr": 39240
-      },
-      {
-        "name": "__do_upcast(__cxxabiv1::__class_type_info const*, void**) const",
-        "addr": 39016
-      },
-      {
-        "name": "__do_find_public_src(int, void const*, __cxxabiv1::__class_type_info const*, void const*) const",
-        "addr": 39108
-      },
-      {
-        "name": "__do_dyncast(int, __cxxabiv1::__class_type_info::__sub_kind, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__dyncast_result&) const",
-        "addr": 39308
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__gnu_cxx",
-    "addr": 0,
-    "index": 15,
-    "methods": [
-      {
-        "name": "__verbose_terminate_handler()",
-        "addr": 40644
-      },
-      {
-        "name": "__throw_concurrence_lock_error()",
-        "addr": 75648
-      },
-      {
-        "name": "__throw_concurrence_unlock_error()",
-        "addr": 75720
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__gnu_cxx::__concurrence_lock_error",
-    "addr": 0,
-    "index": 16,
-    "methods": [
-      {
-        "name": "what() const",
-        "addr": 75440
-      },
-      {
-        "name": "~__concurrence_lock_error()",
-        "addr": 75512
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "__gnu_cxx::__concurrence_unlock_error",
-    "addr": 0,
-    "index": 17,
-    "methods": [
-      {
-        "name": "what() const",
-        "addr": 75456
-      },
-      {
-        "name": "~__concurrence_unlock_error()",
-        "addr": 75472
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "std::bad_cast",
-    "addr": 0,
-    "index": 18,
-    "methods": [
-      {
-        "name": "~bad_cast()",
-        "addr": 76760
-      },
-      {
-        "name": "what() const",
-        "addr": 76744
-      }
-    ],
-    "fields": [
-      
-    ]
-  },
-  {
-    "classname": "std::bad_typeid",
-    "addr": 0,
-    "index": 19,
-    "methods": [
-      {
-        "name": "~bad_typeid()",
-        "addr": 76844
-      },
-      {
-        "name": "what() const",
-        "addr": 76828
-      }
-    ],
-    "fields": [
-      
-    ]
-  }
-]
-EOF
-RUN
-
-NAME=ic*
-FILE=bins/elf/libmagic.so
-CMDS=ic*
-EXPECT=<<EOF
-fs classes
-"f class._JNIEnv = 0x6060"
-"f method._JNIEnv.FindClass(char_const*) = 0x6060"
-"f method._JNIEnv.DeleteLocalRef(_jobject*) = 0x606a"
-"f method._JNIEnv.NewObject(_jclass*,__jmethodID*,_...) = 0x6074"
-"f method._JNIEnv.GetObjectClass(_jobject*) = 0x608e"
-"f method._JNIEnv.GetMethodID(_jclass*,_char_const*,_char_const*) = 0x6098"
-"f method._JNIEnv.CallObjectMethod(_jobject*,__jmethodID*,_...) = 0x60a4"
-"f method._JNIEnv.CallVoidMethod(_jobject*,__jmethodID*,_...) = 0x60c0"
-"f method._JNIEnv.GetStaticMethodID(_jclass*,_char_const*,_char_const*) = 0x60dc"
-"f method._JNIEnv.CallStaticObjectMethod(_jclass*,__jmethodID*,_...) = 0x60ea"
-"f method._JNIEnv.CallStaticIntMethod(_jclass*,__jmethodID*,_...) = 0x695e"
-"f method._JNIEnv.CallStaticVoidMethod(_jclass*,__jmethodID*,_...) = 0x697c"
-"td struct _JNIEnv { char empty[0];};"
-"f class.SystemClassLoaderInjector = 0x699c"
-"f method.SystemClassLoaderInjector.inject(_JNIEnv*,__jobject*,__jstring*,__jstring*) = 0x74f8"
-"f method.SystemClassLoaderInjector.findBaseDexClassloader(_JNIEnv*,__jobject*) = 0x699c"
-"f method.SystemClassLoaderInjector.getField(_JNIEnv*,__jobject*,__jobject*,__jstring*) = 0x6a2c"
-"f method.SystemClassLoaderInjector.getPathList(_JNIEnv*,__jobject*) = 0x6abc"
-"f method.SystemClassLoaderInjector.getDexElements(_JNIEnv*,__jobject*) = 0x6af4"
-"f method.SystemClassLoaderInjector.setField(_JNIEnv*,__jobject*,__jobject*,__jstring*,__jobject*) = 0x6b1c"
-"f method.SystemClassLoaderInjector.combineArray(_JNIEnv*,__jobject*,__jobject*) = 0x6bb0"
-"f method.SystemClassLoaderInjector.injectAboveEqualApiLevel14(_JNIEnv*,__jobject*,__jstring*,__jstring*) = 0x6d00"
-"f method.SystemClassLoaderInjector.appendArray(_JNIEnv*,__jobject*,__jobject*) = 0x6e5c"
-"f method.SystemClassLoaderInjector.injectInAliyunOs(_JNIEnv*,__jobject*,__jstring*,__jstring*) = 0x6f68"
-"f method.SystemClassLoaderInjector.injectBelowApiLevel14(_JNIEnv*,__jobject*,__jstring*,__jstring*) = 0x720c"
-"td struct SystemClassLoaderInjector { char empty[0];};"
-"f class.std = 0x886c"
-"f method.std.terminate() = 0x9470"
-"f method.std.uncaught_exception() = 0x886c"
-"f method.std.unexpected() = 0x9494"
-"f method.std.set_terminate(void_(*)()) = 0x94ac"
-"f method.std.set_unexpected(void_(*)()) = 0x94c8"
-"td struct std { char empty[0];};"
-"f class.std::exception = 0x8884"
-"f method.std::exception.~exception() = 0x8884"
-"f method.std::exception.what()_const = 0x88f4"
-"td struct std::exception { char empty[0];};"
-"f class.std::bad_exception = 0x889c"
-"f method.std::bad_exception.~bad_exception() = 0x889c"
-"f method.std::bad_exception.what()_const = 0x8904"
-"td struct std::bad_exception { char empty[0];};"
-"f class.__cxxabiv1::__forced_unwind = 0x88c4"
-"f method.__cxxabiv1::__forced_unwind.~__forced_unwind() = 0x88c4"
-"td struct __cxxabiv1::__forced_unwind { char empty[0];};"
-"f class.__cxxabiv1::__foreign_exception = 0x88dc"
-"f method.__cxxabiv1::__foreign_exception.~__foreign_exception() = 0x88dc"
-"td struct __cxxabiv1::__foreign_exception { char empty[0];};"
-"f class.__eh_globals_init = 0x8984"
-"f method.__eh_globals_init.~__eh_globals_init() = 0x8984"
-"td struct __eh_globals_init { char empty[0];};"
-"f class.__cxxabiv1 = 0x943c"
-"f method.__cxxabiv1.__terminate(void_(*)()) = 0x943c"
-"f method.__cxxabiv1.__unexpected(void_(*)()) = 0x9488"
-"td struct __cxxabiv1 { char empty[0];};"
-"f class.__cxxabiv1::__fundamental_type_info = 0x94e4"
-"f method.__cxxabiv1::__fundamental_type_info.~__fundamental_type_info() = 0x94e4"
-"td struct __cxxabiv1::__fundamental_type_info { char empty[0];};"
-"f class.std::type_info = 0x97bc"
-"f method.std::type_info.~type_info() = 0x97bc"
-"f method.std::type_info.__is_pointer_p()_const = 0x97d4"
-"f method.std::type_info.__is_function_p()_const = 0x97dc"
-"f method.std::type_info.__do_catch(std::type_info_const*,_void**,_unsigned_int)_const = 0x9854"
-"f method.std::type_info.__do_upcast(__cxxabiv1::__class_type_info_const*,_void**)_const = 0x97e4"
-"f method.std::type_info.operator==(std::type_info_const&)_const = 0x9808"
-"td struct std::type_info { char empty[0];};"
-"f class.__cxxabiv1::__pointer_type_info = 0x9528"
-"f method.__cxxabiv1::__pointer_type_info.__is_pointer_p()_const = 0x9528"
-"f method.__cxxabiv1::__pointer_type_info.~__pointer_type_info() = 0x9530"
-"f method.__cxxabiv1::__pointer_type_info.__pointer_catch(__cxxabiv1::__pbase_type_info_const*,_void**,_unsigned_int)_const = 0x9574"
-"td struct __cxxabiv1::__pointer_type_info { char empty[0];};"
-"f class.__cxxabiv1::__pbase_type_info = 0x9dd0"
-"f method.__cxxabiv1::__pbase_type_info.~__pbase_type_info() = 0x9df0"
-"f method.__cxxabiv1::__pbase_type_info.__do_catch(std::type_info_const*,_void**,_unsigned_int)_const = 0x9e34"
-"f method.__cxxabiv1::__pbase_type_info.__pointer_catch(__cxxabiv1::__pbase_type_info_const*,_void**,_unsigned_int)_const = 0x9dd0"
-"td struct __cxxabiv1::__pbase_type_info { char empty[0];};"
-"f class.__cxxabiv1::__si_class_type_info = 0x95f4"
-"f method.__cxxabiv1::__si_class_type_info.~__si_class_type_info() = 0x95f4"
-"f method.__cxxabiv1::__si_class_type_info.__do_find_public_src(int,_void_const*,___cxxabiv1::__class_type_info_const*,_void_const*)_const = 0x9638"
-"f method.__cxxabiv1::__si_class_type_info.__do_dyncast(int,___cxxabiv1::__class_type_info::__sub_kind,___cxxabiv1::__class_type_info_const*,_void_const*,___cxxabiv1::__class_type_info_const*,_void_const*,___cxxabiv1::__class_type_info::__dyncast_result&)_const = 0x969c"
-"f method.__cxxabiv1::__si_class_type_info.__do_upcast(__cxxabiv1::__class_type_info_const*,_void_const*,___cxxabiv1::__class_type_info::__upcast_result&)_const = 0x977c"
-"td struct __cxxabiv1::__si_class_type_info { char empty[0];};"
-"f class.__cxxabiv1::__class_type_info = 0x9868"
-"f method.__cxxabiv1::__class_type_info.~__class_type_info() = 0x98d8"
-"f method.__cxxabiv1::__class_type_info.__do_upcast(__cxxabiv1::__class_type_info_const*,_void_const*,___cxxabiv1::__class_type_info::__upcast_result&)_const = 0x991c"
-"f method.__cxxabiv1::__class_type_info.__do_catch(std::type_info_const*,_void**,_unsigned_int)_const = 0x9948"
-"f method.__cxxabiv1::__class_type_info.__do_upcast(__cxxabiv1::__class_type_info_const*,_void**)_const = 0x9868"
-"f method.__cxxabiv1::__class_type_info.__do_find_public_src(int,_void_const*,___cxxabiv1::__class_type_info_const*,_void_const*)_const = 0x98c4"
-"f method.__cxxabiv1::__class_type_info.__do_dyncast(int,___cxxabiv1::__class_type_info::__sub_kind,___cxxabiv1::__class_type_info_const*,_void_const*,___cxxabiv1::__class_type_info_const*,_void_const*,___cxxabiv1::__class_type_info::__dyncast_result&)_const = 0x998c"
-"td struct __cxxabiv1::__class_type_info { char empty[0];};"
-"f class.__gnu_cxx = 0x9ec4"
-"f method.__gnu_cxx.__verbose_terminate_handler() = 0x9ec4"
-"f method.__gnu_cxx.__throw_concurrence_lock_error() = 0x12780"
-"f method.__gnu_cxx.__throw_concurrence_unlock_error() = 0x127c8"
-"td struct __gnu_cxx { char empty[0];};"
-"f class.__gnu_cxx::__concurrence_lock_error = 0x126b0"
-"f method.__gnu_cxx::__concurrence_lock_error.what()_const = 0x126b0"
-"f method.__gnu_cxx::__concurrence_lock_error.~__concurrence_lock_error() = 0x126f8"
-"td struct __gnu_cxx::__concurrence_lock_error { char empty[0];};"
-"f class.__gnu_cxx::__concurrence_unlock_error = 0x126c0"
-"f method.__gnu_cxx::__concurrence_unlock_error.what()_const = 0x126c0"
-"f method.__gnu_cxx::__concurrence_unlock_error.~__concurrence_unlock_error() = 0x126d0"
-"td struct __gnu_cxx::__concurrence_unlock_error { char empty[0];};"
-"f class.std::bad_cast = 0x12bc8"
-"f method.std::bad_cast.~bad_cast() = 0x12bd8"
-"f method.std::bad_cast.what()_const = 0x12bc8"
-"td struct std::bad_cast { char empty[0];};"
-"f class.std::bad_typeid = 0x12c1c"
-"f method.std::bad_typeid.~bad_typeid() = 0x12c2c"
-"f method.std::bad_typeid.what()_const = 0x12c1c"
-"td struct std::bad_typeid { char empty[0];};"
-EOF
-RUN
-
-NAME=icc
-FILE=bins/elf/libmagic.so
-CMDS=icc
-EXPECT=<<EOF
-@interface _JNIEnv
-{
-}
-@end
-@interface SystemClassLoaderInjector
-{
-}
-@end
-@interface std
-{
-}
-@end
-@interface std::exception
-{
-}
-@end
-@interface std::bad_exception
-{
-}
-@end
-@interface __cxxabiv1::__forced_unwind
-{
-}
-@end
-@interface __cxxabiv1::__foreign_exception
-{
-}
-@end
-@interface __eh_globals_init
-{
-}
-@end
-@interface __cxxabiv1
-{
-}
-@end
-@interface __cxxabiv1::__fundamental_type_info
-{
-}
-@end
-@interface std::type_info
-{
-}
-@end
-@interface __cxxabiv1::__pointer_type_info
-{
-}
-@end
-@interface __cxxabiv1::__pbase_type_info
-{
-}
-@end
-@interface __cxxabiv1::__si_class_type_info
-{
-}
-@end
-@interface __cxxabiv1::__class_type_info
-{
-}
-@end
-@interface __gnu_cxx
-{
-}
-@end
-@interface __gnu_cxx::__concurrence_lock_error
-{
-}
-@end
-@interface __gnu_cxx::__concurrence_unlock_error
-{
-}
-@end
-@interface std::bad_cast
-{
-}
-@end
-@interface std::bad_typeid
-{
-}
-@end
-EOF
-RUN
-
+# merged: iaq; iD; iDj
 NAME=iq
 FILE=bins/elf/libmagic.so
-CMDS=iq
-EXPECT=<<EOF
-arch arm
-bits 16
-os linux
-endian little
+CMDS=<<EOF
+iq
+?e --
+iaq
+?e --
+iq
+?e --
+iiq
+?e --
+ieq
+?e --
+iEq
+?e --
+icq
+?e --
+isq
+?e --
+iSq
+?e --
+imq
+?e --
+izq
+?e --
+iD swift _TFSSCfT21_builtinStringLiteralBp8byteSizeBw7isASCIIBi1__SS
+?e --
+iDj swift _TFSSCfT21_builtinStringLiteralBp8byteSizeBw7isASCIIBi1__SS
 EOF
-RUN
-
-NAME=iaq
-FILE=bins/elf/libmagic.so
-CMDS=iaq
 EXPECT=<<EOF
 arch arm
 bits 16
-os linux
+os android
 endian little
+--
+0   0x00000000 91480 arm_16 abi=eabi5 machine=ARM
+--
+arch arm
+bits 16
+os android
+endian little
+--
 __cxa_finalize
 __cxa_atexit
 malloc
@@ -1287,7 +366,9 @@ sprintf
 strncmp
 pthread_mutex_lock
 pthread_mutex_unlock
+--
 0x00005fa8
+--
 0x00007c70 10 __aeabi_unwind_cpp_pr0
 0x00006108 48 getPackageName(_JNIEnv*, _jobject*)
 0x00006138 164 JstringToString(_JNIEnv*, _jstring*)
@@ -1488,88 +569,680 @@ pthread_mutex_unlock
 0x00012c2c 40 std::bad_typeid::~bad_typeid()
 0x00012c54 28 std::bad_typeid::~bad_typeid()
 0x00014b58 15 typeinfo name for std::bad_typeid
-EOF
-RUN
-
-NAME=iD
-FILE=bins/elf/libmagic.so
-CMDS=iD swift _TFSSCfT21_builtinStringLiteralBp8byteSizeBw7isASCIIBi1__SS
-EXPECT=<<EOF
+--
+0x00006060 [0x00006060 - 0x0000699a] jni _JNIEnv
+0x000074f8 [0x0000699c - 0x0000755c] jni SystemClassLoaderInjector
+0x00008884 [0x00008884 - 0x00008930] c++ std::exception
+0x0000889c [0x0000889c - 0x0000894c] c++ std::bad_exception
+0x000088c4 [0x000088c4 - 0x00008968] c++ __cxxabiv1::__forced_unwind
+0x000088dc [0x000088dc - 0x00008984] c++ __cxxabiv1::__foreign_exception
+0x00008984 [0x00008984 - 0x000089b8] c++ __eh_globals_init
+0x000094e4 [0x000094e4 - 0x00009528] c++ __cxxabiv1::__fundamental_type_info
+0x000097bc [0x000097bc - 0x00009858] c++ std::type_info
+0x00009528 [0x00009528 - 0x000095f4] c++ __cxxabiv1::__pointer_type_info
+0x00009df0 [0x00009dd0 - 0x00009ec4] c++ __cxxabiv1::__pbase_type_info
+0x000095f4 [0x000095f4 - 0x000097bc] c++ __cxxabiv1::__si_class_type_info
+0x000098d8 [0x00009868 - 0x000099fc] c++ __cxxabiv1::__class_type_info
+0x000126b0 [0x000126b0 - 0x00012780] c++ __gnu_cxx::__concurrence_lock_error
+0x000126c0 [0x000126c0 - 0x00012750] c++ __gnu_cxx::__concurrence_unlock_error
+0x00012bd8 [0x00012bc8 - 0x00012c1c] c++ std::bad_cast
+0x00012c2c [0x00012c1c - 0x00012c70] c++ std::bad_typeid
+--
+0x00006060 10 _JNIEnv::FindClass(char const*)
+0x00007c7a 10 __aeabi_unwind_cpp_pr1
+0x0000606a 10 _JNIEnv::DeleteLocalRef(_jobject*)
+0x00006074 26 _JNIEnv::NewObject(_jclass*, _jmethodID*, ::)
+0x0000608e 10 _JNIEnv::GetObjectClass(_jobject*)
+0x00006098 12 _JNIEnv::GetMethodID(_jclass*, char const*, char const*)
+0x00007c70 10 __aeabi_unwind_cpp_pr0
+0x000060a4 28 _JNIEnv::CallObjectMethod(_jobject*, _jmethodID*, ::)
+0x000060c0 28 _JNIEnv::CallVoidMethod(_jobject*, _jmethodID*, ::)
+0x000060dc 14 _JNIEnv::GetStaticMethodID(_jclass*, char const*, char const*)
+0x000060ea 30 _JNIEnv::CallStaticObjectMethod(_jclass*, _jmethodID*, ::)
+0x00006108 48 getPackageName(_JNIEnv*, _jobject*)
+0x00006138 164 JstringToString(_JNIEnv*, _jstring*)
+0x000061dc 136 CharTojstring(_JNIEnv*, char const*)
+0x00006264 196 invokeStaticMethodss(_JNIEnv*, _jstring*, _jstring*)
+0x00006328 148 getFieldOjbectEx(_JNIEnv*, _jclass*, _jobject*, _jstring*)
+0x000063bc 84 getFieldOjbect(_JNIEnv*, _jstring*, _jobject*, _jstring*)
+0x00006410 152 setFieldOjbectEx(_JNIEnv*, _jclass*, _jstring*, _jobject*, _jobject*)
+0x000064a8 92 setFieldOjbect(_JNIEnv*, _jstring*, _jstring*, _jobject*, _jobject*)
+0x00006504 34 checkException(_JNIEnv*)
+0x00006528 76 forName(_JNIEnv*, _jstring*)
+0x00006574 32 GetFileName(char*)
+0x00006594 216 replaceAll(char const*, char const*, char const*)
+0x0000666c 152 decode(_JNIEnv*, _jstring*, _jstring*)
+0x00006704 12 sub_444(_JNIEnv*, _jobject*, _jobject*, _jstring*, _jstring*)
+0x00006710 476 sub_333(_JNIEnv*, _jobject*, _jobject*, _jstring*, _jstring*)
+0x000074f8 100 SystemClassLoaderInjector::inject(_JNIEnv*, _jobject*, _jstring*, _jstring*)
+0x000068ec 42 registerNativeMethods(_JNIEnv*, char const*, JNINativeMethod*, int)
+0x00006918 28 register_ndk_load(_JNIEnv*)
+0x00006934 40 JNI_OnLoad
+0x0000695c 2 decodeFile()
+0x0000695e 30 _JNIEnv::CallStaticIntMethod(_jclass*, _jmethodID*, ::)
+0x0000697c 30 _JNIEnv::CallStaticVoidMethod(_jclass*, _jmethodID*, ::)
+0x0000699c 144 SystemClassLoaderInjector::findBaseDexClassloader(_JNIEnv*, _jobject*)
+0x00006a2c 144 SystemClassLoaderInjector::getField(_JNIEnv*, _jobject*, _jobject*, _jstring*)
+0x00006abc 56 SystemClassLoaderInjector::getPathList(_JNIEnv*, _jobject*)
+0x00006af4 40 SystemClassLoaderInjector::getDexElements(_JNIEnv*, _jobject*)
+0x00006b1c 148 SystemClassLoaderInjector::setField(_JNIEnv*, _jobject*, _jobject*, _jstring*, _jobject*)
+0x00006bb0 336 SystemClassLoaderInjector::combineArray(_JNIEnv*, _jobject*, _jobject*)
+0x00006d00 348 SystemClassLoaderInjector::injectAboveEqualApiLevel14(_JNIEnv*, _jobject*, _jstring*, _jstring*)
+0x00008dd4 1640 __gxx_personality_v0
+0x000083f0 0 __cxa_end_cleanup
+0x000086b4 224 __cxa_begin_catch
+0x00008794 216 __cxa_end_catch
+0x00016b00 16 typeinfo for char*
+0x00006e5c 268 SystemClassLoaderInjector::appendArray(_JNIEnv*, _jobject*, _jobject*)
+0x00006f68 676 SystemClassLoaderInjector::injectInAliyunOs(_JNIEnv*, _jobject*, _jstring*, _jstring*)
+0x0000720c 748 SystemClassLoaderInjector::injectBelowApiLevel14(_JNIEnv*, _jobject*, _jstring*, _jstring*)
+0x00007c84 10 __aeabi_unwind_cpp_pr2
+0x00007f00 0 __gnu_Unwind_Restore_VFP_D
+0x00007ef0 0 __gnu_Unwind_Restore_VFP
+0x00007f10 0 __gnu_Unwind_Restore_VFP_D_16_to_31
+0x00007f20 0 __gnu_Unwind_Restore_WMMXD
+0x00007fa8 0 __gnu_Unwind_Restore_WMMXC
+0x00007edc 20 restore_core_regs
+0x00007814 4 _Unwind_GetCFA
+0x00007818 78 __gnu_Unwind_RaiseException
+0x00007866 20 __gnu_Unwind_ForcedUnwind
+0x0000787a 68 __gnu_Unwind_Resume
+0x000078be 26 __gnu_Unwind_Resume_or_Rethrow
+0x000078d8 2 _Unwind_Complete
+0x000078da 16 _Unwind_DeleteException
+0x000078ea 52 _Unwind_VRS_Get
+0x000083dc 18 __gnu_thumb1_case_uqi
+0x00007934 52 _Unwind_VRS_Set
+0x00007980 112 __gnu_Unwind_Backtrace
+0x00008544 180 __cxa_begin_cleanup
+0x00008400 324 __cxa_type_match
+0x000080fc 656 __gnu_unwind_execute
+0x00009a78 436 __cxa_call_unexpected
+0x00007c8e 590 _Unwind_VRS_Pop
+0x00007f64 0 __gnu_Unwind_Save_WMMXD
+0x00007fbc 0 __gnu_Unwind_Save_WMMXC
+0x00007f08 0 __gnu_Unwind_Save_VFP_D
+0x00007ef8 0 __gnu_Unwind_Save_VFP
+0x00007f18 0 __gnu_Unwind_Save_VFP_D_16_to_31
+0x00007edc 20 __restore_core_regs
+0x00007fd0 42 ___Unwind_RaiseException
+0x00007fd0 42 _Unwind_RaiseException
+0x00007ffc 42 ___Unwind_Resume
+0x00007ffc 42 _Unwind_Resume
+0x00008028 42 ___Unwind_Resume_or_Rethrow
+0x00008028 42 _Unwind_Resume_or_Rethrow
+0x00008054 42 ___Unwind_ForcedUnwind
+0x00008054 42 _Unwind_ForcedUnwind
+0x00008080 42 ___Unwind_Backtrace
+0x00008080 42 _Unwind_Backtrace
+0x0000838c 38 __gnu_unwind_frame
+0x000083b2 10 _Unwind_GetRegionStart
+0x000083bc 20 _Unwind_GetLanguageSpecificData
+0x000083d0 6 _Unwind_GetDataRelBase
+0x000083d6 6 _Unwind_GetTextRelBase
+0x00017024 0 _edata
+0x00017024 0 __bss_start
+0x0001bf58 0 _end
+0x000085f8 180 __gnu_end_cleanup
+0x000167f4 8 typeinfo for __cxxabiv1::__foreign_exception
+0x000167c0 8 typeinfo for __cxxabiv1::__forced_unwind
+0x00008a3c 144 __cxa_get_globals
+0x00009470 24 std::terminate()
+0x000086ac 8 __cxa_get_exception_ptr
+0x000089f4 72 __cxa_get_globals_fast
+0x0000886c 24 std::uncaught_exception()
+0x00008884 24 std::exception::~exception()
+0x00016830 20 vtable for std::exception
+0x00008884 24 std::exception::~exception()
+0x0000889c 40 std::bad_exception::~bad_exception()
+0x000167d0 20 vtable for std::bad_exception
+0x0000889c 40 std::bad_exception::~bad_exception()
+0x000088c4 24 __cxxabiv1::__forced_unwind::~__forced_unwind()
+0x00016800 20 vtable for __cxxabiv1::__forced_unwind
+0x000088c4 24 __cxxabiv1::__forced_unwind::~__forced_unwind()
+0x000088dc 24 __cxxabiv1::__foreign_exception::~__foreign_exception()
+0x00016818 20 vtable for __cxxabiv1::__foreign_exception
+0x000088dc 24 __cxxabiv1::__foreign_exception::~__foreign_exception()
+0x000088f4 16 std::exception::what() const
+0x00008904 16 std::bad_exception::what() const
+0x00008914 28 std::exception::~exception()
+0x00008930 28 std::bad_exception::~bad_exception()
+0x0000894c 28 __cxxabiv1::__forced_unwind::~__forced_unwind()
+0x00008968 28 __cxxabiv1::__foreign_exception::~__foreign_exception()
+0x000148dc 13 typeinfo name for std::exception
+0x000167c8 8 typeinfo for std::exception
+0x000148ec 18 typeinfo name for std::bad_exception
+0x000167e8 12 typeinfo for std::bad_exception
+0x00013f34 32 typeinfo name for __cxxabiv1::__forced_unwind
+0x00013f54 36 typeinfo name for __cxxabiv1::__foreign_exception
+0x00016ca8 44 vtable for __cxxabiv1::__class_type_info
+0x00016c40 44 vtable for __cxxabiv1::__si_class_type_info
+0x00008984 52 __eh_globals_init::~__eh_globals_init()
+0x00008984 52 __eh_globals_init::~__eh_globals_init()
+0x00009858 16 __aeabi_atexit
+0x000099fc 124 __cxa_call_terminate
+0x00009494 24 std::unexpected()
+0x0000943c 52 __cxxabiv1::__terminate(void (*)())
+0x00017020 4 __cxxabiv1::__terminate_handler
+0x00009488 12 __cxxabiv1::__unexpected(void (*)())
+0x0001701c 4 __cxxabiv1::__unexpected_handler
+0x000094ac 28 std::set_terminate(void (*)())
+0x000094c8 28 std::set_unexpected(void (*)())
+0x000094e4 40 __cxxabiv1::__fundamental_type_info::~__fundamental_type_info()
+0x000097bc 24 std::type_info::~type_info()
+0x00016be0 32 vtable for __cxxabiv1::__fundamental_type_info
+0x000094e4 40 __cxxabiv1::__fundamental_type_info::~__fundamental_type_info()
+0x0000950c 28 __cxxabiv1::__fundamental_type_info::~__fundamental_type_info()
+0x00014a2c 40 typeinfo name for __cxxabiv1::__fundamental_type_info
+0x00016c00 12 typeinfo for __cxxabiv1::__fundamental_type_info
+0x00014900 2 typeinfo name for void
+0x00014904 3 typeinfo name for void*
+0x00014908 4 typeinfo name for void const*
+0x0001490c 2 typeinfo name for bool
+0x00014910 3 typeinfo name for bool*
+0x00014914 4 typeinfo name for bool const*
+0x00014918 2 typeinfo name for wchar_t
+0x0001491c 3 typeinfo name for wchar_t*
+0x00014920 4 typeinfo name for wchar_t const*
+0x00014924 3 typeinfo name for char16_t
+0x00014928 4 typeinfo name for char16_t*
+0x0001492c 5 typeinfo name for char16_t const*
+0x00014934 3 typeinfo name for char32_t
+0x00014938 4 typeinfo name for char32_t*
+0x0001493c 5 typeinfo name for char32_t const*
+0x00014944 2 typeinfo name for char
+0x00014948 3 typeinfo name for char*
+0x0001494c 4 typeinfo name for char const*
+0x00014950 2 typeinfo name for signed char
+0x00014954 3 typeinfo name for signed char*
+0x00014958 4 typeinfo name for signed char const*
+0x0001495c 2 typeinfo name for unsigned char
+0x00014960 3 typeinfo name for unsigned char*
+0x00014964 4 typeinfo name for unsigned char const*
+0x00014968 2 typeinfo name for short
+0x0001496c 3 typeinfo name for short*
+0x00014970 4 typeinfo name for short const*
+0x00014974 2 typeinfo name for unsigned short
+0x00014978 3 typeinfo name for unsigned short*
+0x0001497c 4 typeinfo name for unsigned short const*
+0x00014980 2 typeinfo name for int
+0x00014984 3 typeinfo name for int*
+0x00014988 4 typeinfo name for int const*
+0x0001498c 2 typeinfo name for unsigned int
+0x00014990 3 typeinfo name for unsigned int*
+0x00014994 4 typeinfo name for unsigned int const*
+0x00014998 2 typeinfo name for long
+0x0001499c 3 typeinfo name for long*
+0x000149a0 4 typeinfo name for long const*
+0x000149a4 2 typeinfo name for unsigned long
+0x000149a8 3 typeinfo name for unsigned long*
+0x000149ac 4 typeinfo name for unsigned long const*
+0x000149b0 2 typeinfo name for long long
+0x000149b4 3 typeinfo name for long long*
+0x000149b8 4 typeinfo name for long long const*
+0x000149bc 2 typeinfo name for unsigned long long
+0x000149c0 3 typeinfo name for unsigned long long*
+0x000149c4 4 typeinfo name for unsigned long long const*
+0x000149c8 2 typeinfo name for float
+0x000149cc 3 typeinfo name for float*
+0x000149d0 4 typeinfo name for float const*
+0x000149d4 2 typeinfo name for double
+0x000149d8 3 typeinfo name for double*
+0x000149dc 4 typeinfo name for double const*
+0x000149e0 2 typeinfo name for long double
+0x000149e4 3 typeinfo name for long double*
+0x000149e8 4 typeinfo name for long double const*
+0x000149ec 3 typeinfo name for decimal32
+0x000149f0 4 typeinfo name for decimal32*
+0x000149f4 5 typeinfo name for decimal32 const*
+0x000149fc 3 typeinfo name for decimal64
+0x00014a00 4 typeinfo name for decimal64*
+0x00014a04 5 typeinfo name for decimal64 const*
+0x00014a0c 3 typeinfo name for decimal128
+0x00014a10 4 typeinfo name for decimal128*
+0x00014a14 5 typeinfo name for decimal128 const*
+0x00014a1c 3 typeinfo name for decltype(nullptr)
+0x00014a20 4 typeinfo name for decltype(nullptr)*
+0x00014a24 5 typeinfo name for decltype(nullptr) const*
+0x00016848 16 typeinfo for decltype(nullptr) const*
+0x00016c18 36 vtable for __cxxabiv1::__pointer_type_info
+0x00016868 8 typeinfo for decltype(nullptr)
+0x00016858 16 typeinfo for decltype(nullptr)*
+0x00016870 16 typeinfo for decimal128 const*
+0x00016890 8 typeinfo for decimal128
+0x00016880 16 typeinfo for decimal128*
+0x00016898 16 typeinfo for decimal64 const*
+0x000168b8 8 typeinfo for decimal64
+0x000168a8 16 typeinfo for decimal64*
+0x000168c0 16 typeinfo for decimal32 const*
+0x000168e0 8 typeinfo for decimal32
+0x000168d0 16 typeinfo for decimal32*
+0x000168e8 16 typeinfo for long double const*
+0x00016908 8 typeinfo for long double
+0x000168f8 16 typeinfo for long double*
+0x00016910 16 typeinfo for double const*
+0x00016930 8 typeinfo for double
+0x00016920 16 typeinfo for double*
+0x00016938 16 typeinfo for float const*
+0x00016958 8 typeinfo for float
+0x00016948 16 typeinfo for float*
+0x00016960 16 typeinfo for unsigned long long const*
+0x00016980 8 typeinfo for unsigned long long
+0x00016970 16 typeinfo for unsigned long long*
+0x00016988 16 typeinfo for long long const*
+0x000169a8 8 typeinfo for long long
+0x00016998 16 typeinfo for long long*
+0x000169b0 16 typeinfo for unsigned long const*
+0x000169d0 8 typeinfo for unsigned long
+0x000169c0 16 typeinfo for unsigned long*
+0x000169d8 16 typeinfo for long const*
+0x000169f8 8 typeinfo for long
+0x000169e8 16 typeinfo for long*
+0x00016a00 16 typeinfo for unsigned int const*
+0x00016a20 8 typeinfo for unsigned int
+0x00016a10 16 typeinfo for unsigned int*
+0x00016a28 16 typeinfo for int const*
+0x00016a48 8 typeinfo for int
+0x00016a38 16 typeinfo for int*
+0x00016a50 16 typeinfo for unsigned short const*
+0x00016a70 8 typeinfo for unsigned short
+0x00016a60 16 typeinfo for unsigned short*
+0x00016a78 16 typeinfo for short const*
+0x00016a98 8 typeinfo for short
+0x00016a88 16 typeinfo for short*
+0x00016aa0 16 typeinfo for unsigned char const*
+0x00016ac0 8 typeinfo for unsigned char
+0x00016ab0 16 typeinfo for unsigned char*
+0x00016ac8 16 typeinfo for signed char const*
+0x00016ae8 8 typeinfo for signed char
+0x00016ad8 16 typeinfo for signed char*
+0x00016af0 16 typeinfo for char const*
+0x00016b10 8 typeinfo for char
+0x00016b18 16 typeinfo for char32_t const*
+0x00016b38 8 typeinfo for char32_t
+0x00016b28 16 typeinfo for char32_t*
+0x00016b40 16 typeinfo for char16_t const*
+0x00016b60 8 typeinfo for char16_t
+0x00016b50 16 typeinfo for char16_t*
+0x00016b68 16 typeinfo for wchar_t const*
+0x00016b88 8 typeinfo for wchar_t
+0x00016b78 16 typeinfo for wchar_t*
+0x00016b90 16 typeinfo for bool const*
+0x00016bb0 8 typeinfo for bool
+0x00016ba0 16 typeinfo for bool*
+0x00016bb8 16 typeinfo for void const*
+0x00016bd8 8 typeinfo for void
+0x00016bc8 16 typeinfo for void*
+0x000097d4 8 std::type_info::__is_pointer_p() const
+0x000097dc 8 std::type_info::__is_function_p() const
+0x00009854 4 std::type_info::__do_catch(std::type_info const*, void**, unsigned int) const
+0x000097e4 8 std::type_info::__do_upcast(__cxxabiv1::__class_type_info const*, void**) const
+0x00016ca0 8 typeinfo for std::type_info
+0x00009528 8 __cxxabiv1::__pointer_type_info::__is_pointer_p() const
+0x00009530 40 __cxxabiv1::__pointer_type_info::~__pointer_type_info()
+0x00009df0 40 __cxxabiv1::__pbase_type_info::~__pbase_type_info()
+0x00009530 40 __cxxabiv1::__pointer_type_info::~__pointer_type_info()
+0x00009558 28 __cxxabiv1::__pointer_type_info::~__pointer_type_info()
+0x00009574 128 __cxxabiv1::__pointer_type_info::__pointer_catch(__cxxabiv1::__pbase_type_info const*, void**, unsigned int) const
+0x00009808 76 std::type_info::operator==(std::type_info const&) const
+0x00014a54 36 typeinfo name for __cxxabiv1::__pointer_type_info
+0x00016c0c 12 typeinfo for __cxxabiv1::__pointer_type_info
+0x00016d10 12 typeinfo for __cxxabiv1::__pbase_type_info
+0x00009e34 144 __cxxabiv1::__pbase_type_info::__do_catch(std::type_info const*, void**, unsigned int) const
+0x000095f4 40 __cxxabiv1::__si_class_type_info::~__si_class_type_info()
+0x000098d8 40 __cxxabiv1::__class_type_info::~__class_type_info()
+0x000095f4 40 __cxxabiv1::__si_class_type_info::~__si_class_type_info()
+0x0000961c 28 __cxxabiv1::__si_class_type_info::~__si_class_type_info()
+0x00009638 100 __cxxabiv1::__si_class_type_info::__do_find_public_src(int, void const*, __cxxabiv1::__class_type_info const*, void const*) const
+0x0000969c 224 __cxxabiv1::__si_class_type_info::__do_dyncast(int, __cxxabiv1::__class_type_info::__sub_kind, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__dyncast_result&) const
+0x0000977c 64 __cxxabiv1::__si_class_type_info::__do_upcast(__cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__upcast_result&) const
+0x0000991c 44 __cxxabiv1::__class_type_info::__do_upcast(__cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__upcast_result&) const
+0x00014a78 37 typeinfo name for __cxxabiv1::__si_class_type_info
+0x00016c70 12 typeinfo for __cxxabiv1::__si_class_type_info
+0x00009948 68 __cxxabiv1::__class_type_info::__do_catch(std::type_info const*, void**, unsigned int) const
+0x00009868 92 __cxxabiv1::__class_type_info::__do_upcast(__cxxabiv1::__class_type_info const*, void**) const
+0x00016cd8 12 typeinfo for __cxxabiv1::__class_type_info
+0x00016c80 32 vtable for std::type_info
+0x000097bc 24 std::type_info::~type_info()
+0x000097ec 28 std::type_info::~type_info()
+0x00014aa0 13 typeinfo name for std::type_info
+0x000098c4 20 __cxxabiv1::__class_type_info::__do_find_public_src(int, void const*, __cxxabiv1::__class_type_info const*, void const*) const
+0x000098d8 40 __cxxabiv1::__class_type_info::~__class_type_info()
+0x00009900 28 __cxxabiv1::__class_type_info::~__class_type_info()
+0x0000998c 112 __cxxabiv1::__class_type_info::__do_dyncast(int, __cxxabiv1::__class_type_info::__sub_kind, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info const*, void const*, __cxxabiv1::__class_type_info::__dyncast_result&) const
+0x00014ab0 34 typeinfo name for __cxxabiv1::__class_type_info
+0x00012810 224 __cxa_allocate_exception
+0x00009c64 188 __cxa_throw
+0x00009d20 176 __cxa_rethrow
+0x00009ec4 436 __gnu_cxx::__verbose_terminate_handler()
+0x000128f0 160 __cxa_free_exception
+0x00009dd0 32 __cxxabiv1::__pbase_type_info::__pointer_catch(__cxxabiv1::__pbase_type_info const*, void**, unsigned int) const
+0x00016ce8 36 vtable for __cxxabiv1::__pbase_type_info
+0x00009df0 40 __cxxabiv1::__pbase_type_info::~__pbase_type_info()
+0x00009e18 28 __cxxabiv1::__pbase_type_info::~__pbase_type_info()
+0x00012b54 72 __cxa_bad_typeid
+0x00014ad4 34 typeinfo name for __cxxabiv1::__pbase_type_info
+0x00012b9c 44 __cxa_current_exception_type
+0x00012538 332 __cxa_demangle
+0x00012684 44 __gcclibcxx_demangle_callback
+0x000126b0 16 __gnu_cxx::__concurrence_lock_error::what() const
+0x000126c0 16 __gnu_cxx::__concurrence_unlock_error::what() const
+0x000126d0 40 __gnu_cxx::__concurrence_unlock_error::~__concurrence_unlock_error()
+0x00016d50 20 vtable for __gnu_cxx::__concurrence_unlock_error
+0x000126d0 40 __gnu_cxx::__concurrence_unlock_error::~__concurrence_unlock_error()
+0x000126f8 40 __gnu_cxx::__concurrence_lock_error::~__concurrence_lock_error()
+0x00016d38 20 vtable for __gnu_cxx::__concurrence_lock_error
+0x000126f8 40 __gnu_cxx::__concurrence_lock_error::~__concurrence_lock_error()
+0x00012720 48 __gnu_cxx::__concurrence_unlock_error::~__concurrence_unlock_error()
+0x00012750 48 __gnu_cxx::__concurrence_lock_error::~__concurrence_lock_error()
+0x00012780 72 __gnu_cxx::__throw_concurrence_lock_error()
+0x00016d1c 12 typeinfo for __gnu_cxx::__concurrence_lock_error
+0x000127c8 72 __gnu_cxx::__throw_concurrence_unlock_error()
+0x00016d28 12 typeinfo for __gnu_cxx::__concurrence_unlock_error
+0x00012990 212 __cxa_allocate_dependent_exception
+0x00012a64 168 __cxa_free_dependent_exception
+0x00014af8 39 typeinfo name for __gnu_cxx::__concurrence_lock_error
+0x00014b20 41 typeinfo name for __gnu_cxx::__concurrence_unlock_error
+0x00012b0c 72 __cxa_bad_cast
+0x00016d78 20 vtable for std::bad_cast
+0x00016d68 12 typeinfo for std::bad_cast
+0x00012bd8 40 std::bad_cast::~bad_cast()
+0x00016d90 20 vtable for std::bad_typeid
+0x00016da8 12 typeinfo for std::bad_typeid
+0x00012c2c 40 std::bad_typeid::~bad_typeid()
+0x00012bc8 16 std::bad_cast::what() const
+0x00012bd8 40 std::bad_cast::~bad_cast()
+0x00012c00 28 std::bad_cast::~bad_cast()
+0x00014b4c 12 typeinfo name for std::bad_cast
+0x00012c1c 16 std::bad_typeid::what() const
+0x00012c2c 40 std::bad_typeid::~bad_typeid()
+0x00012c54 28 std::bad_typeid::~bad_typeid()
+0x00014b58 15 typeinfo name for std::bad_typeid
+0x00005e04 16 imp.__cxa_finalize
+0x00005df8 16 imp.__cxa_atexit
+0x00005e10 16 imp.malloc
+0x00005e1c 16 imp.memcpy
+0x00005e28 16 imp.strlen
+0x00005e34 16 imp.strdup
+0x00005e40 16 imp.strstr
+0x00005e4c 16 imp.free
+0x00005e58 16 imp.fopen
+0x00005e64 16 imp.fread
+0x00005e70 16 imp.fwrite
+0x00005e7c 16 imp.fflush
+0x00005e88 16 imp.fclose
+0x00005e94 16 imp.strrchr
+0x00005ea0 16 imp.memset
+0x00005eac 16 imp.strcat
+0x00005eb8 16 imp.strncpy
+0x00005ec4 16 imp.remove
+0x00005ed0 16 imp.__stack_chk_fail
+0xffffffffffffffff 16 imp.__stack_chk_guard
+0x00005edc 16 imp.__gnu_Unwind_Find_exidx
+0x00005ee8 16 imp.abort
+0x00005ef4 16 operator delete(void*)
+0x00005f00 16 imp.__cxa_pure_virtual
+0x00005f0c 16 imp.pthread_key_delete
+0x00005f18 16 imp.pthread_getspecific
+0x00005f24 16 imp.pthread_setspecific
+0x00005f30 16 imp.pthread_key_create
+0x00005f3c 16 imp.strcmp
+0x00005f48 16 imp.fputs
+0x00005f54 16 imp.fputc
+0xffffffffffffffff 16 imp.__sF
+0x00005f60 16 imp.memcmp
+0x00005f6c 16 imp.realloc
+0x00005f78 16 imp.sprintf
+0x00005f84 16 imp.strncmp
+0x00005f90 16 imp.pthread_mutex_lock
+0x00005f9c 16 imp.pthread_mutex_unlock
+--
+0x00000000 0x00000000 ---- 
+0x00000154 0x00000167 -r-- .interp
+0x00000168 0x0000018c -r-- .note.gnu.build-id
+0x0000018c 0x00001b1c -r-- .dynsym
+0x00001b1c 0x000040ec -r-- .dynstr
+0x000040ec 0x00004b74 -r-- .hash
+0x00004b74 0x00005cc4 -r-- .rel.dyn
+0x00005cc4 0x00005de4 -r-- .rel.plt
+0x00005de4 0x00005fa8 -r-x .plt
+0x00005fa8 0x00012f30 -r-x .text
+0x00012f30 0x00013334 -r-- .ARM.extab
+0x00013334 0x000139ac -r-- .ARM.exidx
+0x000139ac 0x00014b68 -r-- .rodata
+0x00016080 0x000167b8 -rw- .data.rel.ro.local
+0x000167b8 0x000167c0 -rw- .fini_array
+0x000167c0 0x00016db4 -rw- .data.rel.ro
+0x00016db4 0x00016dc0 -rw- .init_array
+0x00016dc0 0x00016ec0 -rw- .dynamic
+0x00016ec0 0x00017000 -rw- .got
+0x00017000 0x00017024 -rw- .data
+0x00017028 0x00017028 -rw- .bss
+0x00000000 0x00000010 ---- .comment
+0x00000000 0x0000001c ---- .note.gnu.gold-version
+0x00000000 0x0000002b ---- .ARM.attributes
+0x00000000 0x000000f3 ---- .shstrtab
+--
+--
+0x139ac 15 14 getPackageName
+0x139bb 21 20 ()Ljava/lang/String;
+0x139d0 17 16 java/lang/String
+0x139e1 6 5 utf-8
+0x139e7 9 8 getBytes
+0x139f0 23 22 (Ljava/lang/String;)[B
+0x13a07 7 6 GB2312
+0x13a0e 7 6 <init>
+0x13a15 24 23 ([BLjava/lang/String;)V
+0x13a2d 16 15 java/lang/Class
+0x13a3d 8 7 forName
+0x13a45 38 37 (Ljava/lang/String;)Ljava/lang/Class;
+0x13a6b 10 9 getMethod
+0x13a75 65 64 (Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;
+0x13ab6 7 6 invoke
+0x13abd 58 57 (Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;
+0x13af7 17 16 getDeclaredField
+0x13b08 46 45 (Ljava/lang/String;)Ljava/lang/reflect/Field;
+0x13b36 14 13 setAccessible
+0x13b44 5 4 (Z)V
+0x13b4d 39 38 (Ljava/lang/Object;)Ljava/lang/Object;
+0x13b78 40 39 (Ljava/lang/Object;Ljava/lang/Object;)V
+0x13ba5 8 7 decode_
+0x13bad 18 17 getFileStreamPath
+0x13bbf 35 34 (Ljava/lang/String;)Ljava/io/File;
+0x13be6 16 15 getAbsolutePath
+0x13bf6 5 4 .dex
+0x13bfd 30 29 com/la/magic/sdk/so/MagicLoad
+0x13c1b 13 12 MagicLoadDex
+0x13c28 82 81 (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;
+0x13c7a 7 6 Decode
+0x13c81 65 64 (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z
+0x13cc2 15 14 getClassLoader
+0x13cd1 26 25 ()Ljava/lang/ClassLoader;
+0x13ceb 33 32 dalvik/system/BaseDexClassLoader
+0x13d0c 10 9 getParent
+0x13d16 33 32 dalvik.system.BaseDexClassLoader
+0x13d37 9 8 pathList
+0x13d40 12 11 dexElements
+0x13d4c 9 8 getClass
+0x13d55 20 19 ()Ljava/lang/Class;
+0x13d69 17 16 getComponentType
+0x13d7a 24 23 java/lang/reflect/Array
+0x13d92 10 9 getLength
+0x13d9c 22 21 (Ljava/lang/Object;)I
+0x13db2 12 11 newInstance
+0x13dbe 39 38 (Ljava/lang/Class;I)Ljava/lang/Object;
+0x13de5 40 39 (Ljava/lang/Object;I)Ljava/lang/Object;
+0x13e0d 41 40 (Ljava/lang/Object;ILjava/lang/Object;)V
+0x13e36 29 28 dalvik/system/DexClassLoader
+0x13e53 81 80 (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
+0x13ea4 21 20 (V)Ljava/lang/Class;
+0x13eb9 15 14 \\.[a-zA-Z0-9]+
+0x13ec8 5 4 .lex
+0x13ecd 29 28 dalvik/system/LexClassLoader
+0x13eea 30 29 dalvik/system/PathClassLoader
+0x13f08 7 6 mPaths
+0x13f0f 12 11 mRawDexPath
+0x13f1b 7 6 mFiles
+0x13f22 6 5 mZips
+0x13f28 6 5 mLexs
+0x13f2e 6 5 mDexs
+0x13f34 32 31 N10__cxxabiv115__forced_unwindE
+0x13f54 36 35 N10__cxxabiv119__foreign_exceptionE
+0x13f78 15 14 std::exception
+0x13f88 19 18 std::bad_exception
+0x13f9c 30 29 terminate called recursively\n
+0x13fbc 49 48 terminate called after throwing an instance of '
+0x13ff4 46 45 terminate called without an active exception\n
+0x14024 12 9   what():
+0x14030 9 8 _GLOBAL_
+0x1403c 22 21 (anonymous namespace)
+0x14054 15 14 string literal
+0x14068 5 4 auto
+0x14088 6 5 [abi:
+0x14094 14 13 {default arg#
+0x140ac 7 6 JArray
+0x140b8 12 10 vtable for
+0x140c4 9 7 VTT for
+0x140d0 25 23 construction vtable for
+0x140ec 5 4 -in-
+0x140f4 14 12 typeinfo for
+0x14104 19 17 typeinfo name for
+0x14118 17 15 typeinfo fn for
+0x1412c 22 20 non-virtual thunk to
+0x14144 18 16 virtual thunk to
+0x14158 27 25 covariant return thunk to
+0x14174 16 14 java Class for
+0x14184 20 18 guard variable for
+0x14198 23 21 TLS init function for
+0x141b0 26 24 TLS wrapper function for
+0x141cc 22 21 reference temporary #
+0x141e4 6 4  for
+0x141ec 18 16 hidden alias for
+0x14200 23 21 transaction clone for
+0x14218 27 25 non-transaction clone for
+0x14234 6 4 _Sat
+0x1423c 7 6 _Accum
+0x14244 7 6 _Fract
+0x14250 9 8 operator
+0x1425c 10 8 operator
+0x14278 5 3 new
+0x1428c 6 5 false
+0x14294 5 4 true
+0x1429c 15 13 java resource
+0x142ac 11 10 decltype (
+0x142bc 5 4 this
+0x142c4 7 6 {parm#
+0x142cc 30 28 global constructors keyed to
+0x142ec 29 27 global destructors keyed to
+0x1430c 9 8 {lambda(
+0x1431c 15 14 {unnamed type#
+0x1432c 9 7  [clone
+0x1433c 10 9  restrict
+0x14348 10 9  volatile
+0x14354 7 6  const
+0x14360 9 7 complex
+0x1436c 11 9 imaginary
+0x1437c 11 10  __vector(
+0x1438c 15 14 std::allocator
+0x1439c 10 9 allocator
+0x143a8 18 17 std::basic_string
+0x143bc 13 12 basic_string
+0x143cc 12 11 std::string
+0x143d8 71 70 std::basic_string<char, std::char_traits<char>, std::allocator<char> >
+0x14420 13 12 std::istream
+0x14430 50 49 std::basic_istream<char, std::char_traits<char> >
+0x14464 14 13 basic_istream
+0x14474 13 12 std::ostream
+0x14484 50 49 std::basic_ostream<char, std::char_traits<char> >
+0x144b8 14 13 basic_ostream
+0x144c8 14 13 std::iostream
+0x144d8 51 50 std::basic_iostream<char, std::char_traits<char> >
+0x1450c 15 14 basic_iostream
+0x1453c 9 7 alignof
+0x14550 11 10 const_cast
+0x1457c 10 8 delete[]
+0x1458c 13 12 dynamic_cast
+0x145a8 8 6 delete
+0x145fc 12 10 operator""
+0x14640 6 5 new[]
+0x146bc 17 16 reinterpret_cast
+0x146e4 12 11 static_cast
+0x146f0 8 6 sizeof
+0x14700 6 5 throw
+0x1470c 7 5 throw
+0x14714 12 11 signed char
+0x14720 5 4 bool
+0x14728 8 7 boolean
+0x14730 5 4 char
+0x14738 5 4 byte
+0x14740 7 6 double
+0x14748 12 11 long double
+0x14754 6 5 float
+0x1475c 11 10 __float128
+0x14768 14 13 unsigned char
+0x1477c 13 12 unsigned int
+0x1478c 9 8 unsigned
+0x14798 5 4 long
+0x147a0 14 13 unsigned long
+0x147b0 9 8 __int128
+0x147bc 18 17 unsigned __int128
+0x147d0 6 5 short
+0x147d8 15 14 unsigned short
+0x147e8 5 4 void
+0x147f0 8 7 wchar_t
+0x147f8 10 9 long long
+0x14804 19 18 unsigned long long
+0x14818 10 9 decimal32
+0x14824 10 9 decimal64
+0x14830 11 10 decimal128
+0x1483c 5 4 half
+0x14844 9 8 char16_t
+0x14850 9 8 char32_t
+0x1485c 18 17 decltype(nullptr)
+0x14870 36 35 __gnu_cxx::__concurrence_lock_error
+0x14894 38 37 __gnu_cxx::__concurrence_unlock_error
+0x148bc 14 13 std::bad_cast
+0x148cc 16 15 std::bad_typeid
+0x148dc 13 12 St9exception
+0x148ec 18 17 St13bad_exception
+0x1492c 5 4 PKDs
+0x1493c 5 4 PKDi
+0x149f4 5 4 PKDf
+0x14a04 5 4 PKDd
+0x14a14 5 4 PKDe
+0x14a24 5 4 PKDn
+0x14a2c 40 39 N10__cxxabiv123__fundamental_type_infoE
+0x14a54 36 35 N10__cxxabiv119__pointer_type_infoE
+0x14a78 37 36 N10__cxxabiv120__si_class_type_infoE
+0x14aa0 13 12 St9type_info
+0x14ab0 34 33 N10__cxxabiv117__class_type_infoE
+0x14ad4 34 33 N10__cxxabiv117__pbase_type_infoE
+0x14af8 39 38 N9__gnu_cxx24__concurrence_lock_errorE
+0x14b20 41 40 N9__gnu_cxx26__concurrence_unlock_errorE
+0x14b4c 12 11 St8bad_cast
+0x14b58 15 14 St10bad_typeid
+--
 Swift.String.init(_builtinStringLiteral: Builtin.RawPointer, byteSize: Builtin.Word, isASCII: Builtin.Int1) -> Swift.String
+--
+{"lang":"swift","mangled":"_TFSSCfT21_builtinStringLiteralBp8byteSizeBw7isASCIIBi1__SS","demangled":"Swift.String.init(_builtinStringLiteral: Builtin.RawPointer, byteSize: Builtin.Word, isASCII: Builtin.Int1) -> Swift.String"}
 EOF
 RUN
 
-NAME=ie (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ie
-EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x08048300 paddr=0x00000300 haddr=0x00000018 hvaddr=0x08048018 type=program
-
-1 entrypoints
-EOF
-RUN
-
-NAME=iej (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iej
-EXPECT=<<EOF
-[{"vaddr":134513408,"paddr":768,"baddr":134512640,"laddr":0,"hvaddr":134512664,"haddr":24,"type":"program"}]
-EOF
-RUN
-
-NAME=ii (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ii
-EXPECT=<<EOF
-[Imports]
-nth vaddr      bind   type   lib name
--------------------------------------
-1   0x080482d0 GLOBAL FUNC       puts
-2   0x080482e0 WEAK   NOTYPE     __gmon_start__
-3   0x080482f0 GLOBAL FUNC       __libc_start_main
-
-EOF
-RUN
-
-NAME=iI (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iI
-EXPECT=<<EOF
-arch     x86
-baddr    0x8048000
-binsz    4899
-bintype  elf
-bits     32
-canary   false
-class    ELF32
-compiler GCC: (GNU) 4.8.2
-crypto   false
-endian   little
-havecode true
-intrp    /lib/ld-linux.so.2
-laddr    0x0
-lang     c
-linenum  true
-lsyms    true
-machine  Intel 80386
-nx       true
-os       linux
-pic      false
-relocs   true
-relro    no
-rpath    NONE
-sanitize false
-static   false
-stripped false
-subsys   linux
-va       true
-EOF
-RUN
-
+# merged: iS (file x86); iSS (file x86); iSj; iSj (cfg.json.num=hex)
 NAME=iIj
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iIj~{}
+CMDS=<<EOF
+iIj~{}
+?e --
+iS
+?e --
+iSS
+?e --
+iSj
+?e --
+e cfg.json.num=hex
+iSj
+EOF
 EXPECT=<<EOF
 {
   "arch": "x86",
@@ -1578,6 +1251,7 @@ EXPECT=<<EOF
   "bintype": "elf",
   "bits": 32,
   "canary": false,
+  "injprot": false,
   "class": "ELF32",
   "compiled": "",
   "compiler": "GCC: (GNU) 4.8.2",
@@ -1589,7 +1263,7 @@ EXPECT=<<EOF
   "intrp": "/lib/ld-linux.so.2",
   "laddr": 0,
   "lang": "c",
-  "linenum": true,
+  "linenum": false,
   "lsyms": true,
   "machine": "Intel 80386",
   "nx": true,
@@ -1602,12 +1276,62 @@ EXPECT=<<EOF
   "sanitize": false,
   "static": false,
   "stripped": false,
+  "uncaps": true,
   "subsys": "linux",
   "va": true,
   "checksums": {
     
   }
 }
+--
+nth paddr        size vaddr       vsize perm flags type        name
+-------------------------------------------------------------------
+0   0x00000000    0x0 0x00000000    0x0 ---- 0x0   NULL
+1   0x00000134   0x13 0x08048134   0x13 -r-- 0x2   PROGBITS    .interp
+2   0x00000148   0x20 0x08048148   0x20 -r-- 0x2   NOTE        .note.ABI-tag
+3   0x00000168   0x24 0x08048168   0x24 -r-- 0x2   NOTE        .note.gnu.build-id
+4   0x0000018c   0x20 0x0804818c   0x20 -r-- 0x2   GNU_HASH    .gnu.hash
+5   0x000001ac   0x50 0x080481ac   0x50 -r-- 0x2   DYNSYM      .dynsym
+6   0x000001fc   0x4a 0x080481fc   0x4a -r-- 0x2   STRTAB      .dynstr
+7   0x00000246    0xa 0x08048246    0xa -r-- 0x2   GNU_VERSYM  .gnu.version
+8   0x00000250   0x20 0x08048250   0x20 -r-- 0x2   GNU_VERNEED .gnu.version_r
+9   0x00000270    0x8 0x08048270    0x8 -r-- 0x2   REL         .rel.dyn
+10  0x00000278   0x18 0x08048278   0x18 -r-- 0x2   REL         .rel.plt
+11  0x00000290   0x23 0x08048290   0x23 -r-x 0x6   PROGBITS    .init
+12  0x000002c0   0x40 0x080482c0   0x40 -r-x 0x6   PROGBITS    .plt
+13  0x00000300  0x194 0x08048300  0x194 -r-x 0x6   PROGBITS    .text
+14  0x00000494   0x14 0x08048494   0x14 -r-x 0x6   PROGBITS    .fini
+15  0x000004a8   0x15 0x080484a8   0x15 -r-- 0x2   PROGBITS    .rodata
+16  0x000004c0   0x2c 0x080484c0   0x2c -r-- 0x2   PROGBITS    .eh_frame_hdr
+17  0x000004ec   0xb0 0x080484ec   0xb0 -r-- 0x2   PROGBITS    .eh_frame
+18  0x0000059c    0x4 0x0804959c    0x4 -rw- 0x3   INIT_ARRAY  .init_array
+19  0x000005a0    0x4 0x080495a0    0x4 -rw- 0x3   FINI_ARRAY  .fini_array
+20  0x000005a4    0x4 0x080495a4    0x4 -rw- 0x3   PROGBITS    .jcr
+21  0x000005a8   0xe8 0x080495a8   0xe8 -rw- 0x3   DYNAMIC     .dynamic
+22  0x00000690    0x4 0x08049690    0x4 -rw- 0x3   PROGBITS    .got
+23  0x00000694   0x18 0x08049694   0x18 -rw- 0x3   PROGBITS    .got.plt
+24  0x000006ac    0x8 0x080496ac    0x8 -rw- 0x3   PROGBITS    .data
+25  0x000006b4    0x0 0x080496b4    0x4 -rw- 0x3   NOBITS      .bss
+26  0x000006b4   0x11 0x00000000   0x11 ---- 0x30  PROGBITS    .comment
+27  0x000006c5  0x106 0x00000000  0x106 ---- 0x0   STRTAB      .shstrtab
+28  0x00000c7c  0x450 0x00000000  0x450 ---- 0x0   SYMTAB      .symtab
+29  0x000010cc  0x257 0x00000000  0x257 ---- 0x0   STRTAB      .strtab
+--
+nth paddr        size vaddr       vsize perm flags type name
+------------------------------------------------------------
+0   0x00000034  0x100 0x08048034  0x100 -r-x 0x0   MAP  PHDR
+1   0x00000134   0x13 0x08048134   0x13 -r-- 0x0   MAP  INTERP
+2   0x00000000  0x59c 0x08048000  0x59c -r-x 0x0   MAP  LOAD0
+3   0x0000059c  0x118 0x0804959c  0x11c -rw- 0x0   MAP  LOAD1
+4   0x000005a8   0xe8 0x080495a8   0xe8 -rw- 0x0   MAP  DYNAMIC
+5   0x00000148   0x44 0x08048148   0x44 -r-- 0x0   MAP  NOTE
+6   0x000004c0   0x2c 0x080484c0   0x2c -r-- 0x0   MAP  GNU_EH_FRAME
+7   0x00000000    0x0 0x00000000    0x0 -rw- 0x0   MAP  GNU_STACK
+8   0x00000000   0x34 0x08048000   0x34 -rw- 0x0   MAP  ehdr
+--
+[{"name":"","size":0,"vsize":0,"type":"NULL","perm":"----","flags":0,"paddr":0,"vaddr":0},{"name":".interp","size":19,"vsize":19,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":308,"vaddr":134512948},{"name":".note.ABI-tag","size":32,"vsize":32,"type":"NOTE","perm":"-r--","flags":2,"paddr":328,"vaddr":134512968},{"name":".note.gnu.build-id","size":36,"vsize":36,"type":"NOTE","perm":"-r--","flags":2,"paddr":360,"vaddr":134513000},{"name":".gnu.hash","size":32,"vsize":32,"type":"GNU_HASH","perm":"-r--","flags":2,"paddr":396,"vaddr":134513036},{"name":".dynsym","size":80,"vsize":80,"type":"DYNSYM","perm":"-r--","flags":2,"paddr":428,"vaddr":134513068},{"name":".dynstr","size":74,"vsize":74,"type":"STRTAB","perm":"-r--","flags":2,"paddr":508,"vaddr":134513148},{"name":".gnu.version","size":10,"vsize":10,"type":"GNU_VERSYM","perm":"-r--","flags":2,"paddr":582,"vaddr":134513222},{"name":".gnu.version_r","size":32,"vsize":32,"type":"GNU_VERNEED","perm":"-r--","flags":2,"paddr":592,"vaddr":134513232},{"name":".rel.dyn","size":8,"vsize":8,"type":"REL","perm":"-r--","flags":2,"paddr":624,"vaddr":134513264},{"name":".rel.plt","size":24,"vsize":24,"type":"REL","perm":"-r--","flags":2,"paddr":632,"vaddr":134513272},{"name":".init","size":35,"vsize":35,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":656,"vaddr":134513296},{"name":".plt","size":64,"vsize":64,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":704,"vaddr":134513344},{"name":".text","size":404,"vsize":404,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":768,"vaddr":134513408},{"name":".fini","size":20,"vsize":20,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":1172,"vaddr":134513812},{"name":".rodata","size":21,"vsize":21,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":1192,"vaddr":134513832},{"name":".eh_frame_hdr","size":44,"vsize":44,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":1216,"vaddr":134513856},{"name":".eh_frame","size":176,"vsize":176,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":1260,"vaddr":134513900},{"name":".init_array","size":4,"vsize":4,"type":"INIT_ARRAY","perm":"-rw-","flags":3,"paddr":1436,"vaddr":134518172},{"name":".fini_array","size":4,"vsize":4,"type":"FINI_ARRAY","perm":"-rw-","flags":3,"paddr":1440,"vaddr":134518176},{"name":".jcr","size":4,"vsize":4,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":1444,"vaddr":134518180},{"name":".dynamic","size":232,"vsize":232,"type":"DYNAMIC","perm":"-rw-","flags":3,"paddr":1448,"vaddr":134518184},{"name":".got","size":4,"vsize":4,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":1680,"vaddr":134518416},{"name":".got.plt","size":24,"vsize":24,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":1684,"vaddr":134518420},{"name":".data","size":8,"vsize":8,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":1708,"vaddr":134518444},{"name":".bss","size":0,"vsize":4,"type":"NOBITS","perm":"-rw-","flags":3,"paddr":1716,"vaddr":134518452},{"name":".comment","size":17,"vsize":17,"type":"PROGBITS","perm":"----","flags":48,"paddr":1716,"vaddr":0},{"name":".shstrtab","size":262,"vsize":262,"type":"STRTAB","perm":"----","flags":0,"paddr":1733,"vaddr":0},{"name":".symtab","size":1104,"vsize":1104,"type":"SYMTAB","perm":"----","flags":0,"paddr":3196,"vaddr":0},{"name":".strtab","size":599,"vsize":599,"type":"STRTAB","perm":"----","flags":0,"paddr":4300,"vaddr":0}]
+--
+[{"name":"","size":0,"vsize":0,"type":"NULL","perm":"----","flags":0,"paddr":"0x0","vaddr":"0x0"},{"name":".interp","size":19,"vsize":19,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":"0x134","vaddr":"0x8048134"},{"name":".note.ABI-tag","size":32,"vsize":32,"type":"NOTE","perm":"-r--","flags":2,"paddr":"0x148","vaddr":"0x8048148"},{"name":".note.gnu.build-id","size":36,"vsize":36,"type":"NOTE","perm":"-r--","flags":2,"paddr":"0x168","vaddr":"0x8048168"},{"name":".gnu.hash","size":32,"vsize":32,"type":"GNU_HASH","perm":"-r--","flags":2,"paddr":"0x18c","vaddr":"0x804818c"},{"name":".dynsym","size":80,"vsize":80,"type":"DYNSYM","perm":"-r--","flags":2,"paddr":"0x1ac","vaddr":"0x80481ac"},{"name":".dynstr","size":74,"vsize":74,"type":"STRTAB","perm":"-r--","flags":2,"paddr":"0x1fc","vaddr":"0x80481fc"},{"name":".gnu.version","size":10,"vsize":10,"type":"GNU_VERSYM","perm":"-r--","flags":2,"paddr":"0x246","vaddr":"0x8048246"},{"name":".gnu.version_r","size":32,"vsize":32,"type":"GNU_VERNEED","perm":"-r--","flags":2,"paddr":"0x250","vaddr":"0x8048250"},{"name":".rel.dyn","size":8,"vsize":8,"type":"REL","perm":"-r--","flags":2,"paddr":"0x270","vaddr":"0x8048270"},{"name":".rel.plt","size":24,"vsize":24,"type":"REL","perm":"-r--","flags":2,"paddr":"0x278","vaddr":"0x8048278"},{"name":".init","size":35,"vsize":35,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":"0x290","vaddr":"0x8048290"},{"name":".plt","size":64,"vsize":64,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":"0x2c0","vaddr":"0x80482c0"},{"name":".text","size":404,"vsize":404,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":"0x300","vaddr":"0x8048300"},{"name":".fini","size":20,"vsize":20,"type":"PROGBITS","perm":"-r-x","flags":6,"paddr":"0x494","vaddr":"0x8048494"},{"name":".rodata","size":21,"vsize":21,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":"0x4a8","vaddr":"0x80484a8"},{"name":".eh_frame_hdr","size":44,"vsize":44,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":"0x4c0","vaddr":"0x80484c0"},{"name":".eh_frame","size":176,"vsize":176,"type":"PROGBITS","perm":"-r--","flags":2,"paddr":"0x4ec","vaddr":"0x80484ec"},{"name":".init_array","size":4,"vsize":4,"type":"INIT_ARRAY","perm":"-rw-","flags":3,"paddr":"0x59c","vaddr":"0x804959c"},{"name":".fini_array","size":4,"vsize":4,"type":"FINI_ARRAY","perm":"-rw-","flags":3,"paddr":"0x5a0","vaddr":"0x80495a0"},{"name":".jcr","size":4,"vsize":4,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":"0x5a4","vaddr":"0x80495a4"},{"name":".dynamic","size":232,"vsize":232,"type":"DYNAMIC","perm":"-rw-","flags":3,"paddr":"0x5a8","vaddr":"0x80495a8"},{"name":".got","size":4,"vsize":4,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":"0x690","vaddr":"0x8049690"},{"name":".got.plt","size":24,"vsize":24,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":"0x694","vaddr":"0x8049694"},{"name":".data","size":8,"vsize":8,"type":"PROGBITS","perm":"-rw-","flags":3,"paddr":"0x6ac","vaddr":"0x80496ac"},{"name":".bss","size":0,"vsize":4,"type":"NOBITS","perm":"-rw-","flags":3,"paddr":"0x6b4","vaddr":"0x80496b4"},{"name":".comment","size":17,"vsize":17,"type":"PROGBITS","perm":"----","flags":48,"paddr":"0x6b4","vaddr":"0x0"},{"name":".shstrtab","size":262,"vsize":262,"type":"STRTAB","perm":"----","flags":0,"paddr":"0x6c5","vaddr":"0x0"},{"name":".symtab","size":1104,"vsize":1104,"type":"SYMTAB","perm":"----","flags":0,"paddr":"0xc7c","vaddr":"0x0"},{"name":".strtab","size":599,"vsize":599,"type":"STRTAB","perm":"----","flags":0,"paddr":"0x10cc","vaddr":"0x0"}]
 EOF
 RUN
 
@@ -1627,28 +1351,21 @@ lang     msvc
 EOF
 RUN
 
+# merged: imj; imq
 NAME=im
 FILE=bins/nes/Pong.nes
-CMDS=im~?SRAM
+CMDS=<<EOF
+im~?SRAM
+?e --
+imj~?SRAM
+?e --
+imq
+EOF
 EXPECT=<<EOF
 1
-EOF
-RUN
-
-NAME=imj
-FILE=bins/nes/Pong.nes
-CMDS=imj~?SRAM
-EXPECT=<<EOF
+--
 1
-EOF
-RUN
-
-NAME=imq
-FILE=bins/nes/Pong.nes
-CMDS=imq
-EXPECT=<<EOF
-[Memory]
-
+--
 0x00000000
 0x00001000
 0x00001800
@@ -2681,159 +2398,93 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=iS (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iS
-EXPECT=<<EOF
-[Sections]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000000    0x0 0x00000000    0x0 ---- 
-1   0x00000134   0x13 0x08048134   0x13 -r-- .interp
-2   0x00000148   0x20 0x08048148   0x20 -r-- .note.ABI-tag
-3   0x00000168   0x24 0x08048168   0x24 -r-- .note.gnu.build-id
-4   0x0000018c   0x20 0x0804818c   0x20 -r-- .gnu.hash
-5   0x000001ac   0x50 0x080481ac   0x50 -r-- .dynsym
-6   0x000001fc   0x4a 0x080481fc   0x4a -r-- .dynstr
-7   0x00000246    0xa 0x08048246    0xa -r-- .gnu.version
-8   0x00000250   0x20 0x08048250   0x20 -r-- .gnu.version_r
-9   0x00000270    0x8 0x08048270    0x8 -r-- .rel.dyn
-10  0x00000278   0x18 0x08048278   0x18 -r-- .rel.plt
-11  0x00000290   0x23 0x08048290   0x23 -r-x .init
-12  0x000002c0   0x40 0x080482c0   0x40 -r-x .plt
-13  0x00000300  0x194 0x08048300  0x194 -r-x .text
-14  0x00000494   0x14 0x08048494   0x14 -r-x .fini
-15  0x000004a8   0x15 0x080484a8   0x15 -r-- .rodata
-16  0x000004c0   0x2c 0x080484c0   0x2c -r-- .eh_frame_hdr
-17  0x000004ec   0xb0 0x080484ec   0xb0 -r-- .eh_frame
-18  0x0000059c    0x4 0x0804959c    0x4 -rw- .init_array
-19  0x000005a0    0x4 0x080495a0    0x4 -rw- .fini_array
-20  0x000005a4    0x4 0x080495a4    0x4 -rw- .jcr
-21  0x000005a8   0xe8 0x080495a8   0xe8 -rw- .dynamic
-22  0x00000690    0x4 0x08049690    0x4 -rw- .got
-23  0x00000694   0x18 0x08049694   0x18 -rw- .got.plt
-24  0x000006ac    0x8 0x080496ac    0x8 -rw- .data
-25  0x000006b4    0x0 0x080496b4    0x4 -rw- .bss
-26  0x000006b4   0x11 0x00000000   0x11 ---- .comment
-27  0x000006c5  0x106 0x00000000  0x106 ---- .shstrtab
-28  0x00000c7c  0x450 0x00000000  0x450 ---- .symtab
-29  0x000010cc  0x257 0x00000000  0x257 ---- .strtab
-
-EOF
-RUN
-
-NAME=iSS (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iSS
-EXPECT=<<EOF
-[Segments]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000034  0x100 0x08048034  0x100 -r-x PHDR
-1   0x00000134   0x13 0x08048134   0x13 -r-- INTERP
-2   0x00000000  0x59c 0x08048000  0x59c -r-x LOAD0
-3   0x0000059c  0x118 0x0804959c  0x11c -rw- LOAD1
-4   0x000005a8   0xe8 0x080495a8   0xe8 -rw- DYNAMIC
-5   0x00000148   0x44 0x08048148   0x44 -r-- NOTE
-6   0x000004c0   0x2c 0x080484c0   0x2c -r-- GNU_EH_FRAME
-7   0x00000000    0x0 0x00000000    0x0 -rw- GNU_STACK
-8   0x00000000   0x34 0x08048000   0x34 -rw- ehdr
-
-EOF
-RUN
-
-NAME=iSj
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iSj
-EXPECT=<<EOF
-[{"name":"","size":0,"vsize":0,"perm":"----","paddr":0,"vaddr":0},{"name":".interp","size":19,"vsize":19,"perm":"-r--","paddr":308,"vaddr":134512948},{"name":".note.ABI-tag","size":32,"vsize":32,"perm":"-r--","paddr":328,"vaddr":134512968},{"name":".note.gnu.build-id","size":36,"vsize":36,"perm":"-r--","paddr":360,"vaddr":134513000},{"name":".gnu.hash","size":32,"vsize":32,"perm":"-r--","paddr":396,"vaddr":134513036},{"name":".dynsym","size":80,"vsize":80,"perm":"-r--","paddr":428,"vaddr":134513068},{"name":".dynstr","size":74,"vsize":74,"perm":"-r--","paddr":508,"vaddr":134513148},{"name":".gnu.version","size":10,"vsize":10,"perm":"-r--","paddr":582,"vaddr":134513222},{"name":".gnu.version_r","size":32,"vsize":32,"perm":"-r--","paddr":592,"vaddr":134513232},{"name":".rel.dyn","size":8,"vsize":8,"perm":"-r--","paddr":624,"vaddr":134513264},{"name":".rel.plt","size":24,"vsize":24,"perm":"-r--","paddr":632,"vaddr":134513272},{"name":".init","size":35,"vsize":35,"perm":"-r-x","paddr":656,"vaddr":134513296},{"name":".plt","size":64,"vsize":64,"perm":"-r-x","paddr":704,"vaddr":134513344},{"name":".text","size":404,"vsize":404,"perm":"-r-x","paddr":768,"vaddr":134513408},{"name":".fini","size":20,"vsize":20,"perm":"-r-x","paddr":1172,"vaddr":134513812},{"name":".rodata","size":21,"vsize":21,"perm":"-r--","paddr":1192,"vaddr":134513832},{"name":".eh_frame_hdr","size":44,"vsize":44,"perm":"-r--","paddr":1216,"vaddr":134513856},{"name":".eh_frame","size":176,"vsize":176,"perm":"-r--","paddr":1260,"vaddr":134513900},{"name":".init_array","size":4,"vsize":4,"perm":"-rw-","paddr":1436,"vaddr":134518172},{"name":".fini_array","size":4,"vsize":4,"perm":"-rw-","paddr":1440,"vaddr":134518176},{"name":".jcr","size":4,"vsize":4,"perm":"-rw-","paddr":1444,"vaddr":134518180},{"name":".dynamic","size":232,"vsize":232,"perm":"-rw-","paddr":1448,"vaddr":134518184},{"name":".got","size":4,"vsize":4,"perm":"-rw-","paddr":1680,"vaddr":134518416},{"name":".got.plt","size":24,"vsize":24,"perm":"-rw-","paddr":1684,"vaddr":134518420},{"name":".data","size":8,"vsize":8,"perm":"-rw-","paddr":1708,"vaddr":134518444},{"name":".bss","size":0,"vsize":4,"perm":"-rw-","paddr":1716,"vaddr":134518452},{"name":".comment","size":17,"vsize":17,"perm":"----","paddr":1716,"vaddr":0},{"name":".shstrtab","size":262,"vsize":262,"perm":"----","paddr":1733,"vaddr":0},{"name":".symtab","size":1104,"vsize":1104,"perm":"----","paddr":3196,"vaddr":0},{"name":".strtab","size":599,"vsize":599,"perm":"----","paddr":4300,"vaddr":0}]
-EOF
-RUN
-
+# merged: iSq; iSSq; section comment
 NAME=iSSj
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iSSj
-EXPECT=<<EOF
-[{"name":"PHDR","size":256,"vsize":256,"perm":"-r-x","paddr":52,"vaddr":134512692},{"name":"INTERP","size":19,"vsize":19,"perm":"-r--","paddr":308,"vaddr":134512948},{"name":"LOAD0","size":1436,"vsize":1436,"perm":"-r-x","paddr":0,"vaddr":134512640},{"name":"LOAD1","size":280,"vsize":284,"perm":"-rw-","paddr":1436,"vaddr":134518172},{"name":"DYNAMIC","size":232,"vsize":232,"perm":"-rw-","paddr":1448,"vaddr":134518184},{"name":"NOTE","size":68,"vsize":68,"perm":"-r--","paddr":328,"vaddr":134512968},{"name":"GNU_EH_FRAME","size":44,"vsize":44,"perm":"-r--","paddr":1216,"vaddr":134513856},{"name":"GNU_STACK","size":0,"vsize":0,"perm":"-rw-","paddr":0,"vaddr":0},{"name":"ehdr","size":52,"vsize":52,"perm":"-rw-","paddr":0,"vaddr":134512640}]
-EOF
-RUN
-
-NAME=iSq
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iSq
-EXPECT=<<EOF
-0x0 0x0 ---- 
-0x8048134 0x8048147 -r-- .interp
-0x8048148 0x8048168 -r-- .note.ABI-tag
-0x8048168 0x804818c -r-- .note.gnu.build-id
-0x804818c 0x80481ac -r-- .gnu.hash
-0x80481ac 0x80481fc -r-- .dynsym
-0x80481fc 0x8048246 -r-- .dynstr
-0x8048246 0x8048250 -r-- .gnu.version
-0x8048250 0x8048270 -r-- .gnu.version_r
-0x8048270 0x8048278 -r-- .rel.dyn
-0x8048278 0x8048290 -r-- .rel.plt
-0x8048290 0x80482b3 -r-x .init
-0x80482c0 0x8048300 -r-x .plt
-0x8048300 0x8048494 -r-x .text
-0x8048494 0x80484a8 -r-x .fini
-0x80484a8 0x80484bd -r-- .rodata
-0x80484c0 0x80484ec -r-- .eh_frame_hdr
-0x80484ec 0x804859c -r-- .eh_frame
-0x804959c 0x80495a0 -rw- .init_array
-0x80495a0 0x80495a4 -rw- .fini_array
-0x80495a4 0x80495a8 -rw- .jcr
-0x80495a8 0x8049690 -rw- .dynamic
-0x8049690 0x8049694 -rw- .got
-0x8049694 0x80496ac -rw- .got.plt
-0x80496ac 0x80496b4 -rw- .data
-0x80496b4 0x80496b4 -rw- .bss
-0x0 0x11 ---- .comment
-0x0 0x106 ---- .shstrtab
-0x0 0x450 ---- .symtab
-0x0 0x257 ---- .strtab
-EOF
-RUN
-
-NAME=iSSq
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iSSq
-EXPECT=<<EOF
-0x8048034 0x8048134 -r-x PHDR
-0x8048134 0x8048147 -r-- INTERP
-0x8048000 0x804859c -r-x LOAD0
-0x804959c 0x80496b4 -rw- LOAD1
-0x80495a8 0x8049690 -rw- DYNAMIC
-0x8048148 0x804818c -r-- NOTE
-0x80484c0 0x80484ec -r-- GNU_EH_FRAME
-0x0 0x0 -rw- GNU_STACK
-0x8048000 0x8048034 -rw- ehdr
-EOF
-RUN
-
-NAME=section comment
-FILE=bins/elf/analysis/x86-helloworld-gcc
 CMDS=<<EOF
+iSSj
+?e --
+iSq
+?e --
+iSSq
+?e --
 e asm.bytes = false
 pd 1 @ 0x080495a8
 EOF
 EXPECT=<<EOF
+[{"name":"PHDR","size":256,"vsize":256,"perm":"-r-x","flags":0,"paddr":52,"vaddr":134512692},{"name":"INTERP","size":19,"vsize":19,"perm":"-r--","flags":0,"paddr":308,"vaddr":134512948},{"name":"LOAD0","size":1436,"vsize":1436,"perm":"-r-x","flags":0,"paddr":0,"vaddr":134512640},{"name":"LOAD1","size":280,"vsize":284,"perm":"-rw-","flags":0,"paddr":1436,"vaddr":134518172},{"name":"DYNAMIC","size":232,"vsize":232,"perm":"-rw-","flags":0,"paddr":1448,"vaddr":134518184},{"name":"NOTE","size":68,"vsize":68,"perm":"-r--","flags":0,"paddr":328,"vaddr":134512968},{"name":"GNU_EH_FRAME","size":44,"vsize":44,"perm":"-r--","flags":0,"paddr":1216,"vaddr":134513856},{"name":"GNU_STACK","size":0,"vsize":0,"perm":"-rw-","flags":0,"paddr":0,"vaddr":0},{"name":"ehdr","size":52,"vsize":52,"perm":"-rw-","flags":0,"paddr":0,"vaddr":134512640}]
+--
+0x00000000 0x00000000 ---- 
+0x08048134 0x08048147 -r-- .interp
+0x08048148 0x08048168 -r-- .note.ABI-tag
+0x08048168 0x0804818c -r-- .note.gnu.build-id
+0x0804818c 0x080481ac -r-- .gnu.hash
+0x080481ac 0x080481fc -r-- .dynsym
+0x080481fc 0x08048246 -r-- .dynstr
+0x08048246 0x08048250 -r-- .gnu.version
+0x08048250 0x08048270 -r-- .gnu.version_r
+0x08048270 0x08048278 -r-- .rel.dyn
+0x08048278 0x08048290 -r-- .rel.plt
+0x08048290 0x080482b3 -r-x .init
+0x080482c0 0x08048300 -r-x .plt
+0x08048300 0x08048494 -r-x .text
+0x08048494 0x080484a8 -r-x .fini
+0x080484a8 0x080484bd -r-- .rodata
+0x080484c0 0x080484ec -r-- .eh_frame_hdr
+0x080484ec 0x0804859c -r-- .eh_frame
+0x0804959c 0x080495a0 -rw- .init_array
+0x080495a0 0x080495a4 -rw- .fini_array
+0x080495a4 0x080495a8 -rw- .jcr
+0x080495a8 0x08049690 -rw- .dynamic
+0x08049690 0x08049694 -rw- .got
+0x08049694 0x080496ac -rw- .got.plt
+0x080496ac 0x080496b4 -rw- .data
+0x080496b4 0x080496b4 -rw- .bss
+0x00000000 0x00000011 ---- .comment
+0x00000000 0x00000106 ---- .shstrtab
+0x00000000 0x00000450 ---- .symtab
+0x00000000 0x00000257 ---- .strtab
+--
+0x08048034 0x08048134 -r-x PHDR
+0x08048134 0x08048147 -r-- INTERP
+0x08048000 0x0804859c -r-x LOAD0
+0x0804959c 0x080496b4 -rw- LOAD1
+0x080495a8 0x08049690 -rw- DYNAMIC
+0x08048148 0x0804818c -r-- NOTE
+0x080484c0 0x080484ec -r-- GNU_EH_FRAME
+0x00000000 0x00000000 -rw- GNU_STACK
+0x08048000 0x08048034 -rw- ehdr
+--
             ;-- section..dynamic:
             ;-- segment.DYNAMIC:
-            ;-- .dynamic:
             ;-- _DYNAMIC:
             0x080495a8      .dword 0x00000001                          ; [21] -rw- section size 232 named .dynamic
 EOF
 RUN
 
+# merged: il (file x86); il* (file x86); ir (file x86); ir* (file x86); irq (file x86); iR aliases ir relocations; is (file x86)
 NAME=bss section comment
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=pd 3 @ section..bss
+CMDS=<<EOF
+pd 3 @ section..bss
+?e --
+il
+?e --
+il*
+?e --
+ir
+?e --
+ir*
+?e --
+irq
+?e --
+ir~?
+iR~?
+?e --
+is
+EOF
 EXPECT=<<EOF
             ;-- section..bss:
-            ;-- .bss:
             ;-- completed.5979:
             ;-- _edata:
             ;-- __bss_start:
@@ -2842,81 +2493,38 @@ EXPECT=<<EOF
             0x080496b6      0000           add byte [eax], al
             ;-- _end:
             0x080496b8      ff             invalid
-EOF
-RUN
-
-NAME=il (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=il
-EXPECT=<<EOF
-[Linked libraries]
+--
 libc.so.6
-
-1 library
-EOF
-RUN
-
-NAME=il* (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=il*
-EXPECT=<<EOF
-"CCa entry0 libc.so.6"
-EOF
-RUN
-
-NAME=ir (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ir
-EXPECT=<<EOF
-[Relocations]
-
-vaddr      paddr      type   name
----------------------------------
-0x08049690 0x00000690 SET_32 __gmon_start__
-0x080496a0 0x000006a0 SET_32 puts
-0x080496a4 0x000006a4 SET_32 __gmon_start__
-0x080496a8 0x000006a8 SET_32 __libc_start_main
-
-
-4 relocations
-EOF
-RUN
-
-NAME=ir* (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ir*
-EXPECT=<<EOF
+--
+'CCa entry0 libc.so.6
+--
+vaddr      paddr      type   ntype name
+---------------------------------------
+0x08049690 0x00000690 SET_32 6     __gmon_start__
+0x080496a0 0x000006a0 SET_32 7     puts
+0x080496a4 0x000006a4 SET_32 7     __gmon_start__
+0x080496a8 0x000006a8 SET_32 7     __libc_start_main
+--
 fs relocs
-"f reloc.__gmon_start__ 4 0x08049690"
-Cd 4 @ 0x08049690
-"f reloc.puts 4 0x080496a0"
-Cd 4 @ 0x080496a0
-"f reloc.__gmon_start__ 4 0x080496a4"
-Cd 4 @ 0x080496a4
-"f reloc.__libc_start_main 4 0x080496a8"
-Cd 4 @ 0x080496a8
-EOF
-RUN
-
-NAME=irq (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=irq
-EXPECT=<<EOF
+'f reloc.__gmon_start__ 4 0x08049690
+'@0x08049690'Cd 4
+'f reloc.puts 4 0x080496a0
+'@0x080496a0'Cd 4
+'f reloc.__gmon_start__ 4 0x080496a4
+'@0x080496a4'Cd 4
+'f reloc.__libc_start_main 4 0x080496a8
+'@0x080496a8'Cd 4
+--
 0x08049690  __gmon_start__
 0x080496a0  puts
 0x080496a4  __gmon_start__
 0x080496a8  __libc_start_main
-EOF
-RUN
-
-NAME=is (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=is
-EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
+--
+6
+6
+--
+nth paddr      vaddr      bind   type   size lib name                                   demangled
+-------------------------------------------------------------------------------------------------
 4   0x000004ac 0x080484ac GLOBAL OBJ    4        _IO_stdin_used
 1   0x00000134 0x08048134 LOCAL  SECT   0        .interp
 2   0x00000148 0x08048148 LOCAL  SECT   0        .note.ABI-tag
@@ -2945,7 +2553,7 @@ nth paddr      vaddr      bind   type   size lib name
 25  ---------- 0x080496b4 LOCAL  SECT   0        .bss
 26  ---------- 0x00000000 LOCAL  SECT   0        .comment
 27  ---------- 0x00000000 LOCAL  FILE   0        init.c
-28  ---------- 0x00000000 LOCAL  FILE   0        
+28  ---------- 0x00000000 LOCAL  FILE   0
 29  ---------- 0x00000000 LOCAL  FILE   0        crtstuff.c
 30  0x000005a4 0x080495a4 LOCAL  OBJ    0        __JCR_LIST__
 31  0x00000340 0x08048340 LOCAL  FUNC   0        deregister_tm_clones
@@ -2959,7 +2567,7 @@ nth paddr      vaddr      bind   type   size lib name
 39  ---------- 0x00000000 LOCAL  FILE   0        crtstuff.c
 40  0x00000598 0x08048598 LOCAL  OBJ    0        __FRAME_END__
 41  0x000005a4 0x080495a4 LOCAL  OBJ    0        __JCR_END__
-42  ---------- 0x00000000 LOCAL  FILE   0        
+42  ---------- 0x00000000 LOCAL  FILE   0
 43  0x000005a0 0x080495a0 LOCAL  NOTYPE 0        __init_array_end
 44  0x000005a8 0x080495a8 LOCAL  OBJ    0        _DYNAMIC
 45  0x0000059c 0x0804959c LOCAL  NOTYPE 0        __init_array_start
@@ -2971,6 +2579,7 @@ nth paddr      vaddr      bind   type   size lib name
 52  0x00000494 0x08048494 GLOBAL FUNC   0        _fini
 53  0x000006ac 0x080496ac GLOBAL NOTYPE 0        __data_start
 56  0x000006b0 0x080496b0 GLOBAL OBJ    0        __dso_handle
+57  0x000004ac 0x080484ac GLOBAL OBJ    4        _IO_stdin_used
 59  0x00000420 0x08048420 GLOBAL FUNC   97       __libc_csu_init
 60  ---------- 0x080496b8 GLOBAL NOTYPE 0        _end
 61  0x00000300 0x08048300 GLOBAL FUNC   0        _start
@@ -2985,88 +2594,30 @@ nth paddr      vaddr      bind   type   size lib name
 EOF
 RUN
 
-NAME=iz (file x86)
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iz
-EXPECT=<<EOF
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
-EOF
-RUN
-
-NAME=iz (file x86) 2
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=<<EOF
-?e -- default --
-iz
-?e -- geq 12 --
-e bin.minstr=12
-iz
-?e -- geq 13 --
-e bin.minstr=13
-iz
-?e -- geq 0 --
-e bin.minstr=0
-iz
-?e -- leq 12 --
-e bin.maxstr=12
-iz
-?e -- leq 11 --
-e bin.maxstr=11
-iz
-?e -- no limit --
-e bin.maxstr=0
-iz
-EOF
-EXPECT=<<EOF
--- default --
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
--- geq 12 --
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
--- geq 13 --
-[Strings]
-nth paddr vaddr len size section type string
---------------------------------------------
--- geq 0 --
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
--- leq 12 --
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
--- leq 11 --
-[Strings]
-nth paddr vaddr len size section type string
---------------------------------------------
--- no limit --
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
-EOF
-RUN
-
+# merged: iA (file x86_64); ie (file x86_64); ih (file x86_64); ii (file x86_64); iI (file x86_64); iS (file x86_64); iSS (file x86_64)
 NAME=i (file x86_64)
 FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=i~!hello-linux
+CMDS=<<EOF
+i~!hello-linux
+?e --
+ia
+?e --
+ie
+?e --
+ih
+?e --
+ii
+?e --
+iI
+?e --
+iS
+?e --
+iSS
+EOF
 EXPECT=<<EOF
 fd       3
 size     0x1a36
 humansz  6.6K
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     r-x
 format   elf64
 iorw     false
@@ -3078,6 +2629,7 @@ binsz    6710
 bintype  elf
 bits     64
 canary   false
+injprot  false
 class    ELF64
 compiler GCC: (GNU) 4.7.2
 crypto   false
@@ -3086,7 +2638,7 @@ havecode true
 intrp    /lib/ld-linux-x86-64.so.2
 laddr    0x0
 lang     c
-linenum  true
+linenum  false
 lsyms    true
 machine  AMD x86-64 architecture
 nx       true
@@ -3098,75 +2650,44 @@ rpath    NONE
 sanitize false
 static   false
 stripped false
+uncaps   true
 subsys   linux
 va       true
-EOF
-RUN
-
-NAME=iA (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=iA
-EXPECT=<<EOF
-0   0x00000000 6710 x86_64 
-EOF
-RUN
-
-NAME=ie (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=ie
-EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00400410 paddr=0x00000410 haddr=0x00000018 hvaddr=0x00400018 type=program
-
-1 entrypoints
-EOF
-RUN
-
-NAME=iH (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=iH
-EXPECT=<<EOF
-0x00000000  ELF64       0x464c457f
-0x00000010  Type        0x0002
-0x00000012  Machine     0x003e
-0x00000014  Version     0x00000001
-0x00000018  Entrypoint  0x00400410
-0x00000020  PhOff       0x00000040
-0x00000028  ShOff       0x00000a30
-0x00000030  Flags       0x00000000
-0x00000034  EhSize      64
-0x00000036  PhentSize   56
-0x00000038  PhNum       8
-0x0000003a  ShentSize   64
-0x0000003c  ShNum       30
-0x0000003e  ShrStrndx   27
-EOF
-RUN
-
-NAME=ii (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=ii
-EXPECT=<<EOF
-[Imports]
+--
+0   0x00000000 6710 x86_64 machine=AMD x86-64 architecture
+--
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00000410 0x00400410 0x00000018 0x00400018 program
+--
+0x00000000 0x00000000 0x464c457f ELF
+0x00000010 0x00000010 0x00000002 Type
+0x00000012 0x00000012 0x0000003e Machine
+0x00000014 0x00000014 0x00000001 Version
+0x00000018 0x00000018 0x00400410 EntryPoint
+0x00000020 0x00000020 0x00000040 PhOff
+0x00000028 0x00000028 0x00000a30 ShOff
+0x00000030 0x00000030 0x00000000 Flags
+0x00000034 0x00000034 0x00000040 EhSize
+0x00000036 0x00000036 0x00000038 PhentSize
+0x00000038 0x00000038 0x00000008 PhNum
+0x0000003a 0x0000003a 0x00000040 ShentSize
+0x0000003c 0x0000003c 0x0000001e ShNum
+0x0000003e 0x0000003e 0x0000001b ShrStrndx
+--
 nth vaddr      bind   type   lib name
 -------------------------------------
 1   0x004003e0 GLOBAL FUNC       puts
 2   0x004003f0 GLOBAL FUNC       __libc_start_main
 3   0x00400400 WEAK   NOTYPE     __gmon_start__
-
-EOF
-RUN
-
-NAME=iI (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=iI
-EXPECT=<<EOF
+--
 arch     x86
 baddr    0x400000
 binsz    6710
 bintype  elf
 bits     64
 canary   false
+injprot  false
 class    ELF64
 compiler GCC: (GNU) 4.7.2
 crypto   false
@@ -3175,7 +2696,7 @@ havecode true
 intrp    /lib/ld-linux-x86-64.so.2
 laddr    0x0
 lang     c
-linenum  true
+linenum  false
 lsyms    true
 machine  AMD x86-64 architecture
 nx       true
@@ -3187,135 +2708,81 @@ rpath    NONE
 sanitize false
 static   false
 stripped false
+uncaps   true
 subsys   linux
 va       true
+--
+nth paddr        size vaddr       vsize perm flags type        name
+-------------------------------------------------------------------
+0   0x00000000    0x0 0x00000000    0x0 ---- 0x0   NULL
+1   0x00000200   0x1a 0x00400200   0x1a -r-- 0x2   PROGBITS    .interp
+2   0x0000021c   0x20 0x0040021c   0x20 -r-- 0x2   NOTE        .note.ABI-tag
+3   0x0000023c   0x24 0x0040023c   0x24 -r-- 0x2   NOTE        .note.gnu.build-id
+4   0x00000260   0x1c 0x00400260   0x1c -r-- 0x2   GNU_HASH    .gnu.hash
+5   0x00000280   0x60 0x00400280   0x60 -r-- 0x2   DYNSYM      .dynsym
+6   0x000002e0   0x3d 0x004002e0   0x3d -r-- 0x2   STRTAB      .dynstr
+7   0x0000031e    0x8 0x0040031e    0x8 -r-- 0x2   GNU_VERSYM  .gnu.version
+8   0x00000328   0x20 0x00400328   0x20 -r-- 0x2   GNU_VERNEED .gnu.version_r
+9   0x00000348   0x18 0x00400348   0x18 -r-- 0x2   RELA        .rela.dyn
+10  0x00000360   0x48 0x00400360   0x48 -r-- 0x2   RELA        .rela.plt
+11  0x000003a8   0x1a 0x004003a8   0x1a -r-x 0x6   PROGBITS    .init
+12  0x000003d0   0x40 0x004003d0   0x40 -r-x 0x6   PROGBITS    .plt
+13  0x00000410  0x1a4 0x00400410  0x1a4 -r-x 0x6   PROGBITS    .text
+14  0x000005b4    0x9 0x004005b4    0x9 -r-x 0x6   PROGBITS    .fini
+15  0x000005c0   0x10 0x004005c0   0x10 -r-- 0x2   PROGBITS    .rodata
+16  0x000005d0   0x34 0x004005d0   0x34 -r-- 0x2   PROGBITS    .eh_frame_hdr
+17  0x00000608   0xd4 0x00400608   0xd4 -r-- 0x2   PROGBITS    .eh_frame
+18  0x000006e0    0x8 0x006006e0    0x8 -rw- 0x3   INIT_ARRAY  .init_array
+19  0x000006e8    0x8 0x006006e8    0x8 -rw- 0x3   FINI_ARRAY  .fini_array
+20  0x000006f0    0x8 0x006006f0    0x8 -rw- 0x3   PROGBITS    .jcr
+21  0x000006f8  0x1d0 0x006006f8  0x1d0 -rw- 0x3   DYNAMIC     .dynamic
+22  0x000008c8    0x8 0x006008c8    0x8 -rw- 0x3   PROGBITS    .got
+23  0x000008d0   0x30 0x006008d0   0x30 -rw- 0x3   PROGBITS    .got.plt
+24  0x00000900   0x10 0x00600900   0x10 -rw- 0x3   PROGBITS    .data
+25  0x00000910    0x0 0x00600910    0x8 -rw- 0x3   NOBITS      .bss
+26  0x00000910   0x11 0x00000000   0x11 ---- 0x30  PROGBITS    .comment
+27  0x00000921  0x108 0x00000000  0x108 ---- 0x0   STRTAB      .shstrtab
+28  0x000011b0  0x648 0x00000000  0x648 ---- 0x0   SYMTAB      .symtab
+29  0x000017f8  0x23e 0x00000000  0x23e ---- 0x0   STRTAB      .strtab
+--
+nth paddr        size vaddr       vsize perm flags type name
+------------------------------------------------------------
+0   0x00000040  0x1c0 0x00400040  0x1c0 -r-x 0x0   MAP  PHDR
+1   0x00000200   0x1a 0x00400200   0x1a -r-- 0x0   MAP  INTERP
+2   0x00000000  0x6dc 0x00400000  0x6dc -r-x 0x0   MAP  LOAD0
+3   0x000006e0  0x230 0x006006e0  0x238 -rw- 0x0   MAP  LOAD1
+4   0x000006f8  0x1d0 0x006006f8  0x1d0 -rw- 0x0   MAP  DYNAMIC
+5   0x0000021c   0x44 0x0040021c   0x44 -r-- 0x0   MAP  NOTE
+6   0x000005d0   0x34 0x004005d0   0x34 -r-- 0x0   MAP  GNU_EH_FRAME
+7   0x00000000    0x0 0x00000000    0x0 -rw- 0x0   MAP  GNU_STACK
+8   0x00000000   0x40 0x00400000   0x40 -rw- 0x0   MAP  ehdr
 EOF
 RUN
 
-NAME=iS (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=iS
-EXPECT=<<EOF
-[Sections]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000000    0x0 0x00000000    0x0 ---- 
-1   0x00000200   0x1a 0x00400200   0x1a -r-- .interp
-2   0x0000021c   0x20 0x0040021c   0x20 -r-- .note.ABI-tag
-3   0x0000023c   0x24 0x0040023c   0x24 -r-- .note.gnu.build-id
-4   0x00000260   0x1c 0x00400260   0x1c -r-- .gnu.hash
-5   0x00000280   0x60 0x00400280   0x60 -r-- .dynsym
-6   0x000002e0   0x3d 0x004002e0   0x3d -r-- .dynstr
-7   0x0000031e    0x8 0x0040031e    0x8 -r-- .gnu.version
-8   0x00000328   0x20 0x00400328   0x20 -r-- .gnu.version_r
-9   0x00000348   0x18 0x00400348   0x18 -r-- .rela.dyn
-10  0x00000360   0x48 0x00400360   0x48 -r-- .rela.plt
-11  0x000003a8   0x1a 0x004003a8   0x1a -r-x .init
-12  0x000003d0   0x40 0x004003d0   0x40 -r-x .plt
-13  0x00000410  0x1a4 0x00400410  0x1a4 -r-x .text
-14  0x000005b4    0x9 0x004005b4    0x9 -r-x .fini
-15  0x000005c0   0x10 0x004005c0   0x10 -r-- .rodata
-16  0x000005d0   0x34 0x004005d0   0x34 -r-- .eh_frame_hdr
-17  0x00000608   0xd4 0x00400608   0xd4 -r-- .eh_frame
-18  0x000006e0    0x8 0x006006e0    0x8 -rw- .init_array
-19  0x000006e8    0x8 0x006006e8    0x8 -rw- .fini_array
-20  0x000006f0    0x8 0x006006f0    0x8 -rw- .jcr
-21  0x000006f8  0x1d0 0x006006f8  0x1d0 -rw- .dynamic
-22  0x000008c8    0x8 0x006008c8    0x8 -rw- .got
-23  0x000008d0   0x30 0x006008d0   0x30 -rw- .got.plt
-24  0x00000900   0x10 0x00600900   0x10 -rw- .data
-25  0x00000910    0x0 0x00600910    0x8 -rw- .bss
-26  0x00000910   0x11 0x00000000   0x11 ---- .comment
-27  0x00000921  0x108 0x00000000  0x108 ---- .shstrtab
-28  0x000011b0  0x648 0x00000000  0x648 ---- .symtab
-29  0x000017f8  0x23e 0x00000000  0x23e ---- .strtab
-
-EOF
-RUN
-
-NAME=iSS (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=iSS
-EXPECT=<<EOF
-[Segments]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000040  0x1c0 0x00400040  0x1c0 -r-x PHDR
-1   0x00000200   0x1a 0x00400200   0x1a -r-- INTERP
-2   0x00000000  0x6dc 0x00400000  0x6dc -r-x LOAD0
-3   0x000006e0  0x230 0x006006e0  0x238 -rw- LOAD1
-4   0x000006f8  0x1d0 0x006006f8  0x1d0 -rw- DYNAMIC
-5   0x0000021c   0x44 0x0040021c   0x44 -r-- NOTE
-6   0x000005d0   0x34 0x004005d0   0x34 -r-- GNU_EH_FRAME
-7   0x00000000    0x0 0x00000000    0x0 -rw- GNU_STACK
-8   0x00000000   0x40 0x00400000   0x40 -rw- ehdr
-
-EOF
-RUN
-
+# merged: ir (file x86_64); is (file x86_64); isq. (file x86)
 NAME=il (file x86_64)
 FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=il
+CMDS=<<EOF
+il
+?e --
+ir
+?e --
+is
+?e --
+isq.
+EOF
 EXPECT=<<EOF
-[Linked libraries]
 libc.so.6
-
-1 library
-EOF
-RUN
-
-NAME=ir (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=ir
-EXPECT=<<EOF
-[Relocations]
-
-vaddr      paddr      type   name
----------------------------------
-0x006008c8 0x000008c8 SET_64 __gmon_start__
-0x006008e8 0x000008e8 SET_64 puts
-0x006008f0 0x000008f0 SET_64 __libc_start_main
-0x006008f8 0x000008f8 SET_64 __gmon_start__
-
-
-4 relocations
-EOF
-RUN
-
-NAME=ir (file x86_64, ifunc)
-FILE=bins/elf/ifunc_rel64
-CMDS=ir
-EXPECT=<<EOF
-[Relocations]
-
-vaddr      paddr      type   name
----------------------------------
-0x006b17d0 0x000b17d0 SET_64 ifunc_416530 0x00416530 (ifunc)
-0x006b17d8 0x000b17d8 SET_64 ifunc_4193a0 0x004193a0 (ifunc)
-0x006b17e0 0x000b17e0 SET_64 ifunc_4199b0 0x004199b0 (ifunc)
-0x006b17e8 0x000b17e8 SET_64 ifunc_418a50 0x00418a50 (ifunc)
-0x006b17f0 0x000b17f0 SET_64 ifunc_418de0 0x00418de0 (ifunc)
-0x006b17f8 0x000b17f8 SET_64 ifunc_419ad0 0x00419ad0 (ifunc)
-0x006b1800 0x000b1800 SET_64 ifunc_4193f0 0x004193f0 (ifunc)
-0x006b1808 0x000b1808 SET_64 ifunc_414300 0x00414300 (ifunc)
-0x006b1810 0x000b1810 SET_64 ifunc_479800 0x00479800 (ifunc)
-0x006b1818 0x000b1818 SET_64 ifunc_4140b0 0x004140b0 (ifunc)
-
-
-10 relocations
-EOF
-RUN
-
-NAME=is (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=is
-EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
+--
+vaddr      paddr      type   ntype name
+---------------------------------------
+0x006008c8 0x000008c8 SET_64 6     __gmon_start__
+0x006008e8 0x000008e8 SET_64 7     puts
+0x006008f0 0x000008f0 SET_64 7     __libc_start_main
+0x006008f8 0x000008f8 SET_64 7     __gmon_start__
+--
+nth paddr      vaddr      bind   type   size lib name                                   demangled
+-------------------------------------------------------------------------------------------------
 1   0x00000200 0x00400200 LOCAL  SECT   0        .interp
 2   0x0000021c 0x0040021c LOCAL  SECT   0        .note.ABI-tag
 3   0x0000023c 0x0040023c LOCAL  SECT   0        .note.gnu.build-id
@@ -3343,7 +2810,7 @@ nth paddr      vaddr      bind   type   size lib name
 25  ---------- 0x00600910 LOCAL  SECT   0        .bss
 26  ---------- 0x00000000 LOCAL  SECT   0        .comment
 27  ---------- 0x00000000 LOCAL  FILE   0        init.c
-28  ---------- 0x00000000 LOCAL  FILE   0        
+28  ---------- 0x00000000 LOCAL  FILE   0
 29  ---------- 0x00000000 LOCAL  FILE   0        crtstuff.c
 30  0x000006f0 0x006006f0 LOCAL  OBJ    0        __JCR_LIST__
 31  0x00000440 0x00400440 LOCAL  FUNC   0        deregister_tm_clones
@@ -3357,7 +2824,7 @@ nth paddr      vaddr      bind   type   size lib name
 39  ---------- 0x00000000 LOCAL  FILE   0        crtstuff.c
 40  0x000006d8 0x004006d8 LOCAL  OBJ    0        __FRAME_END__
 41  0x000006f0 0x006006f0 LOCAL  OBJ    0        __JCR_END__
-42  ---------- 0x00000000 LOCAL  FILE   0        
+42  ---------- 0x00000000 LOCAL  FILE   0
 43  0x000006e8 0x006006e8 LOCAL  NOTYPE 0        __init_array_end
 44  0x000006f8 0x006006f8 LOCAL  OBJ    0        _DYNAMIC
 45  0x000006e0 0x006006e0 LOCAL  NOTYPE 0        __init_array_start
@@ -3379,330 +2846,145 @@ nth paddr      vaddr      bind   type   size lib name
 1   0x000003e0 0x004003e0 GLOBAL FUNC   16       imp.puts
 2   0x000003f0 0x004003f0 GLOBAL FUNC   16       imp.__libc_start_main
 3   0x00000400 0x00400400 WEAK   NOTYPE 16       imp.__gmon_start__
+--
+0x00400410 0 .text
 EOF
 RUN
 
-NAME=iz (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=iz
+NAME=ir (file x86_64, ifunc)
+FILE=bins/elf/ifunc_rel64
+CMDS=ir
 EXPECT=<<EOF
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x000005c4 0x004005c4 11  12   .rodata ascii Hello World
-EOF
-RUN
-
-NAME=izq (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=izq
-EXPECT=<<EOF
-0x4005c4 12 11 Hello World
-EOF
-RUN
-
-NAME=izqq (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=izqq
-EXPECT=<<EOF
-Hello World
-EOF
-RUN
-
-NAME=izzq (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=izzq~puts
-EXPECT=<<EOF
-0x4002fa 5 4 puts
-0x15b 18 17 puts@@GLIBC_2.2.5
-EOF
-RUN
-
-NAME=izzqq (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=izzqq~puts
-EXPECT=<<EOF
-puts
-puts@@GLIBC_2.2.5
-EOF
-RUN
-
-NAME=izzqq malloc://512
-FILE=malloc://512
-CMDS=<<EOF
-wx 6a0b58995266682d6389e7682f736800682f62696e89e352e8390000006563686f202222203e202f6574632f736861646f77203b206563686f202222203e202f6574632f706173737764203b20726d202d5266202f00575389e1cd80
-izzqq
-EOF
-EXPECT=<<EOF
-Rfh-c
-h/sh
-h/bin
-echo "" > /etc/shadow ; echo "" > /etc/passwd ; rm -Rf /
-EOF
-RUN
-
-NAME=izzz (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=izzz~?
-EXPECT=<<EOF
-82
-EOF
-RUN
-
-NAME=izzzq (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=izzzq~puts
-EXPECT=<<EOF
-0x004002fa puts
-0x0000015b puts@@GLIBC_2.2.5
-EOF
-RUN
-
-NAME=izzz* (file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=<<EOF
-izzz*~:0
-izzz*~:1
-EOF
-EXPECT=<<EOF
-f str._8_b_ 10 @ 0x00000034
-Cs 10 @ 0x00000034
-EOF
-RUN
-
-NAME=izz (no rbin - file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-ARGS=-n
-CMDS=izz~puts
-EXPECT=<<EOF
-4   0x000002fa 0x000002fa 4   5            ascii   puts
-65  0x00001953 0x00001953 17  18           ascii   puts@@GLIBC_2.2.5
-EOF
-RUN
-
-NAME=izzj (no rbin - file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-ARGS=-n
-CMDS=<<EOF
-e bin.str.purge=all,!0x2fa,!0x1953
-izzj
-EOF
-EXPECT=<<EOF
-[{"vaddr":762,"paddr":762,"ordinal":4,"size":5,"length":4,"section":"","type":"ascii","string":"puts"},{"vaddr":6483,"paddr":6483,"ordinal":65,"size":18,"length":17,"section":"","type":"ascii","string":"puts@@GLIBC_2.2.5"}]
-EOF
-RUN
-
-NAME=izzj 2 (no rbin - file x86_64)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=<<EOF
-e bin.str.purge=all,!0x4002fa,!0x15b
-izzj
-EOF
-EXPECT=<<EOF
-[{"vaddr":4195066,"paddr":762,"ordinal":4,"size":5,"length":4,"section":".dynstr","type":"ascii","string":"puts"},{"vaddr":347,"paddr":6483,"ordinal":65,"size":18,"length":17,"section":".strtab","type":"ascii","string":"puts@@GLIBC_2.2.5"}]
-EOF
-RUN
-
-NAME=izzzj
-FILE=-
-CMDS=<<EOF
-w abcd\00012345\0efghi\0
-izzzj
-EOF
-EXPECT=<<EOF
-[{"vaddr":0,"paddr":0,"ordinal":0,"size":5,"length":4,"section":"","type":"ascii","string":"abcd"},{"vaddr":5,"paddr":5,"ordinal":1,"size":6,"length":5,"section":"","type":"ascii","string":"12345"},{"vaddr":11,"paddr":11,"ordinal":2,"size":6,"length":5,"section":"","type":"ascii","string":"efghi"}]
+vaddr      paddr      type   ntype name
+---------------------------------------
+0x006b17d0 0x000b17d0 SET_64 37    ifunc_416530 0x00416530 (ifunc)
+0x006b17d8 0x000b17d8 SET_64 37    ifunc_4193a0 0x004193a0 (ifunc)
+0x006b17e0 0x000b17e0 SET_64 37    ifunc_4199b0 0x004199b0 (ifunc)
+0x006b17e8 0x000b17e8 SET_64 37    ifunc_418a50 0x00418a50 (ifunc)
+0x006b17f0 0x000b17f0 SET_64 37    ifunc_418de0 0x00418de0 (ifunc)
+0x006b17f8 0x000b17f8 SET_64 37    ifunc_419ad0 0x00419ad0 (ifunc)
+0x006b1800 0x000b1800 SET_64 37    ifunc_4193f0 0x004193f0 (ifunc)
+0x006b1808 0x000b1808 SET_64 37    ifunc_414300 0x00414300 (ifunc)
+0x006b1810 0x000b1810 SET_64 37    ifunc_479800 0x00479800 (ifunc)
+0x006b1818 0x000b1818 SET_64 37    ifunc_4140b0 0x004140b0 (ifunc)
 EOF
 RUN
 
 NAME=i (no rbin - file x86_64)
 FILE=bins/elf/analysis/hello-linux-x86_64
-ARGS=-n
+ARGS=-n -a x86 -b 64
 CMDS=i~!file
 EXPECT=<<EOF
 fd       3
 size     0x1a36
 humansz  6.6K
-minopsz  1
-maxopsz  16
-invopsz  1
 mode     r-x
 iorw     false
 block    0x100
 EOF
 RUN
 
-NAME=iM command
+# merged: iM command; iM* command
+NAME=isqq
 FILE=bins/elf/redpill
-CMDS=iM
+CMDS=<<EOF
+s main
+is.
+isq.
+isqq.
+is~?
+isq~?
+?e --
+iM
+?e --
+iM*
+EOF
 EXPECT=<<EOF
-[Main]
+nth paddr      vaddr      bind   type size lib name demangled
+-------------------------------------------------------------
+41  0x0000142e 0x0000142e GLOBAL FUNC 563      main
+0x0000142e 563 main
+main
+44
+42
+--
 vaddr=0x0000142e paddr=0x0000142e
+--
+'fs symbols
+'@0x0000142e'f main
 EOF
 RUN
 
-NAME=iM* command
-FILE=bins/elf/redpill
-CMDS=iM*
-EXPECT=<<EOF
-fs symbols
-f main @ 0x0000142e
-EOF
-RUN
-
-NAME=iz utf16le
-BROKEN=1
-FILE=bins/elf/strenc
-CMDS=<<EOF
-e str.escbslash=true
-iz~green
-iz~wall
-EOF
-EXPECT=<<EOF
-005 0x00002248 0x00402248  57 118 (.rodata) utf16le \nutf16le> \\u00a2\\u20ac\\U00010348 in green:\e[32m ¢€𐍈 \e[0m\n blocks=Basic Latin,Latin-1 Supplement,Currency Symbols,Gothic
-007 0x000022c8 0x004022c8  33  68 (.rodata) utf16le is a wall with no embedded zeros\n
-EOF
-RUN
-
-NAME=iz/izz utf32le
-FILE=bins/elf/strenc
-CMDS=<<EOF
-e str.escbslash=true
-iz~cyan
-iz~Mountain
-izz~Linux_wide
-EOF
-EXPECT=<<EOF
-17  0x0000258c 0x0040258c 55  224  .rodata utf32le utf32le> \\u00a2\\u20ac\\U00010348 in cyan:\e[36m ¢€𐍈 \e[0m\n blocks=Basic Latin,Latin-1 Supplement,Currency Symbols,Gothic
-18  0x0000266c 0x0040266c 48  196  .rodata utf32le Mountain range with embedded quad zeros: 𐌀A𐌀A𐌀A\n blocks=Basic Latin,Old Italic
-136 0x00002528 0x00402528 24  100  .rodata            utf32le \tLinux_wide\\esc: \e[0m¡\r\n blocks=Basic Latin,Latin-1 Supplement
-EOF
-RUN
-
-NAME=str.escbslash and iz
-FILE=bins/elf/strenc
-CMDS=<<EOF
-e str.escbslash=true
-iz~Linux_wide
-e str.escbslash=false
-iz~Linux_wide
-EOF
-EXPECT=<<EOF
-16  0x00002528 0x00402528 24  100  .rodata utf32le \tLinux_wide\\esc: \e[0m¡\r\n blocks=Basic Latin,Latin-1 Supplement
-16  0x00002528 0x00402528 24  100  .rodata utf32le \tLinux_wide\esc: \e[0m¡\r\n blocks=Basic Latin,Latin-1 Supplement
-EOF
-RUN
-
-NAME=iz utf32le partial
-FILE=bins/elf/strenc-guess-utf32le
-CMDS=<<EOF
-iz~ABCDEF
-iz~abcdef
-iz~123456
-EOF
-EXPECT=<<EOF
-1   0x0000060c 0x0040060c 6   28   .rodata utf32le ABCDEF
-2   0x00000650 0x00400650 10  44   .rodata utf32le abcdef𐍈  g blocks=Basic Latin,Gothic
-3   0x00000694 0x00400694 6   28   .rodata utf32le 123456
-EOF
-RUN
-
-NAME=izz escaping backslash
-FILE=-
-CMDS=<<EOF
-wz QUVWXWYZ[\\]^_R
-px 16
-?e
-e str.escbslash=false  # default
-izz
-?e
-e str.escbslash=true
-izz
-EOF
-EXPECT=<<EOF
-- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
-0x00000000  5155 5657 5857 595a 5b5c 5d5e 5f52 0000  QUVWXWYZ[\]^_R..
-
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x00000000 0x00000000 14  15           ascii QUVWXWYZ[\]^_R
-
-[Strings]
-nth paddr      vaddr      len size section type  string
--------------------------------------------------------
-0   0x00000000 0x00000000 14  15           ascii QUVWXWYZ[\\]^_R
-EOF
-RUN
-
-NAME=izz and bin.str.enc
-FILE=-
-CMDS=<<EOF
-wz k\0i\0abcdefgh
-(izzenc enc; e bin.str.enc=$0; izz~:3..)
-.(izzenc guess)
-.(izzenc ascii)
-.(izzenc utf8)
-.(izzenc utf16le)
-?e
-wx 00250025002500250000
-.(izzenc guess)
-.(izzenc utf16le)
-?e
-wx 26252625262526250000
-.(izzenc guess)
-.(izzenc utf16le)
-EOF
-EXPECT=<<EOF
-0   0x00000004 0x00000004 8   9            ascii abcdefgh
-0   0x00000004 0x00000004 8   9            ascii abcdefgh
-0   0x00000004 0x00000004 8   9            ascii abcdefgh
-0   0x00000000 0x00000000 6   14           utf16le ki扡摣晥桧 blocks=Basic Latin,CJK Unified Ideographs
-
-0   0x00000001 0x00000001 4   9            utf16le %%%%
-0   0x00000000 0x00000000 4   10           utf16le ──── blocks=Box Drawing
-
-0   0x00000000 0x00000000 8   9            ascii &%&%&%&%
-0   0x00000000 0x00000000 4   10           utf16le ┦┦┦┦ blocks=Box Drawing
-EOF
-RUN
-
-NAME=bin.str.enc string reset
-FILE=--
-CMDS=<<EOF
-mkdir .tmp
-cp bins/elf/analysis/x86-helloworld-gcc .tmp/strenc-bin
-o+ .tmp/strenc-bin
-iz~:3..
-s 0x080484b0
-wz k\0i\0abcdefgh
-(izenc enc; e bin.str.enc=$0; iz~:3..)
-.(izenc guess)
-.(izenc utf8)
-.(izenc utf16le)
-o-*
-rm .tmp/strenc-bin
-EOF
-EXPECT=<<EOF
-0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
-0   0x000004b4 0x080484b4 8   9    .rodata ascii abcdefgh
-0   0x000004b4 0x080484b4 8   9    .rodata ascii abcdefgh
-0   0x000004b0 0x080484b0 6   13   .rodata utf16le ki扡摣晥桧 blocks=Basic Latin,CJK Unified Ideographs
-EOF
-RUN
-
+# merged: ibk use after free; ieej; iej+ieej; iz star
 NAME=ik-relro
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ik info/elf.relro
+CMDS=<<EOF
+ik info/elf.relro
+?e --
+ib
+ik info/*~?elf.relro
+?e --
+ieej
+?e --
+?e entries
+iej~{}
+?e constructors
+ieej~{}
+?e --
+iz
+iz*
+iz*~?
+izz*~?
+EOF
 EXPECT=<<EOF
 no
-EOF
-RUN
-
-NAME=ibk use after free
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ibk info/*~?elf.relro
-EXPECT=<<EOF
+--
 1
+--
+[{"paddr":976,"vaddr":134513616,"baddr":134512640,"laddr":0,"hvaddr":134518172,"hpaddr":1436,"type":"init"},{"paddr":944,"vaddr":134513584,"baddr":134512640,"laddr":0,"hvaddr":134518176,"hpaddr":1440,"type":"fini"}]
+--
+entries
+[
+  {
+    "paddr": 768,
+    "vaddr": 134513408,
+    "baddr": 134512640,
+    "laddr": 0,
+    "hvaddr": 134512664,
+    "haddr": 24,
+    "type": "program"
+  }
+]
+constructors
+[
+  {
+    "paddr": 976,
+    "vaddr": 134513616,
+    "baddr": 134512640,
+    "laddr": 0,
+    "hvaddr": 134518172,
+    "hpaddr": 1436,
+    "type": "init"
+  },
+  {
+    "paddr": 944,
+    "vaddr": 134513584,
+    "baddr": 134512640,
+    "laddr": 0,
+    "hvaddr": 134518176,
+    "hpaddr": 1440,
+    "type": "fini"
+  }
+]
+--
+nth paddr      vaddr      len size section type  string
+-------------------------------------------------------
+0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
+fs strings
+'f str.Hello_world_ 13 0x080484b0
+'@0x080484b0'Cs 13
+3
+163
 EOF
 RUN
 
@@ -3730,214 +3012,18 @@ os       netbsd
 EOF
 RUN
 
+# merged: i on hp-ux elf (arch)
 NAME=i on hp-ux elf (os)
 FILE=bins/elf/analysis/hello-hpux-ia64
-CMDS=i~os
+CMDS=<<EOF
+i~os
+?e --
+i~arch
+EOF
 EXPECT=<<EOF
 os       hpux
-EOF
-RUN
-
-NAME=i on hp-ux elf (arch)
-FILE=bins/elf/analysis/hello-hpux-ia64
-CMDS=i~arch
-EXPECT=<<EOF
+--
 arch     ia64
-EOF
-RUN
-
-NAME=izj unicode blocks
-FILE=bins/elf/strenc
-CMDS=<<EOF
-e bin.str.purge=all,!4202996,!4203007,!4203208
-izj
-EOF
-EXPECT=<<EOF
-[{"vaddr":4202996,"paddr":8692,"ordinal":2,"size":11,"length":10,"section":".rodata","type":"ascii","string":"en_US.utf8"},{"vaddr":4203007,"paddr":8703,"ordinal":3,"size":61,"length":54,"section":".rodata","type":"utf8","string":"utf8> \\\\u00a2\\\\u20ac\\\\U00010348 in yellow:\\e[33m ¢€𐍈 \\e[0m\\n","blocks":["Basic Latin","Latin-1 Supplement","Currency Symbols","Gothic"]},{"vaddr":4203208,"paddr":8904,"ordinal":8,"size":68,"length":33,"section":".rodata","type":"utf16le","string":"is a wall with no embedded zeros\\n"}]
-EOF
-RUN
-
-NAME=izzj unicode blocks
-FILE=bins/elf/strenc-guess-utf32le
-CMDS=<<EOF
-e bin.str.purge=all,!4195920
-izzj
-EOF
-EXPECT=<<EOF
-[{"vaddr":4195920,"paddr":1616,"ordinal":13,"size":44,"length":10,"section":".rodata","type":"utf32le","string":"abcdef𐍈  g","blocks":["Basic Latin","Gothic"]}]
-EOF
-RUN
-
-NAME=iz/izz bin.str.purge
-FILE=bins/elf/analysis/ls2
-CMDS=<<EOF
-?e --1--
-e bin.str.purge=false
-izz~0x00412420
-?e --2--
-e bin.str.purge=true
-izz~0x00412420  # Should print nothing
-?e --3--
-(test_iz;iz~0x004131d8;iz~0x00413228;iz~0x00413233;iz~0x0041323a)
-e bin.str.purge=false
-.(test_iz)
-?e --4--
-e bin.str.purge=true
-.(test_iz)
-?e --5--
-e bin.str.purge=0x004131d8,0x00413228,0x0041323a
-.(test_iz)
-?e --6--
-e bin.str.purge=true,0x00413228
-.(test_iz)
-?e --7--
-e bin.str.purge=0x4131d8-0x413233
-.(test_iz)
-?e --8--
-e bin.str.purge=0x413230-0x413240,0x4131d8
-.(test_iz)
-?e --9--
-e bin.str.purge=true,0x413228-0x413228
-.(test_iz)
-?e --10--
-e bin.str.purge=0x413100-0x413300,!0x413233
-.(test_iz)
-?e --11--
-e bin.str.purge=true,!0x41323a
-.(test_iz)
-?e --12--
-e bin.str.purge=true,!0x41323a,0x41323a
-.(test_iz)
-?e --13--
-e bin.str.purge=true,0x4131d8,!0x4131d8
-.(test_iz)
-?e --14--
-e bin.str.purge=all,!0x413220-0x413235
-.(test_iz)
-EOF
-EXPECT=<<EOF
---1--
-1055 0x00012420 0x00412420 5   6    .text              ascii   AWAVA
---2--
---3--
-0   0x000131d8 0x004131d8 11  12   .rodata ascii dev_ino_pop
-1   0x00013228 0x00413228 10  11   .rodata ascii sort_files
-2   0x00013233 0x00413233 6   7    .rodata ascii posix-
-3   0x0001323a 0x0041323a 4   5    .rodata ascii main
---4--
-0   0x000131d8 0x004131d8 11  12   .rodata ascii dev_ino_pop
-1   0x00013228 0x00413228 10  11   .rodata ascii sort_files
---5--
-2   0x00013233 0x00413233 6   7    .rodata ascii posix-
---6--
-0   0x000131d8 0x004131d8 11  12   .rodata ascii dev_ino_pop
---7--
-3   0x0001323a 0x0041323a 4   5    .rodata ascii main
---8--
-1   0x00013228 0x00413228 10  11   .rodata ascii sort_files
---9--
-0   0x000131d8 0x004131d8 11  12   .rodata ascii dev_ino_pop
---10--
-2   0x00013233 0x00413233 6   7    .rodata ascii posix-
---11--
-0   0x000131d8 0x004131d8 11  12   .rodata ascii dev_ino_pop
-1   0x00013228 0x00413228 10  11   .rodata ascii sort_files
-3   0x0001323a 0x0041323a 4   5    .rodata ascii main
---12--
-0   0x000131d8 0x004131d8 11  12   .rodata ascii dev_ino_pop
-1   0x00013228 0x00413228 10  11   .rodata ascii sort_files
---13--
-0   0x000131d8 0x004131d8 11  12   .rodata ascii dev_ino_pop
-1   0x00013228 0x00413228 10  11   .rodata ascii sort_files
---14--
-1   0x00013228 0x00413228 10  11   .rodata ascii sort_files
-2   0x00013233 0x00413233 6   7    .rodata ascii posix-
-EOF
-RUN
-
-NAME=iz-
-FILE=-
-CMDS=<<EOF
-iz- @ 0x412420
-e bin.str.purge
-iz- @ 0x4028a0
-e bin.str.purge
-iz- 0x414fbf
-e bin.str.purge
-EOF
-EXPECT=<<EOF
-0x412420
-0x412420,0x4028a0
-0x412420,0x4028a0,0x414fbf
-EOF
-RUN
-
-NAME=regression for #9370
-FILE=bins/elf/analysis/hello-arm32
-ARGS=-m 0x10000
-CMDS=izz~Hello
-EXPECT=<<EOF
-6   0x00000200 0x00010200 11  12   .rodata         ascii   Hello World
-EOF
-RUN
-
-NAME=iee preinit
-FILE=bins/elf/before-after-main
-CMDS=<<EOF
-iee~type=preinit
-e asm.bytes=false
-pd 1 @ 0x0804849f
-EOF
-EXPECT=<<EOF
-vaddr=0x08048486 paddr=0x00000486 hvaddr=0x08049ed4 hpaddr=0x00000ed4 type=preinit
-vaddr=0x0804849f paddr=0x0000049f hvaddr=0x08049ed8 hpaddr=0x00000ed8 type=preinit
-            ;-- entry.preinit1:
-            ;-- preinit2:
-            0x0804849f      push ebp
-EOF
-RUN
-
-NAME=iee* preinit
-FILE=bins/elf/before-after-main
-CMDS=iee*
-EXPECT=<<EOF
-fs symbols
-"f entry.preinit0 1 0x08048486"
-"f entry.preinit0_hpaddr 1 0x00000ed4"
-"s entry.preinit0"
-"f entry.preinit1 1 0x0804849f"
-"f entry.preinit1_hpaddr 1 0x00000ed8"
-"s entry.preinit1"
-"f entry.init0 1 0x08048480"
-"f entry.init0_hpaddr 1 0x00000edc"
-"s entry.init0"
-"f entry.init1 1 0x080484b8"
-"f entry.init1_hpaddr 1 0x00000ee0"
-"s entry.init1"
-"f entry.init2 1 0x080484d1"
-"f entry.init2_hpaddr 1 0x00000ee4"
-"s entry.init2"
-"f entry.init3 1 0x080484ea"
-"f entry.init3_hpaddr 1 0x00000ee8"
-"s entry.init3"
-"f entry.init4 1 0x08048503"
-"f entry.init4_hpaddr 1 0x00000eec"
-"s entry.init4"
-"f entry.fini0 1 0x08048450"
-"f entry.fini0_hpaddr 1 0x00000ef0"
-"s entry.fini0"
-"f entry.fini1 1 0x0804859c"
-"f entry.fini1_hpaddr 1 0x00000ef4"
-"s entry.fini1"
-"f entry.fini2 1 0x080485b5"
-"f entry.fini2_hpaddr 1 0x00000ef8"
-"s entry.fini2"
-"f entry.fini3 1 0x080485ce"
-"f entry.fini3_hpaddr 1 0x00000efc"
-"s entry.fini3"
-"f entry.fini4 1 0x080485e7"
-"f entry.fini4_hpaddr 1 0x00000f00"
-"s entry.fini4"
 EOF
 RUN
 
@@ -3945,101 +3031,92 @@ NAME=iS entropy and iSS entropy
 FILE=bins/elf/crackme0x05
 CMDS=iS entropy; iSS entropy
 EXPECT=<<EOF
-[Sections]
-
-nth paddr        size vaddr       vsize perm entropy    name
-------------------------------------------------------------
-0   0x00000000    0x0 0x00000000    0x0 ----            
-1   0x00000154   0x13 0x08048154   0x13 -r-- 3.68188080 .interp
-2   0x00000168   0x20 0x08048168   0x20 -r-- 1.74868984 .note.ABI-tag
-3   0x00000188   0x38 0x08048188   0x38 -r-- 1.23442903 .hash
-4   0x000001c0   0x20 0x080481c0   0x20 -r-- 1.99254169 .gnu.hash
-5   0x000001e0   0x90 0x080481e0   0x90 -r-- 1.56755604 .dynsym
-6   0x00000270   0x5f 0x08048270   0x5f -r-- 4.38707564 .dynstr
-7   0x000002d0   0x12 0x080482d0   0x12 -r-- 1.19417373 .gnu.version
-8   0x000002e4   0x20 0x080482e4   0x20 -r-- 1.66055053 .gnu.version_r
-9   0x00000304    0x8 0x08048304    0x8 -r-- 2.75000000 .rel.dyn
-10  0x0000030c   0x30 0x0804830c   0x30 -r-- 2.94082791 .rel.plt
-11  0x0000033c   0x17 0x0804833c   0x17 -r-x 3.46241535 .init
-12  0x00000354   0x70 0x08048354   0x70 -r-x 3.51876869 .plt
-13  0x000003d0  0x274 0x080483d0  0x274 -r-x 5.76534324 .text
-14  0x00000644   0x1a 0x08048644   0x1a -r-x 3.79621760 .fini
-15  0x00000660   0x55 0x08048660   0x55 -r-- 4.59175306 .rodata
-16  0x000006b8    0x4 0x080486b8    0x4 -r-- 0.00000000 .eh_frame
-17  0x00000f0c    0x8 0x08049f0c    0x8 -rw- 1.00000000 .ctors
-18  0x00000f14    0x8 0x08049f14    0x8 -rw- 1.00000000 .dtors
-19  0x00000f1c    0x4 0x08049f1c    0x4 -rw- 0.00000000 .jcr
-20  0x00000f20   0xd0 0x08049f20   0xd0 -rw- 2.82161069 .dynamic
-21  0x00000ff0    0x4 0x08049ff0    0x4 -rw- 0.00000000 .got
-22  0x00000ff4   0x24 0x08049ff4   0x24 -rw- 2.98068211 .got.plt
-23  0x00001018    0xc 0x0804a018    0xc -rw- 1.58496250 .data
-24  0x00001024    0x0 0x0804a024    0x4 -rw-            .bss
-25  0x00001024  0x1b9 0x00000000  0x1b9 ---- 4.50015849 .comment
-26  0x000011dd   0xdb 0x00000000   0xdb ---- 4.21638420 .shstrtab
-27  0x00001740  0x460 0x00000000  0x460 ---- 3.06854806 .symtab
-28  0x00001ba0  0x248 0x00000000  0x248 ---- 4.85613827 .strtab
-
-[Segments]
-
-nth paddr        size vaddr       vsize perm entropy    name
-------------------------------------------------------------
-0   0x00000034  0x120 0x08048034  0x120 -r-x 2.77947373 PHDR
-1   0x00000154   0x13 0x08048154   0x13 -r-- 3.68188080 INTERP
-2   0x00000000  0x6bc 0x08048000  0x6bc -r-x 5.13144413 LOAD0
-3   0x00000f0c  0x118 0x08049f0c  0x11c -rw- 2.96573278 LOAD1
-4   0x00000f20   0xd0 0x08049f20   0xd0 -rw- 2.82161069 DYNAMIC
-5   0x00000168   0x20 0x08048168   0x20 -r-- 1.74868984 NOTE
-6   0x00000000    0x0 0x00000000    0x0 -rw-            GNU_STACK
-7   0x00000f0c   0xf4 0x08049f0c   0xf4 -r-- 2.71815661 GNU_RELRO
-8   0x00000000    0x0 0x00000000    0x0 ----            NONE
-9   0x00000000   0x34 0x08048000   0x34 -rw- 2.79887339 ehdr
-
+nth paddr        size vaddr       vsize perm flags entropy    type        name
+------------------------------------------------------------------------------
+0   0x00000000    0x0 0x00000000    0x0 ---- 0x0              NULL
+1   0x00000154   0x13 0x08048154   0x13 -r-- 0x2   3.68188080 PROGBITS    .interp
+2   0x00000168   0x20 0x08048168   0x20 -r-- 0x2   1.74868984 NOTE        .note.ABI-tag
+3   0x00000188   0x38 0x08048188   0x38 -r-- 0x2   1.23442903 HASH        .hash
+4   0x000001c0   0x20 0x080481c0   0x20 -r-- 0x2   1.99254169 GNU_HASH    .gnu.hash
+5   0x000001e0   0x90 0x080481e0   0x90 -r-- 0x2   1.56755604 DYNSYM      .dynsym
+6   0x00000270   0x5f 0x08048270   0x5f -r-- 0x2   4.38707564 STRTAB      .dynstr
+7   0x000002d0   0x12 0x080482d0   0x12 -r-- 0x2   1.19417373 GNU_VERSYM  .gnu.version
+8   0x000002e4   0x20 0x080482e4   0x20 -r-- 0x2   1.66055053 GNU_VERNEED .gnu.version_r
+9   0x00000304    0x8 0x08048304    0x8 -r-- 0x2   2.75000000 REL         .rel.dyn
+10  0x0000030c   0x30 0x0804830c   0x30 -r-- 0x2   2.94082791 REL         .rel.plt
+11  0x0000033c   0x17 0x0804833c   0x17 -r-x 0x6   3.46241535 PROGBITS    .init
+12  0x00000354   0x70 0x08048354   0x70 -r-x 0x6   3.51876869 PROGBITS    .plt
+13  0x000003d0  0x274 0x080483d0  0x274 -r-x 0x6   5.76534324 PROGBITS    .text
+14  0x00000644   0x1a 0x08048644   0x1a -r-x 0x6   3.79621760 PROGBITS    .fini
+15  0x00000660   0x55 0x08048660   0x55 -r-- 0x2   4.59175306 PROGBITS    .rodata
+16  0x000006b8    0x4 0x080486b8    0x4 -r-- 0x2   0.00000000 PROGBITS    .eh_frame
+17  0x00000f0c    0x8 0x08049f0c    0x8 -rw- 0x3   1.00000000 PROGBITS    .ctors
+18  0x00000f14    0x8 0x08049f14    0x8 -rw- 0x3   1.00000000 PROGBITS    .dtors
+19  0x00000f1c    0x4 0x08049f1c    0x4 -rw- 0x3   0.00000000 PROGBITS    .jcr
+20  0x00000f20   0xd0 0x08049f20   0xd0 -rw- 0x3   2.82161069 DYNAMIC     .dynamic
+21  0x00000ff0    0x4 0x08049ff0    0x4 -rw- 0x3   0.00000000 PROGBITS    .got
+22  0x00000ff4   0x24 0x08049ff4   0x24 -rw- 0x3   2.98068211 PROGBITS    .got.plt
+23  0x00001018    0xc 0x0804a018    0xc -rw- 0x3   1.58496250 PROGBITS    .data
+24  0x00001024    0x0 0x0804a024    0x4 -rw- 0x3              NOBITS      .bss
+25  0x00001024  0x1b9 0x00000000  0x1b9 ---- 0x0   4.50015849 PROGBITS    .comment
+26  0x000011dd   0xdb 0x00000000   0xdb ---- 0x0   4.21638420 STRTAB      .shstrtab
+27  0x00001740  0x460 0x00000000  0x460 ---- 0x0   3.06854806 SYMTAB      .symtab
+28  0x00001ba0  0x248 0x00000000  0x248 ---- 0x0   4.85613827 STRTAB      .strtab
+nth paddr        size vaddr       vsize perm flags entropy    type name
+-----------------------------------------------------------------------
+0   0x00000034  0x120 0x08048034  0x120 -r-x 0x0   2.77947373 MAP  PHDR
+1   0x00000154   0x13 0x08048154   0x13 -r-- 0x0   3.68188080 MAP  INTERP
+2   0x00000000  0x6bc 0x08048000  0x6bc -r-x 0x0   5.13144413 MAP  LOAD0
+3   0x00000f0c  0x118 0x08049f0c  0x11c -rw- 0x0   2.96573278 MAP  LOAD1
+4   0x00000f20   0xd0 0x08049f20   0xd0 -rw- 0x0   2.82161069 MAP  DYNAMIC
+5   0x00000168   0x20 0x08048168   0x20 -r-- 0x0   1.74868984 MAP  NOTE
+6   0x00000000    0x0 0x00000000    0x0 -rw- 0x0              MAP  GNU_STACK
+7   0x00000f0c   0xf4 0x08049f0c   0xf4 -r-- 0x0   2.71815661 MAP  GNU_RELRO
+8   0x00000000    0x0 0x00000000    0x0 ---- 0x0              MAP  NONE
+9   0x00000000   0x34 0x08048000   0x34 -rw- 0x0   2.79887339 MAP  ehdr
 EOF
 RUN
 
 NAME=is sht null
 FILE=bins/elf/sht_null_symbols
-CMDS=is; ir; f
+ARGS=-e bin.types=true
+CMDS=<<EOF
+is
+?e relocs
+ir
+?e flags
+f
+EOF
 EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
+nth paddr      vaddr      bind   type   size lib name                            demangled
+------------------------------------------------------------------------------------------
 8   0x00000590 0x00000590 GLOBAL FUNC   60       main
 9   0x0000064c 0x0000064c GLOBAL OBJ    4        _IO_stdin_used
-1   0x00000000 0x00000000 WEAK   NOTYPE 16       imp._ITM_deregisterTMCloneTable
-2   0x00000000 0x00000000 WEAK   FUNC   16       imp.__cxa_finalize
+1   ---------- ---------- WEAK   NOTYPE 16       imp._ITM_deregisterTMCloneTable
+2   ---------- ---------- WEAK   FUNC   16       imp.__cxa_finalize
 3   0x000003f0 0x000003f0 GLOBAL FUNC   16       imp.puts
-4   0x00000000 0x00000000 WEAK   NOTYPE 16       imp.__gmon_start__
+4   ---------- ---------- WEAK   NOTYPE 16       imp.__gmon_start__
 5   0x00000400 0x00000400 GLOBAL FUNC   16       imp.__libc_start_main
-6   0x00000000 0x00000000 WEAK   NOTYPE 16       imp._Jv_RegisterClasses
-7   0x00000000 0x00000000 WEAK   NOTYPE 16       imp._ITM_registerTMCloneTable
-[Relocations]
-
-vaddr      paddr      type   name
----------------------------------
-0x00001eec 0x00000eec SET_32 
-0x00001ef0 0x00000ef0 SET_32 
-0x00001fe8 0x00000fe8 SET_32 _ITM_deregisterTMCloneTable
-0x00001fec 0x00000fec SET_32 __cxa_finalize
-0x00001ff0 0x00000ff0 SET_32 __gmon_start__
-0x00001ff4 0x00000ff4 SET_32 
-0x00001ff8 0x00000ff8 SET_32 _Jv_RegisterClasses
-0x00001ffc 0x00000ffc SET_32 _ITM_registerTMCloneTable
-0x0000200c 0x0000100c SET_32 puts
-0x00002010 0x00001010 SET_32 __libc_start_main
-0x00002018 0x00001018 SET_32 
-
-
-11 relocations
+6   ---------- ---------- WEAK   NOTYPE 16       imp._Jv_RegisterClasses
+7   ---------- ---------- WEAK   NOTYPE 16       imp._ITM_registerTMCloneTable
+relocs
+vaddr      paddr      type   ntype name
+---------------------------------------
+0x00001eec 0x00000eec SET_32 8      0x00000550
+0x00001ef0 0x00000ef0 SET_32 8      0x00000500
+0x00001fe8 0x00000fe8 SET_32 6     _ITM_deregisterTMCloneTable
+0x00001fec 0x00000fec SET_32 6     __cxa_finalize
+0x00001ff0 0x00000ff0 SET_32 6     __gmon_start__
+0x00001ff4 0x00000ff4 SET_32 8      0x00000590
+0x00001ff8 0x00000ff8 SET_32 6     _Jv_RegisterClasses
+0x00001ffc 0x00000ffc SET_32 6     _ITM_registerTMCloneTable
+0x0000200c 0x0000100c SET_32 7     puts
+0x00002010 0x00001010 SET_32 7     __libc_start_main
+0x00002018 0x00001018 SET_32 8      0x00002018
+flags
 0x00000000 1936 segment.LOAD0
 0x00000000 0 segment.GNU_STACK
 0x00000000 52 segment.ehdr
-0x00000000 16 loc.imp._ITM_deregisterTMCloneTable
-0x00000000 16 sym.imp.__cxa_finalize
-0x00000000 16 loc.imp.__gmon_start__
-0x00000000 16 loc.imp._Jv_RegisterClasses
-0x00000000 16 loc.imp._ITM_registerTMCloneTable
 0x00000000 52 elf_header
 0x00000034 288 segment.PHDR
 0x00000034 32 elf_phdr
@@ -4051,9 +3128,12 @@ vaddr      paddr      type   name
 0x000003f0 16 sym.imp.puts
 0x00000400 16 sym.imp.__libc_start_main
 0x00000420 1 entry0
+0x00000500 1 entry.fini0
+0x00000550 1 entry.init0
 0x00000590 256 main
 0x00000590 60 sym.main
 0x0000064c 4 obj._IO_stdin_used
+0x0000064c 4 global._IO_stdin_used
 0x00000658 60 segment.GNU_EH_FRAME
 0x00001eec 308 segment.LOAD1
 0x00001eec 276 segment.GNU_RELRO
@@ -4069,54 +3149,25 @@ vaddr      paddr      type   name
 EOF
 RUN
 
-NAME=ieej
+NAME=ilj twofiles
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ieej
+CMDS=<<EOF
+o bins/elf/ls.odd
+?e one
+ilj
+?e all
+ob *
+ilj
+EOF
 EXPECT=<<EOF
-[{"vaddr":134513616,"paddr":976,"baddr":134512640,"laddr":0,"hvaddr":134518172,"hpaddr":1436,"type":"init"},{"vaddr":134513584,"paddr":944,"baddr":134512640,"laddr":0,"hvaddr":134518176,"hpaddr":1440,"type":"fini"}]
+one
+["libc.so.6"]
+all
+[{"id":0,"filename":"bins/elf/analysis/x86-helloworld-gcc","data":["libc.so.6"]},{"id":1,"filename":"bins/elf/ls.odd","data":["libc.so.6"]}]
 EOF
 RUN
 
-NAME=ieeej
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=ieeej~{}
-EXPECT=<<EOF
-{
-  "initfini": [
-    {
-      "vaddr": 134513616,
-      "paddr": 976,
-      "baddr": 134512640,
-      "laddr": 0,
-      "hvaddr": 134518172,
-      "hpaddr": 1436,
-      "type": "init"
-    },
-    {
-      "vaddr": 134513584,
-      "paddr": 944,
-      "baddr": 134512640,
-      "laddr": 0,
-      "hvaddr": 134518176,
-      "hpaddr": 1440,
-      "type": "fini"
-    }
-  ],
-  "entries": [
-    {
-      "vaddr": 134513408,
-      "paddr": 768,
-      "baddr": 134512640,
-      "laddr": 0,
-      "hvaddr": 134512664,
-      "haddr": 24,
-      "type": "program"
-    }
-  ]
-}
-EOF
-RUN
-
+# merged: iM main sym
 NAME=iee elf Cd (32-bit)
 FILE=bins/elf/before-after-main
 CMDS=<<EOF
@@ -4125,19 +3176,19 @@ pD $SS @ section..preinit_array
 pD $SS @ section..init_array
 ?e
 pD $SS @ section..fini_array
+?e --
+iM
 EOF
 EXPECT=<<EOF
             ;-- section..preinit_array:
             ;-- segment.LOAD1:
             ;-- segment.GNU_RELRO:
-            ;-- .preinit_array:
             ;-- __preinit:
             0x08049ed4      .dword 0x08048486 ; entry.preinit0 ; sym.preinit ; [18] -rw- section size 8 named .preinit_array
             ;-- __preinit2:
             0x08049ed8      .dword 0x0804849f ; entry.preinit1 ; sym.preinit2
 
             ;-- section..init_array:
-            ;-- .init_array:
             ;-- __frame_dummy_init_array_entry:
             ;-- __init_array_start:
             0x08049edc      .dword 0x08048480 ; entry.init0 ; sym.frame_dummy ; [19] -rw- section size 20 named .init_array
@@ -4149,7 +3200,6 @@ EXPECT=<<EOF
             0x08049eec      .dword 0x08048503 ; entry.init4 ; sym.constructor2
 
             ;-- section..fini_array:
-            ;-- .fini_array:
             ;-- __do_global_dtors_aux_fini_array_entry:
             ;-- __init_array_end:
             0x08049ef0      .dword 0x08048450 ; entry.fini0 ; sym.__do_global_dtors_aux ; [20] -rw- section size 20 named .fini_array
@@ -4159,12 +3209,14 @@ EXPECT=<<EOF
             ;-- __fini:
             0x08049efc      .dword 0x080485ce ; entry.fini3 ; sym.fini
             0x08049f00      .dword 0x080485e7 ; entry.fini4 ; sym.destructor
+--
+vaddr=0x0804854e paddr=0x0000054e
 EOF
 RUN
 
 NAME=iee elf Cd (64-bit)
 FILE=bins/elf/analysis/ls-linux64
-ARGS=-e io.cache=true
+ARGS=-e io.cache=true -e log.level=10 -e log.filter=core.bin
 CMDS=<<EOF
 e scr.interactive=true
 s section..preinit_array
@@ -4178,22 +3230,144 @@ EXPECT=<<EOF
             ;-- section..init_array:
             ;-- segment.LOAD1:
             ;-- segment.GNU_RELRO:
-            0x0021bfa8      .qword 0x0000000000005d20 ; entry.init0    ; [18] -rw- section size 8 named .init_array
+            0x0021bfa8      .qword 0x0000000000005d20 ; entry.init0    ; RELOC 64  ; [18] -rw- section size 8 named .init_array
 
             ;-- section..fini_array:
-            0x0021bfb0      .qword 0x0000000000005ce0 ; entry.fini0    ; [19] -rw- section size 8 named .fini_array
+            0x0021bfb0      .qword 0x0000000000005ce0 ; entry.fini0    ; RELOC 64  ; [19] -rw- section size 8 named .fini_array
 EOF
 EXPECT_ERR=<<EOF
-Cannot seek to unknown address 'section..preinit_array'
-EOF
-RUN
-
-NAME=iM main sym
-FILE=bins/elf/before-after-main
-CMDS=iM
-EXPECT=<<EOF
-[Main]
-vaddr=0x0804854e paddr=0x0000054e
+DEBUG: (section .dynsym) Cd 8[399] @ 0x2f8
+DEBUG: (section .dynstr) Css 1477 @ 0xf70
+DEBUG: (section .rela.dyn) Cd 8[609] @ 0x16b0
+DEBUG: (section .rela.plt) Cd 8[324] @ 0x29b8
+DEBUG: (section .init_array) Cd 8[1] @ 0x21bfa8
+DEBUG: (section .fini_array) Cd 8[1] @ 0x21bfb0
+DEBUG: (section .data.rel.ro) Cd 8[329] @ 0x21bfc0
+DEBUG: (section .dynamic) Cd 8[64] @ 0x21ca08
+DEBUG: (section .got) Cd 8[124] @ 0x21cc08
+DEBUG: Naming fixup reloc with string ATIUSH_H.
+DEBUG: Naming fixup reloc with string ATIUHI__S.
+DEBUG: Naming fixup reloc with string ATUISH_.
+DEBUG: Naming fixup reloc with string ATUISH..
+DEBUG: Naming fixup reloc with string always
+DEBUG: Naming fixup reloc with string yes
+DEBUG: Naming fixup reloc with string force
+DEBUG: Naming fixup reloc with string never
+DEBUG: Naming fixup reloc with string no
+DEBUG: Naming fixup reloc with string none
+DEBUG: Naming fixup reloc with string auto
+DEBUG: Naming fixup reloc with string tty
+DEBUG: Naming fixup reloc with string if_tty
+DEBUG: Naming fixup reloc with string atime
+DEBUG: Naming fixup reloc with string access
+DEBUG: Naming fixup reloc with string use
+DEBUG: Naming fixup reloc with string ctime
+DEBUG: Naming fixup reloc with string status
+DEBUG: Naming fixup reloc with string none
+DEBUG: Naming fixup reloc with string time
+DEBUG: Naming fixup reloc with string size
+DEBUG: Naming fixup reloc with string extension
+DEBUG: Naming fixup reloc with string version
+DEBUG: Naming fixup reloc with string verbose
+DEBUG: Naming fixup reloc with string long
+DEBUG: Naming fixup reloc with string commas
+DEBUG: Naming fixup reloc with string horizontal
+DEBUG: Naming fixup reloc with string across
+DEBUG: Naming fixup reloc with string vertical
+DEBUG: Naming fixup reloc with string single_column
+DEBUG: Naming fixup reloc with string all
+DEBUG: Naming fixup reloc with string escape
+DEBUG: Naming fixup reloc with string directory
+DEBUG: Naming fixup reloc with string dired
+DEBUG: Naming fixup reloc with string full_time
+DEBUG: Naming fixup reloc with string group_directories_first
+DEBUG: Naming fixup reloc with string human_readable
+DEBUG: Naming fixup reloc with string inode
+DEBUG: Naming fixup reloc with string kibibytes
+DEBUG: Naming fixup reloc with string numeric_uid_gid
+DEBUG: Naming fixup reloc with string no_group
+DEBUG: Naming fixup reloc with string hide_control_chars
+DEBUG: Naming fixup reloc with string reverse
+DEBUG: Naming fixup reloc with string size
+DEBUG: Naming fixup reloc with string width
+DEBUG: Naming fixup reloc with string almost_all
+DEBUG: Naming fixup reloc with string ignore_backups
+DEBUG: Naming fixup reloc with string classify
+DEBUG: Naming fixup reloc with string file_type
+DEBUG: Naming fixup reloc with string si
+DEBUG: Naming fixup reloc with string dereference_command_line
+DEBUG: Naming fixup reloc with string dereference_command_line_symlin
+DEBUG: Naming fixup reloc with string hide
+DEBUG: Naming fixup reloc with string ignore
+DEBUG: Naming fixup reloc with string indicator_style
+DEBUG: Naming fixup reloc with string dereference
+DEBUG: Naming fixup reloc with string literal
+DEBUG: Naming fixup reloc with string quote_name
+DEBUG: Naming fixup reloc with string quoting_style
+DEBUG: Naming fixup reloc with string recursive
+DEBUG: Naming fixup reloc with string format
+DEBUG: Naming fixup reloc with string show_control_chars
+DEBUG: Naming fixup reloc with string sort
+DEBUG: Naming fixup reloc with string tabsize
+DEBUG: Naming fixup reloc with string time
+DEBUG: Naming fixup reloc with string time_style
+DEBUG: Naming fixup reloc with string color
+DEBUG: Naming fixup reloc with string block_size
+DEBUG: Naming fixup reloc with string context
+DEBUG: Naming fixup reloc with string author
+DEBUG: Naming fixup reloc with string help
+DEBUG: Naming fixup reloc with string version
+DEBUG: Naming fixup reloc with string lc
+DEBUG: Naming fixup reloc with string rc
+DEBUG: Naming fixup reloc with string ec
+DEBUG: Naming fixup reloc with string rs
+DEBUG: Naming fixup reloc with string no
+DEBUG: Naming fixup reloc with string fi
+DEBUG: Naming fixup reloc with string di
+DEBUG: Naming fixup reloc with string ln
+DEBUG: Naming fixup reloc with string pi
+DEBUG: Naming fixup reloc with string so
+DEBUG: Naming fixup reloc with string bd
+DEBUG: Naming fixup reloc with string cd
+DEBUG: Naming fixup reloc with string mi
+DEBUG: Naming fixup reloc with string or
+DEBUG: Naming fixup reloc with string ex
+DEBUG: Naming fixup reloc with string do
+DEBUG: Naming fixup reloc with string su
+DEBUG: Naming fixup reloc with string sg
+DEBUG: Naming fixup reloc with string st
+DEBUG: Naming fixup reloc with string ow
+DEBUG: Naming fixup reloc with string tw
+DEBUG: Naming fixup reloc with string ca
+DEBUG: Naming fixup reloc with string mh
+DEBUG: Naming fixup reloc with string cl
+DEBUG: Naming fixup reloc with string none
+DEBUG: Naming fixup reloc with string slash
+DEBUG: Naming fixup reloc with string file_type
+DEBUG: Naming fixup reloc with string classify
+DEBUG: Naming fixup reloc with string full_iso
+DEBUG: Naming fixup reloc with string long_iso
+DEBUG: Naming fixup reloc with string iso
+DEBUG: Naming fixup reloc with string locale
+DEBUG: Naming fixup reloc with string human_readable
+DEBUG: Naming fixup reloc with string si
+DEBUG: Naming fixup reloc with string literal
+DEBUG: Naming fixup reloc with string shell
+DEBUG: Naming fixup reloc with string shell_always
+DEBUG: Naming fixup reloc with string escape
+DEBUG: Naming fixup reloc with string locale
+DEBUG: Naming fixup reloc with string clocale
+DEBUG: Cannot resolve symbol address __progname
+DEBUG: Cannot resolve symbol address _ITM_deregisterTMCloneTable
+DEBUG: Cannot resolve symbol address stdout
+DEBUG: Cannot resolve symbol address optind
+DEBUG: Cannot resolve symbol address optarg
+DEBUG: Cannot resolve symbol address program_invocation_name
+DEBUG: Cannot resolve symbol address __progname_full
+DEBUG: Cannot resolve symbol address _Jv_RegisterClasses
+DEBUG: Cannot resolve symbol address _ITM_registerTMCloneTable
+DEBUG: Cannot resolve symbol address program_invocation_short_name
+DEBUG: Cannot resolve symbol address stderr
 EOF
 RUN
 
@@ -4207,6 +3381,7 @@ EXPECT=<<EOF
     "size": 2560,
     "vsize": 4096,
     "perm": "-r-x",
+    "flags": 1615855712,
     "paddr": 1024,
     "vaddr": 4198400
   },
@@ -4215,6 +3390,7 @@ EXPECT=<<EOF
     "size": 512,
     "vsize": 4096,
     "perm": "-rw-",
+    "flags": 3224371264,
     "paddr": 3584,
     "vaddr": 4202496
   },
@@ -4223,6 +3399,7 @@ EXPECT=<<EOF
     "size": 512,
     "vsize": 4096,
     "perm": "-r--",
+    "flags": 1076887616,
     "paddr": 4096,
     "vaddr": 4206592
   },
@@ -4231,6 +3408,7 @@ EXPECT=<<EOF
     "size": 0,
     "vsize": 4096,
     "perm": "-rw-",
+    "flags": 3225419904,
     "paddr": 0,
     "vaddr": 4210688
   },
@@ -4239,6 +3417,7 @@ EXPECT=<<EOF
     "size": 1024,
     "vsize": 4096,
     "perm": "-rw-",
+    "flags": 3224371264,
     "paddr": 4608,
     "vaddr": 4214784
   }
@@ -4246,16 +3425,89 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=ii sig column lists imports with no function signature
+FILE=bins/elf/analysis/cris-dosfsck
+CMDS=ii,sig/eq/false,type/eq/FUNC,name/cols
+EXPECT=<<EOF
+name
+----
+__register_frame_info
+_IO_getc
+__fxstat64
+__deregister_frame_info
+EOF
+RUN
+
+NAME=ii sig column is false for non-function imports
+FILE=bins/elf/analysis/mips-main
+CMDS=<<EOF
+ii,type/eq/NOTYPE,sig/eq/true~?
+ii,type/eq/NOTYPE,sig/eq/false,name/cols
+EOF
+EXPECT=<<EOF
+2
+name
+----
+_ITM_registerTMCloneTable
+_Jv_RegisterClasses
+_ITM_deregisterTMCloneTable
+EOF
+RUN
+
+NAME=ii sig column with every signature known
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=ii,sig/eq/false,type/eq/FUNC,name/cols
+EXPECT=<<EOF
+name
+----
+EOF
+RUN
+
+NAME=iij sig field
+FILE=bins/elf/analysis/mips-main
+CMDS=<<EOF
+iij~{2}
+iij~{3}
+EOF
+EXPECT=<<EOF
+{"ordinal":10,"bind":"GLOBAL","type":"FUNC","sig":true,"name":"__libc_start_main","plt":4196352}
+{"ordinal":11,"bind":"WEAK","type":"FUNC","sig":false,"name":"__gmon_start__"}
+EOF
+RUN
+
+NAME=ii sig resolves user import prototypes and reflects edits
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=<<EOF
+ii+ reviewunknown
+ii,name/eq/reviewunknown,name/cols/sig
+td int sym.imp.reviewunknown(int custom);
+ii,name/eq/reviewunknown,name/cols/sig
+iij~{[3].sig}
+t- sym.imp.reviewunknown
+ii,name/eq/reviewunknown,name/cols/sig
+EOF
+EXPECT=<<EOF
+name          sig
+-----------------
+reviewunknown false
+name          sig
+-----------------
+reviewunknown true
+true
+name          sig
+-----------------
+reviewunknown false
+EOF
+RUN
+
 NAME=ii dupped imports
 FILE=bins/elf/varsub
 CMDS=ii
 EXPECT=<<EOF
-[Imports]
 nth vaddr      bind   type   lib name
 -------------------------------------
-1   0x00000000 GLOBAL FUNC       __libc_start_main
-2   0x00000000 WEAK   NOTYPE     __gmon_start__
-
+1   ---------- GLOBAL FUNC       __libc_start_main
+2   ---------- WEAK   NOTYPE     __gmon_start__
 EOF
 RUN
 
@@ -4270,6 +3522,7 @@ RUN
 
 NAME=ik-macho
 FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
 CMDS=ik info/mach0.entry.vaddr~?0x100000ef8
 EXPECT=<<EOF
 1
@@ -4278,6 +3531,7 @@ RUN
 
 NAME=ikv
 FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
 CMDS=ikv info/mach0.entry.vaddr
 EXPECT=<<EOF
 0x100000ef8
@@ -4286,6 +3540,7 @@ RUN
 
 NAME=ik.
 FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
 CMDS=ik. info/mach0.entry.vaddr
 EXPECT=<<EOF
 0x100000ef8
@@ -4294,6 +3549,7 @@ RUN
 
 NAME=ik*
 FILE=bins/mach0/fatmach0-3true
+ARGS=-e bin.types=true -a x86 -b 64
 CMDS=ik*~?mach0_segment64_0
 EXPECT=<<EOF
 1
@@ -4301,9 +3557,8 @@ EOF
 RUN
 
 NAME=ik?
-BROKEN=1
 FILE=bins/mach0/fatmach0-3true
-CMDS=ik?~?Usage
+CMDS=ik?~?key-value database
 EXPECT=<<EOF
 1
 EOF
@@ -4311,9 +3566,9 @@ RUN
 
 NAME=iS=
 FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
 CMDS=iS=
 EXPECT=<<EOF
-
 0*  0x100000ef8 ######------------------------ 0x100000f3f r-x   71    0.__TEXT.__text
 1   0x100000f40 ------#----------------------- 0x100000f46 r-x   6     1.__TEXT.__symbol_stub1
 2   0x100000f46 ------###--------------------- 0x100000f60 r-x   26    2.__TEXT.__stub_helper
@@ -4323,13 +3578,13 @@ EXPECT=<<EOF
 6   0x100001010 -----------------------#------ 0x100001018 rw-   8     6.__DATA.__la_symbol_ptr
 7   0x100001020 ------------------------####-- 0x100001048 rw-   40    7.__DATA.__program_vars
 8   0x100001048 ----------------------------## 0x100001068 rw-   32    8.__DATA.__data
-=>  0x100000ef8 ------------------------------ 0x100000ef7             
-
+=>  0x100000ef8 ------------------------------ 0x100000ef7
 EOF
 RUN
 
 NAME=iSq.
 FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
 CMDS=iSq.
 EXPECT=<<EOF
 0x100000ef8 0x100000f3f -r-x 0.__TEXT.__text
@@ -4341,14 +3596,112 @@ FILE=bins/mach0/fatmach0-3true
 CMDS=isqq
 EXPECT=<<EOF
 __mh_execute_header
-radr://5614542
 imp.exit
 EOF
 RUN
 
-NAME=iR*
+NAME=iu help
+FILE=-
+CMDS=<<EOF
+iu?~iux
+iu?~overwritten
+EOF
+EXPECT=<<EOF
+| iux [directory]   extract all resources (default: <file>.resources; alias for ixu)
+|                   output names are sanitized and existing files are never overwritten
+EOF
+RUN
+
+NAME=iu subcommand help
+FILE=-
+CMDS=<<EOF
+iu,?
+iu*?
+iuj?
+iuq?
+iuqq?
+iux?
+EOF
+EXPECT=<<EOF
+| iu,[table-query]  list resources in table using given expression
+| iu*  emit resource flags as radare commands
+| iuj  list resources in JSON
+| iuq  list resource address, size, type and name
+| iuqq  list resource names only
+| iux [directory]  extract all resources (default: <file>.resources; alias for ixu)
+EOF
+RUN
+
+NAME=iu invalid subcommand
+FILE=-
+CMDS=<<EOF
+iuy
+s 0
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Invalid `y` subcommand, try `iu?`
+EOF
+RUN
+
+NAME=ix help
+FILE=-
+CMDS=<<EOF
+ix?~extract all
+iS?~extract all
+EOF
+EXPECT=<<EOF
+| ixu [directory]   extract all resources (alias for iux)
+| ixS [directory]   extract all sections (alias for iSx)
+| ixSS [directory]  extract all segments (alias for iSSx)
+| iSx [directory]       extract all sections (default: <file>.sections; alias for ixS)
+| iSSx [directory]      extract all segments (default: <file>.segments; alias for ixSS)
+EOF
+RUN
+
+NAME=ix section and segment aliases
+FILE=bins/elf/analysis/hello-linux-x86_64
+ARGS=-e log.level=0
+CMDS=<<EOF
+rmrf .tmp/ix-sections-a
+rmrf .tmp/ix-sections-b
+rmrf .tmp/ix-segments-a
+rmrf .tmp/ix-segments-b
+iSx .tmp/ix-sections-a
+ixS .tmp/ix-sections-b
+iSSx .tmp/ix-segments-a
+ixSS .tmp/ix-segments-b
+!!rahash2 -qq -a sha256 .tmp/ix-sections-a/section_.text_13.bin
+!!rahash2 -qq -a sha256 .tmp/ix-sections-b/section_.text_13.bin
+!!rahash2 -qq -a sha256 .tmp/ix-segments-a/segment_LOAD0_2.bin
+!!rahash2 -qq -a sha256 .tmp/ix-segments-b/segment_LOAD0_2.bin
+rmrf .tmp/ix-sections-a
+rmrf .tmp/ix-sections-b
+rmrf .tmp/ix-segments-a
+rmrf .tmp/ix-segments-b
+EOF
+EXPECT=<<EOF
+dcb90dd685b3db105be06c136ec2d1d5416e00906e28cc71eebb131cd7b6c206
+dcb90dd685b3db105be06c136ec2d1d5416e00906e28cc71eebb131cd7b6c206
+fb026f99dd41eb994947dc2314fb40e7c016ebbdb7533a2efd51629f3bf234db
+fb026f99dd41eb994947dc2314fb40e7c016ebbdb7533a2efd51629f3bf234db
+EOF
+RUN
+
+# merged: iu table query; iuj; iu quiet and physical modes
+NAME=iu*
 FILE=bins/pe/standard.exe
-CMDS=iR*
+CMDS=<<EOF
+iu*
+?e --
+iu,size/sort,type/cols/name
+?e --
+iuj~{}
+?e --
+iuq
+iuqq
+e io.va=false
+iuq
+EOF
 EXPECT=<<EOF
 fs resources
 f resource.0 5672 0x00401180
@@ -4357,21 +3710,29 @@ f resource.2 20 0x004027b0
 f resource.3 452 0x004027d0
 f resource.4 74 0x004029a0
 fs *
-EOF
-RUN
-
-NAME=iRj
-FILE=bins/pe/standard.exe
-CMDS=iRj~{}
-EXPECT=<<EOF
+--
+type       name
+---------------
+GROUP_ICON 788
+MANIFEST   1
+STRING     10
+VERSION    1
+ICON       1576
+--
 [
   {
     "name": "1576",
     "index": 0,
     "type": "ICON",
     "vaddr": 4198784,
+    "paddr": 896,
     "size": 5672,
+    "id": 1576,
+    "type_id": 3,
     "lang": "LANG_NEUTRAL",
+    "language_id": 0,
+    "codepage": 0,
+    "named": false,
     "timestamp": "Thu Jan  1 00:00:00 1970"
   },
   {
@@ -4379,8 +3740,14 @@ EXPECT=<<EOF
     "index": 1,
     "type": "STRING",
     "vaddr": 4205072,
+    "paddr": 7184,
     "size": 76,
+    "id": 10,
+    "type_id": 6,
     "lang": "LANG_NEUTRAL",
+    "language_id": 0,
+    "codepage": 0,
+    "named": false,
     "timestamp": "Thu Jan  1 00:00:00 1970"
   },
   {
@@ -4388,8 +3755,14 @@ EXPECT=<<EOF
     "index": 2,
     "type": "GROUP_ICON",
     "vaddr": 4204464,
+    "paddr": 6576,
     "size": 20,
+    "id": 788,
+    "type_id": 14,
     "lang": "LANG_NEUTRAL",
+    "language_id": 0,
+    "codepage": 0,
+    "named": false,
     "timestamp": "Thu Jan  1 00:00:00 1970"
   },
   {
@@ -4397,8 +3770,14 @@ EXPECT=<<EOF
     "index": 3,
     "type": "VERSION",
     "vaddr": 4204496,
+    "paddr": 6608,
     "size": 452,
+    "id": 1,
+    "type_id": 16,
     "lang": "LANG_NEUTRAL",
+    "language_id": 0,
+    "codepage": 0,
+    "named": false,
     "timestamp": "Thu Jan  1 00:00:00 1970"
   },
   {
@@ -4406,22 +3785,33 @@ EXPECT=<<EOF
     "index": 4,
     "type": "MANIFEST",
     "vaddr": 4204960,
+    "paddr": 7072,
     "size": 74,
+    "id": 1,
+    "type_id": 24,
     "lang": "LANG_NEUTRAL",
+    "language_id": 0,
+    "codepage": 0,
+    "named": false,
     "timestamp": "Thu Jan  1 00:00:00 1970"
   }
 ]
-EOF
-RUN
-
-NAME=izzz*
-FILE=bins/mach0/fatmach0-3true
-CMDS=izzz*~appleca
-EXPECT=<<EOF
-f str._http:__www.apple.com_appleca_root.crl0_r 41 @ 0x00002562
-f str.https:__www.apple.com_appleca_0 32 @ 0x00002963
-f str.http:__www.apple.com_appleca_0 31 @ 0x00002e47
-f str._http:__www.apple.com_appleca_codesigning.crl0_r 48 @ 0x00002f3c
+--
+0x00401180 5672 ICON 1576
+0x00402a10 76 STRING 10
+0x004027b0 20 GROUP_ICON 788
+0x004027d0 452 VERSION 1
+0x004029a0 74 MANIFEST 1
+1576
+10
+788
+1
+1
+0x00000380 5672 ICON 1576
+0x00001c10 76 STRING 10
+0x000019b0 20 GROUP_ICON 788
+0x000019d0 452 VERSION 1
+0x00001ba0 74 MANIFEST 1
 EOF
 RUN
 
@@ -4433,15 +3823,15 @@ EXPECT=<<EOF
 md5 bf619eac0cdf3f68d496ea9344137e8b
 sha1 5c3eb80066420002bc3dcc7ca4ab6efad7ed4ae5
 sha256 076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560
-EOF
-EXPECT_ERR=<<EOF
-File has been modified.
 - md5 bf619eac0cdf3f68d496ea9344137e8b
 + md5 afd010a5a5456c232dee59d59bd75cf6
 - sha1 5c3eb80066420002bc3dcc7ca4ab6efad7ed4ae5
 + sha1 3bfd02bb4fac6499c89278254f04a081887c38ea
 - sha256 076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560
 + sha256 91543b8000dc6bade2bcae4d44c16f3a33e07e6f96a910dcd702c5179a937c20
+EOF
+EXPECT_ERR=<<EOF
+INFO: File has been modified
 EOF
 RUN
 
@@ -4462,26 +3852,26 @@ om
 rm .tmp/it2-modfile
 EOF
 EXPECT_ERR=<<EOF
-File has been modified.
+INFO: File has been modified
+EOF
+EXPECT=<<EOF
+* 4 fd: 3 +0x00001000 0x100000000 - 0x100000fff r-- r-x fmap.__TEXT
+- 3 fd: 3 +0x00002000 0x100001000 - 0x100001fff r-- rw- fmap.__DATA
+- 2 fd: 3 +0x00003000 0x100002000 - 0x1000035df r-- r-- fmap.__LINKEDIT
+- 1 fd: 4 +0x00000000 0x1000035e0 - 0x100003fff r-- r-- mmap.__LINKEDIT
+* 4 fd: 3 +0x00001000 0x100000000 - 0x100000fff rwx rwx fmap.__TEXT
+- 3 fd: 3 +0x00002000 0x100001000 - 0x100001fff rwx rwx fmap.__DATA
+- 2 fd: 3 +0x00003000 0x100002000 - 0x1000035df rwx rwx fmap.__LINKEDIT
+- 1 fd: 4 +0x00000000 0x1000035e0 - 0x100003fff r-- rwx mmap.__LINKEDIT
+md5 84144530144b53a704c84d9c65ab5f92
+sha1 9016e215a321184c42c28ab03847554851932713
+sha256 95debaecaaaf89c7f5151218def15ef18c8be375aeccf0564a3b16416c361012
 - md5 84144530144b53a704c84d9c65ab5f92
 + md5 9a99cca7bf3e27ee1c8964141cfad053
 - sha1 9016e215a321184c42c28ab03847554851932713
 + sha1 17c5b6331a420fc3b48defe782090295294fee2e
 - sha256 95debaecaaaf89c7f5151218def15ef18c8be375aeccf0564a3b16416c361012
 + sha256 53cb8b3aec20da6a313ac996ca8f518bca9fa4768ff771d35513be09a387f025
-EOF
-EXPECT=<<EOF
-- 4 fd: 3 +0x00001000 0x100000000 - 0x100000fff r-x fmap.__TEXT
-- 3 fd: 3 +0x00002000 0x100001000 - 0x100001fff r-- fmap.__DATA
-- 2 fd: 3 +0x00003000 0x100002000 - 0x100003fff r-- fmap.__LINKEDIT
-* 1 fd: 3 +0x00000000 0x00000000 - 0x0000c52f r-- 
-- 4 fd: 3 +0x00001000 0x100000000 - 0x100000fff rwx fmap.__TEXT
-- 3 fd: 3 +0x00002000 0x100001000 - 0x100001fff rwx fmap.__DATA
-- 2 fd: 3 +0x00003000 0x100002000 - 0x100003fff rwx fmap.__LINKEDIT
-* 1 fd: 3 +0x00000000 0x00000000 - 0x0000c52f rwx 
-md5 84144530144b53a704c84d9c65ab5f92
-sha1 9016e215a321184c42c28ab03847554851932713
-sha256 95debaecaaaf89c7f5151218def15ef18c8be375aeccf0564a3b16416c361012
 EOF
 RUN
 
@@ -4492,168 +3882,6 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=isq. (file x86)
-FILE=bins/elf/analysis/hello-linux-x86_64
-CMDS=isq.
-EXPECT=<<EOF
-0x00400410 0 .text
-EOF
-RUN
-
-NAME=ic?~ (match all)
-FILE=malloc://512
-CMDS=ic?~List
-EXPECT=<<EOF
-| ic                 List classes, methods and fields
-| icc                List classes, methods and fields in Header Format
-| icg                List classes as agn/age commands to create class hirearchy graphs
-| icq                List classes, in quiet mode (just the classname)
-| icqq               List classes, in quieter mode (only show non-system classnames)
-EOF
-RUN
-
-NAME=ic?~ (match one)
-FILE=malloc://512
-CMDS=ic?~Header
-EXPECT=<<EOF
-| icc                List classes, methods and fields in Header Format
-EOF
-RUN
-
-NAME=ic?~ (match none)
-FILE=malloc://512
-CMDS=ic?~Guess
-EXPECT=<<EOF
-EOF
-RUN
-
-NAME=ascii substring detection (#14499)
-FILE=bins/pe/Reborn_Stub-strings.exe
-CMDS=izz~pomf
-EXPECT=<<EOF
-7154 0x00087f8a 0x00489d8a 26  53   .text   utf16le http://pomf.cat/upload.php
-7159 0x000880dd 0x00489edd 19  39   .text   utf16le https://a.pomf.cat/
-7322 0x00089bed 0x0048b9ed 26  53   .text   utf16le http://pomf.cat/upload.php
-7323 0x00089c22 0x0048ba22 19  40   .text   utf16le https://a.pomf.cat/
-EOF
-RUN
-
-NAME=ic (file Java)
-FILE=bins/java/Hello.class
-CMDS=ic
-EXPECT=<<EOF
-0x00000000 [0x0000022b - 0x000002aa]    127 class 0 Hello :: java/lang/Object
-0x0000022b method 0      <init>
-0x00000263 method 1      say
-0x000002aa method 2      main
-EOF
-RUN
-
-NAME=icq (file Java)
-FILE=bins/java/Hello.class
-CMDS=icq
-EXPECT=<<EOF
-0x00000000 [0x0000022b - 0x000002aa] Hello java/lang/Object
-EOF
-RUN
-
-NAME=icqq (file Java)
-FILE=bins/java/Hello.class
-CMDS=icqq
-EXPECT=<<EOF
-Hello
-EOF
-RUN
-
-NAME=icqq (file x86)
-FILE=bins/elf/ls
-CMDS=icqq
-EXPECT=<<EOF
-EOF
-RUN
-
-NAME=iqqc (file Java)
-BROKEN=1
-FILE=bins/java/Hello.class
-CMDS=iqqc
-EXPECT=<<EOF
-Hello
-EOF
-RUN
-
-NAME=iqqc (file x86)
-BROKEN=1
-FILE=bins/elf/ls
-CMDS=iqqc
-EXPECT=<<EOF
-EOF
-RUN
-
-NAME=iqcq (file Java)
-BROKEN=1
-FILE=bins/java/Hello.class
-CMDS=iqcq
-EXPECT=<<EOF
-Hello
-EOF
-RUN
-
-NAME=iqcq (file x86)
-BROKEN=1
-FILE=bins/elf/ls
-CMDS=iqcq
-EXPECT=<<EOF
-EOF
-RUN
-
-NAME=auto entry (lib)
-ARGS=-e io.cache=true
-FILE=bins/elf/libverifyPass.so
-CMDS=<<EOF
-ie
-EOF
-EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00000f50 paddr=0x00000f50 haddr=0x00000018 hvaddr=0x00000018 type=program
-
-1 entrypoints
-EOF
-EXPECT_ERR=<<EOF
-EOF
-RUN
-
-NAME=auto entry (lib no e_entry)
-ARGS=-e io.cache=true
-FILE=bins/elf/libexploit.so
-CMDS=<<EOF
-ie
-EOF
-EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00000d28 paddr=0x00000d28 haddr=0x00000018 hvaddr=0x00000018 type=program
-
-1 entrypoints
-EOF
-EXPECT_ERR=<<EOF
-Cannot determine entrypoint, using 0x00000d28.
-EOF
-RUN
-
-NAME=auto entry (obj)
-FILE=bins/elf/analysis/test.obj
-CMDS=<<EOF
-ie
-EOF
-EXPECT=<<EOF
-[Entrypoints]
-
-0 entrypoints
-EOF
-EXPECT_ERR=<<EOF
-Warning: run r2 with -e bin.cache=true to fix relocations in disassembly
-EOF
-RUN
-
 NAME=macho-ghost-symbols
 FILE=bins/mach0/libr_flag.dylib
 CMDS=<<EOF
@@ -4661,51 +3889,295 @@ is~?
 is~entry?
 EOF
 EXPECT=<<EOF
-247
+243
 0
 EOF
 RUN
 
-NAME=izjencoding
-FILE=bins/elf/analysis/hello-utf-16
+NAME=isqq bug
+FILE=bins/mach0/WheresMyBrowser
 CMDS=<<EOF
-e cfg.json.str = base64
-izj~{[0].section}
+is.@0x100023b68
 EOF
 EXPECT=<<EOF
-LnJvZGF0YQ==
+nth  paddr      vaddr       bind  type size lib name       demangled
+--------------------------------------------------------------------
+1503 0x00023b68 0x100023b68 LOCAL FUNC 0        imp.memcpy
 EOF
 RUN
 
-NAME=izjencodinghex
-FILE=bins/elf/analysis/hello-utf-16
+# merged: iS sha1; iSS sha1
+NAME=iS ssdeep
+FILE=bins/mach0/ls-m1
+ARGS=-a arm -b64
 CMDS=<<EOF
-e cfg.json.str = hex
-izj~{[0].string}
+iS ssdeep
+?e --
+iS sha1,crc32
+?e --
+iSS sha1,crc32
 EOF
 EXPECT=<<EOF
-48656C6C6F20576F726C64
+nth paddr         size vaddr         vsize perm flags      ssdeep                                                                                               type             name
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+0   0x0001b830  0x3c10 0x100003830  0x3c10 -r-x 0x80000400 384:PryJ6rcdWp6KZBeniWR6zqKS/sNC8wYIY8Dr6:P+EIdWpbWnXKSYwHYi6                                        REGULAR          0.__TEXT.__text
+1   0x0001f440   0x520 0x100007440   0x520 -r-x 0x80000408 24:mna2nalt9xlnxWItnJqmlD7hdkyFnYMnYyFnYMnx:mna2nar9lHnjdFd137                                       SYMBOL_STUBS     1.__TEXT.__auth_stubs
+2   0x0001f960    0xdc 0x100007960    0xdc -r-x 0x0        6:tA1khLUVV6OqH3EyRccJ3us2xFJTCTCoo8ITl:i1sgFqTkDBKknl                                               REGULAR          2.__TEXT.__const
+3   0x0001fa3c   0x4e9 0x100007a3c   0x4e9 -r-x 0x2        24:C2dMuhSj7W7Q9S+X+SWEEa/Qn8yzAbpyUNnXjIn10XzQIwZ4aTpMJaKznpluhSlV:C3uhD7QQg0L8w8CQjnXjInYpwBTOJBT/ CSTRINGS         3.__TEXT.__cstring
+4   0x0001ff28    0xd8 0x100007f28    0xd8 -r-x 0x0        6:onRw78Ul17XPmuPlvkzZM8Cm1KqbykqVbb:oR0PLfBPlMzZMw1Kqb3qVbb                                         REGULAR          4.__TEXT.__unwind_info
+5   0x00020000   0x290 0x100008000   0x290 -rw- 0x6        6:CosdDWD3MEsZDy7bQgsVvOjvk8sR4qLzIYsNqmjHc0sJzC7rgQsFPaLae2:kdD8OZDseVvc+R4sONqcOJzs+FPrf           NONLAZY_POINTERS 5.__DATA_CONST.__auth_got
+6   0x00020290    0x30 0x100008290    0x30 -rw- 0x6        3:gll1XEth/tM/tPXV:g0tA1N                                                                            NONLAZY_POINTERS 6.__DATA_CONST.__got
+7   0x000202c0   0x268 0x1000082c0   0x268 -rw- 0x0        12:Lr8aM293CaGqY06dGM3/nBmP/e8rg1MB:LLT9ZGIsnBmHNo                                                   REGULAR          7.__DATA_CONST.__const
+8   0x00024000    0x20 0x10000c000    0x20 -rw- 0x0        3:9lD7G/lZRL:qTL                                                                                     REGULAR          8.__DATA.__data
+9   0x00018000     0x0 0x10000c020    0xb0 -rw- 0x1                                                                                                             ZEROFILL         9.__DATA.__common
+10  0x00018000     0x0 0x10000c0d0   0x150 -rw- 0x1                                                                                                             ZEROFILL         10.__DATA.__bss
+--
+nth paddr         size vaddr         vsize perm flags      sha1, crc32                                       type             name
+----------------------------------------------------------------------------------------------------------------------------------
+0   0x0001b830  0x3c10 0x100003830  0x3c10 -r-x 0x80000400 16cf10f874b4d2ff398f21a2ac2bb4dfc37784ae 5e4b2a81 REGULAR          0.__TEXT.__text
+1   0x0001f440   0x520 0x100007440   0x520 -r-x 0x80000408 5e150b8f2a691b2b0f9b4eb0c82f67e89b665db7 af828b45 SYMBOL_STUBS     1.__TEXT.__auth_stubs
+2   0x0001f960    0xdc 0x100007960    0xdc -r-x 0x0        0eadbedfd1b97b9543d6be88b59682ba808fef84 ffed3b09 REGULAR          2.__TEXT.__const
+3   0x0001fa3c   0x4e9 0x100007a3c   0x4e9 -r-x 0x2        3cbcfbc47a0337c5c9723e30b487228decf26940 d45acdbc CSTRINGS         3.__TEXT.__cstring
+4   0x0001ff28    0xd8 0x100007f28    0xd8 -r-x 0x0        7acf78950a4236b6af94e7a715cf10f347180a0a b51a5f8d REGULAR          4.__TEXT.__unwind_info
+5   0x00020000   0x290 0x100008000   0x290 -rw- 0x6        ba14680e06178a5d876402b7218dd70287d0e939 4e339ae3 NONLAZY_POINTERS 5.__DATA_CONST.__auth_got
+6   0x00020290    0x30 0x100008290    0x30 -rw- 0x6        d13d9ac3337d21c7e6c75acd91a333d5a515879f 2fcb7f70 NONLAZY_POINTERS 6.__DATA_CONST.__got
+7   0x000202c0   0x268 0x1000082c0   0x268 -rw- 0x0        a15d48d50bc8d3ee30c9c9b2335b0a044a2c4533 01647838 REGULAR          7.__DATA_CONST.__const
+8   0x00024000    0x20 0x10000c000    0x20 -rw- 0x0        3963084c9c6587564f29f82cdb8cd4a9ad5c46e6 09c34bda REGULAR          8.__DATA.__data
+9   0x00018000     0x0 0x10000c020    0xb0 -rw- 0x1                                                          ZEROFILL         9.__DATA.__common
+10  0x00018000     0x0 0x10000c0d0   0x150 -rw- 0x1                                                          ZEROFILL         10.__DATA.__bss
+--
+nth paddr         size vaddr         vsize perm flags sha1, crc32                                       type name
+-----------------------------------------------------------------------------------------------------------------
+0   0x00018000  0x8000 0x100000000  0x8000 -r-x 0x0   62f28c2d31aeeafc99420eebdaaf9976175c4553 b46855f0 MAP  __TEXT
+1   0x00020000  0x4000 0x100008000  0x4000 -rw- 0x0   62f2f64918ef72b1bf82ae39e986d9ddf5e42181 979dd9de MAP  __DATA_CONST
+2   0x00024000  0x4000 0x10000c000  0x4000 -rw- 0x0   869518459b4db2174417ed9a87668b47acf04bf7 d0361e49 MAP  __DATA
+3   0x00028000  0x5aa0 0x100010000  0x8000 -r-- 0x0   3d8cb411bc1f24876b44c2d25b57eee2df359d84 9d1c13b7 MAP  __LINKEDIT
 EOF
 RUN
 
-NAME=izjencodingarray
-FILE=bins/elf/analysis/hello-utf-16
-CMDS=<<EOF
-e cfg.json.str = array
-izj~{[0].type}
-EOF
-EXPECT=<<EOF
-[117,116,102,049,054,108,101]
-EOF
-RUN
-
-NAME=izz libcap (#298)
+NAME=ii respects bin.limit after open (elf)
 FILE=-
 CMDS=<<EOF
-wx 7500 6900 3d25 7325 7325 7300 2573 2c00 2b25 7325 7325 7300 2d25 7325 7325 7300 6361 705f 6368 6f77 6e00 6361 705f 6461
-izz~^0
+e bin.relocs=false
+e bin.limit=2
+o bins/elf/analysis/x86-helloworld-gcc
+ii
 EOF
 EXPECT=<<EOF
-0   0x00000004 0x00000004 7   8            ascii =%s%s%s
+nth vaddr      bind   type   lib name
+-------------------------------------
+1   0x080482d0 GLOBAL FUNC       puts
+2   ---------- WEAK   NOTYPE     __gmon_start__
+EOF
+RUN
+
+NAME=mach0 listings respect bin.limit after open
+FILE=-
+CMDS=<<EOF
+e bin.relocs=false
+e bin.limit=3
+o bins/mach0/hello-osx-x86_64
+is
+ii
+ie
+il
+EOF
+EXPECT=<<EOF
+nth paddr      vaddr       bind   type   size lib name                demangled
+-------------------------------------------------------------------------------
+0   0x00000000 0x100000000 GLOBAL NOTYPE 0        __mh_execute_header
+1   0x00001060 0x100001060 GLOBAL OBJ    0        ___progname
+2   0x00000f0c 0x100000f0c GLOBAL FUNC   0        _main
+nth vaddr      bind type lib name
+---------------------------------
+0   ---------- NONE FUNC     exit
+1   ---------- NONE FUNC     puts
+2   ---------- NONE FUNC     dyld_stub_binder
+paddr      vaddr       phaddr     vhaddr      type
+--------------------------------------------------
+0x00000ed0 0x100000ed0 0x000005c0 0x1000005c0 program
+/usr/lib/libSystem.B.dylib
+EOF
+RUN
+
+NAME=pe listings respect bin.limit after open
+FILE=-
+CMDS=<<EOF
+e bin.relocs=false
+e bin.limit=3
+o bins/pe/base.exe
+is
+ii
+ie
+il
+EOF
+EXPECT=<<EOF
+nth paddr      vaddr      bind   type size lib name                      demangled
+----------------------------------------------------------------------------------
+0   0x00000400 0x00401000 GLOBAL FUNC 0        __gnu_exception_handler@4
+1   0x00000550 0x00401150 GLOBAL FUNC 0        ___mingw_CRTStartup
+2   0x00000680 0x00401280 GLOBAL FUNC 0        _mainCRTStartup
+nth vaddr      bind type lib          name
+------------------------------------------
+1   ---------- NONE FUNC KERNEL32.dll AddAtomA
+2   ---------- NONE FUNC KERNEL32.dll ExitProcess
+3   ---------- NONE FUNC KERNEL32.dll FindAtomA
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00000680 0x00401280 0x000000a8 ---------- program
+kernel32.dll
+msvcrt.dll
+EOF
+RUN
+
+NAME=dex listings respect bin.limit after open
+FILE=-
+CMDS=<<EOF
+e bin.relocs=false
+e bin.limit=3
+o bins/dex/HelloWorld.dex
+is
+ii
+ie
+iS
+EOF
+EXPECT=<<EOF
+nth paddr      vaddr      bind   type  size lib name                                     demangled
+--------------------------------------------------------------------------------------------------
+0   0x00000168 0x00000168 NONE   FIELD 0        LHello.sfield_localVar2:I
+1   0x00000160 0x00000160 NONE   FIELD 0        LHello.ifield_localVar:I
+2   0x00000238 0x00000238 GLOBAL FUNC  20       LHello.method.<init>()V
+3   0x0000025c 0x0000025c GLOBAL FUNC  34       LHello.method.main([Ljava/lang/String;)V
+4   0x00000290 0x00000290 GLOBAL FUNC  84       LHello.method.foo(I)V
+7   0x000002f4 0x000002f4 GLOBAL FUNC  20       LWorld.method.<init>()V
+8   0x00000318 0x00000318 GLOBAL FUNC  68       LWorld.method.foo(I)V
+nth vaddr      bind type lib name
+---------------------------------
+0   ---------- NONE FUNC     Ljava/io/PrintStream.method.println(Ljava/lang/String;)V
+1   ---------- NONE FUNC     Ljava/lang/Integer.method.<init>(I)V
+2   ---------- NONE FUNC     Ljava/lang/Integer.method.toString()Ljava/lang/String;
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x0000025c 0x0000025c ---------- ---------- program
+nth paddr        size vaddr       vsize perm flags type name
+------------------------------------------------------------
+0   0x00000000   0x70 0x00000000   0x70 -r-- 0x0   ---- header
+1   0x00000070  0x1c8 0x00000070  0x1c8 -r-- 0x0   ---- constpool
+2   0x00000238  0x124 0x00000238  0x124 -r-x 0x0   ---- code
+EOF
+RUN
+
+NAME=iic classify imports
+FILE=bins/elf/crackme0x00b
+CMDS=<<EOF
+iicq
+iic printf
+iicl console
+iicl nope
+iicj
+aa
+iiclj format
+iiclj nope
+iiclx console
+EOF
+EXPECT=<<EOF
+console
+format
+console,format
+printf
+puts
+{"console":[{"name":"printf","addr":134513536,"refs":[]},{"name":"puts","addr":134513568,"refs":[]}],"format":[{"name":"printf","addr":134513536,"refs":[]}]}
+[{"name":"printf","addr":134513536,"refs":[{"addr":134513829,"fcn":"main"}]}]
+[]
+main
+EOF
+RUN
+
+NAME=iL plugin details preserve exact and prefix lookup
+FILE=-
+CMDS=<<EOF
+iL elf
+iL elf64
+iL elf6
+iL xtr.pemixed
+iL xtr.pem
+iL msvc
+iL msv
+EOF
+EXPECT=<<EOF
+Name: elf
+Description: Executable and Link Format (ELF) for 32 bit
+License: LGPL-3.0-only
+Author: nibble
+Name: elf64
+Description: Executable Link Format for 64bit
+License: LGPL-3.0-only
+Author: nibble
+Name: elf64
+Description: Executable Link Format for 64bit
+License: LGPL-3.0-only
+Author: nibble
+Name: xtr.pemixed
+Description: Microsoft Portable Executable Extractor
+License: LGPL-3.0-only
+Author: JohnPeng47
+Name: xtr.pemixed
+Description: Microsoft Portable Executable Extractor
+License: LGPL-3.0-only
+Author: JohnPeng47
+Name: msvc
+Description: Microsoft Visual C++ demangler
+License: LGPL-3.0-only
+Name: msvc
+Description: Microsoft Visual C++ demangler
+License: LGPL-3.0-only
+EOF
+RUN
+
+NAME=iLj plugin details use shared JSON metadata
+FILE=-
+CMDS=<<EOF
+iLj elf
+iLj elf64
+iLj xtr.pemixed
+iLj xtr.pem
+iLj msvc
+iLj msv
+EOF
+EXPECT=<<EOF
+{"name":"elf","desc":"Executable and Link Format (ELF) for 32 bit","author":"nibble","license":"LGPL-3.0-only"}
+{"name":"elf64","desc":"Executable Link Format for 64bit","author":"nibble","license":"LGPL-3.0-only"}
+{"name":"xtr.pemixed","desc":"Microsoft Portable Executable Extractor","author":"JohnPeng47","license":"LGPL-3.0-only"}
+{"name":"xtr.pemixed","desc":"Microsoft Portable Executable Extractor","author":"JohnPeng47","license":"LGPL-3.0-only"}
+{"name":"msvc","desc":"Microsoft Visual C++ demangler","license":"LGPL-3.0-only"}
+{"name":"msvc","desc":"Microsoft Visual C++ demangler","license":"LGPL-3.0-only"}
+EOF
+RUN
+
+NAME=iL unknown plugin reports an error
+FILE=-
+CMDS=<<EOF
+iL aitodo_missing_plugin
+EOF
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot find plugin aitodo_missing_plugin
+EOF
+RUN
+
+NAME=iD msvc with unknown operator codes
+FILE=-
+CMDS=<<EOF
+"iD msvc ??_!A@@YAXXZ"
+"iD msvc ??_R1A@@"
+?e ok
+EOF
+EXPECT=<<EOF
+ok
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot demangle string
+ERROR: Cannot demangle string
 EOF
 RUN

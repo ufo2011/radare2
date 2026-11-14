@@ -11,6 +11,32 @@ bool test_r_strbuf_slice(void) {
 	mu_end;
 }
 
+bool test_r_strbuf_pad(void) {
+	RStrBuf sb;
+	r_strbuf_init (&sb);
+	r_strbuf_set (&sb, "ab");
+	mu_assert_true (r_strbuf_pad (&sb, '-', 3), "pad in place");
+	mu_assert_streq (r_strbuf_get (&sb), "ab---", "pad content");
+	// crossing into the heap must keep slack like the append paths, not fit exactly
+	mu_assert_true (r_strbuf_pad (&sb, ' ', 500), "pad grows");
+	mu_assert_eq (r_strbuf_length (&sb), 505, "pad length");
+	mu_assert_true (r_strbuf_size (&sb) > 507, "pad capacity keeps growth slack");
+	mu_assert_true (r_strbuf_append (&sb, "!"), "append after pad");
+	mu_assert_eq (r_strbuf_length (&sb), 506, "append length");
+	r_strbuf_fini (&sb);
+
+	// a weakref buffer must be copied before the pad writes into it
+	char backing[8] = "xy";
+	r_strbuf_init (&sb);
+	r_strbuf_setptr (&sb, backing, -1);
+	mu_assert_true (r_strbuf_pad (&sb, 'z', 4), "pad weakref");
+	mu_assert_streq (r_strbuf_get (&sb), "xyzzzz", "pad weakref content");
+	mu_assert_streq (backing, "xy", "weakref backing untouched");
+	r_strbuf_fini (&sb);
+
+	mu_end;
+}
+
 bool test_r_strbuf_append(void) {
 	RStrBuf *sa = r_strbuf_new ("foo");
 	r_strbuf_append (sa, "bar");
@@ -18,6 +44,25 @@ bool test_r_strbuf_append(void) {
 	char *a = r_strbuf_drain (sa);
 	mu_assert_streq (a, "prefoobar", "append+prepend");
 	free (a);
+
+	mu_end;
+}
+
+bool test_r_strbuf_prependf(void) {
+	RStrBuf *sb = r_strbuf_newf ("%8s", "a");
+	r_strbuf_prependf (sb, "%16s", "b");
+	char *s = r_strbuf_get (sb);
+	mu_assert_streq (s, "               b       a", "prependf_0");
+	r_strbuf_prependf (sb, "%24s", "c");
+	s = r_strbuf_get (sb);
+	mu_assert_streq (s,
+		"                       c               b       a", "prependf_1");
+	r_strbuf_prependf (sb, "%1100s", "d");
+	s = r_strbuf_drain (sb);
+	mu_assert_streq (s,
+		"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           d                       c               b       a",
+		"prependf_2");
+	free (s);
 
 	mu_end;
 }
@@ -208,16 +253,18 @@ bool test_r_strbuf_setf(void) {
 
 bool test_r_strbuf_initf(void) {
 	RStrBuf sb;
-	const char *s = r_strbuf_initf (&sb, "hmmst, %s was that audial occurence? %d", "wat", 42);
+	const char *s = r_strbuf_initf (&sb, "hmmst, %s was that audial occurrence? %d", "wat", 42);
 	mu_assert_notnull (s, "initf return notnull");
 	mu_assert_ptreq (s, r_strbuf_get (&sb), "initf return");
-	mu_assert_streq (r_strbuf_get (&sb), "hmmst, wat was that audial occurence? 42", "initf");
+	mu_assert_streq (r_strbuf_get (&sb), "hmmst, wat was that audial occurrence? 42", "initf");
 	r_strbuf_fini (&sb);
 	mu_end;
 }
 
-bool all_tests() {
+bool all_tests(void) {
+	mu_run_test (test_r_strbuf_pad);
 	mu_run_test (test_r_strbuf_append);
+	mu_run_test (test_r_strbuf_prependf);
 	mu_run_test (test_r_strbuf_strong_string);
 	mu_run_test (test_r_strbuf_strong_binary);
 	mu_run_test (test_r_strbuf_weak_string);

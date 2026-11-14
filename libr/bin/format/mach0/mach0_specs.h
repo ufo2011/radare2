@@ -13,63 +13,67 @@ typedef int integer_t;
 #undef MACH0_
 
 #if R_BIN_MACH064
+#define R_BIN_MACH0_WORD_SIZE 8
 #define MACH0_(name) name##_64
 #else
+#define R_BIN_MACH0_WORD_SIZE 4
 #define MACH0_(name) name
 #endif
+
+#define MACHO_MAX_SECTIONS 4096
 
 #define R_BIN_MACH0_SYMBOL_TYPE_EXT 0
 #define R_BIN_MACH0_SYMBOL_TYPE_LOCAL 1
 
 struct x86_thread_state32 {
-	ut32	eax;
-	ut32	ebx;
-	ut32	ecx;
-	ut32	edx;
-	ut32	edi;
-	ut32	esi;
-	ut32	ebp;
-	ut32	esp;
-	ut32	ss;
-	ut32	eflags;
-	ut32	eip;
-	ut32	cs;
-	ut32	ds;
-	ut32	es;
-	ut32	fs;
-	ut32	gs;
+	ut32 eax;
+	ut32 ebx;
+	ut32 ecx;
+	ut32 edx;
+	ut32 edi;
+	ut32 esi;
+	ut32 ebp;
+	ut32 esp;
+	ut32 ss;
+	ut32 eflags;
+	ut32 eip;
+	ut32 cs;
+	ut32 ds;
+	ut32 es;
+	ut32 fs;
+	ut32 gs;
 };
 
 struct x86_thread_state64 {
-	ut64	rax;
-	ut64	rbx;
-	ut64	rcx;
-	ut64	rdx;
-	ut64	rdi;
-	ut64	rsi;
-	ut64	rbp;
-	ut64	rsp;
-	ut64	r8;
-	ut64	r9;
-	ut64	r10;
-	ut64	r11;
-	ut64	r12;
-	ut64	r13;
-	ut64	r14;
-	ut64	r15;
-	ut64	rip;
-	ut64	rflags;
-	ut64	cs;
-	ut64	fs;
-	ut64	gs;
+	ut64 rax;
+	ut64 rbx;
+	ut64 rcx;
+	ut64 rdx;
+	ut64 rdi;
+	ut64 rsi;
+	ut64 rbp;
+	ut64 rsp;
+	ut64 r8;
+	ut64 r9;
+	ut64 r10;
+	ut64 r11;
+	ut64 r12;
+	ut64 r13;
+	ut64 r14;
+	ut64 r15;
+	ut64 rip;
+	ut64 rflags;
+	ut64 cs;
+	ut64 fs;
+	ut64 gs;
 };
 
-#define X86_THREAD_STATE32	1
-#define X86_THREAD_STATE64	4
+#define X86_THREAD_STATE32 1
+#define X86_THREAD_STATE64 4
 
 struct ppc_thread_state32 {
-	ut32 srr0;  /* Instruction address register (PC) */
-	ut32 srr1;	/* Machine state register (supervisor) */
+	ut32 srr0; /* Instruction address register (PC) */
+	ut32 srr1; /* Machine state register (supervisor) */
 	ut32 r0;
 	ut32 r1;
 	ut32 r2;
@@ -254,6 +258,14 @@ typedef struct {
 	uint32_t page_size;
 	uint32_t page_starts_count;
 	uint32_t padding;
+	uint64_t value_add;
+} cache_slide5_t;
+
+typedef struct {
+	uint32_t version;
+	uint32_t page_size;
+	uint32_t page_starts_count;
+	uint32_t padding;
 	uint64_t auth_value_add;
 } cache_slide3_t;
 
@@ -327,13 +339,23 @@ typedef struct {
 	uint32_t nlistCount;
 } cache_locsym_entry_large_t;
 
+enum {
+	DYLD_CACHE_MAPPING_AUTH_DATA = 1 << 0U,
+	DYLD_CACHE_MAPPING_DIRTY_DATA = 1 << 1U,
+	DYLD_CACHE_MAPPING_CONST_DATA = 1 << 2U,
+	DYLD_CACHE_MAPPING_TEXT_STUBS = 1 << 3U,
+	DYLD_CACHE_DYNAMIC_CONFIG_DATA = 1 << 4U,
+	DYLD_CACHE_READ_ONLY_DATA = 1 << 5U,
+	DYLD_CACHE_MAPPING_CONST_TPRO_DATA = 1 << 6U
+};
+
 typedef struct {
 	uint64_t address;
 	uint64_t size;
 	uint64_t fileOffset;
 	uint64_t slideInfoOffset;
 	uint64_t slideInfoSize;
-	uint64_t unknown;
+	uint64_t flags;
 	uint32_t maxProt;
 	uint32_t initProt;
 } cache_mapping_slide;

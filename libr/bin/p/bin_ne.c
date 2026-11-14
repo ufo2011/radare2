@@ -4,124 +4,162 @@
 #include "../i/private.h"
 #include "../format/ne/ne.h"
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut64 length = r_buf_size (b);
-	if (length <= 0x3d) {
+	if (length < 0x40) {
 		return false;
 	}
-	ut16 idx = r_buf_read_le16_at (b, 0x3c);
-	if ((ut64)idx + 26 < length) {
-		ut8 buf[2];
-		r_buf_read_at (b, 0, buf, sizeof (buf));
-		if (!memcmp (buf, "MZ", 2)) {
-			r_buf_read_at (b, idx, buf, sizeof (buf));
-			if (!memcmp (buf, "NE", 2)) {
-				return true;
-			}
-		}
-	}
-	return false;
+	ut8 magic[2];
+	ut32 offset;
+	return r_buf_read_at (b, 0, magic, sizeof (magic)) == sizeof (magic)
+		&& !memcmp (magic, "MZ", sizeof (magic))
+		&& r_bin_ne_get_header_offset (b, &offset);
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	r_return_val_if_fail (bf && bin_obj && buf, false);
-	r_bin_ne_obj_t *res = r_bin_ne_new_buf (buf, bf->rbin->verbose);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	R_RETURN_VAL_IF_FAIL (bf && buf, false);
+	r_bin_ne_obj_t *res = r_bin_ne_new_buf (buf, bf->rbin->options.verbose);
 	if (res) {
-		*bin_obj = res;
+		bf->bo->bin_obj = res;
 		return true;
 	}
 	return false;
 }
 
-static void destroy (RBinFile *bf) {
-	r_bin_ne_free (bf->o->bin_obj);
+static void destroy(RBinFile *bf) {
+	r_bin_ne_free (bf->bo->bin_obj);
 }
 
-static void header(RBinFile *bf) {
-	struct r_bin_t *rbin = bf->rbin;
-	r_bin_ne_obj_t *ne = bf->o->bin_obj;
-	rbin->cb_printf ("Signature: NE\n");
-	rbin->cb_printf ("MajLinkerVersion: %d\n", ne->ne_header->MajLinkerVersion);
-	rbin->cb_printf ("MinLinkerVersion: %d\n", ne->ne_header->MinLinkerVersion);
-	rbin->cb_printf ("EntryTableOffset: 0x%04x\n", ne->ne_header->EntryTableOffset);
-	rbin->cb_printf ("EntryTableLength: %d\n", ne->ne_header->EntryTableLength);
-	rbin->cb_printf ("FileLoadCRC: %08x\n", ne->ne_header->FileLoadCRC);
-	rbin->cb_printf ("ProgFlags: %d\n", ne->ne_header->ProgFlags);
-	rbin->cb_printf ("ApplFlags: %d\n", ne->ne_header->ApplFlags);
-	rbin->cb_printf ("AutoDataSegIndex: %d\n", ne->ne_header->AutoDataSegIndex);
-	rbin->cb_printf ("InitHeapSize: %d\n", ne->ne_header->InitHeapSize);
-	rbin->cb_printf ("InitStackSize: %d\n", ne->ne_header->InitStackSize);
-	rbin->cb_printf ("EntryPointCSIndex: %d\n", ne->ne_header->csEntryPoint);
-	rbin->cb_printf ("EntryPointIPOff: 0x%04x\n", ne->ne_header->ipEntryPoint);
-	rbin->cb_printf ("InitStack: %d\n", ne->ne_header->InitStack);
-	rbin->cb_printf ("SegCount: %d\n", ne->ne_header->SegCount);
-	rbin->cb_printf ("ModuleRefsCount: %d\n", ne->ne_header->ModRefs);
-	rbin->cb_printf ("NonResNamesTblSiz: 0x%x\n", ne->ne_header->NoResNamesTabSiz);
-	rbin->cb_printf ("SegTableOffset: 0x%x\n", ne->ne_header->SegTableOffset);
-	rbin->cb_printf ("ResourceTblOff: 0x%x\n", ne->ne_header->ResTableOffset);
-	rbin->cb_printf ("ResidentNameTblOff: 0x%x\n", ne->ne_header->ResidNamTable);
-	rbin->cb_printf ("ModuleRefTblOff: 0x%x\n", ne->ne_header->ModRefTable);
-	rbin->cb_printf ("ImportNameTblOff: 0x%x\n", ne->ne_header->ImportNameTable);
-	rbin->cb_printf ("OffStartNonResTab: %d\n", ne->ne_header->OffStartNonResTab);
-	rbin->cb_printf ("MovEntryCount: %d\n", ne->ne_header->MovEntryCount);
-	rbin->cb_printf ("FileAlnSzShftCnt: %d\n", ne->ne_header->FileAlnSzShftCnt);
-	rbin->cb_printf ("nResTabEntries: %d\n", ne->ne_header->nResTabEntries);
-	rbin->cb_printf ("OS: %s\n", ne->os);
-	rbin->cb_printf ("OS2EXEFlags: %x\n", ne->ne_header->OS2EXEFlags);
-	rbin->cb_printf ("retThunkOffset: %d\n", ne->ne_header->retThunkOffset);
-	rbin->cb_printf ("segRefThunksOff: %d\n", ne->ne_header->segrefthunksoff);
-	rbin->cb_printf ("mincodeswap: %d\n", ne->ne_header->mincodeswap);
-	rbin->cb_printf ("winver: %d.%d\n", ne->ne_header->expctwinver[1], ne->ne_header->expctwinver[0]);
+static char *header(RBinFile *bf, int mode) {
+	r_bin_ne_obj_t *ne = bf->bo->bin_obj;
+	if (!ne || !ne->ne_header) {
+		return NULL;
+	}
+	RStrBuf *sb = r_strbuf_new ("");
+#define p(f,...) r_strbuf_appendf (sb, f, ##__VA_ARGS__)
+	p ("Signature: NE\n");
+	p ("MajLinkerVersion: %d\n", ne->ne_header->MajLinkerVersion);
+	p ("MinLinkerVersion: %d\n", ne->ne_header->MinLinkerVersion);
+	p ("EntryTableOffset: 0x%04x\n", ne->ne_header->EntryTableOffset);
+	p ("EntryTableLength: %d\n", ne->ne_header->EntryTableLength);
+	p ("FileLoadCRC: %08x\n", ne->ne_header->FileLoadCRC);
+	p ("ProgFlags: %d\n", ne->ne_header->ProgFlags);
+	p ("ApplFlags: %d\n", ne->ne_header->ApplFlags);
+	p ("AutoDataSegIndex: %d\n", ne->ne_header->AutoDataSegIndex);
+	p ("InitHeapSize: %d\n", ne->ne_header->InitHeapSize);
+	p ("InitStackSize: %d\n", ne->ne_header->InitStackSize);
+	p ("EntryPointCSIndex: %d\n", ne->ne_header->csEntryPoint);
+	p ("EntryPointIPOff: 0x%04x\n", ne->ne_header->ipEntryPoint);
+	p ("InitStack: %d\n", ne->ne_header->InitStack);
+	p ("SegCount: %d\n", ne->ne_header->SegCount);
+	p ("ModuleRefsCount: %d\n", ne->ne_header->ModRefs);
+	p ("NonResNamesTblSiz: 0x%x\n", ne->ne_header->NoResNamesTabSiz);
+	p ("SegTableOffset: 0x%x\n", ne->ne_header->SegTableOffset);
+	p ("ResourceTblOff: 0x%x\n", ne->ne_header->ResTableOffset);
+	p ("ResidentNameTblOff: 0x%x\n", ne->ne_header->ResidNamTable);
+	p ("ModuleRefTblOff: 0x%x\n", ne->ne_header->ModRefTable);
+	p ("ImportNameTblOff: 0x%x\n", ne->ne_header->ImportNameTable);
+	p ("OffStartNonResTab: %d\n", ne->ne_header->OffStartNonResTab);
+	p ("MovEntryCount: %d\n", ne->ne_header->MovEntryCount);
+	p ("FileAlnSzShftCnt: %d\n", ne->ne_header->FileAlnSzShftCnt);
+	p ("nResTabEntries: %d\n", ne->ne_header->nResTabEntries);
+	p ("OS: %s\n", ne->os);
+	p ("OS2EXEFlags: %x\n", ne->ne_header->OS2EXEFlags);
+	p ("retThunkOffset: %d\n", ne->ne_header->retThunkOffset);
+	p ("segRefThunksOff: %d\n", ne->ne_header->segrefthunksoff);
+	p ("mincodeswap: %d\n", ne->ne_header->mincodeswap);
+	p ("winver: %d.%d\n", ne->ne_header->expctwinver[1], ne->ne_header->expctwinver[0]);
+#undef p
+	return r_strbuf_drain (sb);
 }
 
-RBinInfo *info(RBinFile *bf) {
-	r_bin_ne_obj_t *ne = bf->o->bin_obj;
+static RBinInfo *info(RBinFile *bf) {
+	r_bin_ne_obj_t *ne = bf->bo->bin_obj;
 	RBinInfo *i = R_NEW0 (RBinInfo);
-	if (i) {
-		i->bits = 16;
-		i->arch = strdup ("x86");
-		i->os = strdup (ne->os);
+	i->bits = 16;
+	i->arch = strdup ("x86");
+	i->os = strdup (ne->os? ne->os: "os2");
+	if (ne->ne_header) {
 		i->claimed_checksum = r_str_newf ("%08x", ne->ne_header->FileLoadCRC);
 	}
 	return i;
 }
 
-RList *entries(RBinFile *bf) {
-	return r_bin_ne_get_entrypoints (bf->o->bin_obj);
+static RList *entries(RBinFile *bf) {
+	return r_bin_ne_get_entrypoints (bf->bo->bin_obj);
 }
 
-RList *symbols(RBinFile *bf) {
-	return r_bin_ne_get_symbols (bf->o->bin_obj);
+static bool symbols_vec(RBinFile *bf) {
+	r_bin_ne_load_symbols (bf->bo->bin_obj, &bf->bo->symbols_vec);
+	return true;
 }
 
-RList *imports(RBinFile *bf) {
-	return r_bin_ne_get_imports (bf->o->bin_obj);
+static bool imports_vec(RBinFile *bf) {
+	r_bin_ne_load_imports (bf->bo->bin_obj, &bf->bo->imports_vec);
+	return true;
 }
 
-RList *sections(RBinFile *bf) {
-	return r_bin_ne_get_segments (bf->o->bin_obj);
+static RVecRBinReloc *relocs(RBinFile *bf) {
+	return r_bin_ne_get_relocs (bf->bo->bin_obj, &bf->bo->symbols_vec, &bf->bo->sections_vec);
 }
 
-RList *relocs(RBinFile *bf) {
-	return r_bin_ne_get_relocs (bf->o->bin_obj);
+static bool sections_vec(RBinFile *bf) {
+	return r_bin_ne_load_segments (bf->bo->bin_obj, &bf->bo->sections_vec);
+}
+
+static bool load_resources(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, false);
+	r_bin_ne_obj_t *ne = bf->bo->bin_obj;
+	if (!ne) {
+		return false;
+	}
+	ut32 index = 0;
+	RListIter *iter;
+	r_ne_resource *res;
+	r_list_foreach (ne->resources, iter, res) {
+		RListIter *entry_iter;
+		r_ne_resource_entry *entry;
+		r_list_foreach (res->entry, entry_iter, entry) {
+			RBinResource *resource = RVecRBinResource_emplace_back (&bf->bo->resources_vec);
+			if (!resource) {
+				return false;
+			}
+			resource->name = entry->name? strdup (entry->name): NULL;
+			resource->type = res->name? strdup (res->name): NULL;
+			if ((entry->name && !resource->name) || (res->name && !resource->type)) {
+				return false;
+			}
+			resource->paddr = entry->offset + bf->bo->loadaddr;
+			resource->vaddr = resource->paddr;
+			resource->size = entry->size;
+			resource->id = entry->named? UT64_MAX: entry->id;
+			resource->index = index++;
+			resource->type_id = res->named? UT32_MAX: res->type_id;
+			resource->named = entry->named;
+		}
+	}
+	return true;
 }
 
 RBinPlugin r_bin_plugin_ne = {
-	.name = "ne",
-	.desc = "NE format r2 plugin",
-	.author = "GustavoLCR",
-	.license = "LGPL3",
-	.check_buffer = &check_buffer,
-	.load_buffer = &load_buffer,
+	.meta = {
+		.name = "ne",
+		.desc = "New Executables for 16bit Windows",
+		.author = "GustavoLCR",
+		.license = "LGPL-3.0-only",
+	},
+	.check = &check,
+	.load = &load,
 	.destroy = &destroy,
 	.header = &header,
 	.info = &info,
 	.entries = &entries,
-	.sections = &sections,
-	.symbols = &symbols,
-	.imports = &imports,
+	.sections_vec = &sections_vec,
+	.symbols_vec = &symbols_vec,
+	.imports_vec = &imports_vec,
 	.relocs = &relocs,
-	.minstrlen = 4
+	.minstrlen = 4,
+	.load_resources = &load_resources
 };
 
 #ifndef R2_PLUGIN_INCORE

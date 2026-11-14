@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2026 - pancake */
 
 #include <r_reg.h>
 #include <r_util.h>
@@ -6,10 +6,9 @@
 
 static const char *parse_alias(RReg *reg, char **tok, const int n) {
 	if (n == 2) {
-		int role = r_reg_get_name_idx (tok[0] + 1);
-		return r_reg_set_name (reg, role, tok[1])
-			? NULL
-			: "Invalid alias";
+		const int type = r_reg_alias_fromstring (tok[0] + 1);
+		const bool works = r_reg_alias_setname (reg, type, tok[1]);
+		return works? NULL : "Invalid alias";
 	}
 	return "Invalid syntax";
 }
@@ -17,23 +16,120 @@ static const char *parse_alias(RReg *reg, char **tok, const int n) {
 // Sizes prepended with a dot are expressed in bits
 // strtoul with base 0 allows the input to be in decimal/octal/hex format
 
-static ut64 parse_size(char *s, char **end) {
+// bit counts are stored in ints, larger values are rejected through end
+static int parse_size(char *s, char **end) {
+	ut64 bits;
 	if (*s == '.') {
-		return strtoul (s + 1, end, 10);
+		bits = strtoull (s + 1, end, 10);
+	} else {
+		char *has_dot = strchr (s, '.');
+		if (has_dot) {
+			*has_dot++ = 0;
+		}
+		const ut64 bytes = strtoull (s, end, 0);
+		bits = (bytes > INT_MAX / 8)? UT64_MAX: bytes << 3;
+		if (has_dot) {
+			const ut64 extra = strtoull (has_dot, end, 0);
+			bits = (extra > INT_MAX)? UT64_MAX: bits + extra;
+		}
 	}
-	char *has_dot = strchr (s, '.');
-	if (has_dot) {
-		*has_dot++ = 0;
-		ut64 a = strtoul (s, end, 0) << 3;
-		ut64 b = strtoul (has_dot, end, 0);
-		return a + b;
+	if (bits > INT_MAX) {
+		*end = "!";
+		return 0;
 	}
-	return strtoul (s, end, 0) << 3;
+	return (int)bits;
+}
+
+// returns the bit offset just past the last reserved byte in the given arena.
+// considers both materialized RRegItems and declared RRegVBank ranges so that
+// `$` resolves to the true tail when a vbank has reserved space.
+static int parse_def_tail(RReg *reg, int type) {
+	int last = 0;
+	RListIter *iter;
+	RRegItem *ri;
+	r_list_foreach (reg->regset[type].regs, iter, ri) {
+		if (ri->size >= 8 && ri->offset >= 0) {
+			int pos = ri->offset + ri->size;
+			if (pos > last) {
+				last = pos;
+			}
+		}
+	}
+	RRegVBank *vb;
+	R_VEC_FOREACH (&reg->regset[type].vbanks, vb) {
+		int pos = vb->offset + vb->size * vb->count;
+		if (pos > last) {
+			last = pos;
+		}
+	}
+	return last;
+}
+
+static const char *parse_vbank_suffix(char *name, int *count) {
+	*count = 0;
+	if (!name[0] || name[1] != '[' || !r_reg_vbank_prefix (name[0])) {
+		return NULL;
+	}
+	const char *p = name + 2;
+	if (!isdigit ((ut8)*p) || *p == '0') {
+		return "Invalid vbank count";
+	}
+	char *end = NULL;
+	long n = strtol (p, &end, 10);
+	if (n > R_REG_VBANK_MAX_REGS) {
+		return "Invalid vbank count";
+	}
+	if (*end != ']' || end[1]) {
+		return "Invalid vbank suffix";
+	}
+	name[1] = 0;
+	*count = (int)n;
+	return NULL;
+}
+
+static bool vbank_item_match(const char *name, char prefix, int count) {
+	const char *p = name + 1;
+	if (name[0] != prefix || !isdigit ((ut8)*p)) {
+		return false;
+	}
+	if (*p == '0' && p[1]) {
+		return false;
+	}
+	char *end = NULL;
+	long n = strtol (p, &end, 10);
+	return !*end && n < count;
+}
+
+static bool profile_has_duplicate(RReg *reg, const char *name, int count) {
+	const char prefix = name[0];
+	int i;
+	for (i = 0; i < R_REG_TYPE_LAST; i++) {
+		RRegSet *rs = &reg->regset[i];
+		if (count > 0) {
+			// a bank claims every item its prefix and count can name
+			RListIter *iter;
+			RRegItem *ri;
+			r_list_foreach (rs->regs, iter, ri) {
+				if (vbank_item_match (ri->name, prefix, count)) {
+					return true;
+				}
+			}
+		} else if (rs->ht_regs && ht_pp_find (rs->ht_regs, name, NULL)) {
+			return true;
+		}
+		RRegVBank *vb;
+		R_VEC_FOREACH (&rs->vbanks, vb) {
+			if (count > 0? vb->prefix == prefix: vbank_item_match (name, vb->prefix, vb->count)) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 //TODO: implement bool r_reg_set_def_string()
 static const char *parse_def(RReg *reg, char **tok, const int n) {
-	char *end;
+	char *end = "";
 	int type, type2;
 
 	if (n != 5 && n != 6) {
@@ -57,44 +153,98 @@ static const char *parse_def(RReg *reg, char **tok, const int n) {
 	if (type < 0 || type2 < 0) {
 		return "Invalid register type";
 	}
-#if 1
-	if (r_reg_get (reg, tok[1], R_REG_TYPE_ALL)) {
-		eprintf ("Ignoring duplicated register definition '%s'\n", tok[1]);
-		return NULL;
-		//return "Duplicate register definition";
+
+	int vcount = 0;
+	const char *vberr = parse_vbank_suffix (tok[1], &vcount);
+	if (vberr) {
+		return vberr;
 	}
-#endif
+	if (profile_has_duplicate (reg, tok[1], vcount)) {
+		if (vcount > 0) {
+			R_LOG_WARN ("Duplicated register bank definition for '%c[%d]' has been ignored", tok[1][0], vcount);
+		} else {
+			R_LOG_WARN ("Duplicated register definition for '%s' has been ignored", tok[1]);
+		}
+		return NULL;
+	}
+	if (vcount > 0) {
+		// virtual register bank declaration: lazy, no per-item RRegItem yet
+		int vsize = parse_size (tok[2], &end);
+		if (*end || !vsize) {
+			return "Invalid size";
+		}
+		int voff;
+		if (!strcmp (tok[3], "$")) {
+			voff = parse_def_tail (reg, type2);
+		} else if (tok[3][0] == '?') {
+			return "vbank offset must be numeric or '$'";
+		} else {
+			voff = parse_size (tok[3], &end);
+			if (*end) {
+				return "Invalid offset";
+			}
+		}
+		int vpacked = parse_size (tok[4], &end);
+		if (*end) {
+			return "Invalid packed size";
+		}
+		if ((st64)vsize * vcount > INT_MAX - voff) {
+			return "Invalid size";
+		}
+		RRegVBank *vb = RVecRegVBank_emplace_back (&reg->regset[type2].vbanks);
+		if (!vb) {
+			return "Unable to allocate memory";
+		}
+		vb->prefix = tok[1][0];
+		vb->type = type;
+		vb->arena = type2;
+		vb->count = vcount;
+		vb->size = vsize;
+		vb->packed_size = vpacked;
+		vb->offset = voff;
+		r_reg_hasbits_use (reg, vsize);
+		int tail = voff + vsize * vcount;
+		if (tail > reg->size) {
+			reg->size = tail;
+		}
+		reg->regset[type2].maskregstype |= (1ULL << type);
+		return NULL;
+	}
 
 	RRegItem *item = R_NEW0 (RRegItem);
-	if (!item) {
-		return "Unable to allocate memory";
-	}
-
 	item->type = type;
 	item->name = strdup (tok[1]);
 	// All the numeric arguments are strictly checked
 	item->size = parse_size (tok[2], &end);
-	if (*end != '\0' || !item->size) {
+	if (*end || !item->size) {
 		r_reg_item_free (item);
 		return "Invalid size";
 	}
 	if (!strcmp (tok[3], "?")) {
 		item->offset = -1;
+	} else if (!strcmp (tok[3], "?0")) {
+		item->offset = -1;
+	} else if (!strcmp (tok[3], "?1")) {
+		item->offset = -2; // TODO: use an enum here
+	} else if (!strcmp (tok[3], "$")) {
+		item->offset = parse_def_tail (reg, type);
 	} else {
 		item->offset = parse_size (tok[3], &end);
 	}
-	if (*end != '\0') {
+	if (*end || item->offset > INT_MAX - item->size) {
 		r_reg_item_free (item);
 		return "Invalid offset";
 	}
 	item->packed_size = parse_size (tok[4], &end);
-	if (*end != '\0') {
+	if (*end) {
 		r_reg_item_free (item);
 		return "Invalid packed size";
 	}
 
-	// Dynamically update the list of supported bit sizes
-	reg->bits |= item->size;
+	// Update the list of supported bit sizes
+	if (!r_reg_hasbits_use (reg, item->size)) {
+		R_LOG_DEBUG ("r_reg_hasbits_use failed with %d", item->size);
+	}
 
 	// This is optional
 	if (n == 6) {
@@ -107,10 +257,11 @@ static const char *parse_def(RReg *reg, char **tok, const int n) {
 	}
 
 	item->arena = type2;
-	if (!reg->regset[type2].regs) {
+	if (!reg->regset[type2].regs || reg->regset[type2].regs->length == 0) {
+		r_list_free(reg->regset[type2].regs);
 		reg->regset[type2].regs = r_list_newf ((RListFree)r_reg_item_free);
 	}
-	r_list_append (reg->regset[type2].regs, item);
+	r_list_append (reg->regset[type2].regs, r_ref (item));
 	if (!reg->regset[type2].ht_regs) {
 		reg->regset[type2].ht_regs = ht_pp_new0 ();
 	}
@@ -121,35 +272,117 @@ static const char *parse_def(RReg *reg, char **tok, const int n) {
 		reg->size = item->offset + item->size;
 	}
 	// Update the overall type of registers into a regset
-	reg->regset[type2].maskregstype |= ((int)1 << type);
+	reg->regset[type2].maskregstype |= (1ULL << type);
 	return NULL;
+}
+
+static inline bool is_big(int endian) {
+	return (endian & R_SYS_ENDIAN_BIG) == R_SYS_ENDIAN_BIG;
+}
+
+static RRegItem *widest_host(RList *regs, RRegItem *bit) {
+	RRegItem *host = NULL;
+	RListIter *iter;
+	RRegItem *ri;
+	r_list_foreach (regs, iter, ri) {
+		if (ri->size <= 8 || ri->offset < 0 || ri->offset % 8) {
+			continue;
+		}
+		if (ri->offset > bit->offset || bit->offset + bit->size > ri->offset + ri->size) {
+			continue;
+		}
+		if (!host || ri->size > host->size) {
+			host = ri;
+		}
+	}
+	return host;
+}
+
+static bool mirror_vector_alias(RRegSet *regset, RRegItem *item) {
+	if ((item->size & 7) || (item->offset & 7)) {
+		return false;
+	}
+	RRegVBank *bank;
+	R_VEC_FOREACH (&regset->vbanks, bank) {
+		const int offset = item->offset - bank->offset;
+		if (!bank->packed_size || bank->size < 128 || (bank->size & 63) || offset < 0
+			|| offset + item->size > bank->size * bank->count || (offset & 63) + item->size > 64) {
+			continue;
+		}
+		// Vector chunks stay low-first; bytes inside each chunk follow endianness.
+		item->offset = bank->offset + (offset & ~63) + 64 - (offset & 63) - item->size;
+		return true;
+	}
+	return false;
+}
+
+// Aliases are declared at their little-endian byte offsets.
+static void mirror_aliases(RReg *reg) {
+	int i;
+	for (i = 0; i < R_REG_TYPE_LAST; i++) {
+		RList *regs = reg->regset[i].regs;
+		RListIter *iter;
+		RRegItem *ri;
+		r_list_foreach (regs, iter, ri) {
+			if (ri->size >= 64 || ri->offset < 0) {
+				continue;
+			}
+			if (mirror_vector_alias (&reg->regset[i], ri) || ri->size >= 8) {
+				continue;
+			}
+			RRegItem *host = widest_host (regs, ri);
+			if (!host) {
+				continue;
+			}
+			int base = host->offset / 8;
+			int last = base + (host->size + 7) / 8 - 1;
+			int byte = last - (ri->offset / 8 - base);
+			ri->offset = (byte * 8) + (ri->offset % 8);
+		}
+	}
+}
+
+R_API void r_reg_set_endian(RReg *reg, int endian) {
+	R_RETURN_IF_FAIL (reg);
+	const bool flip = is_big (reg->endian) != is_big (endian);
+	reg->endian = endian;
+	if (flip) {
+		mirror_aliases (reg);
+	}
 }
 
 #define PARSER_MAX_TOKENS 8
 R_API bool r_reg_set_profile_string(RReg *reg, const char *str) {
-	char *tok[PARSER_MAX_TOKENS];
+	R_RETURN_VAL_IF_FAIL (reg && str, false);
+	char *tok[PARSER_MAX_TOKENS + 1];
 	char tmp[128];
 	int i, j, l;
 	const char *p = str;
 
-	r_return_val_if_fail (reg && str, false);
 	if (R_STR_ISEMPTY (str)) {
 		return true;
 	}
 
 	// Same profile, no need to change
 	if (reg->reg_profile_str && !strcmp (reg->reg_profile_str, str)) {
+		// R_LOG_WARN ("is the same do nothing");
 	//	r_reg_free_internal (reg, false);
 	//	r_reg_init (reg);
 		return true;
 	}
-
-	// we should reset all the arenas before setting the new reg profile
+	// reset all the arenas before setting the new reg profile
 	r_reg_arena_pop (reg);
 	// Purge the old registers
 	r_reg_free_internal (reg, true);
 	r_reg_arena_shrink (reg);
-
+#if 0
+	for (i = 0; i < R_REG_TYPE_LAST; i++) {
+		RRegSet *rs = &reg->regset[i];
+		if (rs && rs->arena) {
+			rs->arena->size = 64;
+		}
+	}
+#endif
 	// Cache the profile string
 	reg->reg_profile_str = strdup (str);
 
@@ -174,7 +407,7 @@ R_API bool r_reg_set_profile_string(RReg *reg, const char *str) {
 		j = 0;
 		// For every word
 		while (*p) {
-			// Skip the whitespace
+			// Skip whitespace
 			while (*p == ' ' || *p == '\t') {
 				p++;
 			}
@@ -198,76 +431,91 @@ R_API bool r_reg_set_profile_string(RReg *reg, const char *str) {
 			}
 			tmp[i] = '\0';
 			// Limit the number of tokens
-			if (j > PARSER_MAX_TOKENS - 1) {
+			if (j >= PARSER_MAX_TOKENS) {
 				break;
 			}
 			// Save the token
 			tok[j++] = strdup (tmp);
 		}
-		// Empty line, eww
+		tok[j] = NULL;
 		if (j) {
 			// Do the actual parsing
 			char *first = tok[0];
 			// Check whether it's defining an alias or a register
-			if (!strncmp (first, "=RS", 3)) {
-				reg->bits_default = atoi (tok[1]);
-				// Clean up
-				for (i = 0; i < j; i++) {
-					free (tok[i]);
+			if (r_str_startswith (first, "=RS")) {
+				if (tok[1]) {
+					reg->bits_default = atoi (tok[1]);
+				} else {
+					R_LOG_ERROR ("Missing argument for =RS");
 				}
 			} else {
-				const char *r = (*first == '=')
-					? parse_alias (reg, tok, j)
-					: parse_def (reg, tok, j);
-				if (!strncmp (first, "=A0", 3)) {
-					have_a0 = true;
+				const char *r = NULL;
+				if (*first == '^') {
+					reg->endian = R_SYS_ENDIAN;
+					switch (first[1]) {
+					case 'l':
+						reg->endian = R_SYS_ENDIAN_LITTLE;
+						break;
+					case 'b':
+						reg->endian = R_SYS_ENDIAN_BIG;
+						break;
+					case 'm':
+						reg->endian = R_SYS_ENDIAN_MIDDLE;
+						break;
+					}
+				} else if (*first == '=') {
+					r = parse_alias (reg, tok, j);
+					if (!have_a0 && r_str_startswith (first + 1, "A0")) {
+						have_a0 = true;
+					}
+				} else {
+					r = parse_def (reg, tok, j);
 				}
-				// Clean up
-				for (i = 0; i < j; i++) {
-					free (tok[i]);
-				}
-				// Warn the user if something went wrong
 				if (r) {
-					eprintf ("%s: Parse error @ line %d (%s)\n",
-							__FUNCTION__, l, r);
-					//eprintf ("(%s)\n", str);
+					R_LOG_ERROR ("Parse error @ line %d (%s)", l, r);
 					// Clean up
 					r_reg_free_internal (reg, false);
 					r_reg_init (reg);
+					for (i = 0; i < j; i++) {
+						free (tok[i]);
+					}
 					return false;
 				}
 			}
+			// Clean up
+			for (i = 0; i < j; i++) {
+				free (tok[i]);
+			}
 		}
 	} while (*p++);
-	if (!have_a0) {
-		eprintf ("Warning: =A0 not defined\n");
-		//r_reg_free_internal (reg, false);
-		///return false;
+	(void)have_a0;
+	if (is_big (reg->endian)) {
+		mirror_aliases (reg);
 	}
 	reg->size = 0;
 	for (i = 0; i < R_REG_TYPE_LAST; i++) {
 		RRegSet *rs = &reg->regset[i];
-		//eprintf ("* arena %s size %d\n", r_reg_get_type (i), rs->arena->size);
 		if (rs && rs->arena) {
 			reg->size += rs->arena->size;
 		}
 	}
 	// Align to byte boundary if needed
-	//if (reg->size & 7) {
+	// if (reg->size & 7) {
 	//	reg->size += 8 - (reg->size & 7);
-	//}
+	// }
 	//reg->size >>= 3; // bits to bytes (divide by 8)
 	r_reg_fit_arena (reg);
 	// dup the last arena to allow regdiffing
 	r_reg_arena_push (reg);
 	r_reg_reindex (reg);
+	r_reg_ro_reset (reg, reg->roregs);
 	// reset arenas
 	return true;
 }
 
 // read profile from file
 R_API bool r_reg_set_profile(RReg *reg, const char *profile) {
-	r_return_val_if_fail (reg && profile, false);
+	R_RETURN_VAL_IF_FAIL (reg && profile, false);
 	char *str = r_file_slurp (profile, NULL);
 	if (!str) {
 		char *base = r_sys_getenv (R_LIB_ENV);
@@ -278,7 +526,7 @@ R_API bool r_reg_set_profile(RReg *reg, const char *profile) {
 		}
 	}
 	if (!str) {
-		eprintf ("r_reg_set_profile: Cannot find '%s'\n", profile);
+		R_LOG_WARN ("Cannot find '%s'", profile);
 		return false;
 	}
 	bool ret = r_reg_set_profile_string (reg, str);
@@ -287,23 +535,33 @@ R_API bool r_reg_set_profile(RReg *reg, const char *profile) {
 }
 
 static char *gdb_to_r2_profile(const char *gdb) {
-	r_return_val_if_fail (gdb, NULL);
+	R_RETURN_VAL_IF_FAIL (gdb, NULL);
 	RStrBuf *sb = r_strbuf_new ("");
 	if (!sb) {
 		return NULL;
 	}
 	char *ptr1, *gptr, *gptr1;
+	char *profile = strdup (gdb);
+	if (!profile) {
+		r_strbuf_free (sb);
+		return NULL;
+	}
 	char name[16], groups[128], type[16];
 	const int all = 1, gpr = 2, save = 4, restore = 8, float_ = 16,
 		  sse = 32, vector = 64, system = 128, mmx = 256;
 	int number, rel, offset, size, type_bits, ret;
 	// Every line is -
 	// Name Number Rel Offset Size Type Groups
-	const char *ptr = r_str_trim_head_ro (gdb);
+	char *ptr = profile;
+	while (isspace ((ut8)*ptr)) {
+		ptr++;
+	}
 
 	// It's possible someone includes the heading line too. Skip it
 	if (r_str_startswith (ptr, "Name")) {
 		if (!(ptr = strchr (ptr, '\n'))) {
+			free (profile);
+			r_strbuf_free (sb);
 			return NULL;
 		}
 		ptr++;
@@ -319,16 +577,17 @@ static char *gdb_to_r2_profile(const char *gdb) {
 		if ((ptr1 = strchr (ptr, '\n'))) {
 			*ptr1 = '\0';
 		} else {
-			eprintf ("Could not parse line: %s (missing \\n)\n", ptr);
+			R_LOG_WARN ("Could not parse line: %s (missing newline)", ptr);
+			free (profile);
 			r_strbuf_free (sb);
 			return false;
 		}
-		ret = sscanf (ptr, " %s %d %d %d %d %s %s", name, &number, &rel,
-			&offset, &size, type, groups);
-		// Groups is optional, others not
+		ret = r_str_scanf (ptr, "%.s %d %d %d %d %.s %.s", sizeof (name), name, &number, &rel, &offset, &size, sizeof (type), type, sizeof (groups), groups);
+		// Groups is optional, others are not
 		if (ret < 6) {
 			if (*ptr != '*') {
-				eprintf ("Could not parse line: %s\n", ptr);
+				R_LOG_WARN ("Could not parse line: %s", ptr);
+				free (profile);
 				r_strbuf_free (sb);
 				return false;
 			}
@@ -368,9 +627,9 @@ static char *gdb_to_r2_profile(const char *gdb) {
 				type_bits |= restore;
 			} else if (r_str_startswith (gptr, "float")) {
 				type_bits |= float_;
-			} else if (r_str_startswith (gptr, "sse")) {
+			} else if (r_str_startswith (gptr, "sse")) { // this is vector
 				type_bits |= sse;
-			} else if (r_str_startswith (gptr, "mmx")) {
+			} else if (r_str_startswith (gptr, "mmx")) { // this is vector too
 				type_bits |= mmx;
 			} else if (r_str_startswith (gptr, "vector")) {
 				type_bits |= vector;
@@ -394,11 +653,13 @@ static char *gdb_to_r2_profile(const char *gdb) {
 		if (!(type_bits & sse) && !(type_bits & float_)) {
 			type_bits |= gpr;
 		}
-		// Print line
-		r_strbuf_appendf (sb, "%s\t%s\t.%d\t%d\t0\n",
-			// Ref: Comment above about more register type mappings
-			((type_bits & mmx) || (type_bits & float_) || (type_bits & sse)) ? "fpu" : "gpr",
-			name, size * 8, offset);
+		const char *type = ((type_bits & mmx) || (type_bits & float_) || (type_bits & sse)) ? "fpu" : "gpr";
+		if (isupper (*name)) {
+			// assume uppercase register names are only used for privileged registers
+			type = "pri"; // family=priv
+			r_str_case (name, false);
+		}
+		r_strbuf_appendf (sb, "%s\t%s\t.%d\t%d\t0\n", type, name, size * 8, offset);
 		// Go to next line
 		if (!ptr1) {
 			break;
@@ -406,12 +667,14 @@ static char *gdb_to_r2_profile(const char *gdb) {
 		ptr = ptr1 + 1;
 		continue;
 	}
-	return r_strbuf_drain (sb);
+	char *out = r_strbuf_drain (sb);
+	free (profile);
+	return out;
 }
 
 R_API char *r_reg_parse_gdb_profile(const char *profile_file) {
-	char *str = NULL;
-	if (!(str = r_file_slurp (profile_file, NULL))) {
+	char *str = r_file_slurp (profile_file, NULL);
+	if (!str) {
 		char *base = r_sys_getenv (R_LIB_ENV);
 		if (base) {
 			char *file = r_str_appendf (base, R_SYS_DIR "%s", profile_file);
@@ -426,34 +689,29 @@ R_API char *r_reg_parse_gdb_profile(const char *profile_file) {
 		free (str);
 		return ret;
 	}
-	eprintf ("r_reg_parse_gdb_profile: Cannot find '%s'\n", profile_file);
+	R_LOG_WARN ("r_reg_parse_gdb_profile: Cannot find '%s'", profile_file);
 	return NULL;
 }
 
 R_API char *r_reg_profile_to_cc(RReg *reg) {
-	const char *r0 = r_reg_get_name_by_type (reg, "R0");
-	const char *a0 = r_reg_get_name_by_type (reg, "A0");
-	const char *a1 = r_reg_get_name_by_type (reg, "A1");
-	const char *a2 = r_reg_get_name_by_type (reg, "A2");
-	const char *a3 = r_reg_get_name_by_type (reg, "A3");
-
+	R_RETURN_VAL_IF_FAIL (reg, NULL);
+	const char *r0 = r_reg_alias_getname (reg, R_REG_ALIAS_R0);
 	if (!r0) {
-		r0 = a0;
+		r0 = r_reg_alias_getname (reg, R_REG_ALIAS_A0);
 	}
 	if (!r0) {
-		// it is mandatory to have at least =A0 defined in the reg profile
-		// this will be enforced in reg/profile at parsing time
 		return NULL;
 	}
-	if (a3 && a2 && a1) {
-		return r_str_newf ("%s reg(%s, %s, %s, %s)", r0, a0, a1, a2, a3);
+	RStrBuf *sb = r_strbuf_new (NULL);
+	r_strbuf_appendf (sb, "%s reg(", r0);
+	int i;
+	for (i = R_REG_ALIAS_A0; i <= R_REG_ALIAS_A9; i++) {
+		const char *arg = r_reg_alias_getname (reg, i);
+		if (!arg) {
+			break;
+		}
+		r_strbuf_appendf (sb, "%s%s", i == R_REG_ALIAS_A0? "": ", ", arg);
 	}
-	if (a2 && a1) {
-		return r_str_newf ("%s reg(%s, %s, %s)", r0, a0, a1, a2);
-	}
-	if (a1) {
-		return r_str_newf ("%s reg(%s, %s)", r0, a0, a1);
-	}
-	return r_str_newf ("%s reg(%s)", r0, a0);
+	r_strbuf_append (sb, ")");
+	return r_strbuf_drain (sb);
 }
-

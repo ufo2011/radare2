@@ -1,5 +1,6 @@
 NAME=f_123
 FILE=-
+ARGS=-1
 CMDS=<<EOF
 f _foo=123
 f _123=_foo
@@ -15,18 +16,19 @@ f $foo=456
 ?v $foo
 EOF
 EXPECT=<<EOF
+ERROR: Invalid flag name '123'
+ERROR: Invalid flag name '$123'
+ERROR: Invalid flag name '$foo'
 0x7b
 0x7b
 0x141
 0x7b
-0xffffffffffffffff
-0xffffffffffffffff
+ERROR: cant find flag
+0x0
+ERROR: cant find flag
+0x0
 EOF
-EXPECT_ERR=<<EOF
-Invalid flag name '123'.
-Invalid flag name '$123'.
-Invalid flag name '$foo'.
-EOF
+EXPECT_ERR=
 RUN
 
 NAME=f?flag
@@ -82,25 +84,43 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: fs test_flagspace; fs-test_flagspace; fs-test_flagspace
 NAME=1: fs *
 FILE=bins/elf/analysis/main
 CMDS=<<EOF
 fs *
 fs~?^*
+?e --
+fs test_flagspace
+fs~?test_flagspace
+?e --
+fs test_flagspace
+fs-test_flagspace
+fs~?test_flagspace
+?e --
+fs-*
+fs~?0
 EOF
 EXPECT=<<EOF
+0
+--
+1
+--
+0
+--
 0
 EOF
 RUN
 
 NAME=2: fs *
 FILE=bins/elf/analysis/main
+ARGS=-e bin.types=true
 CMDS=<<EOF
 fs *
 fs~?*
 EOF
 EXPECT=<<EOF
-9
+10
 EOF
 RUN
 
@@ -121,40 +141,6 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=fs test_flagspace
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
-fs test_flagspace
-fs~?test_flagspace
-EOF
-EXPECT=<<EOF
-1
-EOF
-RUN
-
-NAME=fs-test_flagspace
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
-fs test_flagspace
-fs-test_flagspace
-fs~?test_flagspace
-EOF
-EXPECT=<<EOF
-0
-EOF
-RUN
-
-NAME=fs-test_flagspace
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
-fs-*
-fs~?0
-EOF
-EXPECT=<<EOF
-0
-EOF
-RUN
-
 NAME=fs-.
 FILE=malloc://1024
 CMDS=<<EOF
@@ -169,6 +155,7 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: fsr; f.
 NAME=fsm
 FILE=bins/elf/analysis/main
 CMDS=<<EOF
@@ -176,23 +163,27 @@ fs-*
 fs test
 fsm str.Hello_World test
 fs
-EOF
-EXPECT=<<EOF
-    1 * test
-EOF
-RUN
-
-NAME=fsr
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
+?e --
 fs-*
 fs test
 fs test
 fsr test2
 fs
+?e --
+aaa
+f.blah
+f.
+s 0
+?e outside
+f.
 EOF
 EXPECT=<<EOF
+    1 * test
+--
     0 * test2
+--
+0x00400410 blah   [entry0 + 0]
+outside
 EOF
 RUN
 
@@ -279,7 +270,7 @@ f bloh 0x00000003 @ 0x00000002
 fj
 EOF
 EXPECT=<<EOF
-[{"name":"bloh","size":3,"offset":2},{"name":"blah","size":10,"offset":11}]
+[{"name":"bloh","size":3,"addr":2},{"name":"blah","size":10,"addr":11}]
 EOF
 RUN
 
@@ -403,22 +394,6 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=f.
-FILE=bins/elf/analysis/main
-CMDS=<<EOF
-aaa
-f.blah
-f.
-s 0
-?e outside
-f.
-EOF
-EXPECT=<<EOF
-0x00400410 blah   [entry0 + 0]
-outside
-EOF
-RUN
-
 NAME=f.*
 FILE=bins/elf/analysis/main
 CMDS=<<EOF
@@ -432,13 +407,13 @@ f.*
 f.**
 EOF
 EXPECT=<<EOF
-f.patata@0x00400410
+'@0x00400410'f.patata
 outside
 all
-f.patata@0x00400410
+'@0x00400410'f.patata
 EOF
 EXPECT_ERR=<<EOF
-Cannot find function at 0x00000000
+ERROR: Cannot find function at 0x00000000
 EOF
 RUN
 
@@ -461,7 +436,7 @@ all
 {"entry0":{"patata":4195344}}
 EOF
 EXPECT_ERR=<<EOF
-Cannot find function at 0x00000000
+ERROR: Cannot find function at 0x00000000
 EOF
 RUN
 
@@ -502,7 +477,7 @@ e asm.arch=x86
 e asm.bits=32
 s entry0
 e asm.lines=false
-e asm.offset=false
+e asm.addr=false
 e asm.functions=false
 e asm.comments=false
 f--
@@ -546,7 +521,7 @@ f+skutter 1 @ 12
 fj
 EOF
 EXPECT=<<EOF
-[{"name":"cat","size":1,"offset":0},{"name":"rimmer","size":12,"offset":0},{"name":"skutter","size":1,"offset":12},{"name":"lister","size":32,"offset":666},{"name":"kryten","size":32,"offset":666}]
+[{"name":"cat","size":1,"addr":0},{"name":"rimmer","size":12,"addr":0},{"name":"skutter","size":1,"addr":12},{"name":"lister","size":32,"addr":666},{"name":"kryten","size":32,"addr":666}]
 EOF
 RUN
 
@@ -629,12 +604,49 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: flag color
 NAME=dup flags with filter
 FILE=bins/elf/ifunc_rel64
-CMDS=f~obj._IO_helper_jumps
+CMDS=<<EOF
+f~obj._IO_helper_jumps
+?e --
+af
+fc red
+e scr.color=true
+s-16
+xa 128
+fc
+fc*
+fc-*
+fc*
+fc magenta @ $$+16
+xa 32
+EOF
 EXPECT=<<EOF
 0x0049ad40 168 obj._IO_helper_jumps
 0x0049b680 168 obj._IO_helper_jumps_1
+--
+[32m- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF[0m
+[32m0x00400c20[0m  feff ff66 2e0f 1f84 0000 0000 000f 1f00[0m  ...f............[0m
+[33m/fcn.entry0[0m
+            /sym._start                                            
+[32m0x00400c30[0m  [7m[31m31[27m[31med [31m49[31m89 [31md1[31m5e [31m48[31m89 [31me2[31m48 [31m83[31me4 [31mf0[31m50 [31m54[31m49[0m  [7m[31m[27m1[31m.[31mI[31m.[31m.[31m^[31mH[31m.[31m.[31mH[31m.[31m.[31m.[31mP[31mT[31mI[0m ; arg1
+[32m0x00400c40[0m  [31mc7[31mc0 [31m80[31m14 [31m40[31m00 [31m48[31mc7 [31mc1[31mf0 [31m13[31m40 [31m00[31m48 [31mc7[31mc7[0m  [31m.[31m.[31m.[31m.[31m@[31m.[31mH[31m.[31m.[31m.[31m.[31m@[31m.[31mH[31m.[31m.[0m
+[32m0x00400c50[0m  [31m4e[31m0d [31m40[31m00 [31me8[31m57 [31m01[31m00 [31m00[31mf4 660f 1f44 0000[0m  [31mN[31m.[31m@[31m.[31m.[31mW[31m.[31m.[31m.[31m.f..D..[0m
+            /sym.deregister_tm_clones                              
+[32m0x00400c60[0m  [7m[32mb8[27m37 346b 0055 482d 3034 6b00 4883 f80e[0m  [7m[32m[27m.74k.UH-04k.H...[0m
+[32m0x00400c70[0m  4889 e576 1bb8 0000 0000 4885 c074 115d[0m  H..v......H..t.][0m
+[32m0x00400c80[0m  bf30 346b 00ff e066 0f1f 8400 0000 0000[0m  .04k...f........[0m
+[32m0x00400c90[0m  5dc3 0f1f 4000 662e 0f1f 8400 0000 0000[0m  ]...@.f.........[0m
+0x00400c30  entry0    red
+0x00400c30  sym._startred
+'fc entry0=red
+'fc sym._start=red
+[32m- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF[0m
+[32m0x00400c20[0m  feff ff66 2e0f 1f84 0000 0000 000f 1f00[0m  ...f............[0m
+[33m/fcn.entry0[0m
+            /sym._start                                            
+[32m0x00400c30[0m  [7m[35m31[27m[35med [35m49[35m89 [35md1[35m5e [35m48[35m89 [35me2[35m48 [35m83[35me4 [35mf0[35m50 [35m54[35m49[0m  [7m[35m[27m1[35m.[35mI[35m.[35m.[35m^[35mH[35m.[35m.[35mH[35m.[35m.[35m.[35mP[35mT[35mI[0m ; arg1
 EOF
 RUN
 
@@ -664,12 +676,12 @@ fj
 EOF
 EXPECT=<<EOF
 fs *
-f direct1 1 0x00000000 base64:dmVyYmF0aW0=
+'f direct1 1 0x00000000 base64:dmVyYmF0aW0=
 fs *
-f direct2 1 0x00000010 base64:ImJhc2U2NCBhcm1vcmVkIg==
+'f direct2 1 0x00000010 base64:ImJhc2U2NCBhcm1vcmVkIg==
 fs *
-f indirect 1 0x00000020 base64:d29ya3MgdG9v
-[{"name":"direct1","size":1,"offset":0,"comment":"verbatim"},{"name":"direct2","size":1,"offset":16,"comment":"\"base64 armored\""},{"name":"indirect","size":1,"offset":32,"comment":"works too"}]
+'f indirect 1 0x00000020 base64:d29ya3MgdG9v
+[{"name":"direct1","size":1,"comment":"verbatim","addr":0},{"name":"direct2","size":1,"comment":"\"base64 armored\"","addr":16},{"name":"indirect","size":1,"comment":"works too","addr":32}]
 EOF
 RUN
 
@@ -682,4 +694,74 @@ EOF
 EXPECT=<<EOF
 0x00000064 1 base64:NotB64
 EOF
+RUN
+
+NAME=fss keeps pushed space names after deleting the space
+FILE=-
+CMDS=<<EOF
+fs foo
+fs+bar
+fs-foo
+fss
+fs-
+fss
+EOF
+EXPECT=<<EOF
+0  foo
+1  bar (selected)
+0  * (selected)
+EOF
+RUN
+
+NAME=UTF-8 flags are opt-in and toggling preserves existing names
+FILE=malloc://512
+CMDS=<<EOF2
+e asm.flags.utf8
+s 0x10
+fD. sym.名字
+f~sym.
+e asm.flags.utf8=true
+f 中文=0x20
+fr 中文 🚀
+f~🚀
+e asm.flags.utf8=false
+s 0x30
+fD. symbol.名字
+f~symbol.
+f~🚀
+EOF2
+EXPECT=<<EOF2
+false
+0x00000010 1 sym.
+0x00000020 1 🚀
+0x00000030 1 symbol.
+0x00000020 1 🚀
+EOF2
+RUN
+
+NAME=UTF-8 flags preserve binary strings only when enabled
+FILE=bins/elf/strenc
+ARGS=-e asm.flags.utf8=true
+CMDS=f~str.utf8
+EXPECT=<<EOF2
+0x004021ff 61 str.utf8__u00a2u20acU00010348_in_yellow:e_33m_¢€𐍈_e_0m_n
+EOF2
+RUN
+
+NAME=UTF-8 flag commands require explicit permission
+FILE=malloc://512
+CMDS=<<EOF2
+f 名字=0x10
+f~?
+e asm.flags.utf8=true
+f 名字=0x10
+f~?
+EOF2
+EXPECT=<<EOF2
+0
+1
+EOF2
+EXPECT_ERR=<<EOF2
+ERROR: Invalid flag name '名字'
+EOF2
 RUN

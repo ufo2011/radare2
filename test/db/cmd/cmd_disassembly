@@ -1,3 +1,29 @@
+NAME=disasm cmp ascii
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+wx 3c6f 3d1027
+pd 2
+EOF
+EXPECT=<<EOF
+            0x00000000      3c6f           cmp al, 0x6f                ; 'o'
+            0x00000002      3d10270000     cmp eax, 0x2710             ; '\x10\''
+EOF
+RUN
+
+NAME=infinite x/i disasm bug
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+x/i 32
+?e works
+EOF
+EXPECT=<<EOF
+works
+EOF
+RUN
+
 NAME=flags subst bug
 FILE=-
 CMDS=<<EOF
@@ -28,7 +54,7 @@ f sym.imp.objc_msgSend=0xedfa8
 pd 1
 EOF
 EXPECT=<<EOF
-0x00000000      bl 0xedfa8    ; sym.imp.objc_msgSend
+0x00000000      bl sym.imp.objc_msgSend
 EOF
 RUN
 
@@ -40,7 +66,6 @@ pd 1
 EOF
 EXPECT=<<EOF
             ;-- section..text:
-            ;-- .text:
             ;-- entry0:
             ;-- _start:
             0x000006a0      31ed           xor ebp, ebp                ; [14] -r-x section size 546 named .text
@@ -138,7 +163,7 @@ CMDS=<<EOF
 wx e9010f
 e asm.arch=x86
 e asm.bits=16
-?vi $l
+?vi $is
 pi 1
 ao 1~size[1]
 EOF
@@ -172,7 +197,7 @@ call 0x3535
 EOF
 RUN
 
-NAME=unaligned arm code
+NAME=unaligned thumb code
 FILE=-
 CMDS=<<EOF
 wx 00000000
@@ -230,5 +255,119 @@ EOF
 EXPECT=<<EOF
 3
 3
+EOF
+RUN
+
+NAME=byte spacing and align in disasm
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+e scr.utf8=0
+e asm.lines.jmp=1
+e asm.comments=0
+wx 803d1ca0040833740ceb1c83c004a318a0088ffd2a118a00408b1085d275eb
+e asm.bytes.space=0
+e asm.bytes.align=0
+pd 10
+?e --
+e asm.bytes.align = true
+pd 10
+?e --
+e asm.bytes.space = true
+pd 10
+?e --
+e asm.bytes.align = true
+pd 10
+EOF
+EXPECT=<<EOF
+            0x00000000      803d1ca004..   cmp byte [0x804a01c], 0x33
+        ,=< 0x00000007      740c           je 0x15
+       ,==< 0x00000009      eb1c           jmp 0x27
+       ||   0x0000000b      83c004         add eax, 4
+       ||   0x0000000e      a318a0088f     mov dword [0x8f08a018], eax
+       ||   0x00000013      fd             std
+       ||   0x00000014      2a11           sub dl, byte [ecx]
+       |    0x00000016      8a00           mov al, byte [eax]
+       |    0x00000018      40             inc eax
+       |    0x00000019      8b10           mov edx, dword [eax]
+--
+            0x00000000       803d1ca004..  cmp byte [0x804a01c], 0x33
+        ,=< 0x00000007               740c  je 0x15
+       ,==< 0x00000009               eb1c  jmp 0x27
+       ||   0x0000000b             83c004  add eax, 4
+       ||   0x0000000e         a318a0088f  mov dword [0x8f08a018], eax
+       ||   0x00000013                 fd  std
+       ||   0x00000014               2a11  sub dl, byte [ecx]
+       |    0x00000016               8a00  mov al, byte [eax]
+       |    0x00000018                 40  inc eax
+       |    0x00000019               8b10  mov edx, dword [eax]
+--
+            0x00000000           80 3d 1c a0 ..  cmp byte [0x804a01c], 0x33
+        ,=< 0x00000007                    74 0c  je 0x15
+       ,==< 0x00000009                    eb 1c  jmp 0x27
+       ||   0x0000000b                 83 c0 04  add eax, 4
+       ||   0x0000000e           a3 18 a0 08 ..  mov dword [0x8f08a018], eax
+       ||   0x00000013                       fd  std
+       ||   0x00000014                    2a 11  sub dl, byte [ecx]
+       |    0x00000016                    8a 00  mov al, byte [eax]
+       |    0x00000018                       40  inc eax
+       |    0x00000019                    8b 10  mov edx, dword [eax]
+--
+            0x00000000           80 3d 1c a0 ..  cmp byte [0x804a01c], 0x33
+        ,=< 0x00000007                    74 0c  je 0x15
+       ,==< 0x00000009                    eb 1c  jmp 0x27
+       ||   0x0000000b                 83 c0 04  add eax, 4
+       ||   0x0000000e           a3 18 a0 08 ..  mov dword [0x8f08a018], eax
+       ||   0x00000013                       fd  std
+       ||   0x00000014                    2a 11  sub dl, byte [ecx]
+       |    0x00000016                    8a 00  mov al, byte [eax]
+       |    0x00000018                       40  inc eax
+       |    0x00000019                    8b 10  mov edx, dword [eax]
+EOF
+RUN
+
+NAME=asm.sub.tail rewrites numbers relative to the current address
+FILE=malloc://0x10000
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+s 0x1000
+wx b834120000b800100000e8f60f0000
+e asm.sub.tail=true
+pi 3
+EOF
+EXPECT=<<EOF
+mov eax, ..234
+mov eax, ..0
+call ..2005
+EOF
+RUN
+
+NAME=asm.sub.tail with rewrites longer than the numbers
+FILE=hex://03f30d0a000000006300000000000000000100000040000000730400000064000053280100000073400000003939392039393920393939203939392039393920393939203939392039393920393939203939392039393920393939203939392039393920393939203939392028000000002800000000280000000028000000007304000000612e707973080000003c6d6f64756c653e010000007300000000
+CMDS=<<EOF
+e asm.sub.tail=true
+pi 1
+EOF
+EXPECT=<<EOF
+load_const '999 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 ..3e7 '
+EOF
+RUN
+
+NAME=asm.sub.reg replaces registers with their role names
+FILE=malloc://64
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+e asm.sub.reg=true
+e asm.bytes=false
+e asm.addr=false
+wx 4889e5488b4508
+pd 2
+EOF
+EXPECT=<<EOF
+                 mov BP, SP
+                 mov R0, qword [BP + 8]
 EOF
 RUN

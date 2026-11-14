@@ -1,62 +1,55 @@
-// Copyright (c) 2016-2021 - LGPL, SkUaTeR, All rights reserved.
+/* Copyright (c) 2016-2026 - LGPL, SkUaTeR, All rights reserved. */
 
 #include <r_io.h>
 #include <r_lib.h>
-#include <r_util.h>
 #include <libbochs.h>
 
 typedef struct {
 	libbochs_t desc;
 } RIOBochs;
 
-static libbochs_t *desc = NULL;
-static RIODesc *riobochs = NULL;
+static libbochs_t *get_desc_from_fd(RIODesc *fd) {
+	if (!fd || !fd->data) {
+		return NULL;
+	}
+	RIOBochs *riob = fd->data;
+	return &riob->desc;
+}
+
 extern RIOPlugin r_io_plugin_bochs; // forward declaration
 
 static bool __plugin_open(RIO *io, const char *file, bool many) {
-	return !strncmp (file, "bochs://", strlen ("bochs://"));
+	return r_str_startswith (file, "bochs://");
 }
 
 static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
-	RIOBochs  *riob;
-	lprintf("io_open\n");
-	const char *i;
-	char * fileBochs = NULL;
-	char * fileCfg = NULL;
+	char *fileBochs = NULL;
+	char *fileCfg = NULL;
 	int l;
 	if (!__plugin_open (io, file, 0)) {
 		return NULL;
 	}
 	if (r_sandbox_enable (false)) {
-		eprintf ("sandbox exit\n");
 		return NULL;
 	}
-	if (riobochs) {
-		return riobochs;
-	}
 
-	i = strchr (file + 8, '#');
+	const char *i = strchr (file + 8, '#');
 	if (i) {
 		l = i - file - 8;
 		fileBochs = r_str_ndup (file + 8, l);
 		fileCfg = strdup (i + 1);
 	} else {
 		free (fileCfg);
-		eprintf ("Error can't find :\n");
+		R_LOG_ERROR ("can't find :");
 		return NULL;
 	}
-	riob = R_NEW0 (RIOBochs);
-
-	// Inicializamos
+	RIOBochs *riob = R_NEW0 (RIOBochs);
 	if (bochs_open (&riob->desc, fileBochs, fileCfg) == true) {
-		desc = &riob->desc;
-		riobochs = r_io_desc_new (io, &r_io_plugin_bochs, file, rw, mode, riob);
-		//riogdb = r_io_desc_new (&r_io_plugin_gdb, riog->desc.sock->fd, file, rw, mode, riog);
-		free(fileBochs);
-		free(fileCfg);
-		return riobochs;
+		RIODesc *riod = r_io_desc_new (io, &r_io_plugin_bochs, file, rw, mode, riob);
+		free (fileBochs);
+		free (fileCfg);
+		return riod;
 	}
-	lprintf ("bochsio.open: Cannot connect to bochs.\n");
 	free (riob);
 	free (fileBochs);
 	free (fileCfg);
@@ -64,51 +57,56 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 }
 
 static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
-	lprintf("io_write\n");
 	return -1;
 }
 
 static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
-	lprintf("io_seek %016"PFMT64x" \n",offset);
 	return offset;
 }
 
 static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	memset (buf, 0xff, count);
-	ut64 addr = io->off;
+	libbochs_t *desc = get_desc_from_fd (fd);
 	if (!desc || !desc->data) {
 		return -1;
 	}
-	lprintf ("io_read ofs= %016"PFMT64x" count= %x\n", io->off, count);
-	bochs_read (desc,addr,count,buf);
+	memset (buf, io->Oxff, count);
+	ut64 addr = io->off;
+	bochs_read (desc, addr, count, buf);
 	return count;
 }
 
 static bool __close(RIODesc *fd) {
+	libbochs_t *desc = get_desc_from_fd (fd);
 	bochs_close (desc);
+	R_FREE (fd->data);
 	return true;
 }
 
 static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
-        lprintf ("system command (%s)\n", cmd);
-        if (!strcmp (cmd, "help")) {
-                lprintf ("Usage: =!cmd args\n"
-                        " =!:<bochscmd>      - Send a bochs command.\n"
-                        " =!dobreak          - pause bochs.\n");
-		lprintf ("io_system: Enviando commando bochs\n");
-		bochs_send_cmd (desc, &cmd[1], true);
-		io->cb_printf ("%s\n", desc->data);
-	} else if (!strncmp (cmd, "dobreak", 7)) {
-		bochs_cmd_stop (desc);
-		io->cb_printf ("%s\n", desc->data);
+	libbochs_t *desc = get_desc_from_fd (fd);
+	if (!desc) {
+		return NULL;
 	}
-        return NULL;
+	if (*cmd == '?' || !strcmp (cmd, "help")) {
+		eprintf ("Usage: :cmd args\n"
+			" ::<bochscmd>      - Send a bochs command.\n"
+			" :dobreak	  - pause bochs.\n");
+		bochs_send_cmd (desc, &cmd[1], true);
+		return r_str_newf ("%s\n", desc->data);
+	} else if (r_str_startswith (cmd, "dobreak")) {
+		bochs_cmd_stop (desc);
+		return r_str_newf ("%s\n", desc->data);
+	}
+	return NULL;
 }
 
 RIOPlugin r_io_plugin_bochs = {
-	.name = "bochs",
-	.desc = "Attach to a BOCHS debugger instance",
-	.license = "LGPL3",
+	.meta = {
+		.name = "bochs",
+		.author = "skuater",
+		.desc = "Attach to a BOCHS debugger instance",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "bochs://",
 	.open = __open,
 	.close = __close,

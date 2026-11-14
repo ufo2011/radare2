@@ -1,8 +1,5 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake, nibble */
+/* radare - LGPL - Copyright 2021-2026 - pancake */
 
-#include <stdio.h>
-#include <r_types.h>
-#include <r_util.h>
 #include <r_syscall.h>
 
 #if HAVE_GPERF
@@ -18,6 +15,8 @@ extern SdbGperf gperf_ios_x86_32;
 extern SdbGperf gperf_linux_arm_32;
 extern SdbGperf gperf_linux_arm_64;
 extern SdbGperf gperf_linux_mips_32;
+extern SdbGperf gperf_linux_ppc_32;
+extern SdbGperf gperf_linux_ppc_64;
 extern SdbGperf gperf_linux_sparc_32;
 extern SdbGperf gperf_linux_x86_32;
 extern SdbGperf gperf_linux_x86_64;
@@ -41,6 +40,8 @@ static const SdbGperf *gperfs[] = {
 	&gperf_linux_arm_32,
 	&gperf_linux_arm_64,
 	&gperf_linux_mips_32,
+	&gperf_linux_ppc_32,
+	&gperf_linux_ppc_64,
 	&gperf_linux_sparc_32,
 	&gperf_linux_x86_32,
 	&gperf_linux_x86_64,
@@ -54,6 +55,8 @@ static const SdbGperf *gperfs[] = {
 };
 
 R_API SdbGperf *r_syscall_get_gperf(const char *k) {
+	R_RETURN_VAL_IF_FAIL (k, NULL);
+	k = r_file_basename (k);
 	SdbGperf **gp = (SdbGperf**)gperfs;
 	while (*gp) {
 		SdbGperf *g = *gp;

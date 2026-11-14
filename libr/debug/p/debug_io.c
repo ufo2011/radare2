@@ -1,8 +1,8 @@
-/* radare - LGPL - Copyright 2016-2021 pancake */
+/* radare - LGPL - Copyright 2016-2025 pancake */
 
-#include <r_io.h>
-#include <r_asm.h>
 #include <r_debug.h>
+#include <r_core.h>
+#include <r_asm.h>
 
 static bool __io_step(RDebug *dbg) {
 	free (dbg->iob.system (dbg->iob.io, "ds"));
@@ -25,6 +25,8 @@ static RList *__io_maps(RDebug *dbg) {
 	ut64 map_start, map_end;
 	char perm[32];
 	char name[512];
+	RCore *core = dbg->coreb.core;
+	RCons *cons = core->cons;
 	for (;;) {
 		char *nl = strchr (str, '\n');
 		if (nl) {
@@ -48,11 +50,17 @@ static RList *__io_maps(RDebug *dbg) {
 			if (_s_) {
 				memmove (_s_, _s_ + 2, strlen (_s_));
 			}
-			sscanf (str, "0x%"PFMT64x" - 0x%"PFMT64x" %s %s",
-				&map_start, &map_end, perm, name);
+			if (r_str_scanf (str, "0x%Lx - 0x%Lx %.s %.s", &map_start, &map_end, sizeof (perm), perm, sizeof (name), name) > 4) {
+				break;
+			}
 			if (map_end != 0LL) {
-				RDebugMap *map = r_debug_map_new (name, map_start, map_end, r_str_rwx (perm), 0);
-				r_list_append (list, map);
+				int sperm = r_str_rwx (perm);
+				if (sperm >= 0) {
+					RDebugMap *map = r_debug_map_new (name, map_start, map_end, sperm, 0);
+					r_list_append (list, map);
+				} else {
+					R_LOG_WARN ("Invalid permission string (%s)", perm);
+				}
 			}
 			str = nl + 1;
 		} else {
@@ -60,7 +68,7 @@ static RList *__io_maps(RDebug *dbg) {
 		}
 	}
 	free (ostr);
-	r_cons_reset();
+	r_cons_reset (cons);
 	return list;
 }
 
@@ -75,72 +83,77 @@ static bool __io_attach(RDebug *dbg, int pid) {
 
 // "drp" register profile
 static char *__io_reg_profile(RDebug *dbg) {
-	r_cons_push ();
+	RCore *core = dbg->coreb.core;
+	RCons *cons = core->cons;
+	r_cons_push (cons);
 	char *drp = dbg->iob.system (dbg->iob.io, "drp");
 	if (drp) {
+		r_cons_pop (cons);
 		return drp;
 	}
-	const char *buf = r_cons_get_buffer ();
-	if (buf && *buf) {
-		char *ret = strdup (buf);
-		r_cons_pop ();
+	char *ret = r_cons_drain (cons, NULL);
+	r_cons_pop (cons);
+	if (R_STR_ISNOTEMPTY (ret)) {
 		return ret;
 	}
+	free (ret);
 	return r_anal_get_reg_profile (dbg->anal);
 }
 
 // "dr8" read register state
-static int __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
+static bool __reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
+	RCore *core = dbg->coreb.core;
+	RCons *cons = core->cons;
+	r_cons_push (cons);
 	char *dr8 = dbg->iob.system (dbg->iob.io, "dr8");
 	if (!dr8) {
-		const char *fb = r_cons_get_buffer ();
-		if (!fb || !*fb) {
-			eprintf ("debug.io: Failed to get dr8 from io\n");
-			return -1;
+		const char *fb = r_cons_get_buffer (cons, NULL);
+		if (R_STR_ISEMPTY (fb)) {
+			R_LOG_ERROR ("Failed to get dr8 from io");
+			r_cons_pop (cons);
+			return false;
 		}
 		dr8 = strdup (fb);
-		r_cons_reset ();
+		r_cons_reset (cons);
 	}
+	r_cons_pop (cons);
 	ut8 *bregs = calloc (1, strlen (dr8));
 	if (!bregs) {
 		free (dr8);
-		return -1;
+		return false;
 	}
 	r_str_trim ((char *)bregs);
 	int sz = r_hex_str2bin (dr8, bregs);
 	if (sz > 0) {
 		memcpy (buf, bregs, R_MIN (size, sz));
-		free (bregs);
-		free (dr8);
-		return size;
-	} else {
-		// eprintf ("SIZE %d (%s)\n", sz, regs);
 	}
 	free (bregs);
 	free (dr8);
-	return -1;
+	return (sz > 0);
 }
 
 // "dc" continue execution
 static bool __io_continue(RDebug *dbg, int pid, int tid, int sig) {
 	dbg->iob.system (dbg->iob.io, "dc");
-	r_cons_flush ();
 	return true;
 }
 
 // "dk" send kill signal
 static bool __io_kill(RDebug *dbg, int pid, int tid, int sig) {
-	const char *cmd = sdb_fmt ("dk %d", sig);
+	r_strf_var (cmd, 32, "dk %d", sig);
 	dbg->iob.system (dbg->iob.io, cmd);
-	r_cons_flush ();
 	return true;
 }
 
 RDebugPlugin r_debug_plugin_io = {
-	.name = "io",
-	.license = "MIT",
+	.meta = {
+		.name = "io",
+		.author = "pancake",
+		.license = "MIT",
+		.desc = "io debug plugin",
+	},
 	.arch = "any", // TODO: exception!
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
 	.step = __io_step,
 	.map_get = __io_maps,
 	.attach = &__io_attach,
@@ -152,7 +165,7 @@ RDebugPlugin r_debug_plugin_io = {
 	.step_over = __io_step_over,
 	.canstep = 1,
 #if 0
-	.init = __esil_init,
+	.init_debugger = __esil_init,
 	.contsc = __esil_continue_syscall,
 	.detach = &__esil_detach,
 	.stop = __esil_stop,

@@ -29,7 +29,7 @@ EXPECT=<<EOF
 41414141414141414141
 EOF
 EXPECT_ERR=<<EOF
-Cannot patch outside
+ERROR: Cannot patch outside
 EOF
 RUN
 
@@ -97,11 +97,10 @@ EOF
 RUN
 
 NAME=ragg2 -k linux -a x86 -b32 simple_cmp.r
-BROKEN=1
 FILE=-
 CMDS=!ragg2 -k linux -a x86 -b32 bins/other/ragg2/simple_cmp.r
 EXPECT=<<EOF
-5589e581ec80000000c745086869210ac7450c6e000000c74510000000008d4508898504000000c7450501000000c745060200000055583b45060f8f5a0000006a04546a018b1c248b8c24040000008b942408000000b804000000cd8083c40c6a008b1c24b801000000cd8083c40481c4800000005dc3
+5589e581ec80000000c745086869210ac7450c00000000c74510000000008d4508894504bb00000000bb01000000895d05bb00000000bb02000000895d06ff7505583b45067f1a6a04ff75046a018b1c248b4c24048b542408b804000000cd8083c40ceb136a008b1c24b801000000cd8083c40481c4800000005dc3ebe3
 EOF
 RUN
 
@@ -109,6 +108,520 @@ NAME=ragg2 bugg8.r
 FILE=-
 CMDS=!ragg2 bins/other/ragg2/bugg8.r > /dev/null
 EXPECT=<<EOF
+EOF
+RUN
+
+NAME=ragg2 fastcall declarations do not emit x86 asm garbage
+FILE=unit/legacy_unit/ragg2/fastcall-decls.r
+CMDS=!ragg2 -a x86 -b 32 -s unit/legacy_unit/ragg2/fastcall-decls.r
+EXPECT=<<EOF
+.equ bar,4
+
+.global main
+main:
+  ret
+
+
+EOF
+RUN
+
+NAME=ragg2 fastcall declarations emit x64 aliases without garbage
+FILE=unit/legacy_unit/ragg2/fastcall-decls.r
+CMDS=!ragg2 -a x86 -b 64 -s unit/legacy_unit/ragg2/fastcall-decls.r
+EXPECT=<<EOF
+.equ bar,4
+
+.global main
+main:
+  ret
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 basic arm fastcall sample emits valid thumb asm
+FILE=unit/legacy_unit/ragg2/fastcall-basic.r
+CMDS=!ragg2 -s -a arm -b 16 unit/legacy_unit/ragg2/fastcall-basic.r
+EXPECT=<<EOF
+.equ printf, 0x1fa0b4
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 32
+# rcc_fun 1 (printf)
+# encode filtered string (fnord\n) (printf)
+  adr r0, 4
+  b 12
+.string "fnord\n"
+.fill 1, 1, 0
+  str r0, [sp, 4]
+# call in egg->lang.mode 0
+  ldr r0, [sp, 4]
+  bl printf
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 basic arm fastcall sample emits valid arm32 asm
+FILE=unit/legacy_unit/ragg2/fastcall-basic.r
+CMDS=!ragg2 -s -a arm -b 32 unit/legacy_unit/ragg2/fastcall-basic.r
+EXPECT=<<EOF
+.equ printf, 0x1fa0b4
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 32
+# rcc_fun 1 (printf)
+# encode filtered string (fnord\n) (printf)
+  add pc, 4
+.string "fnord\n"
+.fill 1, 1, 0
+  sub r0, pc, 12
+  str r0, [sp, 4]
+# call in egg->lang.mode 0
+  ldr r0, [sp, 4]
+  bl printf
+  sub sp, fp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 basic arm fastcall sample emits valid arm64 asm
+FILE=unit/legacy_unit/ragg2/fastcall-basic.r
+CMDS=!ragg2 -s -a arm -b 64 unit/legacy_unit/ragg2/fastcall-basic.r
+EXPECT=<<EOF
+.equ printf, 0x1fa0b4
+
+.global main
+main:
+  stp x29, x30, [sp, -16]!
+  mov x29, sp
+  sub sp, sp, 32
+# rcc_fun 1 (printf)
+# encode filtered string (fnord\n) (printf)
+  adr x0, 8
+  b 12
+.string "fnord\n"
+.fill 1, 1, 0
+  str x0, [sp, 8]
+# call in egg->lang.mode 0
+  ldr x0, [sp, 8]
+  bl printf
+  mov sp, x29
+  ldp x29, x30, [sp], 16
+  ret
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb dereference sample emits valid stack syntax
+FILE=unit/legacy_unit/ragg2/fastcall-deref.r
+CMDS=!ragg2 -s -a arm -b 16 unit/legacy_unit/ragg2/fastcall-deref.r
+EXPECT=<<EOF
+.equ printf, 0x1fa0b4
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+  mov r1, 0
+  mov r1, 0xb0000000
+  mov r9, r1
+  str r9, [sp, 68]
+# rcc_fun 1 (printf)
+  ldr r0, [sp, 68]
+  ldr r0, [r0]
+  str r0, [sp, 12]
+# encode filtered string (idreg=%x\n) (printf)
+  adr r0, 4
+  b 16
+.string "idreg=%x\n"
+.fill 2, 1, 0
+  str r0, [sp, 20]
+# call in egg->lang.mode 0
+  ldr r1, [sp, 12]
+  ldr r0, [sp, 20]
+  bl printf
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm32 dereference sample emits valid stack syntax
+FILE=unit/legacy_unit/ragg2/fastcall-deref.r
+CMDS=!ragg2 -s -a arm -b 32 unit/legacy_unit/ragg2/fastcall-deref.r
+EXPECT=<<EOF
+.equ printf, 0x1fa0b4
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+  mov r1, 0
+  mov r1, 0xb0000000
+  mov r9, r1
+  str r9, [sp, 68]
+# rcc_fun 1 (printf)
+  ldr r0, [sp, 68]
+  ldr r0, [r0]
+  str r0, [sp, 12]
+# encode filtered string (idreg=%x\n) (printf)
+  add pc, 8
+.string "idreg=%x\n"
+.fill 2, 1, 0
+  sub r0, pc, 16
+  str r0, [sp, 20]
+# call in egg->lang.mode 0
+  ldr r1, [sp, 12]
+  ldr r0, [sp, 20]
+  bl printf
+  sub sp, fp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb mathop and compound assignment emit valid stack loads
+FILE=-
+CMDS=!ragg2 -s -a arm -b 16 -e 'main@global(64,64) { .var0 = 1; .var4 = .var0 + 2; .var4 += 3; }'
+EXPECT=<<EOF
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+  mov r1, 0
+  mov r1, 1
+  mov r9, r1
+  str r9, [sp, 68]
+  mov r1, 0
+  ldr r1, [sp, 68]
+  add r1, 2
+  mov r9, r1
+  str r9, [sp, 72]
+  mov r1, 0
+  mov r1, 3
+  ldr r9, [sp, 72]
+  add r9, r1
+  str r9, [sp, 72]
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb dereference assignment loads into r0
+FILE=-
+CMDS=!ragg2 -s -a arm -b 16 -e 'main@global(64,64) { .var0 = 0xb0000000; .var4 = *.var0; }'
+EXPECT=<<EOF
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+  mov r1, 0
+  mov r1, 0xb0000000
+  mov r9, r1
+  str r9, [sp, 68]
+  mov r1, 0
+  ldr r0, [sp, 68]
+  ldr r0, [r0]
+  mov r1, r0
+  mov r9, r1
+  str r9, [sp, 72]
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb indirect call emits valid ldr and blx
+FILE=-
+CMDS=!ragg2 -s -a arm -b 16 -e 'main@global(64,64) { .var0(); }'
+EXPECT=<<EOF
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+# rcc_fun 1 (.var0)
+  ldr r12, [sp, 68]
+  blx r12
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb indirect call keeps args out of the target register
+FILE=-
+CMDS=!ragg2 -s -a arm -b 16 -e 'main@global(64,64) { .var0(42); }'
+EXPECT=<<EOF
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+# rcc_fun 1 (.var0)
+  mov r0, 42
+  str r0, [sp, 12]
+  ldr r0, [sp, 12]
+  ldr r12, [sp, 68]
+  blx r12
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb division emits three-operand sdiv
+FILE=-
+CMDS=!ragg2 -s -a arm -b 16 -e 'main@global(64,64) { .var0 = 8 / 2; .var0 /= 2; }'
+EXPECT=<<EOF
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+  mov r1, 0
+  mov r2, 8
+  mov r9, 2
+  sdiv r2, r2, r9
+  mov r1, r2
+  mov r9, r1
+  str r9, [sp, 68]
+  mov r1, 0
+  mov r1, 2
+  ldr r9, [sp, 68]
+  sdiv r9, r9, r1
+  str r9, [sp, 68]
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb multiplication emits three-operand mul
+FILE=-
+CMDS=!ragg2 -s -a arm -b 16 -e 'main@global(64,64) { .var0 = 6 * 7; .var0 *= 2; }'
+EXPECT=<<EOF
+
+.global main
+main:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 192
+  mov r1, 0
+  mov r2, 6
+  mov r9, 7
+  mul r2, r2, r9
+  mov r1, r2
+  mov r9, r1
+  str r9, [sp, 68]
+  mov r1, 0
+  mov r1, 2
+  ldr r9, [sp, 68]
+  mul r9, r9, r1
+  str r9, [sp, 68]
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb nonzero-frame return restores sp fp pc (ESIL)
+FILE=malloc://256
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=16
+aei
+aeim
+aer lr=0x8005
+aer fp=0xdeadbeef
+aer sp=0x177ff0
+s 0
+wa+ push {fp,lr}
+wa+ add fp, sp, 4
+wa+ sub sp, sp, 32
+wa+ mov sp, fp
+wa+ sub sp, sp, 4
+wa+ pop {fp,pc}
+s 0
+aepc 0
+6aes
+aer sp
+aer fp
+aer pc
+EOF
+EXPECT=<<EOF
+0x00177ff0
+0xdeadbeef
+0x00008004
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm thumb zero-frame return restores sp fp pc (ESIL)
+FILE=malloc://256
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=16
+aei
+aeim
+aer lr=0x8005
+aer fp=0xdeadbeef
+aer sp=0x177ff0
+s 0
+wa+ push {fp,lr}
+wa+ pop {fp,pc}
+s 0
+aepc 0
+2aes
+aer sp
+aer fp
+aer pc
+EOF
+EXPECT=<<EOF
+0x00177ff0
+0xdeadbeef
+0x00008004
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm32 nonzero-frame return restores sp fp pc (ESIL)
+FILE=malloc://256
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=32
+aei
+aeim
+aer lr=0x8004
+aer fp=0xdeadbeef
+aer sp=0x177ff0
+s 0
+wa+ push {fp,lr}
+wa+ add fp, sp, 4
+wa+ sub sp, sp, 32
+wa+ sub sp, fp, 4
+wa+ pop {fp,pc}
+s 0
+aepc 0
+5aes
+aer sp
+aer fp
+aer pc
+EOF
+EXPECT=<<EOF
+0x00177ff0
+0xdeadbeef
+0x00008004
+EOF
+RUN
+
+NAME=ragg2 issue25590 arm32 zero-frame return restores sp fp pc (ESIL)
+FILE=malloc://256
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=32
+aei
+aeim
+aer lr=0x8004
+aer fp=0xdeadbeef
+aer sp=0x177ff0
+s 0
+wa+ push {fp,lr}
+wa+ pop {fp,pc}
+s 0
+aepc 0
+2aes
+aer sp
+aer fp
+aer pc
+EOF
+EXPECT=<<EOF
+0x00177ff0
+0xdeadbeef
+0x00008004
+EOF
+RUN
+
+NAME=ragg2 two-function arm thumb second frame is balanced (parser)
+FILE=-
+CMDS=!ragg2 -s -a arm -b 16 -e 'first@global(8,8) { ; } second@global() { ; }'
+EXPECT=<<EOF
+
+.global first
+first:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 24
+  mov sp, fp
+  sub sp, sp, 4
+  pop {fp,pc}
+
+
+.global second
+second:
+  push {fp,lr}
+  pop {fp,pc}
+
+
+EOF
+RUN
+
+NAME=ragg2 two-function arm32 second frame is balanced (parser)
+FILE=-
+CMDS=!ragg2 -s -a arm -b 32 -e 'first@global(8,8) { ; } second@global() { ; }'
+EXPECT=<<EOF
+
+.global first
+first:
+  push {fp,lr}
+  add fp, sp, 4
+  sub sp, sp, 24
+  sub sp, fp, 4
+  pop {fp,pc}
+
+
+.global second
+second:
+  push {fp,lr}
+  pop {fp,pc}
+
+
 EOF
 RUN
 
@@ -124,7 +637,7 @@ RUN
 
 NAME=ragg2 -v
 FILE=-
-CMDS=!ragg2 -v | grep -c build
+CMDS=!ragg2 -v | grep -c birth
 EXPECT=<<EOF
 1
 EOF
@@ -150,7 +663,7 @@ NAME=ragg2 empty file
 FILE=-
 CMDS=!ragg2 ""
 EXPECT_ERR=<<EOF
-Cannot open empty path
+ERROR: Cannot open empty path
 EOF
 RUN
 
@@ -158,7 +671,7 @@ NAME=ragg2 empty include
 FILE=bins/other/ragg2/hi.c
 CMDS=!ragg2 -I "" bins/other/ragg2/hi.c
 EXPECT_ERR=<<EOF
-Cannot open empty include path
+ERROR: Cannot open empty include path
 EOF
 RUN
 
@@ -166,13 +679,13 @@ NAME=ragg2 empty contents
 FILE=bins/other/ragg2/hi.c
 CMDS=!ragg2 -C "" bins/other/ragg2/hi.c
 EXPECT_ERR=<<EOF
-Cannot open empty contents path
+ERROR: Cannot open empty contents path
 EOF
 RUN
 
 NAME=ragg2 debruijn sequence 1
 FILE=-
-CMDS=!ragg2 -r -P 2; ?e
+CMDS=!ragg2 -a x86 -r -P 2; ?e
 EXPECT=<<EOF
 AA
 EOF
@@ -180,8 +693,495 @@ RUN
 
 NAME=ragg2 debruijn sequence 2
 FILE=-
-CMDS=!ragg2 -P 2 -r; ?e
+CMDS=!ragg2 -a x86 -P 2 -r; ?e
 EXPECT=<<EOF
 AA
+EOF
+RUN
+
+NAME=ragg2 debruijn sequence ppc 64
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -r -P 2; ?e
+EXPECT=<<EOF
+AA
+EOF
+RUN
+
+NAME=ragg2 -a ppc -b 32 -k linux exit syscall
+FILE=-
+CMDS=!ragg2 -a ppc -b 32 -k linux -e 'exit@syscall(1); main@global() { exit(0); }'
+EXPECT=<<EOF
+7c0802a6900100049421ffd0386000009061001080610010380000014400000238210030800100047c0803a64e800020
+EOF
+RUN
+
+NAME=ragg2 -a ppc -b 64 -k linux exit syscall (BE default)
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -e 'exit@syscall(1); main@global() { exit(0); }'
+EXPECT=<<EOF
+7c0802a6f8010010f821ffa138600000f8610020e8610020380000014400000238210060e80100107c0803a64e800020
+EOF
+RUN
+
+NAME=ragg2 -a ppc -b 64 -s shows source
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'exit@syscall(1); main@global() { exit(0); }'
+EXPECT=<<EOF
+
+.global main
+main:
+  mflr r0
+  std r0, 16(r1)
+  stdu r1, -96(r1)
+# rcc_fun 1 (exit)
+  li r3, 0
+  std r3, 32(r1)
+# set syscall args
+  ld r3, 32(r1)
+# syscall
+ li r0, 1
+ sc
+  addi r1, r1, 96
+  ld r0, 16(r1)
+  mtlr r0
+  blr
+
+
+EOF
+RUN
+
+# --- bug-detection tests below: each currently fails, demonstrating a
+# --- specific bug in the PPC backend. They turn green once the bug is fixed.
+
+# Finding #1: missing '\n' in emit_ppc.c indirect emit_jmp / emit_call.
+# The 'ld r0, ...' and 'mtctr r0' lines get concatenated when the call
+# goes through the indirect (atr=1) path triggered by '.var()' syntax.
+NAME=ragg2 ppc indirect call separates ld and mtctr (finding #1)
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'main@global(8,0) { .var0(); }' | grep -c '^  ld r0, 0(r1)$'
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+# Finding #2: emit_frame with sz=0 allocates only R_MIN_FRAME bytes (32 for
+# ppc64), but emit_arg stores arg 1 at offset R_MIN_FRAME (=32), which is
+# the FIRST byte of the caller's frame. The frame must be large enough to
+# include a parameter save area (32 + 8*8 = 96 for ppc64 with R_NGP=8).
+NAME=ragg2 ppc 64 frame accommodates arg spill (finding #2)
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'foo@global() { ; } main@global() { foo(42); }' | grep -E '^  stdu r1,' | tail -1
+EXPECT=<<EOF
+  stdu r1, -96(r1)
+EOF
+RUN
+
+# Finding #3: h_li / h_addi / h_cmpwi accept 0x8000..0xffff and silently
+# sign-extend. SIMM is signed-16 so the upper bound must be 0x7fff.
+NAME=rasm2 ppc.nz rejects li above signed-16 max (finding #3)
+FILE=-
+CMDS=!rasm2 -a ppc -b 64 -e 'li r3, 0x8000'
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'li r3, 0x8000' at line 1
+EOF
+RUN
+
+# Finding #4: emit_ppc.c uses 32-bit cmpw/mullw/divw even in the 64-bit
+# emit_ppc64. Compares of 64-bit values silently truncate the high word.
+# This test currently emits 'cmpw'; post-fix must emit 'cmpd' on ppc64.
+NAME=ragg2 ppc 64 compare uses cmpd not cmpw (finding #4)
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'main@global(8,0) { .var0 = 1; if (.var0 == 0) { break; } }' | grep -cE '^  cmpd '
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+# Finding #5: emit_mathop emits PPC 3-register arithmetic with literal
+# operands. ppc.nz parses bare digits 0-31 as register names, so
+# 'add r4, r4, 1' silently encodes as 'add r4, r4, r1' (stack pointer).
+# Post-fix must emit 'addi' (D-form, immediate-aware) for literal operands.
+NAME=ragg2 ppc mathop with immediate uses addi (finding #5)
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'main@global(8,0) { .var0 = .var0 + 1; }' | grep -cE '^  addi r[0-9]+, r[0-9]+, 1$'
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+# Finding #4b (pattern analogue): mullw / divw aren't switched to mulld /
+# divd in 64-bit emit_ppc. Same fix shape as finding #4 but a different
+# instruction site (emit_mathop, not emit_branch).
+NAME=ragg2 ppc 64 multiply uses mulld not mullw (finding #4b)
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'main@global(8,0) { .var0 = .var0 * .var1; }' | grep -cE '^  mulld '
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+# Finding #3b (pattern analogue): h_addi accepts 0x8000 with silent
+# sign-wrap, same bug as h_li (finding #3) but in a different handler.
+NAME=rasm2 ppc.nz rejects addi above signed-16 max (finding #3b)
+FILE=-
+CMDS=!rasm2 -a ppc -b 64 -e 'addi r1, r1, 0x8000'
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'addi r1, r1, 0x8000' at line 1
+EOF
+RUN
+
+# Finding #5b (pattern analogue): subtract-with-literal emits
+# 'subf r4, 1, r4' where '1' is parsed as r1 (stack pointer!). Post-fix
+# should emit either 'addi rT, rA, -imm' or materialise the literal into
+# R_TMP first.
+NAME=ragg2 ppc subtract with literal does not use subf (finding #5b)
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'main@global(8,0) { .var0 = .var0 - 1; }' | grep -cE '^  subf r[0-9]+, [0-9]+, r[0-9]+$'
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+# --- coverage tests below: every callback in emit_ppc.c exercised at least
+# --- once. Currently pass.
+
+# emit_trap: 'break' statement
+NAME=ragg2 ppc emit_trap on break
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'main@global() { break; }' | grep -c '^  trap$'
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+# emit_load: dereference of pointer variable
+NAME=ragg2 ppc emit_load on dereference
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'main@global(16,0) { .var0 = *.var1; }' | grep -cE '^  ld r[0-9]+, 0\(r[0-9]+\)$'
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+# emit_call (direct): function-to-function bl. Asserts 'bl foo' appears.
+NAME=ragg2 ppc emit_call direct bl
+FILE=-
+CMDS=!ragg2 -a ppc -b 64 -k linux -s -e 'foo@global() { ; } main@global() { foo(); }' | grep -c '^  bl foo$'
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=ragg2 -H R2_NOPLUGINS
+FILE=-
+CMDS=!R2_NOPLUGINS=1;ragg2 -H R2_NOPLUGINS
+EXPECT=<<EOF
+1
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=ragg2 esil assign constant
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5; }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil addition
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5 + 3; }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,3,r1,+=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil compound plus
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5; .var0 += 3; }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,r1,v8,:=,3,r1,:=,r1,v8,+=
+
+EOF
+RUN
+
+NAME=ragg2 esil compound minus
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 10; .var0 -= 4; }'
+EXPECT=<<EOF
+
+.global main
+main:
+10,r1,:=,r1,v8,:=,4,r1,:=,r1,v8,-=
+
+EOF
+RUN
+
+NAME=ragg2 esil multiplication
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5 * 3; }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r2,:=,3,r2,*=,r2,r1,:=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil division
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 20 / 4; }'
+EXPECT=<<EOF
+
+.global main
+main:
+20,r2,:=,4,r2,/=,r2,r1,:=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil bitwise and
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 0xff & 0x0f; }'
+EXPECT=<<EOF
+
+.global main
+main:
+0xff,r3,:=,0x0f,r3,&=,r3,r1,:=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil bitwise or chain
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 1 | 2 | 4; }'
+EXPECT=<<EOF
+
+.global main
+main:
+1,r3,:=,2,r3,|=,4,r3,|=,r3,r1,:=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil bitwise xor
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5 ^ 3; }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r3,:=,3,r3,^=,r3,r1,:=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil operator precedence
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 2 + 3 * 4; }'
+EXPECT=<<EOF
+
+.global main
+main:
+2,r1,:=,3,r2,:=,4,r2,*=,r2,r1,+=,r1,v8,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil variable as rvalue
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5; .var8 = .var0 + 1; }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,r1,v8,:=,v8,r1,:=,1,r1,+=,r1,v16,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil pointer dereference
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 0x1000; .var8 = *.var0; }'
+EXPECT=<<EOF
+
+.global main
+main:
+0x1000,r1,:=,r1,v8,:=,v8,[4],r0,:=,r0,r1,:=,r1,v16,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil syscall via @syscall
+FILE=-
+CMDS=!ragg2 -a esil -b 64 -k linux -s -e 'exit@syscall(60); main@global(16,0) { exit(42); }'
+EXPECT=<<EOF
+
+.global main
+main:
+42,a1,:=,60,$
+
+
+EOF
+RUN
+
+NAME=ragg2 esil raw register access
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .%rax = 5; }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,r1,rax,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil raw register in expression
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .%rax = .%rcx + 3; }'
+EXPECT=<<EOF
+
+.global main
+main:
+rcx,r1,:=,3,r1,+=,r1,rax,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil unknown dotname is an error
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .rax = 5; }'
+EXPECT_ERR=<<EOF
+ERROR: Unknown name '.rax' (use .%rax for a raw register or `rax@alias(...)`)
+EOF
+RUN
+
+NAME=ragg2 esil alias directive
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'myreg@alias(rax) main@global(16,0) { .myreg = 42; }'
+EXPECT=<<EOF
+
+.global main
+main:
+42,r1,:=,r1,rax,:=
+
+EOF
+RUN
+
+NAME=ragg2 esil if equality skip
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5; if (.var0 == 0) { .var0 = 99; } }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,r1,v8,:=,v8,a1,:=,0,a1,==,$z,!,?{,26,GOTO,},99,r1,:=,r1,v8,:=,26,GOTO,26,GOTO
+
+EOF
+RUN
+
+NAME=ragg2 esil if not-equal skip
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5; if (.var0 != 0) { .var0 = 99; } }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,r1,v8,:=,v8,a1,:=,0,a1,==,$z,?{,25,GOTO,},99,r1,:=,r1,v8,:=,25,GOTO,25,GOTO
+
+EOF
+RUN
+
+NAME=ragg2 esil bare truthy if
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 5; if (.var0) { .var0 = 0; } }'
+EXPECT=<<EOF
+
+.global main
+main:
+5,r1,:=,r1,v8,:=,v8,a1,:=,0,a1,==,$z,?{,25,GOTO,},0,r1,:=,r1,v8,:=,25,GOTO,25,GOTO
+
+EOF
+RUN
+
+NAME=ragg2 esil while truthy
+FILE=-
+CMDS=!ragg2 -a esil -s -e 'main@global(16,0) { .var0 = 3; while (.var0) { .var0 -= 1; } }'
+EXPECT=<<EOF
+
+.global main
+main:
+3,r1,:=,r1,v8,:=,v8,a1,:=,0,a1,==,$z,?{,28,GOTO,},1,r1,:=,r1,v8,-=,v8,a1,:=,9,GOTO
+
+EOF
+RUN
+
+NAME=ragg2 ignores a stale R2CONS
+FILE=-
+ENV=R2CONS=4416884320
+CMDS=!ragg2 -B 90
+EXPECT=<<EOF
+90
+EOF
+RUN
+
+NAME=ragg2 expands inlines
+FILE=-
+CMDS=!ragg2 -a x86 -b 32 -e 'z@inline(){ 1; } main@global(){ z(); z(); }'
+EXPECT=<<EOF
+b801000000b801000000c3
+EOF
+RUN
+
+NAME=ragg2 rejects a recursive inline
+FILE=-
+CMDS=!ragg2 -a x86 -b 32 -e 'z@inline(){ z(); } main@global(){ z(); }'
+EXPECT=<<EOF
+c3
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Recursive expansion of inline 'z'
+EOF
+RUN
+
+NAME=ragg2 if after more blocks than the ifelse table holds
+FILE=--
+CMDS=<<EOF
+ragg2 -a x86 -b 64 -e 'main@global(16,0) { .var0 = 5; {}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}if (.var0) { .var0 = 0; } }'
+?e alive
+EOF
+EXPECT=<<EOF
+alive
+EOF
+RUN
+
+NAME=ragg2 -o cannot write files in the sandbox
+FILE=--
+CMDS=<<EOF
+e cfg.sandbox=true
+ragg2 -o ragg2_sandbox_out -B 90
+?e done
+EOF
+EXPECT=<<EOF
+done
+EOF
+EXPECT_ERR=<<EOF
+ERROR: cannot open file 'ragg2_sandbox_out'
 EOF
 RUN

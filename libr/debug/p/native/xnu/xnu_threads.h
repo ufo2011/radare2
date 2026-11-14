@@ -6,8 +6,7 @@
 #	define R_REG_T ppc_thread_state_t
 #	define R_REG_STATE_T PPC_THREAD_STATE
 #	define R_REG_STATE_SZ PPC_THREAD_STATE_SZ
-
-#elif __arm || __arm64 || __aarch64
+#elif __arm64 || __aarch64
 #	include <mach/arm/thread_status.h>
 #	ifndef ARM_THREAD_STATE
 #		define ARM_THREAD_STATE 1
@@ -15,6 +14,17 @@
 #	ifndef ARM_THREAD_STATE64
 #		define ARM_THREAD_STATE64 6
 #	endif
+typedef union r_xnu_arm_reg_state_t {
+	// which one is used here is determined by RzXnuDebug.cpu
+//	arm_thread_state32_t arm32;
+//	arm_thread_state64_t arm64;
+} RXnuArmRegState;
+#undef R_REG_T
+// #define R_REG_T        RXnuArmRegState
+// typedef struct arm_unified_thread_state arm_unified_thread_state_t;
+#	define R_REG_T arm_unified_thread_state_t
+#elif __arm || __arm__
+#undef R_REG_T
 #	define R_REG_T arm_unified_thread_state_t
 #	define R_REG_STATE_T MACHINE_THREAD_STATE
 #	define R_REG_STATE_SZ MACHINE_THREAD_STATE_COUNT
@@ -47,7 +57,7 @@ typedef struct _xnu_thread {
 	R_REG_T gpr; // type R_REG_T using unified API XXX bad naming
 	void *state;
 	ut32 state_size;
-#if __arm64 || __aarch64 || __arm64__ || __aarch64__
+#if __arm64 || __aarch64 || __arm64__ || __aarch64__ || __arm64e__
 	union {
 		arm_debug_state32_t drx32;
 		arm_debug_state64_t drx64;
@@ -63,6 +73,12 @@ typedef struct _xnu_thread {
 	ut32 count;
 } xnu_thread_t;
 
+R_PACKED(
+	typedef struct {
+		mach_exception_data_type_t values[EXCEPTION_CODE_MAX];
+	})
+xnu_exception_data_t;
+
 typedef struct _exc_msg {
 	mach_msg_header_t hdr;
 	/* start of the kernel processed data */
@@ -74,7 +90,7 @@ typedef struct _exc_msg {
 	exception_type_t exception;
 	mach_msg_type_number_t code_cnt;
 #if !__POWERPC__
-	mach_exception_data_t code;
+	xnu_exception_data_t code;
 #endif
 	/* some times RCV_TO_LARGE probs */
 	char pad[512];

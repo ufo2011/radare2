@@ -3,13 +3,59 @@
 
 uname -a
 
+ARG=$1
+CFGOSTYPE=
+
+use_zig_target() {
+	ZIG_TARGET="$1"
+	type zig > /dev/null 2>&1 || {
+		return 1
+	}
+	export CC="zig cc -target ${ZIG_TARGET}"
+	export LD="zig cc -target ${ZIG_TARGET}"
+	export AR="zig ar"
+	export RANLIB="zig ranlib"
+	[ -z "${PKGCONFIG}" ] && export PKGCONFIG=/usr/bin/false
+	CFGOSTYPE="--with-ostype=gnulinux"
+	return 0
+}
+
+use_i386_toolchain() {
+	export CFLAGS="-m32 ${CFLAGS}"
+	export LDFLAGS="-m32 ${LDFLAGS}"
+}
+
+case "$ARG" in
+arm64)
+	ARCH=arm64
+	;;
+amd64)
+	ARCH=amd64
+	export CFLAGS="-Werror"
+	;;
+i386)
+	ARCH=i386
+	export CFLAGS="-Werror"
+	use_zig_target x86-linux-gnu || use_i386_toolchain
+	;;
+*)
+	CFGARGS=$*
+	;;
+esac
+
 if [ -z "${ARCH}" ]; then
-  ARCH=`uname -m`
+	ARCH=`uname -m`
 fi
 
-if [ "${ARCH}" = "x86_64" ]; then
-  ARCH=amd64
-fi
+case "${ARCH}" in
+x86_64)
+	ARCH=amd64
+	;;
+aarch64)
+	ARCH=arm64
+	;;
+esac
+export ARCH
 
 echo "[debian] preparing radare2 package..."
 PKGDIR=dist/debian/radare2/root
@@ -18,26 +64,41 @@ DEVDIR=dist/debian/radare2-dev/root
 # clean
 rm -rf "${PKGDIR}" "${DEVDIR}"
 
-if [ -z "$CFLAGS" ]; then
-  export CFLAGS="-O2 -Werror -Wno-cpp"
-  export CFLAGS="${CFLAGS} -Wno-unused-result"
-## export CFLAGS="${CFLAGS} -Wno-stringop-truncation"
+. `dirname $0`/make-jobs.inc.sh
+
+if [ -z "${MAKE}" ]; then
+	MAKE=make
+	gmake --help > /dev/null 2>&1
+	[ $? = 0 ] && MAKE=gmake
 fi
+
+type fakeroot > /dev/null 2>&1
+if [ $? = 0 ]; then
+FAKEROOT=fakeroot
+else
+FAKEROOT=
+fi
+
+export CFLAGS="-Wno-cpp -Wno-unused-result ${CFLAGS} -O2"
 # build
-export
-./configure --prefix=/usr --with-checks-level=0
+./configure --prefix=/usr --with-checks-level=0 ${CFGOSTYPE} ${CFGARGS}
 [ $? != 0 ] && exit 1
-make -j4
+${MAKE} -j${MAKE_JOBS}
 [ $? != 0 ] && exit 1
-make install DESTDIR="${PWD}/${PKGDIR}"
+$FAKEROOT ${MAKE} install DESTDIR="${PWD}/${PKGDIR}"
 [ $? != 0 ] && exit 1
 
 # dev-split
 mkdir -p "${DEVDIR}/usr/include"
 mv "${PKGDIR}/usr/include/"* "${DEVDIR}/usr/include"
 mkdir -p "${DEVDIR}/usr/lib"
-mv "${PKGDIR}/usr/lib/"lib*a "${DEVDIR}/usr/lib"
-mv "${PKGDIR}/usr/lib/pkgconfig" "${DEVDIR}/usr/lib"
+set -- "${PKGDIR}/usr/lib"/lib*a
+if [ -e "$1" ]; then
+	mv "$@" "${DEVDIR}/usr/lib"
+fi
+if [ -d "${PKGDIR}/usr/lib/pkgconfig" ]; then
+	mv "${PKGDIR}/usr/lib/pkgconfig" "${DEVDIR}/usr/lib"
+fi
 
 # strip
 for a in ${PKGDIR}/usr/bin/* ; do
@@ -48,12 +109,21 @@ for a in ${PKGDIR}/usr/lib/libr*.so.* ; do
   echo "[debian] strip $a"
   strip --strip-unneeded "$a" 2> /dev/null || true
 done
+for a in ${PKGDIR}/usr/lib/radare2/*/* ; do
+  echo "[debian] strip $a"
+  strip --strip-unneeded "$a" 2> /dev/null || true
+done
+
+# r2book
+echo "[debian] download latest r2book info..."
+wget -P "${PKGDIR}/usr/share/info/" \
+  "https://github.com/radareorg/radare2-book/releases/latest/download/r2book.info.gz"
 
 # packages
 echo "[debian] building radare2 package..."
-make -C dist/debian/radare2 ARCH=${ARCH}
+$FAKEROOT ${MAKE} -C dist/debian/radare2 ARCH=${ARCH}
 cp -f dist/debian/radare2/*.deb .
 
 echo "[debian] building radare2-dev package..."
-make -C dist/debian/radare2-dev ARCH=${ARCH}
+$FAKEROOT ${MAKE} -C dist/debian/radare2-dev ARCH=${ARCH}
 cp -f dist/debian/radare2-dev/*.deb .

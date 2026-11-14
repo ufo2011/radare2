@@ -1,4 +1,5 @@
 NAME=r2 http://example.org
+BROKEN=1
 FILE=http://example.org
 CMDS=<<EOF
 r
@@ -6,12 +7,8 @@ b 64
 ps
 EOF
 EXPECT=<<EOF
-1256
-<!doctype html>
-<html>
-<head>
-    <title>Example Domain</title>
-
+513
+<!doctype html><html lang="en"><head><title>Example Domain</titl
 EOF
 RUN
 

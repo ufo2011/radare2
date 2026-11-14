@@ -141,7 +141,7 @@ So instead we use the macro below and test it against specific values.  */
 #define GCC_VERSION (__GNUC__ * 1000 + __GNUC_MINOR__)
 #endif /* GCC_VERSION */
 
-#if defined (__STDC__) || defined(__cplusplus) || defined (_AIX) || (defined (__mips) && defined (_SYSTYPE_SVR4)) || defined(__WINDOWS__)
+#if defined (__STDC__) || defined(__cplusplus) || defined (_AIX) || (defined (__mips) && defined (_SYSTYPE_SVR4)) || defined(R2__WINDOWS__)
 /* All known AIX compilers implement these things (but don't always
    define __STDC__).  The RISC/OS MIPS compiler defines these things
    in SVR4 mode, but does not define __STDC__.  */
@@ -170,7 +170,7 @@ So instead we use the macro below and test it against specific values.  */
 #define VA_OPEN(AP, VAR)	{ va_list AP; va_start(AP, VAR); { struct Qdmy
 #define VA_CLOSE(AP)		} va_end(AP); }
 #define VA_FIXEDARG(AP, T, N)	struct Qdmy
- 
+
 #undef const
 #undef volatile
 #undef signed

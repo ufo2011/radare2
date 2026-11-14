@@ -1,3 +1,4 @@
+# x86.nz no longer have access to RFlag/RNum
 NAME=asm/callflag
 FILE=-
 CMDS=<<EOF
@@ -18,7 +19,9 @@ FILE=-
 CMDS=<<EOF
 e asm.arch=x86
 pa call eax
-e asm.assembler=java
+e asm.arch=java
+# XXX asm.assembler only works if the assembler is in asm plugin, wont fallback on anal ones
+# e asm.assembler=java
 pa bipush 33
 EOF
 EXPECT=<<EOF
@@ -34,10 +37,9 @@ e asm.arch=x86
 e asm.bits=32
 pa out 256,AL
 EOF
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'out 256,AL' at line 3
+ERROR: Cannot assemble 'out 256,AL' at line 1
 EOF
 RUN
 
@@ -48,10 +50,9 @@ e asm.arch=x86
 e asm.bits=32
 pa push 0x3311223311222222
 EOF
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'push 0x3311223311222222' at line 3
+ERROR: Cannot assemble 'push 0x3311223311222222' at line 1
 EOF
 RUN
 
@@ -62,9 +63,670 @@ e asm.arch=x86
 e asm.bits=32
 pa mov eax, 0x3311223311222222
 EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'mov eax, 0x3311223311222222' at line 1
+EOF
+RUN
+
+NAME=Invalid x86 64bit not with a displacement over 32 bits
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa not qword [rax+0x123456789]
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'not qword [rax+0x123456789]' at line 1
+EOF
+RUN
+
+NAME=Invalid x86 64bit not with a 64-bit address over a signed disp32
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa not dword [rax+0x80000000]
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'not dword [rax+0x80000000]' at line 1
+EOF
+RUN
+
+NAME=x86 lock needs a lockable instruction with a memory destination
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa lock add eax, ecx
+pa lock mov dword [rax], ecx
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'lock add eax, ecx' at line 1
+ERROR: Cannot assemble 'lock mov dword [rax], ecx' at line 1
+EOF
+RUN
+
+NAME=Invalid x86 64bit inc with a 64-bit address over a signed disp32
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa inc byte [rax+0x80000000]
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'inc byte [rax+0x80000000]' at line 1
+EOF
+RUN
+
+NAME=asm.spp with an unterminated tag
+FILE=malloc://64
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+e asm.spp=true
+'pa nop <{this tag is never closed AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+pa nop
+?e done
+EOF
+EXPECT=<<EOF
+90
+done
+EOF
+EXPECT_ERR=<<EOF
+Unterminated preprocessor conditional or tag
+EOF
+RUN
+
+NAME=asm.spp expands a closed tag
+FILE=malloc://64
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+e asm.spp=true
+'pa <{set x nop}>nop
+'pa <{get x}>
+EOF
+EXPECT=<<EOF
+90
+90
+EOF
+RUN
+
+NAME=pa data directives longer than 64 bytes
+FILE=malloc://64
+CMDS=<<EOF2
+e asm.arch=x86
+e asm.bits=64
+pa .fill 100,1,0x41
+pa .hex 42424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242
+'pa .string "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+EOF2
+EXPECT=<<EOF2
+41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141
+42424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242424242
+6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100
+EOF2
+RUN
+
+NAME=pa .incbin directive
+FILE=malloc://64
+CMDS=<<EOF2
+e asm.arch=x86
+e asm.bits=64
+pa .incbin bins/other/rasm2/testARM32.bin
+pa .incbin bins/other/rasm2/testARM32.bin,32,4
+'pa nop;.incbin bins/other/rasm2/testARM32.bin,0,4;nop
+'pa .incbin bins/other/rasm2/testARM32.bin 0 1;.hex 41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141
+EOF2
+EXPECT=<<EOF2
+4661b0e1f087bd080040a0e3014084e2043095e40920a0e10810a0e10700a0e133ff2fe1060054e1
+33ff2fe1
+904661b0e190
+4641414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141
+EOF2
+RUN
+
+NAME=pa .fill sizes behave like gas
+FILE=malloc://64
+TIMEOUT=10
+CMDS=<<EOF2
+e asm.arch=x86
+e asm.bits=64
+'pa nop;.fill 2;nop
+'pa nop;.fill 2,2;nop
+'pa nop;.fill -1,1,0x41;nop
+'pa nop;.fill 2,-1,0x41;nop
+'pa .hex 9090;.fill 0x80000000,1,0x41
+'pa nop;.fill 0x10000,0x10000
+'pa nop;.fill 0x100000004,1,0x41
+EOF2
+EXPECT=<<EOF2
+90000090
+900000000090
+9090
+9090
+EOF2
+EXPECT_ERR=<<EOF2
+WARN: .fill with a negative repeat is ignored
+WARN: .fill with a negative size is ignored
+ERROR: Too large .fill
+ERROR: Cannot assemble '.fill 0x80000000,1,0x41' at line 2
+ERROR: Too large .fill
+ERROR: Cannot assemble '.fill 0x10000,0x10000' at line 2
+ERROR: Too large .fill
+ERROR: Cannot assemble '.fill 0x100000004,1,0x41' at line 2
+EOF2
+RUN
+
+NAME=pa comments between statements emit no bytes
+FILE=malloc://64
+CMDS=<<EOF2
+e asm.arch=x86
+e asm.bits=64
+'pa nop;/* a */;/* b */;nop
+'pa .hex 9090;/* a */;/* b */;.hex 41
+EOF2
+EXPECT=<<EOF2
+9090
+909041
+EOF2
+RUN
+
+NAME=x86.nz segment override after too many register terms
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+pa mov eax, [eax+es:0x10]
+pa mov eax, [eax+ebx+ecx+es:0x10]
+pa a al,al,[al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+es:0x41414141
+pa nop
+EOF
+EXPECT=<<EOF
+268b0500000000
+90
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'mov eax, [eax+ebx+ecx+es:0x10]' at line 1
+ERROR: Cannot assemble 'a al,al,[al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+al+es:0x41414141' at line 1
+EOF
+RUN
+
+NAME=pa z80 data directives bounded by the encoder buffer
+FILE=-
+ARGS=-a z80
+TIMEOUT=10
+CMDS=<<EOF
+pa ds 64
+pa db "\101\102\000\377"
+pa db "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+pa ds 65
+pa ds 0x7fffffff
+pa db "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+pa ld a, b
+EOF
+EXPECT=<<EOF
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+414200ff
+61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161
+78
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'ds 65' at line 1
+ERROR: Cannot assemble 'ds 0x7fffffff' at line 1
+ERROR: Cannot assemble 'db "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' at line 1
+EOF
+RUN
+
+NAME=pa data directives followed by instructions on encoders that own op->bytes
+FILE=--
+CMDS=<<EOF
+pa .byte 1,,nop @a:mips
+pa .byte 1,,nop @a:riscv
+pa .byte 1,,nop @a:8051
+pa .byte 1,,nop @a:ppc.nz
+pa .byte 1,,nop @a:cil
+pa .byte 1,,nop @a:i4004
+EOF
+EXPECT=<<EOF
+0100000000
+0113000000
+0100
+0100000060
+0100
+0100
+EOF
+RUN
+
+NAME=pa .byte with several values
+FILE=--
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa .byte 1 + 2, 4 * 2, 0xff
+pa .byte 1,2,3
+pa .db 1,	2
+"pa .byte 1,2;nop"
+pa .byte 1:2:3:4
+EOF
+EXPECT=<<EOF
+0308ff
+010203
+0102
+010290
+01
+EOF
+RUN
+
+NAME=pa .cfloat with a single word
+FILE=--
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa .cfloat 1:8:23:127:0:0
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: The .cfloat directive expects 6 arguments: (sign_bits, exp_bits, mant_bits, bias, big_endian, explicit_leading_bit)
+INFO: Example (float): .cfloat 1 8 23 127 0 0
+INFO: Example (double): .cfloat 1 11 52 1023 0 0
+INFO: Example (bf16): .cfloat 1 8 7 127 0 0
+INFO: Example (x86-80): .cfloat 1 15 64 16383 0 1
+ERROR: Cannot assemble '.cfloat 1:8:23:127:0:0' at line 1
+EOF
+RUN
+
+NAME=Invalid x86 32bit bit test operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+pa bt eax, 1, ecx
+pa bt eax, cr0
+pa bt cr0, 1
+pa bts eax, eip
+pa btr dword [ax], 1
+pa bt dword [eip], 1
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'bt eax, 1, ecx' at line 1
+ERROR: Cannot assemble 'bt eax, cr0' at line 1
+ERROR: Cannot assemble 'bt cr0, 1' at line 1
+ERROR: Cannot assemble 'bts eax, eip' at line 1
+ERROR: Cannot assemble 'btr dword [ax], 1' at line 1
+ERROR: Cannot assemble 'bt dword [eip], 1' at line 1
+EOF
+RUN
+
+NAME=Invalid x86 64bit bit test operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa bt eax, 1, ecx
+pa bt rax, cr0
+pa bt cr0, 1
+pa bt rip, 1
+pa btc rax, rip
+pa btr dword [ax], 1
+pa bt dword [rax + ecx], 1
+pa bts dword [eax + rcx], 1
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'bt eax, 1, ecx' at line 1
+ERROR: Cannot assemble 'bt rax, cr0' at line 1
+ERROR: Cannot assemble 'bt cr0, 1' at line 1
+ERROR: Cannot assemble 'bt rip, 1' at line 1
+ERROR: Cannot assemble 'btc rax, rip' at line 1
+ERROR: Cannot assemble 'btr dword [ax], 1' at line 1
+ERROR: Cannot assemble 'bt dword [rax + ecx], 1' at line 1
+ERROR: Cannot assemble 'bts dword [eax + rcx], 1' at line 1
+EOF
+RUN
+
+NAME=Invalid x86 64bit movzx and movsx operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+pa movzx rax, ah
+pa movzx al, bl
+pa movzx eax, eax
+pa movzx eax, dword [rax]
+pa movzx byte [rax], al
+pa movsx eax, byte [rip + rax]
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'movzx rax, ah' at line 1
+ERROR: Cannot assemble 'movzx al, bl' at line 1
+ERROR: Cannot assemble 'movzx eax, eax' at line 1
+ERROR: Cannot assemble 'movzx eax, dword [rax]' at line 1
+ERROR: Cannot assemble 'movzx byte [rax], al' at line 1
+ERROR: Cannot assemble 'movsx eax, byte [rip + rax]' at line 1
+EOF
+RUN
+
+NAME=pa arm64 reject out of range add and sub operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+pa add x0, x1, 0x8000000000000000
+pa sub x0, x1, 0x8000000000000000
+pa subs x0, x1, 0x8000000000000000
+pa cmp x0, 0x8000000000000000
+pa add x0, x1, w2, uxtw 0xffffffff
+pa add x0, x1, w2, uxtw 5
+pa add x0, x1, sp
+pa add w0, w1, wsp
+pa subs x0, x1, sp
+pa cmp x0, sp
+pa cmp w0, wsp
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'add x0, x1, 0x8000000000000000' at line 1
+ERROR: Cannot assemble 'sub x0, x1, 0x8000000000000000' at line 1
+ERROR: Cannot assemble 'subs x0, x1, 0x8000000000000000' at line 1
+ERROR: Cannot assemble 'cmp x0, 0x8000000000000000' at line 1
+ERROR: Cannot assemble 'add x0, x1, w2, uxtw 0xffffffff' at line 1
+ERROR: Cannot assemble 'add x0, x1, w2, uxtw 5' at line 1
+ERROR: Cannot assemble 'add x0, x1, sp' at line 1
+ERROR: Cannot assemble 'add w0, w1, wsp' at line 1
+ERROR: Cannot assemble 'subs x0, x1, sp' at line 1
+ERROR: Cannot assemble 'cmp x0, sp' at line 1
+ERROR: Cannot assemble 'cmp w0, wsp' at line 1
+EOF
+RUN
+
+NAME=pa arm64 reject invalid neg and negs operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+pa neg w0, x1
+pa negs x0, w1
+"pa neg x0, #1"
+"pa negs w0, #1"
+pa neg x0, sp
+pa negs w0, wsp
+pa neg sp, x1
+pa negs wsp, w1
+pa neg w0, w1, lsl 32
+pa neg w0, w1, lsr 32
+pa neg w0, w1, asr 32
+pa negs w0, w1, lsl 32
+pa negs w0, w1, lsr 32
+pa negs w0, w1, asr 32
+pa neg x0, x1, lsl 64
+pa neg x0, x1, lsr 64
+pa neg x0, x1, asr 64
+pa negs x0, x1, lsl 64
+pa negs x0, x1, lsr 64
+pa negs x0, x1, asr 64
+pa neg x0, x1, ror 1
+pa negs w0, w1, ror 1
+pa neg x0, w1, uxtw
+pa negs w0, w1, uxtw
+pa neg x0
+pa negs x0, x1, lsl 1, x2
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'neg w0, x1' at line 1
+ERROR: Cannot assemble 'negs x0, w1' at line 1
+ERROR: Cannot assemble 'neg x0, #1' at line 1
+ERROR: Cannot assemble 'negs w0, #1' at line 1
+ERROR: Cannot assemble 'neg x0, sp' at line 1
+ERROR: Cannot assemble 'negs w0, wsp' at line 1
+ERROR: Cannot assemble 'neg sp, x1' at line 1
+ERROR: Cannot assemble 'negs wsp, w1' at line 1
+ERROR: Cannot assemble 'neg w0, w1, lsl 32' at line 1
+ERROR: Cannot assemble 'neg w0, w1, lsr 32' at line 1
+ERROR: Cannot assemble 'neg w0, w1, asr 32' at line 1
+ERROR: Cannot assemble 'negs w0, w1, lsl 32' at line 1
+ERROR: Cannot assemble 'negs w0, w1, lsr 32' at line 1
+ERROR: Cannot assemble 'negs w0, w1, asr 32' at line 1
+ERROR: Cannot assemble 'neg x0, x1, lsl 64' at line 1
+ERROR: Cannot assemble 'neg x0, x1, lsr 64' at line 1
+ERROR: Cannot assemble 'neg x0, x1, asr 64' at line 1
+ERROR: Cannot assemble 'negs x0, x1, lsl 64' at line 1
+ERROR: Cannot assemble 'negs x0, x1, lsr 64' at line 1
+ERROR: Cannot assemble 'negs x0, x1, asr 64' at line 1
+ERROR: Cannot assemble 'neg x0, x1, ror 1' at line 1
+ERROR: Cannot assemble 'negs w0, w1, ror 1' at line 1
+ERROR: Cannot assemble 'neg x0, w1, uxtw' at line 1
+ERROR: Cannot assemble 'negs w0, w1, uxtw' at line 1
+ERROR: Cannot assemble 'neg x0' at line 1
+ERROR: Cannot assemble 'negs x0, x1, lsl 1, x2' at line 1
+EOF
+RUN
+
+NAME=pa arm64 reject out of range bitfield widths
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+pa bfxil x0, x1, 5, 0
+pa bfxil x0, x1, 60, 8
+pa bfxil w0, w1, 30, 4
+pa bfxil x0, x1, 64, 1
+pa bfi x0, x1, 5, 0
+pa bfi x0, x1, 60, 8
+pa ubfx x0, x1, 5, 0
+pa sbfx w0, w1, 30, 4
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'bfxil x0, x1, 5, 0' at line 1
+ERROR: Cannot assemble 'bfxil x0, x1, 60, 8' at line 1
+ERROR: Cannot assemble 'bfxil w0, w1, 30, 4' at line 1
+ERROR: Cannot assemble 'bfxil x0, x1, 64, 1' at line 1
+ERROR: Cannot assemble 'bfi x0, x1, 5, 0' at line 1
+ERROR: Cannot assemble 'bfi x0, x1, 60, 8' at line 1
+ERROR: Cannot assemble 'ubfx x0, x1, 5, 0' at line 1
+ERROR: Cannot assemble 'sbfx w0, w1, 30, 4' at line 1
+EOF
+RUN
+
+NAME=pa arm64 reject invalid logical shift operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+"pa lsl x0, w1, #1"
+"pa lsr w0, x1, #1"
+"pa lsr d0, d1, #1"
+"pa lsl s0, s1, #1"
+"pa lsr x0, sp, #1"
+"pa lsl sp, x1, #1"
+"pa lsl w0, wsp, #1"
+"pa lsr wsp, w1, #1"
+"pa lsl x0, x1, #1, x2"
+"pa lsr x0, x1, #1, nop"
+"pa lsl x0, x1, #1,"
+"pa lsr x0, x1, #bogus"
+"pa lsr x0, x1, bogus"
+"pa lsl w0, w1, #1+bogus"
+"pa lsl x0, x1,"
+"pa lsr x0, x1, #"
+"pa lsl x0, x1"
+"pa lsr x0, x1, nop"
+"pa lsl x0, x1, #64"
+"pa lsr x0, x1, #64"
+"pa lsl w0, w1, #32"
+"pa lsr w0, w1, #32"
+"pa lsl x0, x1, #-1"
+"pa lsr w0, w1, #-1"
+"pa lsl x0, x1, w2"
+"pa lsr w0, w1, x2"
+"pa lsl x0, x1, sp"
+"pa lsr w0, w1, wsp"
+"pa lsl x0, x1, x2, nop"
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'lsl x0, w1, #1' at line 1
+ERROR: Cannot assemble 'lsr w0, x1, #1' at line 1
+ERROR: Cannot assemble 'lsr d0, d1, #1' at line 1
+ERROR: Cannot assemble 'lsl s0, s1, #1' at line 1
+ERROR: Cannot assemble 'lsr x0, sp, #1' at line 1
+ERROR: Cannot assemble 'lsl sp, x1, #1' at line 1
+ERROR: Cannot assemble 'lsl w0, wsp, #1' at line 1
+ERROR: Cannot assemble 'lsr wsp, w1, #1' at line 1
+ERROR: Cannot assemble 'lsl x0, x1, #1, x2' at line 1
+ERROR: Cannot assemble 'lsr x0, x1, #1, nop' at line 1
+ERROR: Cannot assemble 'lsl x0, x1, #1,' at line 1
+ERROR: Cannot assemble 'lsr x0, x1,' at line 1
+ERROR: Cannot assemble 'lsr x0, x1, bogus' at line 1
+ERROR: Cannot assemble 'lsl w0, w1, #1+bogus' at line 1
+ERROR: Cannot assemble 'lsl x0, x1,' at line 1
+ERROR: Cannot assemble 'lsr x0, x1,' at line 1
+ERROR: Cannot assemble 'lsl x0, x1' at line 1
+ERROR: Cannot assemble 'lsr x0, x1, nop' at line 1
+ERROR: Cannot assemble 'lsl x0, x1, #64' at line 1
+ERROR: Cannot assemble 'lsr x0, x1, #64' at line 1
+ERROR: Cannot assemble 'lsl w0, w1, #32' at line 1
+ERROR: Cannot assemble 'lsr w0, w1, #32' at line 1
+ERROR: Cannot assemble 'lsl x0, x1, #-1' at line 1
+ERROR: Cannot assemble 'lsr w0, w1, #-1' at line 1
+ERROR: Cannot assemble 'lsl x0, x1, w2' at line 1
+ERROR: Cannot assemble 'lsr w0, w1, x2' at line 1
+ERROR: Cannot assemble 'lsl x0, x1, sp' at line 1
+ERROR: Cannot assemble 'lsr w0, w1, wsp' at line 1
+ERROR: Cannot assemble 'lsl x0, x1, x2, nop' at line 1
+EOF
+RUN
+
+NAME=pa arm64 reject invalid asr and ror operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+"pa asr w0, w1, #32"
+"pa ror w0, w1, #32"
+"pa asr x0, x1, #64"
+"pa ror x0, x1, #64"
+"pa asr w0, w1, #-1"
+"pa ror x0, x1, #-1"
+"pa asr x0, w1, #1"
+"pa ror d0, d1, #1"
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'asr w0, w1, #32' at line 1
+ERROR: Cannot assemble 'ror w0, w1, #32' at line 1
+ERROR: Cannot assemble 'asr x0, x1, #64' at line 1
+ERROR: Cannot assemble 'ror x0, x1, #64' at line 1
+ERROR: Cannot assemble 'asr w0, w1, #-1' at line 1
+ERROR: Cannot assemble 'ror x0, x1, #-1' at line 1
+ERROR: Cannot assemble 'asr x0, w1, #1' at line 1
+ERROR: Cannot assemble 'ror d0, d1, #1' at line 1
+EOF
+RUN
+
+NAME=pa arm64 reject stack pointer bitfield operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+"pa ubfm sp, sp, #1, #63"
+"pa ubfm wsp, wsp, #1, #31"
+"pa ubfm x0, sp, #1, #63"
+"pa ubfm sp, x1, #1, #63"
+"pa sbfm sp, sp, #1, #63"
+"pa bfm wsp, wsp, #1, #31"
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'ubfm sp, sp, #1, #63' at line 1
+ERROR: Cannot assemble 'ubfm wsp, wsp, #1, #31' at line 1
+ERROR: Cannot assemble 'ubfm x0, sp, #1, #63' at line 1
+ERROR: Cannot assemble 'ubfm sp, x1, #1, #63' at line 1
+ERROR: Cannot assemble 'sbfm sp, sp, #1, #63' at line 1
+ERROR: Cannot assemble 'bfm wsp, wsp, #1, #31' at line 1
+EOF
+RUN
+
+NAME=Assembly string delimiters and escapes
+FILE=malloc://64
+CMDS=<<EOF
+pa .ascii "a#b"
+"pa .ascii \"a;b,,c\""
+pa .string "AB"
+pa .ascii "$$:$sys.write"
+pa .ascii "A\x00B"
+EOF
+EXPECT=<<EOF
+612362
+613b622c2c63
+414200
+24243a247379732e7772697465
+410042
+EOF
+RUN
+
+NAME=Assembly strings reject invalid hex escapes
+FILE=malloc://64
+CMDS=<<EOF
+pa .ascii "\xg0"
+EOF
 EXPECT=<<EOF
 EOF
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov eax, 0x3311223311222222' at line 3
+ERROR: Invalid hex escape in string
+ERROR: Cannot assemble '.ascii "\xg0"' at line 1
+EOF
+RUN
+
+NAME=pa z80 expression nesting limit and INT_MIN division
+FILE=-
+ARGS=-a z80
+CMDS=<<EOF
+pa ld b, ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+pa ld b, (((1)))
+pa ld a, (0-2147483647-1)/-1
+pa ld a, 1==1==1
+pa ld a, 1<2<3
+'pa ld a, 1|2^3&1
+EOF
+EXPECT=<<EOF
+0601
+3e00
+3e01
+3e01
+3e03
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'ld b, ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))' at line 1
+EOF
+RUN
+
+NAME=pa z80 rejects invalid ld a and bit operands
+FILE=-
+ARGS=-a z80
+CMDS=<<EOF
+pa ld a, (1 n
+pa ld a, (sp)
+pa ld a, foo bar
+pa bit 10, a
+pa bit 7, a
+EOF
+EXPECT=<<EOF
+cb7f
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'ld a, (1 n' at line 1
+ERROR: Cannot assemble 'ld a, (sp)' at line 1
+ERROR: Cannot assemble 'ld a, foo bar' at line 1
+ERROR: Cannot assemble 'bit 10, a' at line 1
 EOF
 RUN

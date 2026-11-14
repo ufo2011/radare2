@@ -1,25 +1,20 @@
+# merged: idp bin state bug (#9441)
 NAME=idp flags
 FILE=bins/pdb/SimplePDB.exe
 CMDS=<<EOF
 idp bins/pdb/SimplePDB.pdb
 fi 1 @ 0x00401000
 fi 1 @ 0x00401010
-EOF
-EXPECT=<<EOF
-0x00401000 4096 section..text
-0x00401000 0 pdb.void___cdecl_SomeCoolFunction_void_
-0x00401010 0 pdb._main
-EOF
-RUN
-
-NAME=idp bin state bug (#9441)
-FILE=bins/pdb/SimplePDB.exe
-CMDS=<<EOF
+?e --
 e asm.bits
 idpi bins/pdb/SimplePDB.pdb~SomeCoolFunction
 e asm.bits
 EOF
 EXPECT=<<EOF
+0x00401000 4096 section..text
+0x00401000 13 pdb.void___cdecl_SomeCoolFunction_void_
+0x00401010 8 pdb._main
+--
 32
 0x00401000  2  .text  void __cdecl SomeCoolFunction(void)
 32
@@ -43,7 +38,7 @@ EXPECT=<<EOF
           "offset": 0
         },
         {
-          "member_type": "uint16_t",
+          "member_type": "int16_t",
           "member_name": "b",
           "offset": 1
         },
@@ -121,7 +116,7 @@ EXPECT=<<EOF
           "offset": 0
         },
         {
-          "member_type": "uint16_t",
+          "member_type": "int16_t",
           "member_name": "b",
           "offset": 0
         },
@@ -169,3 +164,89 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=idp forward thunk boundaries do not depend on public record order
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<END
+e io.cache=true
+e anal.slow=false
+wx e90b000000 @ 0x401000
+wx b82a000000c3 @ 0x401010
+idp bins/pdb/SimplePDB-thunk-first.pdb
+afl~0x00401000,0x00401010
+axf @ 0x401000
+af-*
+f-*
+idp bins/pdb/SimplePDB.pdb
+afl~0x00401000,0x00401010
+axf @ 0x401000
+END
+EXPECT=<<END
+0x00401010    1      6 pdb._main
+0x00401000    1      5 pdb.void___cdecl_SomeCoolFunction_void_
+JUMP 0x401010 pdb._main
+0x00401010    1      6 pdb._main
+0x00401000    1      5 pdb.void___cdecl_SomeCoolFunction_void_
+JUMP 0x401010 pdb._main
+END
+RUN
+
+NAME=PDB data flags do not mark function boundaries
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<END
+e io.cache=true
+e anal.slow=false
+wx e90b000000 @ 0x401000
+wx b82a000000c3 @ 0x401010
+fs+symbols
+f pdb.data 1 0x401010
+fs-
+af @ 0x401000
+afbj @ 0x401000
+END
+EXPECT=<<END
+[{"addr":4198400,"size":5,"jump":4198416,"opaddr":4198400,"inputs":0,"outputs":1,"ninstr":1,"instrs":[4198400],"traced":0},{"addr":4198416,"size":6,"opaddr":18446744073709551615,"inputs":1,"outputs":0,"ninstr":2,"instrs":[4198416,4198421],"traced":0}]
+END
+RUN
+NAME=idp autodetect skips the wrong PDB age and tries the symbol store
+FILE=bins/pdb/SimplePDB-age4.exe
+CMDS=<<END
+e pdb.symstore=bins/pdb/symbols
+idp
+afl~SomeCoolFunction
+END
+EXPECT=<<END
+0x00401000    1     13 pdb.void___cdecl_SomeCoolFunction_void_
+END
+EXPECT_ERR=<<END
+WARN: bins/pdb/SimplePDB.pdb does not belong to this binary (PDB GUID+age 1516D2A3E6864C06BD82C50FBE6152363, binary 1516D2A3E6864C06BD82C50FBE6152364)
+END
+RUN
+
+NAME=idp autodetect never imports a mismatched PDB
+FILE=bins/pdb/SimplePDB-age4.exe
+CMDS=<<END
+e pdb.symstore=bins/pdb/no-symbol-store
+idp
+f~pdb.
+afl
+END
+EXPECT=
+EXPECT_ERR=<<END
+WARN: bins/pdb/SimplePDB.pdb does not belong to this binary (PDB GUID+age 1516D2A3E6864C06BD82C50FBE6152363, binary 1516D2A3E6864C06BD82C50FBE6152364)
+ERROR: File 'SimplePDB.pdb' not found in file directory or symbol store
+END
+RUN
+
+NAME=idp explicit file overrides a mismatched PDB age
+FILE=bins/pdb/SimplePDB-age4.exe
+CMDS=<<END
+idp bins/pdb/SimplePDB.pdb
+afl~SomeCoolFunction
+END
+EXPECT=<<END
+0x00401000    1     13 pdb.void___cdecl_SomeCoolFunction_void_
+END
+EXPECT_ERR=<<END
+WARN: bins/pdb/SimplePDB.pdb does not belong to this binary (PDB GUID+age 1516D2A3E6864C06BD82C50FBE6152363, binary 1516D2A3E6864C06BD82C50FBE6152364)
+END
+RUN

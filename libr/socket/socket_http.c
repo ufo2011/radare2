@@ -1,21 +1,170 @@
-/* radare - LGPL - Copyright 2011-2021 - pancake */
+/* radare - LGPL - Copyright 2011-2026 - pancake */
 
 #include <r_socket.h>
 #include <r_util.h>
 
-#if __WINDOWS__
+#if !R2_NETWORK
+R_API char *r_socket_http_post(const char *url, const char **headers, const char *data, int *code, int *rlen) {
+	if (code) {
+		*code = 0;
+	}
+	if (rlen) {
+		*rlen = 0;
+	}
+	return NULL;
+}
+
+R_API char *r_socket_http_get(const char *url, const char **headers, int *code, int *rlen) {
+	return r_socket_http_post (url, headers, NULL, code, rlen);
+}
+
+R_API bool r_socket_http_download(const char *url, const char **headers, const char *filepath) {
+	return false;
+}
+#else
+#if R2__WINDOWS__
 #include <wininet.h>
 #endif
 
+#if R2_WASM_BROWSER || R2_WASM_HTTP
+extern char *r2_js_http_request(int post, const char *url, const char *headers, const char *data, int *code, int *rlen) __attribute__((import_module("r2"), import_name("http_request")));
+
+static char *socket_http_request(int post, const char *url, const char **headers, const char *data, int *code, int *rlen) {
+	size_t count = 0;
+	if (headers) {
+		while (headers[count]) {
+			count++;
+		}
+	}
+	char *fields = r_str_array_join (headers, count, "\n");
+	char *res = r2_js_http_request (post, url, fields, data, code, rlen);
+	free (fields);
+	return res;
+}
+#endif
+
+#include "socket_http_fscmd.inc.c"
+
 #define SOCKET_HTTP_MAX_HEADER_LENGTH 0x2000
 #define SOCKET_HTTP_MAX_REDIRECTS 5
+
+static bool socket_http_requires_curl(const char *url) {
+#if !HAVE_LIB_SSL && !R2__WINDOWS__
+	return r_str_startswith (url, "https://");
+#else
+	return false;
+#endif
+}
+
+/* Check sandbox network permission for URL or host */
+static bool socket_http_sandbox_check(const char *url_or_host) {
+#if R2_WASM_BROWSER || R2_WASM_HTTP
+	// Host HTTP clients may follow redirects beyond the initial host.
+	return r_sandbox_check (R_SANDBOX_GRAIN_SOCKET) && r_sandbox_check (R_SANDBOX_GRAIN_NETWORK);
+#else
+	if (r_sandbox_check (R_SANDBOX_GRAIN_NETWORK)) {
+		return true;
+	}
+	if (socket_http_requires_curl (url_or_host) || !r_sandbox_check_connect (url_or_host)) {
+		R_LOG_ERROR ("sandbox: network access denied for '%s'", url_or_host);
+		return false;
+	}
+	return true;
+#endif
+}
+
+static bool socket_http_use_curl(const char *url) {
+	return r_sandbox_check (R_SANDBOX_GRAIN_NETWORK)
+		&& (r_sys_getenv_asbool ("R2_CURL") || socket_http_requires_curl (url));
+}
+
+typedef struct {
+	char *host;
+	char *port;
+	char *path;
+} SocketHttpUrl;
+
+static void socket_http_url_fini(SocketHttpUrl *u) {
+	free (u->host);
+	free (u->port);
+	free (u->path);
+}
+
+// split the authority like r_sandbox_check_localhost does, so the checked host is the connected one
+static bool socket_http_url_parse(SocketHttpUrl *u, const char *url, bool ssl) {
+	const char *authority = strstr (url, "://");
+	if (!authority) {
+		R_LOG_ERROR ("Invalid URI");
+		return false;
+	}
+	authority += 3;
+	const size_t authority_len = strcspn (authority, "/?#");
+	char *hostport = r_str_ndup (authority, authority_len);
+	char *at = strrchr (hostport, '@');
+	char *host = at? at + 1: hostport;
+	char *port = NULL;
+	if (*host == '[') {
+		char *end = strchr (++host, ']');
+		port = end? end + 1: NULL;
+		if (!end || (*port && *port != ':')) {
+			R_LOG_ERROR ("Invalid IPv6 host in URI");
+			free (hostport);
+			return false;
+		}
+		*end = 0;
+	} else {
+		port = strchr (host, ':');
+	}
+	if (port && *port == ':') {
+		*port++ = 0;
+	}
+	const char *path = authority + authority_len;
+	if (*path == '/') {
+		path++;
+	}
+	u->host = strdup (host);
+	u->port = strdup (R_STR_ISNOTEMPTY (port)? port: ssl? "443": "80");
+	u->path = r_str_ndup (path, strcspn (path, "#"));
+	free (hostport);
+	if (!*u->host) {
+		R_LOG_ERROR ("Missing host in URI");
+		socket_http_url_fini (u);
+		return false;
+	}
+	return true;
+}
+
+static void socket_http_send_host(RSocket *s, SocketHttpUrl *u) {
+	const bool ipv6 = strchr (u->host, ':');
+	r_socket_printf (s, "Host: %s%s%s:%s\r\n", ipv6? "[": "", u->host, ipv6? "]": "", u->port);
+}
+
+static void socket_http_send_headers(RSocket *s, const char **headers, bool post) {
+	bool content_type = false;
+	if (headers) {
+		const char **header;
+		for (header = headers; *header; header++) {
+			if (!**header) {
+				continue;
+			}
+			if (!r_str_ncasecmp (*header, "Content-Type:", 13)) {
+				content_type = true;
+			}
+			r_socket_printf (s, "%s\r\n", *header);
+		}
+	}
+	if (post && !content_type) {
+		r_socket_printf (s, "Content-Type: application/x-www-form-urlencoded\r\n");
+	}
+	r_socket_printf (s, "\r\n");
+}
 
 static size_t socket_slurp(RSocket *s, RBuffer *buf) {
 	size_t i;
 	if (r_socket_ready (s, 1, 0) != 1) {
 		return 0;
 	}
-	r_socket_block_time (s, true, 0, 1000);
+	r_socket_block_time (s, true, 1, 0);
 	for (i = 0; i < SOCKET_HTTP_MAX_HEADER_LENGTH; i += 1) {
 		ut8 c;
 		int olen = r_socket_read_block (s, &c, 1);
@@ -28,10 +177,10 @@ static size_t socket_slurp(RSocket *s, RBuffer *buf) {
 	return i;
 }
 
-static char *socket_http_get_recursive(const char *url, int *code, int *rlen, ut32 redirections);
+static char *socket_http_get_recursive(const char *url, const char *headers[], int *code, int *rlen, ut32 redirections);
 
-static char *socket_http_answer(RSocket *s, int *code, int *rlen, ut32 redirections) {
-	r_return_val_if_fail (s, NULL);
+static char *socket_http_answer(RSocket *s, const char *headers[], int *code, int *rlen, ut32 redirections) {
+	R_RETURN_VAL_IF_FAIL (s, NULL);
 	const char *p;
 	int ret, len = 0, delta = 0;
 	char *dn = NULL;
@@ -67,63 +216,59 @@ static char *socket_http_answer(RSocket *s, int *code, int *rlen, ut32 redirecti
 
 	olen -= delta;
 	*dn = 0; // chop headers
+	if (code) {
+		int status;
+		if (sscanf (buf, "HTTP/%*s %3d", &status) == 1 && status >= 100 && status <= 599) {
+			*code = status;
+		}
+	}
 
 	/* Follow redirects */
 	p = r_str_casestr (buf, "Location:");
 	if (p) {
 		if (!redirections) {
-			eprintf ("Too many redirects\n");
+			R_LOG_ERROR ("Too many redirects");
 			goto exit;
 		}
 		p += strlen ("Location:");
-		char *end_url = strchr (p, '\n');
-		if (end_url) {
-			int url_len = end_url - p;
-			char *url = r_str_ndup (p, url_len);
-			r_str_trim (url);
-			res = socket_http_get_recursive (url, code, rlen, --redirections);
-			free (url);
-			len = *rlen;
-		}
+		// the headers are chopped, so the last one has no newline
+		const char *end_url = strchr (p, '\n');
+		char *url = end_url? r_str_ndup (p, end_url - p): strdup (p);
+		r_str_trim (url);
+		res = socket_http_get_recursive (url, headers, code, &len, --redirections);
+		free (url);
 		goto exit;
 	}
 
 	/* Parse Len */
+	const int body_len = olen - (dn - buf);
 	p = r_str_casestr (buf, "Content-Length: ");
-	if (p) {
-		len = atoi (p + 16);
-	} else {
-		len = olen - (dn - buf);
-	}
+	len = p? atoi (p + 16): body_len;
 	if (len > 0) {
-		if (len > olen) {
-			res = malloc (len + 2);
-			if (!res) {
-				goto exit;
-			}
-			olen -= dn - buf;
-			memcpy (res, dn + delta, olen);
-			do {
-				ret = r_socket_read_block (s, (ut8*) res + olen, len - olen);
-				if (ret < 1) {
-					break;
-				}
-				olen += ret;
-			} while (olen < len);
-			res[len] = 0;
-		} else {
-			res = malloc (len + 1);
-			if (res) {
-				memcpy (res, dn + delta, len);
-				res[len] = 0;
-			}
+		res = malloc ((size_t)len + 1);
+		if (!res) {
+			len = 0;
+			goto exit;
 		}
+		int have = R_MIN (body_len, len);
+		memcpy (res, dn + delta, have);
+		while (have < len) {
+			ret = r_socket_read_block (s, (ut8 *)res + have, len - have);
+			if (ret < 1) {
+				break;
+			}
+			have += ret;
+		}
+		len = have;
+		res[len] = 0;
 	} else {
+		R_LOG_DEBUG ("LEN = 0");
+		len = 0;
 		res = strdup ("");
 	}
 exit:
 	free (buf);
-	r_buf_free (b);
+	r_unref (b);
 	r_socket_close (s);
 	if (rlen) {
 		*rlen = len;
@@ -131,9 +276,9 @@ exit:
 	return res;
 }
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 static char *http_get_w32(const char *url, int *code, int *rlen) {
-	HINTERNET hInternet = InternetOpenA ("radare2 "R2_VERSION, INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	HINTERNET hInternet = InternetOpenA ("radare2 " R2_VERSION, INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 	if (!hInternet) {
 		r_sys_perror ("InternetOpenA");
 		return NULL;
@@ -160,7 +305,7 @@ static char *http_get_w32(const char *url, int *code, int *rlen) {
 			goto exit;
 		}
 		ret = tmp;
-	} while (!(res = InternetReadFile (hOpenUrl, ret + w, read_sz, &r)) || r);
+	} while (! (res = InternetReadFile (hOpenUrl, ret + w, read_sz, &r)) || r);
 
 	if (res) {
 		char *tmp = realloc (ret, (size_t)w + 1);
@@ -187,162 +332,337 @@ exit:
 }
 #endif
 
-static char *socket_http_get_recursive(const char *url, int *code, int *rlen, ut32 redirections) {
+static char *socket_http_get_recursive(const char *url, const char **headers, int *code, int *rlen, ut32 redirections) {
 	if (code) {
 		*code = 0;
 	}
 	if (rlen) {
 		*rlen = 0;
 	}
-	char *curl_env = r_sys_getenv ("R2_CURL");
-	if (!R_STR_ISEMPTY (curl_env) && atoi (curl_env)) {
-		int len;
-		char *escaped_url = r_str_escape_sh (url);
-		char *command = r_str_newf ("curl -sfL -o - \"%s\"", escaped_url);
-		char *res = r_sys_cmd_str (command, NULL, &len);
-		free (escaped_url);
-		free (command);
-		free (curl_env);
-		if (!res) {
+	/* Check sandbox network permission */
+	if (!socket_http_sandbox_check (url)) {
+		return NULL;
+	}
+#if R2_WASM_BROWSER || R2_WASM_HTTP
+	return socket_http_request (false, url, headers, NULL, code, rlen);
+#elif __wasi__
+	return NULL;
+#endif
+	char *relay_response = NULL;
+	if (socket_http_fscmd (false, url, headers, NULL, code, rlen, &relay_response)) {
+		return relay_response;
+	}
+	const bool use_curl = socket_http_use_curl (url);
+	const bool requires_curl = socket_http_requires_curl (url);
+	if (use_curl) {
+		if (requires_curl) {
+			char *curl_path = r_file_path ("curl");
+			if (!curl_path) {
+				R_LOG_ERROR ("Tried to get '%s', but SSL support is disabled and curl was not found", url);
+				return NULL;
+			}
+			free (curl_path);
+		}
+		char *header_file = r_file_temp ("r2_http_hdr");
+		char *body_file = r_file_temp ("r2_http_body");
+		if (!header_file || !body_file) {
+			free (header_file);
+			free (body_file);
 			return NULL;
 		}
-		if (res) {
+		char *escaped_header_file = r_str_escape_sh (header_file);
+		char *escaped_body_file = r_str_escape_sh (body_file);
+		if (!escaped_header_file || !escaped_body_file) {
+			free (header_file);
+			free (body_file);
+			free (escaped_header_file);
+			free (escaped_body_file);
+			return NULL;
+		}
+		char *escaped_url = r_str_escape_sh (url);
+		if (!escaped_url) {
+			free (header_file);
+			free (body_file);
+			free (escaped_header_file);
+			free (escaped_body_file);
+			return NULL;
+		}
+		RStrBuf *sb = r_strbuf_new ("curl -s -g -D ");
+		r_strbuf_appendf (sb, "\"%s\" -o \"%s\" -L --max-redirs %u", escaped_header_file, escaped_body_file, redirections);
+		if (headers) {
+			const char **header = headers;
+			while (*header) {
+				char *escaped_header = r_str_escape_sh (*header);
+				if (!escaped_header) {
+					r_strbuf_free (sb);
+					free (escaped_url);
+					free (escaped_header_file);
+					free (escaped_body_file);
+					free (header_file);
+					free (body_file);
+					return NULL;
+				}
+				r_strbuf_appendf (sb, " -H \"%s\"", escaped_header);
+				free (escaped_header);
+				header++;
+			}
+		}
+		r_strbuf_appendf (sb, " \"%s\"", escaped_url);
+		char *command = r_strbuf_drain (sb);
+		free (escaped_url);
+		free (escaped_header_file);
+		free (escaped_body_file);
+
+		int cmd_result = r_sys_cmd (command);
+		free (command);
+
+		if (cmd_result != 0) {
+			if (requires_curl) {
+				R_LOG_ERROR ("curl failed to fetch '%s'", url);
+			}
+			r_file_rm (header_file);
+			r_file_rm (body_file);
+			free (header_file);
+			free (body_file);
+			if (code) {
+				*code = 500;
+			}
+			return NULL;
+		}
+
+		// Parse status code from header file
+		size_t hdr_len;
+		char *hdr_content = r_file_slurp (header_file, &hdr_len);
+		if (hdr_content) {
+			if (code) {
+				char *status_line = strstr (hdr_content, "HTTP/");
+				if (status_line) {
+					char *space = strchr (status_line, ' ');
+					if (space) {
+						*code = atoi (space + 1);
+					} else {
+						*code = 200;
+					}
+				} else {
+					*code = 200;
+				}
+			}
+			free (hdr_content);
+		} else {
 			if (code) {
 				*code = 200;
 			}
-			if (rlen) {
-				*rlen = len;
-			}
 		}
+
+		// Read body
+		size_t body_len;
+		char *res = r_file_slurp (body_file, &body_len);
+		if (rlen) {
+			*rlen = body_len;
+		}
+
+		r_file_rm (header_file);
+		r_file_rm (body_file);
+		free (header_file);
+		free (body_file);
 		return res;
 	}
-	free (curl_env);
-#if __WINDOWS__
-	return http_get_w32 (url, code, rlen);
-#else
-	RSocket *s;
-	bool ssl = r_str_startswith (url, "https://");
-#if !HAVE_LIB_SSL
-	if (ssl) {
-		eprintf ("Tried to get '%s', but SSL support is disabled, set R2_CURL=1 to use curl\n", url);
-		return NULL;
+#if R2__WINDOWS__
+	if (r_sandbox_check (R_SANDBOX_GRAIN_NETWORK)) {
+		return http_get_w32 (url, code, rlen);
 	}
 #endif
-	char *response, *host, *path, *port = "80";
-	char *uri = strdup (url);
-	if (!uri) {
+	const bool ssl = r_str_startswith (url, "https://");
+	SocketHttpUrl u = {0};
+	if (!socket_http_url_parse (&u, url, ssl)) {
 		return NULL;
 	}
-	host = strstr (uri, "://");
-	if (!host) {
-		free (uri);
-		eprintf ("r_socket_http_get: Invalid URI");
-		return NULL;
-	}
-	host += 3;
-	port = strchr (host, ':');
-	if (!port) {
-#if HAVE_LIB_SSL
-		port = ssl? "443": "80";
-#else
-		port = "80";
-#endif
-		path = host;
-	} else {
-		*port++ = 0;
-		path = port;
-	}
-	path = strchr (path, '/');
-	if (!path) {
-		path = "";
-	} else {
-		*path++ = 0;
-	}
-	s = r_socket_new (ssl);
+	RSocket *s = r_socket_new (ssl);
 	if (!s) {
-		eprintf ("r_socket_http_get: Cannot create socket\n");
-		free (uri);
+		R_LOG_ERROR ("Cannot create socket");
+		socket_http_url_fini (&u);
 		return NULL;
 	}
-	if (r_socket_connect_tcp (s, host, port, 0)) {
+	char *response = NULL;
+	if (r_socket_connect_tcp (s, u.host, u.port, 0)) {
 		r_socket_printf (s,
-				"GET /%s HTTP/1.1\r\n"
-				"User-Agent: radare2 "R2_VERSION"\r\n"
-				"Accept: */*\r\n"
-				"Host: %s:%s\r\n"
-				"\r\n", path, host, port);
-		response = socket_http_answer (s, code, rlen, redirections);
+			"GET /%s HTTP/1.1\r\n"
+			"User-Agent: radare2 " R2_VERSION "\r\n"
+			"Accept: */*\r\n",
+			u.path);
+		socket_http_send_host (s, &u);
+		socket_http_send_headers (s, headers, false);
+		response = socket_http_answer (s, NULL, code, rlen, redirections);
 	} else {
-		eprintf ("Cannot connect to %s:%s\n", host, port);
-		response = NULL;
+		R_LOG_ERROR ("Cannot connect to %s:%s", u.host, u.port);
 	}
-	free (uri);
+	socket_http_url_fini (&u);
 	r_socket_free (s);
 	return response;
+}
+
+R_API char *r_socket_http_get(const char *url, const char **headers, int *code, int *rlen) {
+	return socket_http_get_recursive (url, headers, code, rlen, SOCKET_HTTP_MAX_REDIRECTS);
+}
+
+R_API bool r_socket_http_download(const char *url, const char **headers, const char *filepath) {
+	int code, rlen;
+	char *data = r_socket_http_get (url, headers, &code, &rlen);
+	if (!data || code != 200) {
+		if (code != 200) {
+			R_LOG_ERROR ("HTTP download failed with status code %d", code);
+		}
+		free (data);
+		return false;
+	}
+	bool ret = r_file_dump (filepath, (const ut8 *)data, rlen, false);
+	free (data);
+	return ret;
+}
+
+R_API char *r_socket_http_post(const char *url, const char *headers[], const char *data, int *code, int *rlen) {
+	if (code) {
+		*code = 0;
+	}
+	if (rlen) {
+		*rlen = 0;
+	}
+	/* Check sandbox network permission */
+	if (!socket_http_sandbox_check (url)) {
+		return NULL;
+	}
+#if R2_WASM_BROWSER || R2_WASM_HTTP
+	return socket_http_request (true, url, headers, data, code, rlen);
+#elif __wasi__
+	return NULL;
 #endif
-}
+	char *relay_response = NULL;
+	if (socket_http_fscmd (true, url, headers, data, code, rlen, &relay_response)) {
+		return relay_response;
+	}
+	const bool use_curl = socket_http_use_curl (url);
+	const bool requires_curl = socket_http_requires_curl (url);
+	if (use_curl) {
+		if (requires_curl) {
+			char *curl_path = r_file_path ("curl");
+			if (!curl_path) {
+				R_LOG_ERROR ("Tried to post '%s', but SSL support is disabled and curl was not found", url);
+				return NULL;
+			}
+			free (curl_path);
+		}
+		int len;
+		char *escaped_url = r_str_escape_sh (url);
+		if (!escaped_url) {
+			return NULL;
+		}
+		RStrBuf *sb = r_strbuf_new ("curl -s -g -D - -L");
+		if (headers) {
+			const char **header = headers;
+			while (*header) {
+				char *escaped_header = r_str_escape_sh (*header);
+				if (!escaped_header) {
+					r_strbuf_free (sb);
+					free (escaped_url);
+					return NULL;
+				}
+				r_strbuf_appendf (sb, " -H \"%s\"", escaped_header);
+				free (escaped_header);
+				header++;
+			}
+		}
+		char *escaped_data = r_str_escape_sh (data);
+		r_strbuf_appendf (sb, " --data-raw \"%s\"", escaped_data);
+		free (escaped_data);
+		r_strbuf_appendf (sb, " \"%s\"", escaped_url);
+		char *command = r_strbuf_drain (sb);
 
-R_API char *r_socket_http_get(const char *url, int *code, int *rlen) {
-	return socket_http_get_recursive (url, code, rlen, SOCKET_HTTP_MAX_REDIRECTS);
-}
+		char *error = NULL;
+		char *res = NULL;
 
-R_API char *r_socket_http_post(const char *url, const char *data, int *code, int *rlen) {
-	RSocket *s;
-	bool ssl = r_str_startswith (url, "https://");
-	char *uri = strdup (url);
-	if (!uri) {
+		// Execute curl command
+		int cmd_result = r_sys_cmd_str_full (command, NULL, 0, &res, &len, &error);
+
+		free (escaped_url);
+		free (command);
+
+		if (cmd_result <= 0 || !res) {
+			// Command failed to execute
+			if (code) {
+				*code = 500; // Internal error
+			}
+			if (error && *error) {
+				R_LOG_ERROR ("curl failed: %s", error);
+				char *err_msg = strdup (error);
+				free (error);
+				free (res);
+				return err_msg;
+			} else {
+				R_LOG_ERROR ("curl failed to execute");
+				free (error);
+				free (res);
+				return NULL;
+			}
+		}
+
+		// with -L curl dumps one header block per response, the body follows the last one
+		char *body = res;
+		int status = 200;
+		while (r_str_startswith (body, "HTTP/")) {
+			char *end = strstr (body, "\r\n\r\n");
+			if (!end) {
+				break;
+			}
+			const char *space = strchr (body, ' ');
+			status = space? atoi (space + 1): 200;
+			body = end + 4;
+			if (status >= 200 && (status < 300 || status >= 400)) {
+				break;
+			}
+		}
+		if (code) {
+			*code = status;
+		}
+		const size_t skip = body - res;
+		const size_t body_len = ((size_t)len >= skip)? len - skip: strlen (body);
+		memmove (res, body, body_len + 1);
+		free (error);
+		if (rlen) {
+			*rlen = body_len;
+		}
+
+		return res;
+	}
+	const bool ssl = r_str_startswith (url, "https://");
+	SocketHttpUrl u = {0};
+	if (!socket_http_url_parse (&u, url, ssl)) {
 		return NULL;
 	}
-
-	char *host = strstr (uri, "://");
-	if (!host) {
-		free (uri);
-		printf ("Invalid URI");
-		return NULL;
-	}
-	host += 3;
-	char *port = strchr (host, ':');
-	if (!port) {
-		port = (ssl)? "443": "80";
-	} else {
-		*port++ = 0;
-	}
-	char *path = strchr (host, '/');
-	if (!path) {
-		path = "";
-	} else {
-		*path++ = 0;
-	}
-	s = r_socket_new (ssl);
+	RSocket *s = r_socket_new (ssl);
 	if (!s) {
-		printf ("Cannot create socket\n");
-		free (uri);
+		R_LOG_ERROR ("Cannot create socket");
+		socket_http_url_fini (&u);
 		return NULL;
 	}
-	if (!r_socket_connect_tcp (s, host, port, 0)) {
-		eprintf ("Cannot connect to %s:%s\n", host, port);
-		free (uri);
+	if (!r_socket_connect_tcp (s, u.host, u.port, 0)) {
+		R_LOG_ERROR ("Cannot connect to %s:%s", u.host, u.port);
+		socket_http_url_fini (&u);
 		r_socket_free (s);
 		return NULL;
 	}
-	/* Send */
 	r_socket_printf (s,
-			"POST /%s HTTP/1.0\r\n"
-			"User-Agent: radare2 "R2_VERSION"\r\n"
-			"Accept: */*\r\n"
-			"Host: %s\r\n"
-			"Content-Length: %i\r\n"
-			"Content-Type: application/x-www-form-urlencoded\r\n"
-			"\r\n", path, host, (int)strlen (data));
-	free (uri);
+		"POST /%s HTTP/1.0\r\n"
+		"User-Agent: radare2 " R2_VERSION "\r\n"
+		"Accept: */*\r\n"
+		"Content-Length: %i\r\n",
+		u.path, (int)strlen (data));
+	socket_http_send_host (s, &u);
+	socket_http_send_headers (s, headers, true);
+	socket_http_url_fini (&u);
 	r_socket_write (s, (void *)data, strlen (data));
-	return socket_http_answer (s, code, rlen, 0);
+	char *response = socket_http_answer (s, NULL, code, rlen, 0);
+	r_socket_free (s);
+	return response;
 }
 
-#if TEST
-void main () {
-	int ret;
-	char *p = r_socket_http_post ("http://www.radare.org/y/index.php", "a=b", &ret);
-	printf ("%s\n", p);
-}
 #endif

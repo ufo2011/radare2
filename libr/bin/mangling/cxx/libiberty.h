@@ -2,7 +2,7 @@
 
    Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
    2006, 2007, 2008, 2009 Free Software Foundation, Inc.
-   
+
    Note - certain prototypes declared in this header file are for
    functions whoes implementation copyright does not belong to the
    FSF.  Those prototypes are present in this file for reference
@@ -24,7 +24,7 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 51 Franklin Street - Fifth Floor,
    Boston, MA 02110-1301, USA.
-   
+
    Written by Cygnus Support, 1994.
 
    The libiberty library provides a number of functions which are
@@ -207,7 +207,7 @@ extern char * getpwd (void);
 #ifdef __MINGW32__
 /* Forward declaration to avoid #include <sys/time.h>.   */
 struct timeval;
-extern int gettimeofday (struct timeval *, void *); 
+extern int gettimeofday (struct timeval *, void *);
 #endif
 
 /* Get the amount of time the process has run, in microseconds.  */
@@ -447,7 +447,7 @@ extern struct pex_obj *pex_init (int flags, const char *pname,
 /* Capture stderr to a pipe.  The output can be read by
    calling pex_read_err and reading from the returned
    FILE object.  This flag may be specified only for
-   the last program in a pipeline.  
+   the last program in a pipeline.
 
    This flag is supported only on Unix and Windows.  */
 #define PEX_STDERR_TO_PIPE	0x40
@@ -622,20 +622,6 @@ extern int pexecute (const char *, char * const *, const char *,
 /* Wait for pexecute to finish.  */
 
 extern int pwait (int, int *, int);
-
-#if !HAVE_DECL_ASPRINTF
-/* Like sprintf but provides a pointer to malloc'd storage, which must
-   be freed by the caller.  */
-
-extern int asprintf (char **, const char *, ...) ATTRIBUTE_PRINTF_2;
-#endif
-
-#if !HAVE_DECL_VASPRINTF
-/* Like vsprintf but provides a pointer to malloc'd storage, which
-   must be freed by the caller.  */
-
-extern int vasprintf (char **, const char *, va_list) ATTRIBUTE_PRINTF(2,0);
-#endif
 
 #if defined(HAVE_DECL_SNPRINTF) && !HAVE_DECL_SNPRINTF
 /* Like sprintf but prints at most N characters.  */

@@ -1,15 +1,13 @@
 NAME=PE JSON test
 FILE=bins/pe/ch22.exe
-ARGS=-nn
+ARGS=-nn -e bin.types=true
 CMDS=<<EOF
 e asm.bits=32
 s 0x80
 pfj.pe_nt_image_headers32
 EOF
 EXPECT=<<EOF
-[{"name":"signature","type":"z","offset":128,"value":"PE"},{"name":"fileHeader","type":"pe_image_file_header","offset":132,"value":[{"name":"machine","type":"E","offset":132,"value":332,"label":"IMAGE_FILE_MACHINE_I386","enum":"pe_machine"},{"name":"numberOfSections","type":"w","offset":134,"value":4},{"name":"timeDateStamp","type":"t","offset":136,"value":"Thu Sep 11 18:21:46 2014"},{"name":"pointerToSymbolTable","type":"x","offset":140,"value":0},{"name":"numberOfSymbols","type":"x","offset":144,"value":0},{"name":"sizeOfOptionalHeader","type":"w","offset":148,"value":224},{"name":"characteristics","type":"B","offset":150,"value":"0x00000102 : IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_32BIT_MACHINE"}]},{"name":"optionalHeader","type":"pe_image_optional_header32","offset":152,"value":[{"name":"magic","type":"E","offset":152,"value":267,"label":"IMAGE_NT_OPTIONAL_HDR32_MAGIC","enum":"pe_magic"},{"name":"majorLinkerVersion","type":"b","offset":154,"value":11},{"name":"minorLinkerVersion","type":"b","offset":155,"value":0},{"name":"sizeOfCode","type":"x","offset":156,"value":12288},{"name":"sizeOfInitializedData","type":"x","offset":160,"value":13312},{"name":"sizeOfUninitializedData","type":"x","offset":164,"value":0},{"name":"addressOfEntryPoint","type":"x","offset":168,"value":20286},{"name":"baseOfCode","type":"x","offset":172,"value":8192},{"name":"baseOfData","type":"x","offset":176,"value":24576},{"name":"imageBase","type":"x","offset":180,"value":4194304},{"name":"sectionAlignment","type":"x","offset":184,"value":8192},{"name":"fileAlignment","type":"x","offset":188,"value":512},{"name":"majorOperatingSystemVersion","type":"w","offset":192,"value":4},{"name":"minorOperatingSystemVersion","type":"w","offset":194,"value":0},{"name":"majorImageVersion","type":"w","offset":196,"value":0},{"name":"minorImageVersion","type":"w","offset":198,"value":0},{"name":"majorSubsystemVersion","type":"w","offset":200,"value":6},{"name":"minorSubsystemVersion","type":"w","offset":202,"value":0},{"name":"win32VersionValue","type":"x","offset":204,"value":0},{"name":"sizeOfImage","type":"x","offset":208,"value":57344},{"name":"sizeOfHeaders","type":"x","offset":212,"value":1024},{"name":"checkSum","type":"x","offset":216,"value":0},{"name":"subsystem","type":"E","offset":220,"value":2,"label":"IMAGE_SUBSYSTEM_WINDOWS_GUI","enum":"pe_subsystem"},{"name":"dllCharacteristics","type":"B","offset":222,"value":"0x00008560 : IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA | IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE | IMAGE_DLLCHARACTERISTICS_NX_COMPAT | IMAGE_DLLCHARACTERISTICS_NO_SEH | IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE"},{"name":"sizeOfStackReserve","type":"x","offset":224,"value":1048576},{"name":"sizeOfStackCommit","type":"x","offset":228,"value":4096},{"name":"sizeOfHeapReserve","type":"x","offset":232,"value":1048576},{"name":"sizeOfHeapCommit","type":"x","offset":236,"value":4096},{"name":"loaderFlags","type":"x","offset":240,"value":0},{"name":"numberOfRvaAndSizes","type":"x","offset":244,"value":16},{"name":"dataDirectory","type":"pe_image_data_directory","offset":248,"value":[[
-{"name":"virtualAddress","type":"x","offset":248,"value":0},{"name":"size","type":"x","offset":252,"value":0},{"name":"virtualAddress","type":"x","offset":256,"value":20208},{"name":"size","type":"x","offset":260,"value":75},{"name":"virtualAddress","type":"x","offset":264,"value":32768},{"name":"size","type":"x","offset":268,"value":11840},{"name":"virtualAddress","type":"x","offset":272,"value":0},{"name":"size","type":"x","offset":276,"value":0},{"name":"virtualAddress","type":"x","offset":280,"value":0},{"name":"size","type":"x","offset":284,"value":0},{"name":"virtualAddress","type":"x","offset":288,"value":49152},{"name":"size","type":"x","offset":292,"value":12},{"name":"virtualAddress","type":"x","offset":296,"value":24576},{"name":"size","type":"x","offset":300,"value":28},{"name":"virtualAddress","type":"x","offset":304,"value":0},{"name":"size","type":"x","offset":308,"value":0},{"name":"virtualAddress","type":"x","offset":312,"value":0},{"name":"size","type":"x","offset":316,"value":0},{"name":"virtualAddress","type":"x","offset":320,"value":0},{"name":"size","type":"x","offset":324,"value":0},{"name":"virtualAddress","type":"x","offset":328,"value":0},{"name":"size","type":"x","offset":332,"value":0},{"name":"virtualAddress","type":"x","offset":336,"value":0},{"name":"size","type":"x","offset":340,"value":0},{"name":"virtualAddress","type":"x","offset":344,"value":8192},{"name":"size","type":"x","offset":348,"value":8},{"name":"virtualAddress","type":"x","offset":352,"value":0},{"name":"size","type":"x","offset":356,"value":0},{"name":"virtualAddress","type":"x","offset":360,"value":8200},{"name":"size","type":"x","offset":364,"value":72},{"name":"virtualAddress","type":"x","offset":368,"value":0},{"name":"size","type":"x","offset":372,"value":0}]
-]}]}]
+[{"name":"signature","type":"z","offset":128,"value":"PE"},{"name":"fileHeader","type":"pe_image_file_header","offset":132,"value":[{"name":"machine","type":"E","offset":132,"value":332,"label":"IMAGE_FILE_MACHINE_I386","enum":"pe_machine"},{"name":"numberOfSections","type":"w","offset":134,"value":4},{"name":"timeDateStamp","type":"t","offset":136,"value":"Thu Sep 11 18:21:46 2014"},{"name":"pointerToSymbolTable","type":"x","offset":140,"value":0},{"name":"numberOfSymbols","type":"x","offset":144,"value":0},{"name":"sizeOfOptionalHeader","type":"w","offset":148,"value":224},{"name":"characteristics","type":"B","offset":150,"value":"0x00000102 : IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_32BIT_MACHINE"}]},{"name":"optionalHeader","type":"pe_image_optional_header32","offset":152,"value":[{"name":"magic","type":"E","offset":152,"value":267,"label":"IMAGE_NT_OPTIONAL_HDR32_MAGIC","enum":"pe_magic"},{"name":"majorLinkerVersion","type":"b","offset":154,"value":11},{"name":"minorLinkerVersion","type":"b","offset":155,"value":0},{"name":"sizeOfCode","type":"x","offset":156,"value":12288},{"name":"sizeOfInitializedData","type":"x","offset":160,"value":13312},{"name":"sizeOfUninitializedData","type":"x","offset":164,"value":0},{"name":"addressOfEntryPoint","type":"x","offset":168,"value":20286},{"name":"baseOfCode","type":"x","offset":172,"value":8192},{"name":"baseOfData","type":"x","offset":176,"value":24576},{"name":"imageBase","type":"x","offset":180,"value":4194304},{"name":"sectionAlignment","type":"x","offset":184,"value":8192},{"name":"fileAlignment","type":"x","offset":188,"value":512},{"name":"majorOperatingSystemVersion","type":"w","offset":192,"value":4},{"name":"minorOperatingSystemVersion","type":"w","offset":194,"value":0},{"name":"majorImageVersion","type":"w","offset":196,"value":0},{"name":"minorImageVersion","type":"w","offset":198,"value":0},{"name":"majorSubsystemVersion","type":"w","offset":200,"value":6},{"name":"minorSubsystemVersion","type":"w","offset":202,"value":0},{"name":"win32VersionValue","type":"x","offset":204,"value":0},{"name":"sizeOfImage","type":"x","offset":208,"value":57344},{"name":"sizeOfHeaders","type":"x","offset":212,"value":1024},{"name":"checkSum","type":"x","offset":216,"value":0},{"name":"subsystem","type":"E","offset":220,"value":2,"label":"IMAGE_SUBSYSTEM_WINDOWS_GUI","enum":"pe_subsystem"},{"name":"dllCharacteristics","type":"B","offset":222,"value":"0x00008560 : IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA | IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE | IMAGE_DLLCHARACTERISTICS_NX_COMPAT | IMAGE_DLLCHARACTERISTICS_NO_SEH | IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE"},{"name":"sizeOfStackReserve","type":"x","offset":224,"value":1048576},{"name":"sizeOfStackCommit","type":"x","offset":228,"value":4096},{"name":"sizeOfHeapReserve","type":"x","offset":232,"value":1048576},{"name":"sizeOfHeapCommit","type":"x","offset":236,"value":4096},{"name":"loaderFlags","type":"x","offset":240,"value":0},{"name":"numberOfRvaAndSizes","type":"x","offset":244,"value":16},{"name":"dataDirectory","type":"pe_image_data_directory","offset":248,"value":[{"name":"virtualAddress","type":"x","offset":248,"value":0},{"name":"size","type":"x","offset":252,"value":0},{"name":"virtualAddress","type":"x","offset":256,"value":20208},{"name":"size","type":"x","offset":260,"value":75},{"name":"virtualAddress","type":"x","offset":264,"value":32768},{"name":"size","type":"x","offset":268,"value":11840},{"name":"virtualAddress","type":"x","offset":272,"value":0},{"name":"size","type":"x","offset":276,"value":0},{"name":"virtualAddress","type":"x","offset":280,"value":0},{"name":"size","type":"x","offset":284,"value":0},{"name":"virtualAddress","type":"x","offset":288,"value":49152},{"name":"size","type":"x","offset":292,"value":12},{"name":"virtualAddress","type":"x","offset":296,"value":24576},{"name":"size","type":"x","offset":300,"value":28},{"name":"virtualAddress","type":"x","offset":304,"value":0},{"name":"size","type":"x","offset":308,"value":0},{"name":"virtualAddress","type":"x","offset":312,"value":0},{"name":"size","type":"x","offset":316,"value":0},{"name":"virtualAddress","type":"x","offset":320,"value":0},{"name":"size","type":"x","offset":324,"value":0},{"name":"virtualAddress","type":"x","offset":328,"value":0},{"name":"size","type":"x","offset":332,"value":0},{"name":"virtualAddress","type":"x","offset":336,"value":0},{"name":"size","type":"x","offset":340,"value":0},{"name":"virtualAddress","type":"x","offset":344,"value":8192},{"name":"size","type":"x","offset":348,"value":8},{"name":"virtualAddress","type":"x","offset":352,"value":0},{"name":"size","type":"x","offset":356,"value":0},{"name":"virtualAddress","type":"x","offset":360,"value":8200},{"name":"size","type":"x","offset":364,"value":72},{"name":"virtualAddress","type":"x","offset":368,"value":0},{"name":"size","type":"x","offset":372,"value":0}]}]}]
 EOF
 RUN
 
@@ -26,7 +24,7 @@ pf.gobelin 2ww?x blah meh (plop)Buh foo
 pfj.gobelin
 EOF
 EXPECT=<<EOF
-[[{"index":0,"offset":0},{"name":"blah","type":"w","offset":0,"value":4660},{"name":"meh","type":"w","offset":2,"value":26505},{"name":"Buh","type":"plop","offset":4,"value":[{"name":"first","type":"i","offset":4,"value":666},{"name":"Boh","type":"troll","offset":8,"value":[{"name":"integer","type":"i","offset":8,"value":4000},{"name":"word","type":"w","offset":12,"value":42},{"name":"Bah","type":"troll*","offset":14,"value":48},{"name":"integer","type":"i","offset":48,"value":20},{"name":"word","type":"w","offset":52,"value":5732},{"name":"Bah","type":"troll*","offset":54,"value":32},{"name":"integer","type":"i","offset":32,"value":1664},{"name":"word","type":"w","offset":36,"value":16384},{"name":"Bah","type":"troll*","offset":38,"value":"NULL"}]},{"name":"bwa","type":"w","offset":18,"value":16916}]},{"name":"foo","type":"x","offset":20,"value":5732}],[{"index":1,"offset":24},{"name":"blah","type":"w","offset":24,"value":0},{"name":"meh","type":"w","offset":26,"value":0},{"name":"Buh","type":"plop","offset":28,"value":[{"name":"first","type":"i","offset":28,"value":0},{"name":"Boh","type":"troll","offset":32,"value":[{"name":"integer","type":"i","offset":32,"value":1664},{"name":"word","type":"w","offset":36,"value":16384},{"name":"Bah","type":"troll*","offset":38,"value":"NULL"}]},{"name":"bwa","type":"w","offset":42,"value":0}]},{"name":"foo","type":"x","offset":44,"value":0}]]
+[{"array":[{"index":0,"offset":0,"values":[{"name":"blah","type":"w","offset":0,"value":4660},{"name":"meh","type":"w","offset":2,"value":26505},{"name":"Buh","type":"plop","offset":4,"value":[{"name":"first","type":"i","offset":4,"value":666},{"name":"Boh","type":"troll","offset":8,"value":[{"name":"integer","type":"i","offset":8,"value":4000},{"name":"word","type":"w","offset":12,"value":42},{"name":"Bah","type":"troll","ptr":true,"offset":8,"ptraddr":48,"value":[{"name":"integer","type":"i","offset":48,"value":20},{"name":"word","type":"w","offset":52,"value":5732},{"name":"Bah","type":"troll","ptr":true,"offset":48,"ptraddr":32,"value":[{"name":"integer","type":"i","offset":32,"value":1664},{"name":"word","type":"w","offset":36,"value":16384},{"name":"Bah","type":"troll","ptr":true,"offset":32,"value":"NULL"}]}]}]},{"name":"bwa","type":"w","offset":18,"value":16916}]},{"name":"foo","type":"x","offset":20,"value":5732}]},{"index":1,"offset":24,"values":[{"name":"blah","type":"w","offset":24,"value":0},{"name":"meh","type":"w","offset":26,"value":0},{"name":"Buh","type":"plop","offset":28,"value":[{"name":"first","type":"i","offset":28,"value":0},{"name":"Boh","type":"troll","offset":32,"value":[{"name":"integer","type":"i","offset":32,"value":1664},{"name":"word","type":"w","offset":36,"value":16384},{"name":"Bah","type":"troll","ptr":true,"offset":32,"value":"NULL"}]},{"name":"bwa","type":"w","offset":42,"value":0}]},{"name":"foo","type":"x","offset":44,"value":0}]}]}]
 EOF
 RUN
 
@@ -84,7 +82,7 @@ RUN
 
 NAME=Complex request with specific array element and specific field
 FILE=bins/pe/ch22.exe
-ARGS=-nn
+ARGS=-nn -e bin.types=true
 CMDS=<<EOF
 e asm.bits=32
 s 0x80
@@ -107,15 +105,15 @@ wx 14000000641620000000@0x30
 pf.troll iw*? integer word (troll)Bah
 pf.plop i?w first (troll)Boh bwa
 pf.gobelin ww?x blah meh (plop)Buh foo
+pf*.gobelin.Buh.first=42
 pf.gobelin.Buh.first=42
-.pf.gobelin.Buh.first=42
+pf*.gobelin.Buh.Boh.Bah.Bah.word=0xadde
 pf.gobelin.Buh.Boh.Bah.Bah.word=0xadde
-.pf.gobelin.Buh.Boh.Bah.Bah.word=0xadde
 pf.gobelin
 EOF
 EXPECT=<<EOF
-wv4 42 @ 4
-wv2 0xadde @ 0x00000024
+wx 2a000000 @ 0x00000004
+wx dead @ 0x00000024
  blah : 0x00000000 = 0x1234
   meh : 0x00000002 = 0x6789
   Buh : 
@@ -133,9 +131,38 @@ wv2 0xadde @ 0x00000024
                                   struct<troll>
                                  integer : 0x00000020 = 1664
                                     word : 0x00000024 = 0xadde
-                                     Bah : (*0x0) NULL
+                                     Bah :  NULL
          bwa : 0x00000012 = 0x4214
   foo : 0x00000014 = 0x00001664
+EOF
+RUN
+
+NAME=nested struct field selection then full print
+FILE=malloc://64
+CMDS=<<EOF
+e asm.bits=32
+wv 1
+wv 2 @ 4
+wv 3 @ 8
+wv 4 @ 12
+pf.child ii one two
+pf.parent i?i head (child)body tail
+pfj.parent
+pf.parent.body
+pf.parent
+EOF
+EXPECT=<<EOF
+[{"name":"head","type":"i","offset":0,"value":1},{"name":"body","type":"child","offset":4,"value":[{"name":"one","type":"i","offset":4,"value":2},{"name":"two","type":"i","offset":8,"value":3}]},{"name":"tail","type":"i","offset":12,"value":4}]
+ body : 
+                struct<child>
+     one : 0x00000004 = 2
+     two : 0x00000008 = 3
+ head : 0x00000000 = 1
+ body : 
+                struct<child>
+     one : 0x00000004 = 2
+     two : 0x00000008 = 3
+ tail : 0x0000000c = 4
 EOF
 RUN
 
@@ -166,12 +193,12 @@ EXPECT=<<EOF
  b : 0x00000004 = 't'
  c : (*0x7361706f)
                 struct<i?i a (dsf)b c>
-   a : 0x7361706f = -1
+   a : 0x7361706f = 0
    b : 
                       struct<dsf>
-     a : 0x73617073 = -1
-     b : 0x73617077 = -1
-   c : 0x7361707b = -1
+     a : 0x73617073 = 0
+     b : 0x73617077 = 0
+   c : 0x7361707b = 0
  d : 0x0000000c = 1751606884
 EOF
 RUN
@@ -180,7 +207,10 @@ NAME=pf only one size
 FILE=malloc://1024
 CMDS=pf 16 16
 EXPECT=<<EOF
-Usage: pf [0|cnt][format-string]
+| pf fmt  show data using the given format-string (see 'pf??' and 'pf???')
+| pf?     help on commands
+| pf??    help on format characters
+| pf???   show usage examples
 EOF
 RUN
 
@@ -188,7 +218,10 @@ NAME=pf refuse space between size and format-string
 FILE=malloc://1024
 CMDS=pf 16 16
 EXPECT=<<EOF
-Usage: pf [0|cnt][format-string]
+| pf fmt  show data using the given format-string (see 'pf??' and 'pf???')
+| pf?     help on commands
+| pf??    help on format characters
+| pf???   show usage examples
 EOF
 RUN
 
@@ -245,11 +278,11 @@ e asm.bits=64
 wz root @ 0x0000000100000faf
 pf z @ 0x0000000100000faf
 e cfg.bigendian=false
-16wxs cc @ 0x200
+16wx+cc @ 0x200
 wv8 0x0000000100000faf @ 0x204
 pf *z @ 0x204
 e cfg.bigendian=true
-16wxs cc @ 0x200
+16wx+cc @ 0x200
 wv8 0x0000000100000faf @ 0x204
 pf *z @ 0x204
 EOF
@@ -328,7 +361,7 @@ EOF
 RUN
 
 NAME=pf z overflow
-FILE=malloc://2048
+FILE=malloc://3200
 ARGS=-m 1000
 CMDS=<<EOF
 e io.cache=false
@@ -391,46 +424,51 @@ EXPECT=<<EOF
 --- io.unalloc = true ---
 
 0x00000be6 = "AB"
-0x00000be6 = ovf "AB"
-0x00000be6 = ovf "AB"
-0x000fffff = ovf ""
+0x00000be6 = "AB"
+0x00000be6 = "AB"
+0x000fffff = ovf "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
 
 0x000007fe = "AB"
-0x000007fe = ovf "AB"
-0x000007fe = ovf "AB"
-0x000fffff = ovf ""
+0x000007fe = "AB"
+0x000007fe = "AB"
+0x000fffff = ovf "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
 
-* 1 fd: 3 +0x00000000 0x000003e8 - 0x00000be7 rwx 
+* 1 fd: 3 +0x00000000 0x000003e8 - 0x00001067 rwx rwx
 ----
-* 2 fd: 3 +0x00000400 0x000007e8 - 0x00000be7 rwx 
-- 1 fd: 3 +0x00000000 0x000003e8 - 0x000007e7 rwx 
+* 2 fd: 3 +0x00000400 0x000007e8 - 0x00000be7 rwx rwx
+- 1 fd: 3 +0x00000000 0x000003e8 - 0x000007e7 rwx rwx
 0x000007e7 = "CD"
 ----
-* 2 fd: 3 +0x00000400 0x000007e8 - 0x00000be7 -wx 
-- 1 fd: 3 +0x00000000 0x000003e8 - 0x000007e7 rwx 
-0x000007e7 = ovf "C"
+* 2 fd: 3 +0x00000400 0x000007e8 - 0x00000be7 -wx -wx
+- 1 fd: 3 +0x00000000 0x000003e8 - 0x000007e7 rwx rwx
+0x000007e7 = ovf "C\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
 ----
-- 1 fd: 3 +0x00000000 0x000003e8 - 0x000007e7 rwx 
-0x000007e7 = ovf "C"
+- 1 fd: 3 +0x00000000 0x000003e8 - 0x000007e7 rwx rwx
+0x000007e7 = ovf "C\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
 
 0x000fffff = "12"
 
 --- io.unalloc = false ---
 
 0x00000be6 = "AB"
-0x00000be6 = ovf "AB\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
-0x00000be6 = "AB\xff\xff\xff"
-0x000fffff = ovf "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+0x00000be6 = "AB"
+0x00000be6 = "AB"
+0x000fffff = "12"
 EOF
 RUN
 
 NAME=pfj z overflow
-FILE=malloc://2048
+FILE=malloc://3200
 ARGS=-m 1000
 CMDS=<<EOF
 e io.unalloc=true
 s 3046
-w AB
+w AB\x00
+pfj [2]z
+pfj z
+pfj [5]z
+?e ----
+w AB\xff
 pfj [2]z
 pfj z
 pfj [5]z
@@ -440,17 +478,21 @@ pfj z @ 0xfffff
 EOF
 EXPECT=<<EOF
 [{"type":"z","offset":3046,"value":"AB"}]
-[{"type":"z","offset":3046,"value":"AB","overflow":true}]
-[{"type":"z","offset":3046,"value":"AB","overflow":true}]
-[{"type":"z","offset":1048575,"value":"","overflow":true}]
-[{"type":"z","offset":1048575,"value":"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff","overflow":true}]
+[{"type":"z","offset":3046,"value":"AB"}]
+[{"type":"z","offset":3046,"value":"AB"}]
+----
+[{"type":"z","offset":3046,"value":"AB"}]
+[{"type":"z","offset":3046,"value":"AB\u00ff"}]
+[{"type":"z","offset":3046,"value":"AB\u00ff"}]
+[{"type":"z","offset":1048575,"value":"\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff","overflow":true}]
+[{"type":"z","offset":1048575,"value":"\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff\u00ff","overflow":true}]
 EOF
 RUN
 
 NAME=pf?
 FILE=-
 CMDS=<<EOF
-pfo elf32
+pfo elf32.r2
 pf?elf_header
 pf? elf_header
 EOF
@@ -464,13 +506,13 @@ NAME=pf? struct not defined
 FILE=-
 CMDS=pf?cat_sat_on_keyboard
 EXPECT_ERR=<<EOF
-Struct cat_sat_on_keyboard is not defined
+ERROR: Struct cat_sat_on_keyboard is not defined
 EOF
 RUN
 
 NAME=-nn filename with @
 FILE=bins/elf/analysis/tiny1@invalid_addr
-ARGS=-nn
+ARGS=-nn -e bin.types=true
 CMDS=<<EOF
 e io.va=0
 pf.elf_header @ elf_header
@@ -524,5 +566,90 @@ struct {
     int32_t dword; // -3
     int64_t qword; // -4
 }
+EOF
+RUN
+
+NAME=pf missing features
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.bits=32
+# ULEB128: 624485 = 0x98765 => E5 8E 26
+wx e58e26 @ 0
+pf u @ 0
+# Octal
+wx 10000000 @ 4
+pf o @ 4
+# Bfloat16
+# 1.0 is 0x3f80
+wx 803f @ 8
+pf g @ 8
+# 10 bytes
+wx 0102030405060708090a @ 12
+pf T @ 12
+# Endian swap
+# wx writes bytes 12 34 56 78
+# LE read: 0x78563412
+# BE read: 0x12345678
+wx 12345678 @ 24
+pf "x;ex" @ 24
+# Skip : (4 bytes) and . (1 byte)
+wx 112233445566778899aa @ 32
+pf x.x @ 32
+# Overlap ,
+# wx writes bytes: AA BB CC DD
+# x (LE) -> 0xDDCCBBAA
+# , rewinds 1 byte.
+# c reads at offset+3 (DD).
+wx AABBCCDD @ 48
+pf x,c @ 48
+# Pointer to string s
+w "Hello" @ 0x100
+wv4 0x100 @ 60
+pf s @ 60
+# Wide string Z
+# H e l l o
+wx 480065006c006c006f000000 @ 70
+pf Z @ 70
+# Uint128 Q
+wx 0102030405060708090a0b0c0d0e0f00 @ 80
+pf Q @ 80
+# Hex pairs X (4 bytes)
+pf [4]X @ 80
+EOF
+EXPECT=<<EOF
+0x00000000 = 624485
+0x00000004 = (octal)  000000020
+0x00000008 = 1
+0x0000000c = 01 02 03 04 05 06 07 08 09 0a  ... (..........)
+0x00000018 = 0x78563412
+0x00000018 = 0x12345678
+0x00000020 = 0x44332211
+0x00000025 = 0x99887766
+0x00000030 = 0xddccbbaa
+0x00000033 = '.'
+0x0000003c = 0x0000003c -> 0x00000100 "Hello"
+0x00000046 = Hello
+0x00000050 = (uint128_t)0x000f0e0d0c0b0a090807060504030201
+0x00000050 = 01 02 03 04  ... (....)
+EOF
+RUN
+
+NAME=format2 endian enum check
+FILE=malloc://1024
+CMDS=<<EOF
+e cfg.bigendian=true
+wX 4142434431323334
+"td enum ascii{ LETTER_A=0x41, LETTER_D=0x44, DIGIT_1=0x31, DIGIT_4=0x34}"
+pf [1]E[1]E[1]E[1]E[1]E[1]E[1]E[1]E (ascii)B1 (ascii)B2 (ascii)B3 (ascii)B4 (ascii)B5 (ascii)B6 (ascii)B7 (ascii)B8
+EOF
+EXPECT=<<EOF
+ B1 : 0x00000000 = B1 (enum ascii) = 0x41 ; LETTER_A
+ B2 : 0x00000001 = B2 (enum ascii) = 0x42
+ B3 : 0x00000002 = B3 (enum ascii) = 0x43
+ B4 : 0x00000003 = B4 (enum ascii) = 0x44 ; LETTER_D
+ B5 : 0x00000004 = B5 (enum ascii) = 0x31 ; DIGIT_1
+ B6 : 0x00000005 = B6 (enum ascii) = 0x32
+ B7 : 0x00000006 = B7 (enum ascii) = 0x33
+ B8 : 0x00000007 = B8 (enum ascii) = 0x34 ; DIGIT_4
 EOF
 RUN

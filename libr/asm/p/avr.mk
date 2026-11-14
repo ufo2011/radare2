@@ -1,15 +1,14 @@
-OBJ_AVR=asm_avr.o
-OBJ_AVR+=../arch/avr/avr_disasm.o
-OBJ_AVR+=../arch/avr/format.o
-OBJ_AVR+=../arch/avr/disasm.o
+OBJ_AVRPSEUDO+=$(LIBR)/arch/p/avr/pseudo.o
 
-STATIC_OBJ+=${OBJ_AVR}
-TARGET_AVR=asm_avr.${EXT_SO}
+TARGET_AVRPSEUDO=parse_avr_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_AVRPSEUDO}
+STATIC_OBJ+=${OBJ_AVRPSEUDO}
 
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_AVR}
-
-${TARGET_AVR}: ${OBJ_AVR}
-	${CC} $(call libname,asm_avr) ${LDFLAGS} \
-		-I../arch/avr ${CFLAGS} -o asm_avr.${EXT_SO} ${OBJ_AVR}
+${TARGET_AVRPSEUDO}: ${OBJ_AVRPSEUDO}
+ifeq ($(CC),cccl)
+	${CC} $(call libname,parse_avr_pseudo) -L../../util -llibr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_AVRPSEUDO} ${OBJ_AVRPSEUDO}
+else
+	${CC} $(call libname,parse_avr_pseudo) -L../../util -lr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_AVRPSEUDO} ${OBJ_AVRPSEUDO} $(LINK)
 endif

@@ -1,0 +1,176 @@
+NAME=global functions
+FILE=-
+CMDS="!rabin2 -D msvc \"?Func@@YAXH@Z\""
+EXPECT=<<EOF
+void __cdecl Func(int)
+EOF
+RUN
+
+NAME=Namespaced / Class Methods
+FILE=-
+CMDS="!rabin2 -D msvc \"?DoWork@Worker@@QAEXH@Z\""
+EXPECT=<<EOF
+public: void __thiscall Worker::DoWork(int)
+EOF
+RUN
+
+NAME=Constructors / Destructors
+FILE=-
+CMDS="!rabin2 -D msvc \"??0Foo@@QAE@XZ\""
+EXPECT=<<EOF
+public: __thiscall Foo::Foo(void)
+EOF
+RUN
+
+NAME=const methods returning by value
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc "??HVector2D@@QBE?AV0@ABV0@@Z"
+!rabin2 -D msvc "?f@X@@QAE?BVY@@XZ"
+EOF
+EXPECT=<<EOF
+public: class Vector2D __thiscall Vector2D::operator+(class Vector2D const &)const
+public: const class Y __thiscall X::f(void)
+EOF
+RUN
+
+NAME=Static Class Methods
+FILE=-
+CMDS="!rabin2 -D msvc \"?create@Factory@@SA?AVProduct@@XZ\""
+EXPECT=<<EOF
+public: static class Product __cdecl Factory::create(void)
+EOF
+RUN
+
+NAME=NAME=Templates Methods
+FILE=-
+CMDS="!rabin2 -D msvc \"?instance@Singleton@@0V1@A\""
+EXPECT=<<EOF
+class Singleton Singleton::instance
+EOF
+RUN
+
+NAME=NAME=RTTI metadata
+FILE=-
+CMDS="!rabin2 -D msvc \"N8CryptoPP19TF_CryptoSystemBaseINS_12PK_DecryptorENS_7TF_BaseINS_23TrapdoorFunctionInverseENS_34PK_EncryptionMessageEncodingMethodEEEEE\""
+EXPECT=<<EOF
+CryptoPP::TF_CryptoSystemBase<CryptoPP::PK_Decryptor,CryptoPP::TF_Base<CryptoPP::TrapdoorFunctionInverse,CryptoPP::PK_EncryptionMessageEncodingMethod>>
+EOF
+RUN
+
+
+NAME=msvc args overflow past 64K
+FILE=-
+CMDS="!rabin2 -D msvc \"?f@@YAXVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@@P6AX00000000000000000000@Z111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111@Z\""
+EXPECT=<<EOF
+?f@@YAXVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@@P6AX00000000000000000000@Z111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111@Z
+EOF
+RUN
+
+NAME=msvc function overflow past 64K
+FILE=-
+CMDS="!rabin2 -D msvc \"?f@@YAXVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@@P6AX00000000000000000000@Z1111111111111111111111111111111111111111@Z\""
+EXPECT=<<EOF
+?f@@YAXVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@@P6AX00000000000000000000@Z1111111111111111111111111111111111111111@Z
+EOF
+RUN
+
+NAME=msvc RTTI base class descriptor
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc "??_R10000A@@8"
+!rabin2 -D msvc '??$?_R10000@@YAXXZ'
+EOF
+EXPECT=<<EOF
+A::`RTTI Base Class Descriptor at (1,1,1,1)'
+void __cdecl `RTTI Base Class Descriptor at (1,1,1,1)'(void)
+EOF
+RUN
+
+NAME=msvc invalid symbols
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc "?f@@YAXH"
+!rabin2 -D msvc "?f@@W4ZAEXXZ"
+!rabin2 -D msvc "?f@@6B?"
+!rabin2 -D msvc '?f@?$g@$1?h@@3_@@YAXXZ'
+EOF
+EXPECT=<<EOF
+?f@@YAXH
+?f@@W4ZAEXXZ
+?f@@6B?
+?f@?$g@$1?h@@3_@@YAXXZ
+EOF
+RUN
+
+NAME=msvc special member functions
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc "??_GFoo@@UAEPAXI@Z"
+!rabin2 -D msvc "??_EFoo@@UAEPAXI@Z"
+!rabin2 -D msvc "??_DFoo@@QAEXXZ"
+!rabin2 -D msvc "??_L@YGXPAXIHP6EX0@Z@Z"
+!rabin2 -D msvc "??_SFoo@@6B@"
+EOF
+EXPECT=<<EOF
+public virtual: void * __thiscall Foo::`scalar deleting dtor'(unsigned int)
+public virtual: void * __thiscall Foo::`vector deleting dtor'(unsigned int)
+public: void __thiscall Foo::`vbase dtor'(void)
+void __stdcall `eh vector ctor iterator'(void *, unsigned int, int, void (__thiscall *)(void *))
+const Foo::`local vftable'
+EOF
+RUN
+
+NAME=msvc RTTI descriptors
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc "??_R2Ex5@@8"
+!rabin2 -D msvc "??_R3Ex5@@8"
+!rabin2 -D msvc "??_R4Ex5@@6BEx2@@@"
+EOF
+EXPECT=<<EOF
+Ex5::`RTTI Base Class Array'
+Ex5::`RTTI Class Hierarchy Descriptor'
+const Ex5::`RTTI Complete Object Locator'{for `Ex2'}
+EOF
+RUN
+
+NAME=msvc negative numbers
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc "??_R1A@?0A@EA@Ex5@@8"
+!rabin2 -D msvc '??$f@$0?L@@@YAXXZ'
+!rabin2 -D msvc '??$f@$0??@@YAXXZ'
+EOF
+EXPECT=<<EOF
+Ex5::`RTTI Base Class Descriptor at (0,-1,0,64)'
+void __cdecl f<-11>(void)
+??$f@$0??@@YAXXZ
+EOF
+RUN
+
+NAME=msvc vtordisp thunks
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc '?sonido@Perro@@$4PPPPPPPM@A@BEXXZ'
+!rabin2 -D msvc '?f@A@@$1PPPPPPPM@3AEXXZ'
+!rabin2 -D msvc '?f@A@@$R4BA@A@PPPPPPPM@7AEXXZ'
+EOF
+EXPECT=<<EOF
+[thunk]:public virtual: void __thiscall Perro::sonido`vtordisp{-4,0}'(void)const
+[thunk]:private virtual: void __thiscall A::f`vtordisp{-4,4}'(void)
+[thunk]:public virtual: void __thiscall A::f`vtordispex{16,0,-4,8}'(void)
+EOF
+RUN
+
+NAME=msvc template constructors
+FILE=-
+CMDS=<<EOF
+!rabin2 -D msvc '??$?0H@Foo@@QAE@H@Z'
+!rabin2 -D msvc '??$?0ABV?$allocator@H@std@@$0A@@?$_Hash_vec@H@std@@QAE@ABV?$allocator@H@1@@Z'
+EOF
+EXPECT=<<EOF
+public: __thiscall Foo::Foo<int>(int)
+public: __thiscall std::_Hash_vec<int>::_Hash_vec<int><class std::allocator<int> const &, 0>(class std::allocator<int> const &)
+EOF
+RUN

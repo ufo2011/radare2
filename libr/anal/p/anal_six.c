@@ -1,0 +1,481 @@
+/* radare - LGPL - Copyright 2021-2026 - Siguza, pancake, hot3eed */
+
+// Context: https://raw.githubusercontent.com/Siguza/misc/master/xref.c
+
+#include <r_anal.h>
+#include <r_core.h>
+
+#define SIX_CMD "six"
+#define SIX_CHUNK_SIZE 0x10000
+#define SIX_LOOKAHEAD_SIZE 0x1000
+#define SIX_ARM64_NOP 0xd503201f
+
+static void addref(RAnal *anal, ut64 from, ut64 to, RAnalRefType type) {
+	r_anal_xrefs_set (anal, from, to, type);
+}
+
+static const ut8 *skip_nops(const ut8 *p, const ut8 *end) {
+	while (end - p >= 4 && r_read_le32 (p) == SIX_ARM64_NOP) {
+		p += 4;
+	}
+	return p;
+}
+
+static const ut8 *resolve_stub(const ut8 *p, const ut8 *end, ut32 reg, ut64 *target) {
+	p = skip_nops (p, end);
+	if (reg == 31 || end - p < 4) {
+		return NULL;
+	}
+	ut32 insn = r_read_le32 (p);
+	if ((insn & 0xff8003e0) == (0x91000000 | (reg << 5))) { // ADD immediate
+		*target += (ut64)((insn >> 10) & 0xfff) << ((insn & 0x400000)? 12: 0);
+		reg = insn & 31;
+		p = skip_nops (p + 4, end);
+	} else if ((insn & 0xff800000) == 0xd2800000) { // MOVZ + ADD shifted register
+		ut32 add_reg = insn & 31;
+		if (add_reg == reg || add_reg == 31) {
+			return NULL;
+		}
+		ut64 add = (ut64)((insn >> 5) & 0xffff) << (((insn >> 21) & 3) * 16);
+		p = skip_nops (p + 4, end);
+		if (end - p < 4) {
+			return NULL;
+		}
+		insn = r_read_le32 (p);
+		if ((insn & 0xffff03e0) != (0x8b000000 | (add_reg << 16) | (reg << 5))) {
+			return NULL;
+		}
+		*target += add << ((insn >> 10) & 63);
+		reg = insn & 31;
+		p = skip_nops (p + 4, end);
+	}
+	return reg != 31 && !(*target & 3) && end - p >= 4 && r_read_le32 (p) == (0xd61f0000 | (reg << 5))? p: NULL;
+}
+
+static const char *lookup_inst_name(uint32_t opc_size) {
+	static const char *inst_names[] = {
+		[0x00] = "strb",
+		[0x01] = "strh",
+		[0x02] = "str",
+		[0x03] = "str",
+		[0x10] = "ldrb",
+		[0x11] = "ldrh",
+		[0x12] = "ldr",
+		[0x13] = "ldr",
+		[0x20] = "ldrsb",
+		[0x21] = "ldrsh",
+		[0x22] = "ldrsw",
+		[0x30] = "ldrsb",
+		[0x31] = "ldrsh",
+	};
+	return (opc_size < R_ARRAY_SIZE (inst_names))? inst_names[opc_size]: NULL;
+}
+
+static const char *lookup_unscaled_inst_name(uint32_t opc_size) {
+	static const char *inst_names[] = {
+		[0x00] = "sturb",
+		[0x01] = "sturh",
+		[0x02] = "stur",
+		[0x03] = "stur",
+		[0x10] = "ldurb",
+		[0x11] = "ldurh",
+		[0x12] = "ldur",
+		[0x13] = "ldur",
+		[0x20] = "ldursb",
+		[0x21] = "ldursh",
+		[0x22] = "ldursw",
+		[0x30] = "ldursb",
+		[0x31] = "ldursh",
+	};
+	return (opc_size < R_ARRAY_SIZE (inst_names))? inst_names[opc_size]: NULL;
+}
+
+static const char *lookup_unprivileged_inst_name(uint32_t opc_size) {
+	static const char *inst_names[] = {
+		[0x00] = "sttrb",
+		[0x01] = "sttrh",
+		[0x02] = "sttr",
+		[0x03] = "sttr",
+		[0x10] = "ldtrb",
+		[0x11] = "ldtrh",
+		[0x12] = "ldtr",
+		[0x13] = "ldtr",
+		[0x20] = "ldtrsb",
+		[0x21] = "ldtrsh",
+		[0x22] = "ldtrsw",
+		[0x30] = "ldtrsb",
+		[0x31] = "ldtrsh",
+	};
+	return (opc_size < R_ARRAY_SIZE (inst_names))? inst_names[opc_size]: NULL;
+}
+
+// Helper to append memory instruction with optional add prefix
+static void append_mem_instr(RStrBuf *sb, ut64 addr, bool is_adrp, ut32 reg, ut64 target, ut32 reg2, ut32 aoff, const char *inst, const char *rs, ut32 dest_reg, ut64 offset, const char *suffix) {
+	if (aoff) {
+		r_strbuf_appendf (sb, "%#" PFMT64x ": %s x%u, %#" PFMT64x "; add x%u, x%u, %#x; %s %s%u, [x%u, %#" PFMT64x "%s\n", addr, is_adrp? "adrp": "adr", reg, target, reg2, reg, aoff, inst, rs, dest_reg, reg2, offset, suffix);
+	} else {
+		r_strbuf_appendf (sb, "%#" PFMT64x ": %s x%u, %#" PFMT64x "; %s %s%u, [x%u, %#" PFMT64x "%s\n", addr, is_adrp? "adrp": "adr", reg, target, inst, rs, dest_reg, reg2, offset, suffix);
+	}
+}
+
+// Helper to append signed offset memory instruction
+static void append_signed_mem_instr(RStrBuf *sb, ut64 addr, bool is_adrp, ut32 reg, ut64 target, ut32 reg2, ut32 aoff, const char *inst, const char *rs, ut32 dest_reg, int64_t soff, const char *suffix) {
+	const char *sign = soff < 0? "-": "";
+	if (aoff) {
+		r_strbuf_appendf (sb, "%#" PFMT64x ": %s x%u, %#" PFMT64x "; add x%u, x%u, %#x; %s %s%u, [x%u, %s%" PFMT64d "%s\n", addr, is_adrp? "adrp": "adr", reg, target, reg2, reg, aoff, inst, rs, dest_reg, reg2, sign, (st64)soff, suffix);
+	} else {
+		r_strbuf_appendf (sb, "%#" PFMT64x ": %s x%u, %#" PFMT64x "; %s %s%u, [x%u, %s%" PFMT64d "%s\n", addr, is_adrp? "adrp": "adr", reg, target, inst, rs, dest_reg, reg2, sign, (st64)soff, suffix);
+	}
+}
+
+static void siguza_xrefs_chunked(RAnal *anal, RStrBuf *sb, bool register_refs, bool islands, ut64 search, const ut8 *mem, ut64 addr, int process_len, int mem_len) {
+	const ut8 *p = mem;
+	const ut8 *e = mem + (mem_len & ~3);
+	const ut8 *pe = mem + (process_len & ~3);
+
+	for (; p < pe; p += 4, addr += 4) {
+		ut32 v = r_read_le32 (p);
+		if ((v & 0x1f000000) == 0x10000000) // adr and adrp
+		{
+			ut32 reg = v & 0x1f;
+			bool is_adrp = (v & 0x80000000) != 0;
+			int64_t base = is_adrp? (addr & 0xfffffffffffff000): addr;
+			int64_t off = (int64_t) ((uint64_t) ((((v >> 5) & 0x7ffff) << 2) | ((v >> 29) & 0x3)) << 43) >> (is_adrp? 31: 43);
+			ut64 target = base + off;
+			ut64 jump = target;
+			const ut8 *branch = islands? resolve_stub (p + 4, e, reg, &jump): NULL;
+			if (branch) {
+				ut64 branch_addr = addr + (branch - p);
+				if (register_refs) {
+					addref (anal, branch_addr, jump, R_ANAL_REF_TYPE_CODE);
+					r_anal_hint_set_type (anal, branch_addr, R_ANAL_OP_TYPE_JMP);
+					r_anal_hint_set_jump (anal, branch_addr, jump);
+				} else if (jump == search) {
+					r_strbuf_appendf (sb, "%#" PFMT64x ": br x%u; %#" PFMT64x "\n", branch_addr, (r_read_le32 (branch) >> 5) & 31, jump);
+				}
+			}
+			if (register_refs) {
+				addref (anal, addr, target, R_ANAL_REF_TYPE_DATA);
+			} else if (target == search) {
+				r_strbuf_appendf (sb, "%#" PFMT64x ": %s x%u, %#" PFMT64x "\n", addr, is_adrp? "adrp": "adr", reg, target);
+			} else {
+				// More complicated cases - up to 3 instr
+				const ut8 *q = skip_nops (p + 4, e);
+				if (q < e) {
+					v = r_read_le32 (q);
+					ut32 reg2 = reg;
+					ut32 aoff = 0;
+					bool found = false;
+					if ((v & 0xff8003e0) == (0x91000000 | (reg << 5))) { // 64bit add, match reg
+						reg2 = v & 0x1f;
+						aoff = (v >> 10) & 0xfff;
+						if (v & 0x400000) {
+							aoff <<= 12;
+						}
+						if (target + aoff == search) {
+							r_strbuf_appendf (sb, "%#" PFMT64x ": %s x%u, %#" PFMT64x "; add x%u, x%u, %#x\n", addr, is_adrp? "adrp": "adr", reg, target, reg2, reg, aoff);
+							found = true;
+						} else {
+							q = skip_nops (q + 4, e);
+						}
+					}
+					if (!found && q < e) {
+						v = r_read_le32 (q);
+						if ((v & 0xff8003e0) == (0x91000000 | (reg2 << 5))) { // 64bit add, match reg
+							ut32 xoff = (v >> 10) & 0xfff;
+							if (v & 0x400000) {
+								xoff <<= 12;
+							}
+							if (target + aoff + xoff == search) {
+								// If we get here, we know the previous add matched
+								r_strbuf_appendf (sb, "%#" PFMT64x ": %s x%u, %#" PFMT64x "; add x%u, x%u, %#x; add x%u, x%u, %#x\n", addr, is_adrp? "adrp": "adr", reg, target, reg2, reg, aoff, v & 0x1f, reg2, xoff);
+							}
+						} else if ((v & 0x3e0003e0) == (0x38000000 | (reg2 << 5))) { // all of str[hb]/ldr[hb], match reg
+							uint8_t size = (v >> 30) & 0x3;
+							uint8_t opc = (v >> 22) & 0x3;
+							uint32_t opc_size = (opc << 4) | size;
+							const char *inst = lookup_inst_name (opc_size);
+
+							if (inst) {
+								uint8_t regsize = opc == 2 && size < 2? 3: size;
+								const char *rs = regsize == 3? "x": "w";
+								if ((v & 0x1000000) != 0) { // unsigned offset
+									ut64 uoff = ((v >> 10) & 0xfff) << size;
+									if (target + aoff + uoff == search) {
+										append_mem_instr (sb, addr, is_adrp, reg, target, reg2, aoff, inst, rs, v & 0x1f, uoff, "]");
+									}
+								} else if ((v & 0x00200000) == 0) {
+									int64_t soff = (int64_t) ((uint64_t) ((v >> 12) & 0x1ff) << 55) >> 55;
+									if (target + aoff + soff == search) {
+										if ((v & 0x400) == 0) {
+											if ((v & 0x800) == 0) { // unscaled
+												inst = lookup_unscaled_inst_name (opc_size);
+											} else { // unprivileged
+												inst = lookup_unprivileged_inst_name (opc_size);
+											}
+											if (inst) {
+												if ((v & 0x400) != 0) { // pre/post-index
+													const char *suffix = (v & 0x800) != 0? "]!": "]";
+													append_signed_mem_instr (sb, addr, is_adrp, reg, target, reg2, aoff, inst, rs, v & 0x1f, soff, suffix);
+												} else { // unscaled/unprivileged
+													append_signed_mem_instr (sb, addr, is_adrp, reg, target, reg2, aoff, inst, rs, v & 0x1f, soff, "]");
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+						// TODO: pairs, SIMD ldr/str, atomics
+					}
+				}
+			}
+		} else if ((v & 0xbf000000) == 0x18000000 || (v & 0xff000000) == 0x98000000) { // ldr and ldrsw literal
+			int64_t off = (int64_t) ((uint64_t) ((v >> 5) & 0x7ffff) << 45) >> 43;
+			if (register_refs) {
+				addref (anal, addr, addr + off, R_ANAL_REF_TYPE_DATA);
+			} else if (addr + off == search) {
+				ut32 reg = v & 0x1f;
+				bool is_ldrsw = (v & 0xff000000) == 0x98000000;
+				bool is_64bit = (v & 0x40000000) != 0 && !is_ldrsw;
+				r_strbuf_appendf (sb, "%#" PFMT64x ": %s %s%u, %#" PFMT64x "\n", addr, is_ldrsw? "ldrsw": "ldr", is_64bit? "x": "w", reg, search);
+			}
+		} else if ((v & 0x7c000000) == 0x14000000) { // b and bl
+			int64_t off = (int64_t) ((uint64_t) (v & 0x3ffffff) << 38) >> 36;
+			bool is_bl = (v & 0x80000000) != 0;
+			if (register_refs) {
+				addref (anal, addr, addr + off, is_bl? R_ANAL_REF_TYPE_CODE: R_ANAL_REF_TYPE_CALL);
+			} else if (addr + off == search) {
+				r_strbuf_appendf (sb, "%#" PFMT64x ": %s %#" PFMT64x "\n", addr, is_bl? "bl": "b", search);
+			}
+		} else if ((v & 0xff000010) == 0x54000000) { // b.cond
+			int64_t off = (int64_t) ((uint64_t) ((v >> 5) & 0x7ffff) << 45) >> 43;
+			if (register_refs) {
+				addref (anal, addr, addr + off, R_ANAL_REF_TYPE_CODE);
+			} else if (addr + off == search) {
+				static const char *cond_names[] = {
+					"eq", "ne", "hs", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le", "al", "nv"
+				};
+				const char *cond = cond_names[v & 0xf];
+				r_strbuf_appendf (sb, "%#" PFMT64x ": b.%s %#" PFMT64x "\n", addr, cond, search);
+			}
+		} else if ((v & 0x7e000000) == 0x34000000) { // cbz and cbnz
+			int64_t off = (int64_t) ((uint64_t) ((v >> 5) & 0x7ffff) << 45) >> 43;
+			if (register_refs) {
+				addref (anal, addr, addr + off, R_ANAL_REF_TYPE_CODE);
+			} else if (addr + off == search) {
+				ut32 reg = v & 0x1f;
+				bool is_64bit = (v & 0x80000000) != 0;
+				bool is_nz = (v & 0x01000000) != 0;
+				r_strbuf_appendf (sb, "%#" PFMT64x ": %s %s%u, %#" PFMT64x "\n", addr, is_nz? "cbnz": "cbz", is_64bit? "x": "w", reg, search);
+			}
+		} else if ((v & 0x7e000000) == 0x36000000) { // tbz and tbnz
+			int64_t off = ((int64_t) ((v >> 5) & 0x3fff) << 50) >> 48;
+			if (register_refs) {
+				addref (anal, addr, addr + off, R_ANAL_REF_TYPE_CODE);
+			} else if (addr + off == search) {
+				ut32 reg = v & 0x1f;
+				ut32 bit = ((v >> 19) & 0x1f) | ((v >> 26) & 0x20);
+				bool is_64bit = bit > 31;
+				bool is_nz = (v & 0x01000000) != 0;
+				r_strbuf_appendf (sb, "%#" PFMT64x ": %s %s%u, %u, %#" PFMT64x "\n", addr, is_nz? "tbnz": "tbz", is_64bit? "x": "w", reg, bit, search);
+			}
+		}
+	}
+}
+
+/**
+ * @param register_refs Register every discovered xref instead of listing matches.
+ * @param search Address to find xrefs to when register_refs is false.
+ * @param start Address at which to start looking for xrefs.
+ * @param lenbytes Reach of the search for xrefs, in bytes.
+ */
+static void siguza_xrefs(RAnal *anal, RStrBuf *sb, bool register_refs, bool islands, ut64 search, ut64 start, ut64 lenbytes) {
+	ut8 *buf = malloc (SIX_CHUNK_SIZE + SIX_LOOKAHEAD_SIZE);
+	if (!buf) {
+		R_LOG_ERROR ("Failed to allocate buffer");
+		return;
+	}
+
+	ut64 pos = islands? (4 - (start & 3)) & 3: 0;
+	while (pos < lenbytes) {
+		int process_len = (int)R_MIN (lenbytes - pos, SIX_CHUNK_SIZE);
+		ut64 lookahead_rem = lenbytes - pos - process_len;
+		int to_read = process_len + (int)R_MIN (lookahead_rem, SIX_LOOKAHEAD_SIZE);
+		if (anal->iob.read_at (anal->iob.io, start + pos, buf, to_read) != to_read) {
+			break;
+		}
+		if (process_len < 4) {
+			break;
+		}
+		siguza_xrefs_chunked (anal, sb, register_refs, islands, search, buf, start + pos, process_len, to_read);
+		pos += process_len;
+	}
+	free (buf);
+}
+
+static bool is_arm64(RAnal *anal) {
+	const char *arch = anal->coreb.cfgGet (anal->coreb.core, "asm.arch");
+	const int bits = anal->coreb.cfgGetI (anal->coreb.core, "asm.bits");
+	return arch && strstr (arch, "arm") && bits == 64;
+}
+
+static char *six_help(void) {
+	return strdup (
+		"| a:six                 register xrefs in arm64 executable sections or current map\n"
+		"| a:sixi                also resolve stub islands and install jump hints (opt-in)\n"
+		"| a:six[i] <target>     list xrefs to target address without changing xrefs or hints\n"
+		"| a:six[i] <target> <len> list xrefs to target from $$ in current executable section or map\n");
+}
+
+static bool parse_num(RAnal *anal, RCore *core, const char *arg, const char *name, ut64 *out) {
+	const char *err = NULL;
+	if (anal->coreb.numGet) {
+		if (core && core->num) {
+			core->num->nc.errors = 0;
+			core->num->nc.calc_err = NULL;
+		}
+		*out = anal->coreb.numGet (anal->coreb.core, arg);
+		if (core && core->num) {
+			err = core->num->nc.calc_err;
+		}
+	} else {
+		*out = r_num_math_err (core? core->num: NULL, arg, &err);
+	}
+	if (err) {
+		R_LOG_ERROR ("Invalid %s '%s': %s", name, arg, err);
+		return false;
+	}
+	return true;
+}
+
+static char *r_cmdsix_call(RAnal *anal, const char *input) {
+	if (!r_str_startswith (input, SIX_CMD)) {
+		return NULL;
+	}
+	size_t cmd_len = strlen (SIX_CMD);
+	bool islands = input[cmd_len] == 'i';
+	if (islands) {
+		cmd_len++;
+	}
+	char ch = input[cmd_len];
+	if (ch && ch != '?' && ch != ' ') {
+		R_LOG_ERROR ("Invalid command 'a:%s'. See 'a:six?' for help", input);
+		return strdup ("");
+	}
+	input += cmd_len;
+	if (*input == '?' || *r_str_trim_head_ro (input) == '?') {
+		return six_help ();
+	}
+
+	if (!is_arm64 (anal)) {
+		R_LOG_ERROR ("This command only works on arm64. Please check your asm.{arch,bits}");
+		return strdup ("");
+	}
+
+	ut64 search = 0;
+	ut64 len = 0;
+	bool has_len = false;
+	RCore *core = (RCore *)anal->coreb.core;
+	input = r_str_trim_head_ro (input);
+	bool register_refs = R_STR_ISEMPTY (input);
+	if (!register_refs) {
+		int argc = 0;
+		char **argv = r_str_argv (input, &argc);
+		if (!argv) {
+			return strdup ("");
+		}
+		if (argc < 1 || argc > 2) {
+			R_LOG_ERROR ("Usage: a:six%s [target] [len]", islands? "i": "");
+			r_str_argv_free (argv);
+			return strdup ("");
+		}
+		if (!parse_num (anal, core, argv[0], "target", &search)) {
+			r_str_argv_free (argv);
+			return strdup ("");
+		}
+		if (argc == 2) {
+			if (!parse_num (anal, core, argv[1], "length", &len)) {
+				r_str_argv_free (argv);
+				return strdup ("");
+			}
+			if (!len) {
+				R_LOG_ERROR ("Length must be greater than zero");
+				r_str_argv_free (argv);
+				return strdup ("");
+			}
+			has_len = true;
+		}
+		r_str_argv_free (argv);
+	}
+
+	RStrBuf *sb = register_refs? NULL: r_strbuf_new (NULL);
+	if (!register_refs && !sb) {
+		return strdup ("");
+	}
+
+	bool scanned = false;
+	RVecRBinSection *sections = anal->binb.get_sections_vec? anal->binb.get_sections_vec (anal->binb.bin): NULL;
+	if (!has_len && sections) {
+		RBinSection *s;
+		R_VEC_FOREACH (sections, s) {
+			if (!s->is_segment && (s->perm & R_PERM_X)) {
+				siguza_xrefs (anal, sb, register_refs, islands, search, s->vaddr, s->vsize);
+				scanned = true;
+			}
+		}
+	}
+	if (!scanned) {
+		ut64 offset = anal->coreb.numGet (anal->coreb.core, "$$");
+		if (has_len && (offset & 3)) {
+			offset &= ~3ULL;
+			R_LOG_INFO ("Current offset is not 4-byte aligned, using 0x%" PFMT64x " instead", offset);
+		}
+		RBinSection *s = has_len && anal->binb.get_vsect_at? anal->binb.get_vsect_at (anal->binb.bin, offset): NULL;
+		RIOMap *map = !s && anal->iob.map_get_at? anal->iob.map_get_at (anal->iob.io, offset): NULL;
+		ut64 start = s? s->vaddr: map? r_io_map_begin (map): offset;
+		ut64 end = s? s->vaddr + s->vsize: map? r_io_map_end (map): offset;
+		int perm = s? s->perm: map? map->perm: 0;
+		if (!(perm & R_PERM_X) || end <= start || offset < start || offset >= end) {
+			R_LOG_WARN ("Current section or map is not executable or has invalid boundaries");
+			r_strbuf_free (sb);
+			return strdup ("");
+		}
+		if (!has_len) {
+			offset = start;
+			len = end - start;
+		} else if (len > end - offset) {
+			len = end - offset;
+			R_LOG_WARN ("Length is not within range for this section, using 0x%" PFMT64x " instead", len);
+		}
+		siguza_xrefs (anal, sb, register_refs, islands, search, offset, len);
+	}
+
+	if (register_refs) {
+		return strdup ("");
+	}
+	char *result = r_strbuf_drain (sb);
+	if (!result) {
+		return strdup ("");
+	}
+	r_str_trim (result);
+	return result;
+}
+
+RAnalPlugin r_anal_plugin_six = {
+	.meta = {
+		.name = "six",
+		.desc = "quickly find xrefs in arm64 buffer (siguza's x-ref)",
+		.author = "Siguza",
+		.license = "MIT",
+	},
+	.cmd = r_cmdsix_call,
+};
+
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
+	.type = R_LIB_TYPE_ANAL,
+	.data = &r_anal_plugin_six,
+	.version = R2_VERSION
+};
+#endif

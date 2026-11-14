@@ -1,51 +1,41 @@
-/* radare - LGPL - Copyright 2013-2019 - xvilka */
+/* radare - LGPL - Copyright 2013-2024 - xvilka */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
 #include <r_bin.h>
 #include "te/te_specs.h"
 #include "te/te.h"
 
 static Sdb *get_sdb(RBinFile *bf) {
-	RBinObject *o = bf->o;
-	if (!o) {
-		return NULL;
-	}
-	struct r_bin_te_obj_t *bin = (struct r_bin_te_obj_t *) o->bin_obj;
-	return bin? bin->kv: NULL;
+	struct r_bin_te_obj_t *bin = (struct r_bin_te_obj_t *)R_UNWRAP3 (bf, bo, bin_obj);
+	return bin ? bin->kv : NULL;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb) {
-	r_return_val_if_fail (bf && bin_obj && b, false);
+static bool load(RBinFile *bf, RBuffer *b, ut64 loadaddr) {
 	ut64 sz = r_buf_size (b);
 	if (sz == 0 || sz == UT64_MAX) {
 		return false;
 	}
 	struct r_bin_te_obj_t *res = r_bin_te_new_buf (b);
 	if (res) {
-		sdb_ns_set (sdb, "info", res->kv);
+		sdb_ns_set (bf->sdb, "info", res->kv);
 	}
-	*bin_obj = res;
+	bf->bo->bin_obj = res;
 	return true;
 }
 
 static void destroy(RBinFile *bf) {
-	r_bin_te_free ((struct r_bin_te_obj_t *) bf->o->bin_obj);
+	r_bin_te_free ((struct r_bin_te_obj_t *) bf->bo->bin_obj);
 }
 
 static ut64 baddr(RBinFile *bf) {
-	return r_bin_te_get_image_base (bf->o->bin_obj);
+	return r_bin_te_get_image_base (bf->bo->bin_obj);
 }
 
 static RBinAddr *binsym(RBinFile *bf, int type) {
 	RBinAddr *ret = NULL;
 	switch (type) {
 	case R_BIN_SYM_MAIN:
-		if (!(ret = R_NEW (RBinAddr))) {
-			return NULL;
-		}
-		ret->paddr = ret->vaddr = r_bin_te_get_main_paddr (bf->o->bin_obj);
+		ret = R_NEW (RBinAddr);
+		ret->paddr = ret->vaddr = r_bin_te_get_main_paddr (bf->bo->bin_obj);
 		break;
 	}
 	return ret;
@@ -53,39 +43,31 @@ static RBinAddr *binsym(RBinFile *bf, int type) {
 
 static RList *entries(RBinFile *bf) {
 	RList *ret = r_list_newf (free);
-	if (ret) {
-		RBinAddr *entry = r_bin_te_get_entrypoint (bf->o->bin_obj);
-		if (entry) {
-			RBinAddr *ptr = R_NEW0 (RBinAddr);
-			if (ptr) {
-				ptr->paddr = entry->paddr;
-				ptr->vaddr = entry->vaddr;
-				r_list_append (ret, ptr);
-			}
-			free (entry);
-		}
+	if (!ret) {
+		return NULL;
+	}
+	RBinAddr *entry = r_bin_te_get_entrypoint (bf->bo->bin_obj);
+	if (entry) {
+		RBinAddr *ptr = R_NEW0 (RBinAddr);
+		ptr->paddr = entry->paddr;
+		ptr->vaddr = entry->vaddr;
+		r_list_append (ret, ptr);
+		free (entry);
 	}
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret = NULL;
+static bool sections_vec(RBinFile *bf) {
 	RBinSection *ptr = NULL;
 	struct r_bin_te_section_t *sections = NULL;
 	int i;
 
-	if (!(ret = r_list_new ())) {
-		return NULL;
+	if (!(sections = r_bin_te_get_sections (bf->bo->bin_obj))) {
+		return false;
 	}
-	ret->free = free;
-	if (!(sections = r_bin_te_get_sections (bf->o->bin_obj))) {
-		free (ret);
-		return NULL;
-	}
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 	for (i = 0; !sections[i].last; i++) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			break;
-		}
+		ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ptr->name = strdup ((char*)sections[i].name);
 		ptr->size = sections[i].size;
 		ptr->vsize = sections[i].vsize;
@@ -108,38 +90,35 @@ static RList *sections(RBinFile *bf) {
 		/* All TE files have _TEXT_RE section, which is 16-bit, because of
 		 * CPU start in this mode */
 		if (!strncmp (ptr->name, "_TEXT_RE", 8)) {
-			ptr->bits = R_SYS_BITS_16;
+			ptr->bits = R_SYS_BITS_PACK (16);
 		}
-		r_list_append (ret, ptr);
 	}
 	free (sections);
-	return ret;
+	return true;
 }
 
 static RBinInfo *info(RBinFile *bf) {
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
 	ret->file = strdup (bf->file);
 	ret->bclass = strdup ("TE");
 	ret->rclass = strdup ("te");
-	ret->os = r_bin_te_get_os (bf->o->bin_obj);
-	ret->arch = r_bin_te_get_arch (bf->o->bin_obj);
-	ret->machine = r_bin_te_get_machine (bf->o->bin_obj);
-	ret->subsystem = r_bin_te_get_subsystem (bf->o->bin_obj);
-	ret->type = strdup ("EXEC (Executable file)");
-	ret->bits = r_bin_te_get_bits (bf->o->bin_obj);
-	ret->big_endian = 1;
+	if (bf->bo->bin_obj) {
+		ret->os = r_bin_te_get_os (bf->bo->bin_obj);
+		const char *arch = r_bin_te_get_arch (bf->bo->bin_obj);
+		ret->arch = arch? strdup (arch): NULL;
+		ret->machine = r_bin_te_get_machine (bf->bo->bin_obj);
+		ret->subsystem = r_bin_te_get_subsystem (bf->bo->bin_obj);
+		ret->type = strdup ("EXEC (Executable file)");
+		ret->bits = r_bin_te_get_bits (bf->bo->bin_obj);
+	}
+	ret->big_endian = true;
 	ret->dbg_info = 0;
 	ret->has_va = true;
-
 	sdb_num_set (bf->sdb, "te.bits", ret->bits, 0);
-
 	return ret;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 buf[2];
 	if (r_buf_read_at (b, 0, buf, 2) == 2) {
 		return !memcmp (buf, "\x56\x5a", 2);
@@ -148,17 +127,20 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 }
 
 RBinPlugin r_bin_plugin_te = {
-	.name = "te",
-	.desc = "TE bin plugin", // Terse Executable format
-	.license = "LGPL3",
+	.meta = {
+		.name = "te",
+		.author = "xvilka",
+		.desc = "Terse Executable (based on PE/COFF for PE32/+)",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
 	.binsym = &binsym,
 	.entries = &entries,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
 	.info = &info,
 	.minstrlen = 4,
 };

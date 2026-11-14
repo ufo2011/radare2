@@ -1,0 +1,207 @@
+/* radare - LGPL - Copyright 2016 - pancake */
+
+#include <r_lib.h>
+#include <r_util.h>
+#include <r_flag.h>
+#include <r_anal.h>
+#include <r_asm.h>
+
+static bool can_replace(const char *str, int idx, int max_operands) {
+	if (str[idx] > '9' || str[idx] < '1') {
+		return false;
+	}
+	if (str[idx + 1] != '\x00' && str[idx + 1] <= '9' && str[idx + 1] >= '1') {
+		return false;
+	}
+	if ((int)((int)str[idx] - 0x30) > max_operands) {
+		return false;
+	}
+	return true;
+}
+
+static char *replace(int argc, const char *argv[]) {
+	int i, j;
+	struct {
+		const char *op;
+		const char *str;
+		int max_operands;
+	} ops[] = {
+		{ "move",  "2 = 1", 2},
+		{ "movea",  "2 = 1", 2},
+		{ "moveq",  "2 = 1", 2},
+		{ "movem",  "2 = 1", 2},
+		{ "lea",  "2 = 1", 2},
+		{ "bsr",  "1()", 1},
+		{ "jsr",  "1()", 1},
+		{ "beq",  "if (==) jmp 1", 1},
+		{ "bne",  "if (!=) jmp 1", 1},
+		{ "bhi",  "if (hi) jmp 1", 1},
+		{ "bls",  "if (ls) jmp 1", 1},
+		{ "bmi",  "if (mi) jmp 1", 1},
+		{ "bpl",  "if (pl) jmp 1", 1},
+		{ "bvs",  "if (vs) jmp 1", 1},
+		{ "bvc",  "if (vc) jmp 1", 1},
+		{ "blt",  "if (<) jmp 1", 1},
+		{ "ble",  "if (<=) jmp 1", 1},
+		{ "bgt",  "if (>) jmp 1", 1},
+		{ "bge",  "if (>=) jmp 1", 1},
+		{ "bcs",  "if (cs) jmp 1", 1},
+		{ "bcc",  "if (cc) jmp 1", 1},
+		{ "bra",  "jmp 1", 1},
+		{ "jmp",  "jmp 1", 1},
+		{ "rts",  "ret", 2},
+		{ "btst",  "1 == 2", 2},
+		{ "cmp",  "1 == 2", 2},
+		{ "cmpi",  "2 == 1", 2},
+		{ "add",  "2 += 1", 2},
+		{ "addi",  "2 += 1", 2},
+		{ "adda",  "2 += 1", 2},
+		{ "sub",  "2 -= 1", 2},
+		{ "subq",  "2 -= 1", 2},
+		{ "tst",  "1 == 0", 2},
+		{ "ori",  "2 |= 1", 2},
+		{ "or",  "2 |= 1", 2},
+		{ "lsr",  "2 >>= 1", 2},
+		{ "lsl",  "2 <<= 1", 2},
+		{ "andi",  "2 &= 1", 2},
+		{ "nop",  "" },
+//
+		{ NULL }
+	};
+
+	RStrBuf *sb = r_strbuf_new ("");
+	for (i = 0; ops[i].op; i++) {
+		if (!strcmp (ops[i].op, argv[0])) {
+			const char *str = ops[i].str;
+			for (j = 0; str[j]; j++) {
+				if (can_replace (str, j, ops[i].max_operands)) {
+					const char *w = argv[str[j] - '0'];
+					if (w) {
+						r_strbuf_append (sb, w);
+					}
+				} else {
+					r_strbuf_append_n (sb, str + j, 1);
+				}
+			}
+			return r_strbuf_drain (sb);
+		}
+	}
+	for (i = 0; i < argc; i++) {
+		r_strbuf_append (sb, argv[i]);
+		r_strbuf_append (sb, (i == 0 || i == argc - 1)? " ": ", ");
+	}
+	return r_strbuf_drain (sb);
+}
+
+#define WSZ 64
+static char *parse(RAsmPluginSession *aps, const char *data) {
+	int i, len = strlen (data);
+	char w0[WSZ];
+	char w1[WSZ];
+	char w2[WSZ];
+	char w3[WSZ];
+	char w4[WSZ];
+	char *buf, *ptr, *optr;
+
+	if (!strcmp (data, "jr ra")) {
+		return strdup ("ret");
+	}
+
+	// malloc can be slow here :?
+	if (!(buf = malloc (len + 1))) {
+		return NULL;
+	}
+	memcpy (buf, data, len + 1);
+
+	r_str_replace_in (buf, len + 1, ".l", "", 1);
+	r_str_replace_in (buf, len + 1, ".w", "", 1);
+	r_str_replace_in (buf, len + 1, ".d", "", 1);
+	r_str_replace_in (buf, len + 1, ".b", "", 1);
+	r_str_trim (buf);
+	char *str = NULL;
+	if (*buf) {
+		w0[0]='\0';
+		w1[0]='\0';
+		w2[0]='\0';
+		w3[0]='\0';
+		w4[0]='\0';
+		ptr = strchr (buf, ' ');
+		if (!ptr) {
+			ptr = strchr (buf, '\t');
+		}
+		if (ptr) {
+			*ptr = '\0';
+			ptr = (char *)r_str_trim_head_ro (ptr + 1);
+			r_str_ncpy (w0, buf, WSZ);
+			r_str_ncpy (w1, ptr, WSZ);
+
+			optr=ptr;
+			ptr = strchr (ptr, ',');
+			if (ptr) {
+				*ptr = '\0';
+				ptr = (char *)r_str_trim_head_ro (ptr + 1);
+				r_str_ncpy (w1, optr, WSZ);
+				r_str_ncpy (w2, ptr, WSZ);
+				optr=ptr;
+				ptr = strchr (ptr, ',');
+				if (ptr) {
+					*ptr = '\0';
+					for (ptr++; *ptr == ' '; ptr++) {
+						;
+					}
+					r_str_ncpy (w2, optr, WSZ);
+					r_str_ncpy (w3, ptr, WSZ);
+					optr=ptr;
+// bonus
+					ptr = strchr (ptr, ',');
+					if (ptr) {
+						*ptr = '\0';
+						for (ptr++; *ptr == ' '; ptr++) {
+							;
+						}
+						r_str_ncpy (w3, optr, WSZ);
+						r_str_ncpy (w4, ptr, WSZ);
+					}
+				}
+			}
+		}
+		{
+			const char *wa[] = { w0, w1, w2, w3, w4 };
+			int nw = 0;
+			for (i = 0; i < 5; i++) {
+				if (wa[i][0] != '\0') {
+					nw++;
+				}
+			}
+			str = replace (nw, wa);
+			{
+				char *pluseq = strstr (str, "+ =");
+				if (pluseq) {
+					memcpy (pluseq, " +=", 3);
+				}
+			}
+		}
+	} else {
+		str = strdup (data);
+	}
+	free (buf);
+	return str;
+}
+
+RAsmPlugin r_asm_plugin_m68k = {
+	.meta = {
+		.name = "m68k",
+		.desc = "M68K pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
+	.parse = parse,
+};
+
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_m68k,
+	.version = R2_VERSION
+};
+#endif

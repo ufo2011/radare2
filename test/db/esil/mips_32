@@ -245,6 +245,43 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=mips.gnu addiu a1, zero, -5 uses 32-bit gprs
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=mips.gnu
+e asm.bits=32
+arp~gpr[1-3]:0..5
+ar > /dev/null
+wx fbff0524
+aei
+aeim
+aeip
+aes
+ar a1
+EOF
+EXPECT=<<EOF
+zero .32 0
+at .32 4
+v0 .32 8
+v1 .32 12
+a0 .32 16
+0xfffffffb
+EOF
+RUN
+
+NAME=mips.gnu at 64 bits keeps 64-bit gprs
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=mips.gnu
+e asm.bits=64
+arp~gpr[1-3]:0..2
+EOF
+EXPECT=<<EOF
+zero .64 0
+at .64 8
+EOF
+RUN
+
 NAME=addiu a1, 6, -5
 FILE=malloc://0x200
 CMDS=<<EOF
@@ -674,6 +711,23 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=nor a1, 0xfffffffe, 0xfffffffe
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=mips
+e asm.bits=32
+e cfg.bigendian=True
+ar > /dev/null
+ar v0=-2
+wx 00422827
+aes
+ar a1
+EOF
+EXPECT=<<EOF
+0x00000001
+EOF
+RUN
+
 NAME=lh v1, (v0)
 FILE=malloc://0x200
 CMDS=<<EOF
@@ -691,7 +745,7 @@ aes
 ar v1
 EOF
 EXPECT=<<EOF
-0x0000bbaa
+0xffffbbaa
 EOF
 RUN
 
@@ -712,7 +766,7 @@ aes
 ar v1
 EOF
 EXPECT=<<EOF
-0x0000bbaa
+0xffffbbaa
 EOF
 RUN
 
@@ -732,7 +786,7 @@ aes
 ar v1
 EOF
 EXPECT=<<EOF
-0x0000ddcc
+0xffffddcc
 EOF
 RUN
 
@@ -921,6 +975,24 @@ p8 5 @ 0
 EOF
 EXPECT=<<EOF
 000000bb03
+EOF
+RUN
+
+NAME=sll/srl/sra zero, v0, 1 and sllv/srlv/srav zero, v0, v1
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=mips
+e asm.bits=32
+wx 400002004200020043000200040062000600620007006200
+pie 6
+EOF
+EXPECT=<<EOF
+0x00000000 ,
+0x00000004 ,
+0x00000008 ,
+0x0000000c ,
+0x00000010 ,
+0x00000014 ,
 EOF
 RUN
 
@@ -1731,6 +1803,7 @@ CMDS=<<EOF
 e io.va=true
 e asm.arch=mips
 e asm.bits=32
+aeim
 ar > /dev/null
 ar v0=8
 ar a0=0x00400b48
@@ -1750,19 +1823,24 @@ NAME=asm.emu with meta
 FILE=bins/elf/analysis/crackmips
 CMDS=<<EOF
 s 0x00400820
+e anal.hasnext=true
 af
 e asm.emu=true
 e emu.write=true
-e anal.gpfixed=false
+e anal.fixed.gp=false
 e asm.lines.bb=false
 e asm.lines.fcn=false
 e asm.imm.str=false
 aei
 aeim
 pdf~0x00400828[7]
+?e ---
+s 0x00400828
+pdf~0x00400828[7]
 EOF
 EXPECT=<<EOF
-0x415424
+---
+0x422884
 EOF
 RUN
 
@@ -1777,5 +1855,1124 @@ as
 EOF
 EXPECT=<<EOF
 0xfa4 = write (1, "Hello, world!.", 15)
+EOF
+RUN
+
+NAME=mips.gnu slt signed vs sltu unsigned
+FILE=malloc://32
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+aei
+wx 2a402a01
+ar t1=0xffffffff
+ar t2=1
+ar pc=0
+s 0
+aes
+ar t0
+wx 2b402a01
+ar t1=0xffffffff
+ar t2=1
+ar pc=0
+s 0
+aes
+ar t0
+wx 2a402a01
+ar t1=5
+ar t2=3
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=mips.gnu slti signed vs sltiu unsigned
+FILE=malloc://32
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+aei
+wx 01002829
+ar t1=0xffffffff
+ar pc=0
+s 0
+aes
+ar t0
+wx 0500282d
+ar t1=3
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+EOF
+RUN
+
+
+NAME=mips mult signed hi vs multu unsigned hi
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 18000901
+ar t0=0xffffffff
+ar t1=2
+ar pc=0
+s 0
+aes
+ar hi
+ar lo
+wx 19000901
+ar t0=0xffffffff
+ar t1=2
+ar pc=0
+s 0
+aes
+ar hi
+ar lo
+EOF
+EXPECT=<<EOF
+0xffffffff
+0xfffffffe
+0x00000001
+0xfffffffe
+EOF
+RUN
+
+NAME=mips srav arithmetic variable shift
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 07402a01
+ar t2=0x80000000
+ar t1=4
+ar pc=0
+s 0
+aes
+ar t0
+ao 1~type[1]
+EOF
+EXPECT=<<EOF
+0xf8000000
+sar
+EOF
+RUN
+
+NAME=mips.gnu mult signed hi and add overflow decode with hi lo registers
+FILE=malloc://32
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+aei
+wx 18000901
+ar t0=0xffffffff
+ar t1=2
+ar pc=0
+aes
+ar hi
+ar lo
+wx 19000901
+ar t0=0xffffffff
+ar t1=2
+ar pc=0
+aes
+ar hi
+ar lo
+wx 20108500
+ao 1~mnemonic
+ar a0=5
+ar a1=3
+ar pc=0
+aes
+ar v0
+wx 12480000
+ar pc=0
+aes
+ar t1
+EOF
+EXPECT=<<EOF
+0xffffffff
+0xfffffffe
+0x00000001
+0xfffffffe
+mnemonic: add
+0x00000008
+0xfffffffe
+EOF
+RUN
+
+NAME=mips.gnu jal writes the link register and branches to the target
+FILE=malloc://0x200
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0400000c
+aes
+ar pc
+ar ra
+EOF
+EXPECT=<<EOF
+0x00000010
+0x00000008
+EOF
+RUN
+
+NAME=mips bgezal links ra unconditionally (not taken still links)
+FILE=malloc://0x200
+ARGS=-a mips -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0f001105
+ar t0=0xffffffff
+ar ra=0
+ar pc=0
+s 0
+2aes
+ar pc
+ar ra
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000008
+EOF
+RUN
+
+NAME=mips bltzal links ra unconditionally (not taken still links)
+FILE=malloc://0x200
+ARGS=-a mips -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0f001005
+ar t0=1
+ar ra=0
+ar pc=0
+s 0
+2aes
+ar pc
+ar ra
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000008
+EOF
+RUN
+
+NAME=mips bgezal branches and links when taken
+FILE=malloc://0x200
+ARGS=-a mips -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0f001105
+ar t0=1
+ar ra=0
+ar pc=0
+s 0
+aes
+ar pc
+ar ra
+EOF
+EXPECT=<<EOF
+0x00000040
+0x00000008
+EOF
+RUN
+
+NAME=mips.gnu bgez branches to the decoded target
+FILE=malloc://0x200
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0f000105
+ar t0=1
+ar pc=0
+s 0
+aes
+ar pc
+EOF
+EXPECT=<<EOF
+0x00000040
+EOF
+RUN
+
+NAME=mips.gnu bltz branches to the decoded target
+FILE=malloc://0x200
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0f000005
+ar t0=0xffffffffffffffff
+ar pc=0
+s 0
+aes
+ar pc
+EOF
+EXPECT=<<EOF
+0x00000040
+EOF
+RUN
+
+NAME=mips.gnu bltzal emits esil, links ra and branches
+FILE=malloc://0x200
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0f001005
+ar t0=0xffffffffffffffff
+ar ra=0
+ar pc=0
+s 0
+aes
+ar pc
+ar ra
+EOF
+EXPECT=<<EOF
+0x00000040
+0x00000008
+EOF
+RUN
+
+NAME=mips.gnu bgezal links ra even when the branch is not taken
+FILE=malloc://0x200
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 0f001105
+ar t0=0xffffffffffffffff
+ar ra=0
+ar pc=0
+s 0
+2aes
+ar pc
+ar ra
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000008
+EOF
+RUN
+
+NAME=sllv and srlv use only the low five bits of the count register
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 04404901
+ar t1=0x80000005
+ar t2=33
+ar pc=0
+s 0
+aes
+ar t0
+wx 06404901
+ar t1=0x80000000
+ar t2=33
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x0000000a
+0x40000000
+EOF
+RUN
+
+NAME=mips.gnu sra shifts the value by the count instead of masking one with the other
+FILE=malloc://32
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+aei
+wx 03410900
+ar t1=0x80000000
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0xf8000000
+EOF
+RUN
+
+NAME=lb and lh sign-extend while lbu and lhu do not
+FILE=malloc://0x200
+ARGS=-a mips -b 32
+CMDS=<<EOF
+ar > /dev/null
+s 4
+wx 84ff0000
+ar t3=4
+wx 00006881 @ 8
+s 8
+aei
+aeim
+aeip
+aes
+ar t0
+wx 00006885 @ 8
+ar pc=8
+s 8
+aes
+ar t0
+wx 00006891 @ 8
+ar pc=8
+s 8
+aes
+ar t0
+wx 00006895 @ 8
+ar pc=8
+s 8
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0xffffff84
+0xffffff84
+0x00000084
+0x0000ff84
+EOF
+RUN
+
+NAME=mips.gnu lh reads a halfword and not a byte
+FILE=malloc://0x200
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+ar > /dev/null
+s 4
+wx 34120000
+ar t3=4
+wx 00006885 @ 8
+s 8
+aei
+aeim
+aeip
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x00001234
+EOF
+RUN
+
+NAME=mips lwl and lwr merge the addressed bytes into the register
+FILE=malloc://0x200
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+ar > /dev/null
+wx 11223344 @ 4
+aei
+aeim
+s 8
+ar t3=4
+wx 89680001 @ 8
+ar t0=0xaabbccdd
+ar pc=8
+aes
+ar t0
+wx 99680001 @ 8
+ar t0=0xaabbccdd
+ar pc=8
+aes
+ar t0
+wx 89680003 @ 8
+ar t0=0xaabbccdd
+ar pc=8
+aes
+ar t0
+wx 99680003 @ 8
+ar t0=0xaabbccdd
+ar pc=8
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x223344dd
+0xaabb1122
+0x44bbccdd
+0x11223344
+EOF
+RUN
+
+NAME=mips swl and swr write only the addressed bytes
+FILE=malloc://0x200
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+ar > /dev/null
+aei
+aeim
+s 8
+ar t3=4
+ar t1=0x55667788
+wx 11223344 @ 4
+wx a9690001 @ 8
+ar pc=8
+aes
+p8 4 @ 4
+wx 11223344 @ 4
+wx b9690001 @ 8
+ar pc=8
+aes
+p8 4 @ 4
+wx 11223344 @ 4
+wx a9690003 @ 8
+ar pc=8
+aes
+p8 4 @ 4
+wx 11223344 @ 4
+wx b9690003 @ 8
+ar pc=8
+aes
+p8 4 @ 4
+EOF
+EXPECT=<<EOF
+11556677
+77883344
+11223355
+55667788
+EOF
+RUN
+
+NAME=mips counts the unaligned bytes from the other end when little endian
+FILE=malloc://0x200
+ARGS=-a mips -b 32
+CMDS=<<EOF
+ar > /dev/null
+wx 11223344 @ 4
+aei
+aeim
+s 8
+ar t3=4
+ar t1=0x55667788
+wx 01006889 @ 8
+ar t0=0xaabbccdd
+ar pc=8
+aes
+ar t0
+wx 01006899 @ 8
+ar t0=0xaabbccdd
+ar pc=8
+aes
+ar t0
+wx 11223344 @ 4
+wx 010069a9 @ 8
+ar pc=8
+aes
+p8 4 @ 4
+wx 11223344 @ 4
+wx 010069b9 @ 8
+ar pc=8
+aes
+p8 4 @ 4
+EOF
+EXPECT=<<EOF
+0x2211ccdd
+0xaa443322
+66553344
+11887766
+EOF
+RUN
+
+NAME=mips.gnu decodes the unaligned word loads and stores
+FILE=malloc://0x200
+ARGS=-a mips.gnu -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+ar > /dev/null
+wx 11223344 @ 4
+aei
+aeim
+s 8
+ar t3=4
+wx 89680001 @ 8
+ar t0=0xaabbccdd
+ar pc=8
+aes
+ar t0
+wx 11223344 @ 4
+wx a9690001 @ 8
+ar t1=0x55667788
+ar pc=8
+aes
+p8 4 @ 4
+ao 1~type
+EOF
+EXPECT=<<EOF
+0x223344dd
+11556677
+type: store
+EOF
+RUN
+
+# MD00086 LL: GPR[rt] <- word at GPR[base]+offset; ll t0, 0(a0) is c0880000
+NAME=mips.gnu ll loads a word like the capstone plugin
+FILE=malloc://16
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+wx 000088c0
+ao~mnemonic,type,esil:
+EOF
+EXPECT=<<EOF
+mnemonic: ll
+type: load
+esil: 0,a0,+,[4],t0,=
+EOF
+RUN
+
+# MD00086 GPR[0] is hardwired to zero; ll zero, 0(a0) is c0800000 and reads the word c0800000
+NAME=mips.gnu loads into zero keep zero at zero
+FILE=malloc://16
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+wx 000080c0
+aei
+aer a0=0
+aes
+aer zero
+EOF
+EXPECT=<<EOF
+0x00000000
+EOF
+RUN
+
+NAME=mips.gnu rotr and rotrv rotate instead of shifting
+FILE=malloc://32
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+aei
+wx 02412900
+ar t1=0x12345678
+ar pc=0
+s 0
+aes
+ar t0
+wx 46404901
+ar t1=0x12345678
+ar t2=4
+ar pc=0
+s 0
+aes
+ar t0
+wx 02410900
+ar t1=0x12345678
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x81234567
+0x81234567
+0x01234567
+EOF
+RUN
+
+NAME=mips.gnu sll keeps its result inside 32 bits
+FILE=malloc://32
+ARGS=-a mips.gnu -b 32
+CMDS=<<EOF
+aei
+wx 00410900
+ar t1=0x87654321
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x76543210
+EOF
+RUN
+
+NAME=rotr and rotrv rotate the low word
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 02412900
+ar t1=0x12345678
+ar pc=0
+s 0
+aes
+ar t0
+wx 46404901
+ar t2=4
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x81234567
+0x81234567
+EOF
+RUN
+
+NAME=the ext and ins bitfield forms
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 0039287d
+ar t1=0x89abcdef
+ar pc=0
+s 0
+aes
+ar t0
+wx 0459287d
+ar t0=0xffffffff
+ar t1=0
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x000000de
+0xfffff00f
+EOF
+RUN
+
+NAME=seb, seh and wsbh
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 2044097c
+ar t1=0x000000f6
+ar pc=0
+s 0
+aes
+ar t0
+wx 2046097c
+ar t1=0x00008056
+ar pc=0
+s 0
+aes
+ar t0
+wx a040097c
+ar t1=0x12345678
+ar pc=0
+s 0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0xfffffff6
+0xffff8056
+0x34127856
+EOF
+RUN
+
+NAME=div, divu, madd and msub write hi and lo
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 1a002a01
+ar t1=0xfffffff9
+ar t2=2
+ar pc=0
+s 0
+aes
+ar lo
+ar hi
+wx 1b002a01
+ar pc=0
+s 0
+aes
+ar lo
+ar hi
+wx 00002a71
+ar hi=1
+ar lo=5
+ar pc=0
+s 0
+aes
+ar hi
+ar lo
+wx 04002a71
+ar hi=1
+ar lo=5
+ar pc=0
+s 0
+aes
+ar hi
+ar lo
+EOF
+EXPECT=<<EOF
+0xfffffffd
+0xffffffff
+0x7ffffffc
+0x00000001
+0x00000000
+0xfffffff7
+0x00000001
+0x00000013
+EOF
+RUN
+
+NAME=maddu and msubu accumulate the unsigned product
+FILE=malloc://32
+ARGS=-a mips -b 32
+CMDS=<<EOF
+aei
+wx 01002a71
+ar t1=0xffffffff
+ar t2=2
+ar hi=1
+ar lo=5
+ar pc=0
+s 0
+aes
+ar hi
+ar lo
+wx 05002a71
+ar hi=1
+ar lo=5
+ar pc=0
+s 0
+aes
+ar hi
+ar lo
+EOF
+EXPECT=<<EOF
+0x00000003
+0x00000003
+0xffffffff
+0x00000007
+EOF
+RUN
+
+NAME=mips32 addi negative operand no overflow
+FILE=malloc://16
+ARGS=-a mips -b 32
+CMDS=<<EOF
+wx ffff2821
+aei
+ar t1=0xa5a50003
+ar t0=0x77
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0xa5a50002
+EOF
+RUN
+
+NAME=mips32 addi negative overflow traps
+FILE=malloc://16
+ARGS=-a mips -b 32
+CMDS=<<EOF
+wx ffff2821
+aei
+ar t1=0x80000000
+ar t0=0x77
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x00000077
+EOF
+RUN
+
+NAME=mips32 MSA bz.d tests both lanes and executes the delay slot (le)
+FILE=malloc://64
+ARGS=-a mips -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+wx 03007f4701000825
+aei
+ar pc=0
+ar t0=0
+ar w31l=0x0
+ar w31h=0x0
+aes 2
+ar pc
+ar t0
+ar pc=0
+ar t0=0
+ar w31l=0x0
+ar w31h=0x8000000000000000
+aes 2
+ar pc
+ar t0
+ar pc=0
+ar t0=0
+ar w31l=0x8000000000000000
+ar w31h=0x0
+aes 2
+ar pc
+ar t0
+ar pc=0
+ar t0=0
+ar w31l=0x1
+ar w31h=0x2
+aes 2
+ar pc
+ar t0
+ar w0l=0x123456789abcdef0
+ar w0h=0xfedcba9876543210
+ar w0l
+ar w0h
+ar w31l
+ar w31h
+ar w0
+EOF
+EXPECT=<<EOF
+0x00000014
+0x00000001
+0x00000014
+0x00000001
+0x00000014
+0x00000001
+0x00000008
+0x00000001
+0x123456789abcdef0
+0xfedcba9876543210
+0x00000001
+0x00000002
+0xfedcba9876543210123456789abcdef0
+EOF
+EXPECT_ERR=<<EOF
+EOF
+RUN
+
+NAME=mips32 MSA bz.d tests both lanes and executes the delay slot (be)
+FILE=malloc://64
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 477f000325080001
+aei
+ar pc=0
+ar t0=0
+ar w31l=0x0
+ar w31h=0x0
+aes 2
+ar pc
+ar t0
+ar pc=0
+ar t0=0
+ar w31l=0x0
+ar w31h=0x8000000000000000
+aes 2
+ar pc
+ar t0
+ar pc=0
+ar t0=0
+ar w31l=0x8000000000000000
+ar w31h=0x0
+aes 2
+ar pc
+ar t0
+ar pc=0
+ar t0=0
+ar w31l=0x1
+ar w31h=0x2
+aes 2
+ar pc
+ar t0
+ar w0l=0x123456789abcdef0
+ar w0h=0xfedcba9876543210
+ar w0l
+ar w0h
+ar w31l
+ar w31h
+EOF
+EXPECT=<<EOF
+0x00000014
+0x00000001
+0x00000014
+0x00000001
+0x00000014
+0x00000001
+0x00000008
+0x00000001
+0x123456789abcdef0
+0xfedcba9876543210
+0x00000001
+0x00000002
+EOF
+EXPECT_ERR=<<EOF
+EOF
+RUN
+
+NAME=mips32 MSA bz tests byte halfword word and vector conditions
+FILE=malloc://64
+ARGS=-a mips -b 32
+CMDS=<<EOF
+wx 0000000001000825
+aei
+wx 03001f47 @0
+ar pc=0
+ar t0=0
+ar w31l=0x101010101010101
+ar w31h=0x101010101010101
+aes 2
+ar pc
+ar t0
+wx 03001f47 @0
+ar pc=0
+ar t0=0
+ar w31l=0x1010101010101
+ar w31h=0x101010101010101
+aes 2
+ar pc
+ar t0
+wx 03003f47 @0
+ar pc=0
+ar t0=0
+ar w31l=0x1000100010001
+ar w31h=0x1000100010001
+aes 2
+ar pc
+ar t0
+wx 03003f47 @0
+ar pc=0
+ar t0=0
+ar w31l=0x1000100010001
+ar w31h=0x100010001
+aes 2
+ar pc
+ar t0
+wx 03005f47 @0
+ar pc=0
+ar t0=0
+ar w31l=0x100000001
+ar w31h=0x100000001
+aes 2
+ar pc
+ar t0
+wx 03005f47 @0
+ar pc=0
+ar t0=0
+ar w31l=0x100000000
+ar w31h=0x100000001
+aes 2
+ar pc
+ar t0
+wx 03007f45 @0
+ar pc=0
+ar t0=0
+ar w31l=0x0
+ar w31h=0x0
+aes 2
+ar pc
+ar t0
+wx 03007f45 @0
+ar pc=0
+ar t0=0
+ar w31l=0x0
+ar w31h=0x8000000000000000
+aes 2
+ar pc
+ar t0
+wx 03007f45 @0
+ar pc=0
+ar t0=0
+ar w31l=0x8000000000000000
+ar w31h=0x0
+aes 2
+ar pc
+ar t0
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000001
+0x00000014
+0x00000001
+0x00000008
+0x00000001
+0x00000014
+0x00000001
+0x00000008
+0x00000001
+0x00000014
+0x00000001
+0x00000014
+0x00000001
+0x00000008
+0x00000001
+0x00000008
+0x00000001
+EOF
+EXPECT_ERR=<<EOF
+EOF
+RUN
+
+NAME=mips32 addi positive overflow traps
+FILE=malloc://16
+ARGS=-a mips -b 32
+CMDS=<<EOF
+wx 01002821
+aei
+ar t1=0x7fffffff
+ar t0=0x77
+aes
+ar t0
+ar t1=0x7ffffffe
+ar pc=0
+aes
+ar t0
+EOF
+EXPECT=<<EOF
+0x00000077
+0x7fffffff
+EOF
+RUN
+
+NAME=clz and clo count leading bits in 32-bit little-endian mode
+FILE=malloc://16
+ARGS=-a mips -b 32
+CMDS=<<EOF
+wx 2010827021108270
+aei
+ar v0=0x77
+ar a0=0x1000
+aes
+ar v0
+ar v0=0x77
+ar a0=0xfffff000
+aes
+ar v0
+ar pc=0
+ar a0=0
+aes
+ar v0
+ar a0=0xffffffff
+aes
+ar v0
+EOF
+EXPECT=<<EOF
+0x00000013
+0x00000014
+0x00000020
+0x00000020
+EOF
+RUN
+
+NAME=clz and clo stop at the top bit in 32-bit big-endian mode
+FILE=malloc://16
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 7082102070821021
+aei
+ar v0=0x77
+ar a0=0x80000000
+aes
+ar v0
+ar v0=0x77
+ar a0=0x7fffffff
+aes
+ar v0
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
 EOF
 RUN

@@ -23,7 +23,9 @@
 #define PT_CONTINUE 7 /* continue the child */
 #define PT_KILL 8 /* kill the child process */
 #define PT_STEP 9 /* single step the child */
+#ifndef PT_ATTACH
 #define PT_ATTACH 10 /* trace some running process */
+#endif
 #define PT_DETACH 11 /* stop tracing a process */
 #define PT_SIGEXC 12 /* signals as exceptions for current_proc */
 #define PT_THUPDATE 13 /* signal for thread# */
@@ -68,7 +70,7 @@ int ptrace(int _request, pid_t _pid, caddr_t _addr, int _data);
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <mach/ppc/_types.h>
+#include <ppc/_types.h>
 #include <mach/ppc/thread_status.h>
 // iPhone5
 #elif __aarch64
@@ -76,7 +78,7 @@ int ptrace(int _request, pid_t _pid, caddr_t _addr, int _data);
 // iPhone
 #elif __arm
 #include <mach/arm/thread_status.h>
-#elif __arm64
+#elif __arm64 || __arm64e
 #include <mach/arm/thread_status.h>
 #else
 // iMac
@@ -113,12 +115,8 @@ int ptrace(int _request, pid_t _pid, caddr_t _addr, int _data);
 #define IMAGE_OFFSET 0x201000
 #define KERNEL_LOWER 0x80000000
 #endif
-//#define R_DEBUG_STATE_T XXX
-//(dbg->bits==64)?x86_THREAD_STATE:_STRUCT_X86_THREAD_STATE32
-//#define R_DEBUG_REG_T _STRUCT_X86_THREAD_STATE64
-//#define R_DEBUG_STATE_SZ ((dbg->bits == R_SYS_BITS_64) ? 168 : 64)
-#define REG_PC ((dbg->bits == R_SYS_BITS_64) ? 16 : 10)
-#define REG_FL ((dbg->bits == R_SYS_BITS_64) ? 17 : 9)
+#define REG_PC (R_SYS_BITS_CHECK (dbg->bits, 64) ? 16 : 10)
+#define REG_FL (R_SYS_BITS_CHECK (dbg->bits, 64) ? 17 : 9)
 #define REG_SP (7)
 #endif
 
@@ -179,76 +177,6 @@ typedef struct {
 	mach_msg_type_number_t count;
 } coredump_thread_state_flavor_t;
 
-#if defined (__ppc__)
-
-static coredump_thread_state_flavor_t
-thread_flavor_array[] = {
-	{ PPC_THREAD_STATE,	PPC_THREAD_STATE_COUNT },
-	{ PPC_FLOAT_STATE, PPC_FLOAT_STATE_COUNT },
-	{ PPC_EXCEPTION_STATE, PPC_EXCEPTION_STATE_COUNT },
-	{ PPC_VECTOR_STATE,	PPC_VECTOR_STATE_COUNT },
-};
-
-static int coredump_nflavors = 4;
-
-#elif defined (__ppc64__)
-
-coredump_thread_state_flavor_t
-thread_flavor_array[] = {
-	{ PPC_THREAD_STATE64, PPC_THREAD_STATE64_COUNT },
-	{ PPC_FLOAT_STATE, PPC_FLOAT_STATE_COUNT },
-	{ PPC_EXCEPTION_STATE64, PPC_EXCEPTION_STATE64_COUNT },
-	{ PPC_VECTOR_STATE,	PPC_VECTOR_STATE_COUNT },
-};
-
-static int coredump_nflavors = 4;
-
-#elif defined (__i386__)
-
-static coredump_thread_state_flavor_t
-thread_flavor_array[] = {
-	{ x86_THREAD_STATE32, x86_THREAD_STATE32_COUNT },
-	{ x86_FLOAT_STATE32, x86_FLOAT_STATE32_COUNT },
-	{ x86_EXCEPTION_STATE32, x86_EXCEPTION_STATE32_COUNT },
-};
-
-static int coredump_nflavors = 3;
-
-#elif defined (__x86_64__)
-
-static coredump_thread_state_flavor_t
-thread_flavor_array[] = {
-	{ x86_THREAD_STATE64, x86_THREAD_STATE64_COUNT },
-	{ x86_FLOAT_STATE64, x86_FLOAT_STATE64_COUNT },
-	{ x86_EXCEPTION_STATE64, x86_EXCEPTION_STATE64_COUNT },
-};
-
-static int coredump_nflavors = 3;
-
-#elif defined (__aarch64__) || defined (__arm64__)
-
-static coredump_thread_state_flavor_t
-thread_flavor_array[] = {
-	{ ARM_UNIFIED_THREAD_STATE, ARM_UNIFIED_THREAD_STATE_COUNT}
-};
-
-static int coredump_nflavors = 1;
-
-#elif defined (__arm__)
-
-static coredump_thread_state_flavor_t
-thread_flavor_array[] = {
-	{ ARM_THREAD_STATE64, ARM_THREAD_STATE64_COUNT }
-};
-
-static int coredump_nflavors = 1;
-
-#else
-// XXX: Add __arm__ for iOS devices?
-#warning Unsupported architecture
-
-#endif
-
 #define MAX_TSTATE_FLAVORS 10
 #define DEFAULT_COREFILE_DEST "core.%u"
 #define R_DEBUG_REASON_MACH_RCV_INTERRUPTED -2
@@ -260,12 +188,14 @@ typedef struct {
 	coredump_thread_state_flavor_t *flavors;
 } tir_t;
 
+#include "xnu_threads.h"
+
 task_t pid_to_task (int pid);
 int xnu_get_vmmap_entries_for_pid (pid_t pid);
 char *xnu_corefile_default_location(void);
-bool xnu_generate_corefile(RDebug *dbg, RBuffer *dest);
-int xnu_reg_read(RDebug *dbg, int type, ut8 *buf, int size);
-int xnu_reg_write(RDebug *dgb, int type, const ut8 *buf, int size);
+bool xnu_generate_corefile(RDebug *dbg, RBuffer *dest, bool fulldump);
+bool xnu_reg_read(RDebug *dbg, int type, ut8 *buf, int size);
+bool xnu_reg_write(RDebug *dgb, int type, const ut8 *buf, int size);
 char *xnu_reg_profile (RDebug *dbg);
 bool xnu_attach(RDebug *dbg, int pid);
 bool xnu_step(RDebug *dbg);
@@ -274,12 +204,15 @@ bool xnu_stop(RDebug *dbg, int pid);
 bool xnu_continue(RDebug *dbg, int pid, int tid, int sig);
 RDebugMap *xnu_map_alloc(RDebug *dbg, ut64 addr, int size);
 int xnu_map_dealloc(RDebug *dbg, ut64 addr, int size);
-int xnu_map_protect(RDebug *dbg, ut64 addr, int size, int perms);
+bool xnu_map_protect(RDebug *dbg, ut64 addr, int size, int perms);
 int xnu_init(void);
 int xnu_wait(RDebug *dbg, int pid);
 RDebugPid *xnu_get_pid(int pid);
 RList *xnu_dbg_maps(RDebug *dbg, int only_modules);
 RList *xnu_thread_list(RDebug *dbg, int pid, RList *list);
+RList *xnu_threads(RDebug *dbg);
 RDebugInfo *xnu_info(RDebug *dbg, const char *arg);
+bool xnu_thread_get_drx(RDebug *dbg, xnu_thread_t *thread);
+bool xnu_thread_set_drx(RDebug *dbg, xnu_thread_t *thread);
 
 #endif

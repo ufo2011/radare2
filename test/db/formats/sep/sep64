@@ -1,0 +1,152 @@
+NAME=sep64 fs plugin is registered
+FILE=--
+CMDS=mL~sep64
+EXPECT=<<EOF
+     sep64  Apple Secure Enclave 64-bit firmware container
+EOF
+RUN
+
+NAME=sep64 listed by rafs2 -L
+FILE=--
+CMDS=!!rafs2 -L~sep64
+EXPECT=<<EOF
+  sep64        Apple Secure Enclave 64-bit firmware container
+EOF
+RUN
+
+NAME=sep64 auto-mounts /bin
+FILE=bins/sep64/sep64.bin
+CMDS=md /
+EXPECT=<<EOF
+m /bin
+EOF
+RUN
+
+NAME=sep64 lists slices in order
+FILE=bins/sep64/sep64.bin
+CMDS=md /bin
+EXPECT=<<EOF
+r boot
+r kernel
+r init
+r demo
+EOF
+RUN
+
+NAME=sep64 slice sizes and offsets
+FILE=bins/sep64/sep64.bin
+CMDS=<<EOF
+mi /bin/boot
+mi /bin/kernel
+mi /bin/init
+mi /bin/demo
+EOF
+EXPECT=<<EOF
+'f file 8192 0x00000000
+'f file 384 0x00002000
+'f file 384 0x00002200
+'f file 384 0x00003000
+EOF
+RUN
+
+NAME=sep64 kernel slice loads as mach-o (zero-copy)
+FILE=bins/sep64/sep64.bin
+CMDS=<<EOF
+e log.quiet=true
+mo /bin/kernel
+i~format
+EOF
+EXPECT=<<EOF
+format   mach064
+EOF
+RUN
+
+NAME=sep64 app slice with discontiguous __DATA stitches correctly
+FILE=bins/sep64/sep64.bin
+CMDS=<<EOF
+e log.quiet=true
+mo /bin/demo
+iSS~__DATA
+EOF
+EXPECT=<<EOF
+1   0x00000100   0x80 0x00000100   0x80 -rw- 0x0   MAP  __DATA
+EOF
+RUN
+
+NAME=sep64 mount + umount + remount stays clean
+FILE=bins/sep64/sep64.bin
+CMDS=<<EOF
+m-/bin
+m sep64 /sep 0
+md /sep~?
+m-/sep
+md /
+EOF
+EXPECT=<<EOF
+4
+EOF
+RUN
+
+NAME=sep64 rejects a malformed init slice in either argument order
+FILE=bins/fuzzed/sep.bin
+CMDS=<<EOF
+m sep64 /sep 0 || echo rejected
+?v $?
+m /sep sep64 0 || echo rejected
+?v $?
+m
+EOF
+EXPECT=<<EOF
+rejected
+0x1
+rejected
+0x1
+EOF
+EXPECT_ERR=<<EOF
+WARN: fs_sep64: init mach-o parse failed at 0x0
+WARN: fs_sep64: init mach-o parse failed at 0x0
+EOF
+RUN
+
+NAME=sep64 rafs2 -t sep64 -l fails on fuzzed input
+FILE=--
+CMDS=rafs2 -t sep64 -l / bins/fuzzed/sep.bin
+EXPECT=
+EXPECT_ERR=<<EOF
+WARN: fs_sep64: init mach-o parse failed at 0x0
+ERROR: Cannot mount sep64 filesystem at offset 0x0
+EOF
+RUN
+
+NAME=sep64: aliasing app records stay within the copy budget
+FILE=malloc://0x20000
+CMDS=<<EOF
+wv4 0x10003fe2 @ 4
+wv4 0xd518c002 @ 8
+wv4 0x14000000 @ 0x800
+wv4 0x14000000 @ 0xffc
+w ion2 @ 0x1010
+wv8 0x2000 @ 0x1014
+wv8 0x10000 @ 0x2018
+wv8 0x20000 @ 0x2038
+wv8 0x12000 @ 0x2068
+wv8 256 @ 0x20c0
+wx cffaedfe0c000001000000000200000002000000900000 @ 0x10000
+wx 19000000480000005f5f544558540000 @ 0x10020
+wv8 0x100 @ 0x10050
+wx 19000000480000005f5f444154410000 @ 0x10068
+wv8 0x100 @ 0x10090
+wv8 8 @ 0x10098
+y 0xb0 @ 0x10000
+yy @ 0x12000
+yy @ 0x14000
+wv8 0xb000 @ 0x14050
+wv8 0xb000 @ 0x14090
+wv8 0x14000 @@s:0x20c8 0xa0c8 120
+wv8 0x15000 @@s:0x20d8 0xa0d8 120
+oba 0
+EOF
+EXPECT_ERR=<<EOF
+WARN: fs_sep64: skipping 251 app slices over the copy budget
+EOF
+RUN

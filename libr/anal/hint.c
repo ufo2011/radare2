@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2013-2020 - pancake */
+/* radare - LGPL - Copyright 2013-2023 - pancake */
 
 #include <r_anal.h>
 
@@ -48,13 +48,34 @@ static void addr_hint_record_fini(void *element, void *user) {
 	case R_ANAL_ADDR_HINT_TYPE_ESIL:
 		free (record->esil);
 		break;
+	case R_ANAL_ADDR_HINT_TYPE_ENUM:
+		free (record->enum_name);
+		break;
+	case R_ANAL_ADDR_HINT_TYPE_REGUSE:
+		free (record->reguse);
+		break;
 	default:
 		break;
 	}
 }
 
+static void addr_hint_record_vec_clear(RVecAnalAddrHintRecord *records) {
+	RAnalAddrHintRecord *record;
+	R_VEC_FOREACH (records, record) {
+		addr_hint_record_fini (record, NULL);
+	}
+	RVecAnalAddrHintRecord_clear (records);
+}
+
+static void addr_hint_record_vec_free(RVecAnalAddrHintRecord *records) {
+	if (records) {
+		addr_hint_record_vec_clear (records);
+		RVecAnalAddrHintRecord_free (records);
+	}
+}
+
 static void addr_hint_record_ht_free(HtUPKv *kv) {
-	r_vector_free (kv->value);
+	addr_hint_record_vec_free (kv->value);
 }
 
 static void bits_hint_record_free_rb(RBNode *node, void *user) {
@@ -62,9 +83,13 @@ static void bits_hint_record_free_rb(RBNode *node, void *user) {
 }
 
 static void arch_hint_record_free_rb(RBNode *node, void *user) {
-	RAnalArchHintRecord *record = (RAnalArchHintRecord *)container_of (node, RAnalRangedHintRecordBase, rb);
-	free (record->arch);
-	free (record);
+	if (node) {
+		RAnalArchHintRecord *record = (RAnalArchHintRecord *)container_of (node, RAnalRangedHintRecordBase, rb);
+		if (record) {
+			free (record->arch);
+			free (record);
+		}
+	}
 }
 
 // used in anal.c, but no API needed
@@ -81,6 +106,7 @@ void r_anal_hint_storage_fini(RAnal *a) {
 	r_rbtree_free (a->bits_hints, bits_hint_record_free_rb, NULL);
 }
 
+// R2_590 - add argument to specify the type of hint to remove
 R_API void r_anal_hint_clear(RAnal *a) {
 	r_anal_hint_storage_fini (a);
 	r_anal_hint_storage_init (a);
@@ -137,16 +163,16 @@ R_API void r_anal_hint_del(RAnal *a, ut64 addr, ut64 size) {
 }
 
 static void unset_addr_hint_record(RAnal *anal, RAnalAddrHintType type, ut64 addr) {
-	RVector *records = ht_up_find (anal->addr_hints, addr, NULL);
+	RVecAnalAddrHintRecord *records = ht_up_find (anal->addr_hints, addr, NULL);
 	if (!records) {
 		return;
 	}
 	size_t i;
-	for (i = 0; i < records->len; i++) {
-		RAnalAddrHintRecord *record = r_vector_index_ptr (records, i);
+	for (i = 0; i < RVecAnalAddrHintRecord_length (records); i++) {
+		RAnalAddrHintRecord *record = RVecAnalAddrHintRecord_at (records, i);
 		if (record->type == type) {
 			addr_hint_record_fini (record, NULL);
-			r_vector_remove_at (records, i, NULL);
+			RVecAnalAddrHintRecord_remove (records, i);
 			return;
 		}
 	}
@@ -154,22 +180,25 @@ static void unset_addr_hint_record(RAnal *anal, RAnalAddrHintType type, ut64 add
 
 // create or return the existing addr hint record of the given type at addr
 static RAnalAddrHintRecord *ensure_addr_hint_record(RAnal *anal, RAnalAddrHintType type, ut64 addr) {
-	RVector *records = ht_up_find (anal->addr_hints, addr, NULL);
+	RVecAnalAddrHintRecord *records = ht_up_find (anal->addr_hints, addr, NULL);
 	if (!records) {
-		records = r_vector_new (sizeof (RAnalAddrHintRecord), addr_hint_record_fini, NULL);
+		records = RVecAnalAddrHintRecord_new ();
 		if (!records) {
 			return NULL;
 		}
 		ht_up_insert (anal->addr_hints, addr, records);
 	}
-	void *pos;
-	r_vector_foreach (records, pos) {
+	RAnalAddrHintRecord *pos;
+	R_VEC_FOREACH (records, pos) {
 		RAnalAddrHintRecord *record = pos;
 		if (record->type == type) {
 			return record;
 		}
 	}
-	RAnalAddrHintRecord *record = r_vector_push (records, NULL);
+	RAnalAddrHintRecord *record = RVecAnalAddrHintRecord_emplace_back (records);
+	if (!record) {
+		return NULL;
+	}
 	memset (record, 0, sizeof (*record));
 	record->type = type;
 	return record;
@@ -181,26 +210,24 @@ static RAnalAddrHintRecord *ensure_addr_hint_record(RAnal *anal, RAnalAddrHintTy
 		break; \
 	} \
 	setcode \
-} while(0)
+} while (0)
 
 static RAnalRangedHintRecordBase *ensure_ranged_hint_record(RBTree *tree, ut64 addr, size_t sz) {
 	RBNode *node = r_rbtree_find (*tree, &addr, ranged_hint_record_cmp, NULL);
 	if (node) {
 		return container_of (node, RAnalRangedHintRecordBase, rb);
 	}
-	RAnalRangedHintRecordBase *record = malloc (sz);
-	memset (record, 0, sz);
-	if (!record) {
-		return NULL;
+	RAnalRangedHintRecordBase *record = calloc (sz, 1);
+	if (record) {
+		record->addr = addr;
+		r_rbtree_insert (tree, &addr, &record->rb, ranged_hint_record_cmp, NULL);
 	}
-	record->addr = addr;
-	r_rbtree_insert (tree, &addr, &record->rb, ranged_hint_record_cmp, NULL);
 	return record;
 }
 
 R_API void r_anal_hint_set_offset(RAnal *a, ut64 addr, const char *typeoff) {
 	SET_HINT (R_ANAL_ADDR_HINT_TYPE_TYPE_OFFSET,
-			  free (r->type_offset);
+		free (r->type_offset);
 		r->type_offset = strdup (typeoff);
 	);
 }
@@ -233,6 +260,17 @@ R_API void r_anal_hint_set_immbase(RAnal *a, ut64 addr, int base) {
 	}
 }
 
+R_API void r_anal_hint_set_enum(RAnal *a, ut64 addr, const char *enum_name) {
+	if (R_STR_ISEMPTY (enum_name)) {
+		unset_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_ENUM, addr);
+		return;
+	}
+	SET_HINT (R_ANAL_ADDR_HINT_TYPE_ENUM,
+		free (r->enum_name);
+		r->enum_name = strdup (enum_name);
+	);
+}
+
 R_API void r_anal_hint_set_pointer(RAnal *a, ut64 addr, ut64 ptr) {
 	SET_HINT (R_ANAL_ADDR_HINT_TYPE_PTR, r->ptr = ptr;);
 }
@@ -262,7 +300,7 @@ R_API void r_anal_hint_set_esil(RAnal *a, ut64 addr, const char *esil) {
 	);
 }
 
-R_API void r_anal_hint_set_type (RAnal *a, ut64 addr, int type) {
+R_API void r_anal_hint_set_type(RAnal *a, ut64 addr, int type) {
 	SET_HINT (R_ANAL_ADDR_HINT_TYPE_OPTYPE, r->optype = type;);
 }
 
@@ -278,6 +316,56 @@ R_API void r_anal_hint_set_val(RAnal *a, ut64 addr, ut64 v) {
 	SET_HINT (R_ANAL_ADDR_HINT_TYPE_VAL, r->val = v;);
 }
 
+R_API void r_anal_hint_set_reguse(RAnal *a, ut64 addr, const char *reguse) {
+	if (R_STR_ISEMPTY (reguse)) {
+		unset_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_REGUSE, addr);
+		return;
+	}
+	SET_HINT (R_ANAL_ADDR_HINT_TYPE_REGUSE,
+		free (r->reguse);
+		r->reguse = strdup (reguse);
+	);
+}
+
+static char *reguse_append_text(const char *list, const char *item) {
+	if (R_STR_ISEMPTY (list)) {
+		return strdup (item);
+	}
+	if (strstr (list, item)) {
+		return NULL;
+	}
+	const char *item_is = strstr (item, " is ");
+	if (item_is) {
+		r_strf_var (prefix, 128, "%.*s is ", (int)(item_is - item), item);
+		const char *p = strstr (list, prefix);
+		if (p) {
+			const char *role = item_is + 4;
+			if (strstr (p, role)) {
+				return NULL;
+			}
+			const char *end = strstr (p, "; ");
+			const int len = end? (int)(end - list): strlen (list);
+			return r_str_newf ("%.*s, %s%s", len, list, role, end? end: "");
+		}
+	}
+	return r_str_newf ("%s; %s", list, item);
+}
+
+R_API void r_anal_hint_append_reguse(RAnal *a, ut64 addr, const char *reguse) {
+	if (R_STR_ISEMPTY (reguse)) {
+		return;
+	}
+	RAnalAddrHintRecord *r = ensure_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_REGUSE, addr);
+	if (!r) {
+		return;
+	}
+	char *msg = reguse_append_text (r->reguse, reguse);
+	if (msg) {
+		free (r->reguse);
+		r->reguse = msg;
+	}
+}
+
 R_API void r_anal_hint_set_arch(RAnal *a, ut64 addr, const char *arch) {
 	RAnalArchHintRecord *record = (RAnalArchHintRecord *)ensure_ranged_hint_record (&a->arch_hints, addr, sizeof (RAnalArchHintRecord));
 	if (!record) {
@@ -289,12 +377,11 @@ R_API void r_anal_hint_set_arch(RAnal *a, ut64 addr, const char *arch) {
 
 R_API void r_anal_hint_set_bits(RAnal *a, ut64 addr, int bits) {
 	RAnalBitsHintRecord *record = (RAnalBitsHintRecord *)ensure_ranged_hint_record (&a->bits_hints, addr, sizeof (RAnalBitsHintRecord));
-	if (!record) {
-		return;
-	}
-	record->bits = bits;
-	if (a->hint_cbs.on_bits) {
-		a->hint_cbs.on_bits (a, addr, bits, true);
+	if (record) {
+		record->bits = bits;
+		if (a->hint_cbs.on_bits) {
+			a->hint_cbs.on_bits (a, addr, bits, true);
+		}
 	}
 }
 
@@ -316,6 +403,10 @@ R_API void r_anal_hint_unset_high(RAnal *a, ut64 addr) {
 
 R_API void r_anal_hint_unset_immbase(RAnal *a, ut64 addr) {
 	unset_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_IMMBASE, addr);
+}
+
+R_API void r_anal_hint_unset_enum(RAnal *a, ut64 addr) {
+	unset_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_ENUM, addr);
 }
 
 R_API void r_anal_hint_unset_nword(RAnal *a, ut64 addr) {
@@ -350,11 +441,11 @@ R_API void r_anal_hint_unset_newbits(RAnal *a, ut64 addr) {
 	unset_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_NEW_BITS, addr);
 }
 
-R_API void r_anal_hint_unset_val (RAnal *a, ut64 addr) {
+R_API void r_anal_hint_unset_val(RAnal *a, ut64 addr) {
 	unset_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_VAL, addr);
 }
 
-R_API void r_anal_hint_unset_type (RAnal *a, ut64 addr) {
+R_API void r_anal_hint_unset_type(RAnal *a, ut64 addr) {
 	unset_addr_hint_record (a, R_ANAL_ADDR_HINT_TYPE_OPTYPE, addr);
 }
 
@@ -366,8 +457,30 @@ R_API void r_anal_hint_unset_arch(RAnal *a, ut64 addr) {
 	r_rbtree_delete (&a->arch_hints, &addr, ranged_hint_record_cmp, NULL, arch_hint_record_free_rb, NULL);
 }
 
+HEAPTYPE (ut64);
+
+static bool filter_hints(ut64 addr, int bits, void *user) {
+	RList *list = (RList *)user;
+	r_list_append (list, ut64_new (addr));
+	return true;
+}
+
 R_API void r_anal_hint_unset_bits(RAnal *a, ut64 addr) {
-	r_rbtree_delete (&a->bits_hints, &addr, ranged_hint_record_cmp, NULL, bits_hint_record_free_rb, NULL);
+	if (addr == UT64_MAX) {
+		// delete all bits hints
+		RList *list = r_list_newf (free);
+		r_anal_bits_hints_foreach (a, filter_hints, list);
+		ut64 *n;
+		RListIter *iter;
+		r_list_foreach (list, iter, n) {
+			ut64 addr = *n;
+			r_rbtree_delete (&a->bits_hints, &addr, ranged_hint_record_cmp, NULL, bits_hint_record_free_rb, NULL);
+		}
+		r_list_free (list);
+		// delete all bits
+	} else {
+		r_rbtree_delete (&a->bits_hints, &addr, ranged_hint_record_cmp, NULL, bits_hint_record_free_rb, NULL);
+	}
 }
 
 R_API void r_anal_hint_free(RAnalHint *h) {
@@ -377,26 +490,28 @@ R_API void r_anal_hint_free(RAnalHint *h) {
 		free (h->opcode);
 		free (h->syntax);
 		free (h->offset);
+		free (h->enum_name);
+		free (h->reguse);
 		free (h);
 	}
 }
 
-R_API R_NULLABLE R_BORROW const char *r_anal_hint_arch_at(RAnal *anal, ut64 addr, R_NULLABLE ut64 *hint_addr) {
+R_API R_UNOWNED const char * R_NULLABLE r_anal_hint_arch_at(RAnal *anal, ut64 addr, ut64 * R_NULLABLE hint_addr) {
 	RBNode *node = r_rbtree_upper_bound (anal->arch_hints, &addr, ranged_hint_record_cmp, NULL);
-	if (!node) {
+	if (R_LIKELY (node)) {
+		RAnalArchHintRecord *record = (RAnalArchHintRecord *)container_of (node, RAnalRangedHintRecordBase, rb);
 		if (hint_addr) {
-			*hint_addr = UT64_MAX;
+			*hint_addr = record->base.addr;
 		}
-		return NULL;
+		return record->arch;
 	}
-	RAnalArchHintRecord *record = (RAnalArchHintRecord *)container_of (node, RAnalRangedHintRecordBase, rb);
 	if (hint_addr) {
-		*hint_addr = record->base.addr;
+		*hint_addr = UT64_MAX;
 	}
-	return record->arch;
+	return NULL;
 }
 
-R_API int r_anal_hint_bits_at(RAnal *anal, ut64 addr, R_NULLABLE ut64 *hint_addr) {
+R_API int r_anal_hint_bits_at(RAnal *anal, ut64 addr, ut64 * R_NULLABLE hint_addr) {
 	RBNode *node = r_rbtree_upper_bound (anal->bits_hints, &addr, ranged_hint_record_cmp, NULL);
 	if (!node) {
 		if (hint_addr) {
@@ -411,7 +526,7 @@ R_API int r_anal_hint_bits_at(RAnal *anal, ut64 addr, R_NULLABLE ut64 *hint_addr
 	return record->bits;
 }
 
-R_API R_NULLABLE const RVector/*<const RAnalAddrHintRecord>*/ *r_anal_addr_hints_at(RAnal *anal, ut64 addr) {
+R_API const RVecAnalAddrHintRecord * R_NULLABLE r_anal_addr_hints_at(RAnal *anal, ut64 addr) {
 	return ht_up_find (anal->addr_hints, addr, NULL);
 }
 
@@ -502,34 +617,40 @@ static void hint_merge(RAnalHint *hint, RAnalAddrHintRecord *record) {
 	case R_ANAL_ADDR_HINT_TYPE_VAL:
 		hint->val = record->val;
 		break;
+	case R_ANAL_ADDR_HINT_TYPE_ENUM:
+		hint->enum_name = record->enum_name ? strdup (record->enum_name) : NULL;
+		break;
+	case R_ANAL_ADDR_HINT_TYPE_REGUSE:
+		hint->reguse = record->reguse ? strdup (record->reguse) : NULL;
+		break;
 	}
 }
 
 R_API RAnalHint *r_anal_hint_get(RAnal *a, ut64 addr) {
-	RAnalHint *hint = R_NEW0 (RAnalHint);
-	if (!hint) {
+	R_RETURN_VAL_IF_FAIL (a, NULL);
+	const char *arch = r_anal_hint_arch_at (a, addr, NULL);
+	const int bits = r_anal_hint_bits_at (a, addr, NULL);
+	const RVecAnalAddrHintRecord *records = r_anal_addr_hints_at (a, addr);
+	if ((!records || RVecAnalAddrHintRecord_empty (records)) && !arch && !bits) {
+		// no hints found
 		return NULL;
 	}
+
+	RAnalHint *hint = R_NEW0 (RAnalHint);
 	hint->addr = addr;
 	hint->jump = UT64_MAX;
 	hint->fail = UT64_MAX;
 	hint->ret = UT64_MAX;
 	hint->val = UT64_MAX;
+	// hint->ptr = UT64_MAX; some test fail. ptr 0 should be valid if we do it properly
 	hint->stackframe = UT64_MAX;
-	const RVector *records = r_anal_addr_hints_at (a, addr);
 	if (records) {
 		RAnalAddrHintRecord *record;
-		r_vector_foreach (records, record) {
+		R_VEC_FOREACH (records, record) {
 			hint_merge (hint, record);
 		}
 	}
-	const char *arch = r_anal_hint_arch_at (a, addr, NULL);
 	hint->arch = arch ? strdup (arch) : NULL;
-	hint->bits = r_anal_hint_bits_at (a, addr, NULL);
-	if ((!records || r_vector_empty (records)) && !hint->arch && !hint->bits) {
-		// no hints found
-		free (hint);
-		return NULL;
-	}
+	hint->bits = bits;
 	return hint;
 }

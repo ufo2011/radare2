@@ -1,6 +1,12 @@
 #ifndef R2_BIN_DWARF_H
 #define R2_BIN_DWARF_H
 
+#include <r_types.h>
+#include <r_util.h>
+
+typedef struct r_bin_t RBin;
+typedef struct r_bin_file_t RBinFile;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -61,7 +67,7 @@ extern "C" {
 #define DW_TAG_member                   0x0d
 #define DW_TAG_pointer_type             0x0f
 #define DW_TAG_reference_type           0x10
-#define DW_TAG_compile_unit             0x11 // 
+#define DW_TAG_compile_unit             0x11
 #define DW_TAG_string_type              0x12
 #define DW_TAG_structure_type           0x13
 #define DW_TAG_subroutine_type          0x15
@@ -119,8 +125,16 @@ extern "C" {
 #define DW_TAG_type_unit                0x41  /* DWARF4 */
 #define DW_TAG_rvalue_reference_type    0x42  /* DWARF4 */
 #define DW_TAG_template_alias           0x43  /* DWARF4 */
+#define DW_TAG_coarray_type             0x44  /* DWARF5 */
+#define DW_TAG_generic_subrange         0x45  /* DWARF5 */
+#define DW_TAG_dynamic_type             0x46  /* DWARF5 */
+#define DW_TAG_atomic_type              0x47  /* DWARF5 */
+#define DW_TAG_call_site                0x48  /* DWARF5 */
+#define DW_TAG_call_site_parameter      0x49  /* DWARF5 */
+#define DW_TAG_skeleton_unit            0x4a  /* DWARF5 */
+#define DW_TAG_immutable_type           0x4b  /* DWARF5 */
 
-#define DW_TAG_LAST                     0x44  // correct ?
+#define DW_TAG_LAST                     0x4c
 /* <_lo_user ; _hi_user> Interval is reserved for vendor extensions */
 #define DW_TAG_lo_user                  0x4080
 #define DW_TAG_hi_user                  0xffff
@@ -202,8 +216,8 @@ extern "C" {
 #define DW_AT_description               0x5a
 #define DW_AT_binary_scale              0x5b
 #define DW_AT_decimal_scale             0x5c
-#define DW_AT_small                     0x5d 
-#define DW_AT_decimal_sign              0x5e 
+#define DW_AT_small                     0x5d
+#define DW_AT_decimal_sign              0x5e
 #define DW_AT_digit_count               0x5f
 #define DW_AT_picture_string            0x60
 #define DW_AT_mutable                   0x61
@@ -303,7 +317,7 @@ extern "C" {
 #define DW_FORM_ref_sup4                0x1c
 #define DW_FORM_strp_sup                0x1d
 #define DW_FORM_data16                  0x1e
-#define DW_FORM_line_ptr                0x1f
+#define DW_FORM_line_strp               0x1f
 #define DW_FORM_ref_sig8                0x20
 #define DW_FORM_implicit_const          0x21
 #define DW_FORM_loclistx                0x22
@@ -472,6 +486,7 @@ extern "C" {
 #define DW_OP_bit_piece                 0x9d
 #define DW_OP_implicit_value            0x9e
 #define DW_OP_stack_value               0x9f
+#define DW_OP_addrx                     0xa1
 
 /* <_lo_user ; _hi_user> Interval is reserved for vendor extensions */
 #define DW_OP_lo_user                   0xe0
@@ -539,12 +554,16 @@ extern "C" {
 #define DW_LANG_C99                     0x000c
 #define DW_LANG_Ada95                   0x000d
 #define DW_LANG_Fortran95               0x000e
+#define DW_LANG_C_plus_plus_03          0x0019
+#define DW_LANG_C_plus_plus_11          0x001a
 #define DW_LANG_PLI                     0x000f
 #define DW_LANG_ObjC                    0x0010
 #define DW_LANG_ObjC_plus_plus          0x0011
 #define DW_LANG_UPC                     0x0012
 #define DW_LANG_D                       0x0013
 #define DW_LANG_Python                  0x0014
+#define DW_LANG_OpenCL                  0x0015
+#define DW_LANG_Modula3                 0x0016
 #define DW_LANG_Rust                    0x001c
 #define DW_LANG_C11                     0x001d
 #define DW_LANG_Swift                   0x001e
@@ -555,6 +574,37 @@ extern "C" {
 #define DW_LANG_Fortran08               0x0023
 #define DW_LANG_lo_user                 0x8000
 #define DW_LANG_hi_user                 0xffff
+
+
+#define DW_LANG_Kotlin 0x0026
+#define DW_LANG_Zig 0x0027
+#define DW_LANG_Crystal 0x0028
+#define DW_LANG_C_plus_plus_17 0x002a
+#define DW_LANG_C_plus_plus_20 0x002b
+#define DW_LANG_C17 0x002c
+#define DW_LANG_Fortran18 0x002d
+#define DW_LANG_Ada2005 0x002e
+#define DW_LANG_Ada2012 0x002f
+#define DW_LANG_HIP 0x0030
+#define DW_LANG_Assembly 0x0031
+#define DW_LANG_C_sharp 0x0032
+#define DW_LANG_Mojo 0x0033
+#define DW_LANG_GLSL 0x0034
+#define DW_LANG_GLSL_ES 0x0035
+#define DW_LANG_HLSL 0x0036
+#define DW_LANG_OpenCL_CPP 0x0037
+#define DW_LANG_CPP_for_OpenCL 0x0038
+#define DW_LANG_SYCL 0x0039
+#define DW_LANG_C_plus_plus_23 0x003a
+#define DW_LANG_Odin 0x003b
+#define DW_LANG_P4 0x003c
+#define DW_LANG_Metal 0x003d
+#define DW_LANG_C23 0x003e
+#define DW_LANG_Fortran23 0x003f
+#define DW_LANG_Ruby 0x0040
+#define DW_LANG_Move 0x0041
+#define DW_LANG_Hylo 0x0042
+#define DW_LANG_V 0x0043
 
 #define DW_ID_case_sensitive            0x00
 #define DW_ID_up_case                   0x01
@@ -623,6 +673,24 @@ extern "C" {
 #define DW_UT_lo_user                   0x80
 #define DW_UT_hi_user                   0xff
 
+#define DW_LLE_end_of_list              0x00
+#define DW_LLE_base_addressx            0x01
+#define DW_LLE_startx_endx              0x02
+#define DW_LLE_startx_length            0x03
+#define DW_LLE_offset_pair              0x04
+#define DW_LLE_default_location         0x05
+#define DW_LLE_base_address             0x06
+#define DW_LLE_start_end                0x07
+#define DW_LLE_start_length             0x08
+
+#define DW_LNCT_path            0x0001
+#define DW_LNCT_directory_index 0x0002
+#define DW_LNCT_timestamp       0x0003
+#define DW_LNCT_size            0x0004
+#define DW_LNCT_MD5             0x0005
+#define DW_LNCT_lo_user         0x2000
+#define DW_LNCT_hi_user         0x3fff
+
 typedef struct {
 	ut32 total_length;
 	ut16 version;
@@ -636,7 +704,7 @@ typedef struct {
 	const char **incdirs;
 	const char *file[128];
 } RBinDwarfInfoHeader;
-#define R_BIN_DWARF_INFO_HEADER_FILE_LENGTH(x) (sizeof (x->file)/sizeof(*(x->file)))
+#define R_BIN_DWARF_INFO_HEADER_FILE_LENGTH(x) (sizeof (x->file)/sizeof (*(x->file)))
 
 typedef struct {
 	ut64 address;
@@ -649,11 +717,12 @@ typedef struct {
 } RBinDwarfState;
 
 typedef struct {
-	ut64 address;
-	char *file;
-	unsigned int line;
-	unsigned int column;
-} RBinDwarfRow;
+	ut64 addr;
+	ut32 file; // index into strpool (UT32_MAX if unset)
+	ut32 path; // index into strpool (UT32_MAX if unset)
+	ut32 line;
+	ut32 column;
+} RBinAddrline;
 
 #define DWARF_INIT_LEN_64	0xffffffff
 typedef union {
@@ -686,10 +755,10 @@ typedef struct {
 
 typedef struct {
 	ut64 length;
-	ut8 *data;
+	const ut8 *data;
 } RBinDwarfBlock;
 
-// http://www.dwarfstd.org/doc/DWARF4.pdf#page=29&zoom=100,0,0
+// https://www.dwarfstd.org/doc/DWARF4.pdf#page=29http://www.dwarfstd.org/doc/DWARF4.pdf#page=29&zoom=100,0,0zoom=100,0,0
 typedef enum {
 	DW_AT_KIND_ADDRESS,
 	DW_AT_KIND_BLOCK,
@@ -702,25 +771,29 @@ typedef enum {
 	DW_AT_KIND_RANGELISTPTR,
 	DW_AT_KIND_REFERENCE,
 	DW_AT_KIND_STRING,
+	// Raw DWARF 5 indexes that could not be resolved in this object.
+	DW_AT_KIND_ADDRESS_INDEX,
+	DW_AT_KIND_STRING_INDEX,
+	DW_AT_KIND_LOCLIST_INDEX, // DW_FORM_loclistx before the unit resolves it
 } RBinDwarfAttrKind;
 
 typedef struct dwarf_attr_kind {
-	ut64 attr_name;
-	ut64 attr_form;
+	ut16 attr_name;
+	ut16 attr_form;
 	RBinDwarfAttrKind kind;
-	/* This is subideal, as dw_form_data can be anything 
-	   we could lose information example: encoding signed 
+	/* This is subideal, as dw_form_data can be anything
+	   we could lose information example: encoding signed
 	   2 byte int into ut64 and then interpreting it as st64 TODO*/
-	union { 
+	union {
 		ut64 address;
-		RBinDwarfBlock block;
 		ut64 uconstant;
 		st64 sconstant;
 		ut8 flag;
 		ut64 reference;
+		RBinDwarfBlock block;
 		struct {
-			const char *content;
 			ut64 offset;
+			const char *content;
 		} string;
 	};
 } RBinDwarfAttrValue;
@@ -736,7 +809,7 @@ typedef struct {
 	//  segmented addressing, this value represents the size of the offset portion of an address.
 	ut8 address_size;
 	ut8 unit_type; // DWARF 5 addition
-	ut8 dwo_id; // DWARF 5 addition
+	ut64 dwo_id; // DWARF 5 addition
 	ut64 type_sig; // DWARF 5 addition
 	ut64 type_offset; // DWARF 5 addition
 	ut64 header_size; // excluding length field
@@ -744,55 +817,97 @@ typedef struct {
 	bool is_64bit;
 } RBinDwarfCompUnitHdr;
 
+R_VEC_TYPE(RVecDwarfAttrValue, RBinDwarfAttrValue);
+
 typedef struct {
-	ut64	tag;
-	ut64	abbrev_code;
-	size_t	count;
-	size_t	capacity;
-	ut64	offset; // important for parsing types
-	bool	has_children; // important for parsing types
-	RBinDwarfAttrValue *attr_values;
+	ut64 offset; // important for parsing types
+	ut32 attr_idx;
+	ut32 abbrev_code;
+	ut16 attr_count;
+	ut16 tag;
+	bool has_children; // important for parsing types
 } RBinDwarfDie;
+
+R_VEC_TYPE(RVecDwarfDie, RBinDwarfDie);
 
 typedef struct {
 	RBinDwarfCompUnitHdr hdr;
-	ut64	offset;
-	size_t	count;
-	size_t	capacity;
-	RBinDwarfDie *dies;
+	ut64 offset;
+	RVecDwarfDie *dies;
+	RVecDwarfAttrValue *attrs;
 } RBinDwarfCompUnit;
 
-#define COMP_UNIT_CAPACITY	8
-#define DEBUG_INFO_CAPACITY	8
+static inline RBinDwarfAttrValue *r_bin_dwarf_die_attr(const RBinDwarfCompUnit *cu, const RBinDwarfDie *die, size_t i) {
+	return die && i < die->attr_count? RVecDwarfAttrValue_at (cu->attrs, die->attr_idx + i): NULL;
+}
+
+#define R_BIN_DWARF_DIE_FOREACH_ATTR(cu, die, it) \
+	for (it = r_bin_dwarf_die_attr (cu, die, 0); it && it < (cu)->attrs->_start + (die)->attr_idx + (die)->attr_count; it++)
+
+static inline RBinDwarfAttrValue *r_bin_dwarf_die_find_attr(const RBinDwarfCompUnit *cu, const RBinDwarfDie *die, ut16 name) {
+	RBinDwarfAttrValue *value;
+	R_BIN_DWARF_DIE_FOREACH_ATTR (cu, die, value) {
+		if (value->attr_name == name) {
+			return value;
+		}
+	}
+	return NULL;
+}
+
+R_VEC_TYPE(RVecDwarfCompUnit, RBinDwarfCompUnit);
+
 typedef struct {
-	size_t count;
-	size_t capacity;
-	RBinDwarfCompUnit *comp_units;
-	HtUP/*<ut64 offset, DwarfDie *die>*/ *lookup_table;
+  RVecDwarfCompUnit *comp_units;
 } RBinDwarfDebugInfo;
 
-#define	ABBREV_DECL_CAP		8
+static inline int r_bin_dwarf_comp_unit_offset_cmp(const RBinDwarfCompUnit *a, const RBinDwarfCompUnit *b) {
+	return (a->offset > b->offset) - (a->offset < b->offset);
+}
+
+static inline int r_bin_dwarf_die_offset_cmp(const RBinDwarfDie *a, const RBinDwarfDie *b) {
+	return (a->offset > b->offset) - (a->offset < b->offset);
+}
+
+// units and their dies are stored in section order, so no index is needed
+static inline RBinDwarfDie *r_bin_dwarf_find_die(const RBinDwarfDebugInfo *info, ut64 offset, R_OUT RBinDwarfCompUnit ** R_NULLABLE unit) {
+	R_RETURN_VAL_IF_FAIL (info && info->comp_units, NULL);
+	RBinDwarfCompUnit unit_key;
+	memset (&unit_key, 0, sizeof (unit_key));
+	unit_key.offset = offset;
+	size_t next = RVecDwarfCompUnit_upper_bound (info->comp_units, &unit_key, r_bin_dwarf_comp_unit_offset_cmp);
+	if (!next) {
+		return NULL;
+	}
+	RBinDwarfCompUnit *cu = RVecDwarfCompUnit_at (info->comp_units, next - 1);
+	RBinDwarfDie die_key;
+	memset (&die_key, 0, sizeof (die_key));
+	die_key.offset = offset;
+	size_t pos = RVecDwarfDie_lower_bound (cu->dies, &die_key, r_bin_dwarf_die_offset_cmp);
+	RBinDwarfDie *die = RVecDwarfDie_at (cu->dies, pos);
+	if (!die || die->offset != offset) {
+		return NULL;
+	}
+	if (unit) {
+		*unit = cu;
+	}
+	return die;
+}
+
+R_VEC_TYPE(RVecDwarfAttrDef, RBinDwarfAttrDef);
 
 typedef struct {
 	ut64 code;
 	ut64 tag;
 	ut64 offset;
 	ut8 has_children;
-	size_t count;
-	size_t capacity;
-	RBinDwarfAttrDef *defs;
+	RVecDwarfAttrDef *defs;
 } RBinDwarfAbbrevDecl;
 
-#define DEBUG_ABBREV_CAP	32
+static inline void abbrev_decl_fini(RBinDwarfAbbrevDecl *decl) {
+	RVecDwarfAttrDef_free (decl->defs);
+}
 
-typedef struct {
-	size_t count;
-	size_t capacity;
-	RBinDwarfAbbrevDecl *decls;
-} RBinDwarfDebugAbbrev;
-
-#define		DWARF_FALSE	0
-#define		DWARF_TRUE	1
+R_VEC_TYPE_WITH_FINI(RVecDwarfAbbrevDecl, RBinDwarfAbbrevDecl, abbrev_decl_fini);
 
 typedef struct {
 	ut64 address;
@@ -800,18 +915,20 @@ typedef struct {
 	ut64 file;
 	ut64 line;
 	ut64 column;
-	ut8 is_stmt;
-	ut8 basic_block;
-	ut8 end_sequence;
-	ut8 prologue_end;
-	ut8 epilogue_begin;
+	bool is_stmt;
+	bool basic_block;
+	bool end_sequence;
+	bool prologue_end;
+	bool epilogue_begin;
 	ut64 isa;
 	ut64 discriminator;
 } RBinDwarfSMRegisters;
 
 typedef struct {
-	char *name;
+	const char *name;
 	ut32 id_idx, mod_time, file_len;
+	bool has_checksum;
+	ut8 md5sum[16];
 } file_entry;
 
 typedef struct {
@@ -847,15 +964,30 @@ typedef struct r_bin_dwarf_loc_list_t {
 
 #define r_bin_dwarf_line_new(o,a,f,l) o->address=a, o->file = strdup (r_str_get (f)), o->line = l, o->column =0,o
 
-R_API RList *r_bin_dwarf_parse_aranges(RBin *a, int mode);
-R_API RList *r_bin_dwarf_parse_line(RBin *a, int mode);
-R_API RBinDwarfDebugAbbrev *r_bin_dwarf_parse_abbrev(RBin *a, int mode);
-R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBinDwarfDebugAbbrev *da, RBin *a, int mode);
-R_API HtUP/*<offset, RBinDwarfLocList*>*/  *r_bin_dwarf_parse_loc(RBin *bin, int addr_size);
-R_API void r_bin_dwarf_print_loc(HtUP /*<offset, RBinDwarfLocList*>*/  *loc_table, int addr_size, PrintfCallback print);
+R_API R_OWNED char *r_bin_dwarf_print_aranges(RBinFile *bf);
+// Optional line text is owned by the caller.
+R_API RList *r_bin_dwarf_parse_line(RBinFile *bf, int mode, char **text);
+R_API ut64 r_bin_dwarf_line_size(RBinFile *bf, const char **section_name);
+R_API RList *r_bin_dwarf_parse_line_files(RBinFile *bf);
+R_API RVecDwarfAbbrevDecl *r_bin_dwarf_parse_abbrev(RBinFile *bf);
+R_API bool r_bin_dwarf_parse_comp_dirs(RBinFile *bf, RVecDwarfAbbrevDecl *da);
+R_API RList *r_bin_dwarf_parse_comp_unit_files(RBinFile *bf, RVecDwarfAbbrevDecl *da);
+R_API R_OWNED char *r_bin_dwarf_print_abbrev(const RVecDwarfAbbrevDecl *da);
+R_API R_OWNED char *r_bin_dwarf_print_info(RBinFile *bf, RVecDwarfAbbrevDecl *da);
+R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBinFile *bf, RVecDwarfAbbrevDecl *da);
+R_API HtUP/*<offset, RBinDwarfLocList*>*/  *r_bin_dwarf_parse_loc(RBinFile *bf, int addr_size);
+R_API R_OWNED char *r_bin_dwarf_print_loc(HtUP /*<offset, RBinDwarfLocList*>*/  *loc_table, int addr_size);
+R_API R_OWNED char *r_bin_dwarf_print_loc_stream(RBinFile *bf, int addr_size);
+typedef struct r_bin_dwarf_loclists_t RBinDwarfLocLists;
+typedef bool (*RBinDwarfLocEntryCb)(void *user, ut64 start, ut64 end, const RBinDwarfBlock *expr, bool is_default);
+typedef bool (*RBinDwarfLocListForeach)(RBinDwarfLocLists *lists, const RBinDwarfCompUnit *unit, ut64 offset, RBinDwarfLocEntryCb cb, void *user);
+R_API RBinDwarfLocLists *r_bin_dwarf_loclists_new(RBinFile *bf);
+R_API bool r_bin_dwarf_loclists_foreach(RBinDwarfLocLists *lists, const RBinDwarfCompUnit *unit, ut64 offset, RBinDwarfLocEntryCb cb, void *user);
+R_API void r_bin_dwarf_loclists_free(RBinDwarfLocLists *lists);
+R_API R_OWNED char *r_bin_dwarf_print_loclists_stream(RBinFile *bf);
 R_API void r_bin_dwarf_free_loc(HtUP /*<offset, RBinDwarfLocList*>*/  *loc_table);
 R_API void r_bin_dwarf_free_debug_info(RBinDwarfDebugInfo *inf);
-R_API void r_bin_dwarf_free_debug_abbrev(RBinDwarfDebugAbbrev *da);
+R_API void r_bin_dwarf_free_debug_abbrev(RVecDwarfAbbrevDecl *da);
 
 #ifdef __cplusplus
 }

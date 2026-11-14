@@ -6,8 +6,11 @@ extern "C" {
 #endif
 
 R_API int r_hex_pair2bin(const char *arg);
+R_API int r_hex_str2bin_until_new(const char *in, ut8 **out);
+// Returns 0 on error, or a negative length for an odd number of nibbles.
 R_API int r_hex_str2binmask(const char *in, ut8 *out, ut8 *mask);
 R_API int r_hex_str2bin(const char *in, ut8 *out);
+R_API ut8 *r_hex_str2bin_dup(const char *in, size_t *len);
 R_API int r_hex_bin2str(const ut8 *in, int len, char *out);
 R_API char *r_hex_bin2strdup(const ut8 *in, int len);
 R_API bool r_hex_to_byte(ut8 *val, ut8 c);
@@ -21,6 +24,8 @@ R_API char *r_hex_from_py_str(char *out, const char *code);
 R_API char *r_hex_from_py_array(char *out, const char *code);
 R_API char *r_hex_from_c_str(char *out, const char **code);
 R_API char *r_hex_from_c_array(char *out, const char *code);
+R_API void r_hex_from_byte(char *val, ut8 c);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2011-2019 - pancake */
+/* radare - LGPL - Copyright 2011-2022 - pancake */
 
 #include <r_util.h>
 #include <stdbool.h>
@@ -6,17 +6,17 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#if __UNIX__
+#if R2__UNIX__
 static bool chmodr(const char *, int recursive);
 static bool parsemode(const char *);
-static void recurse(const char *path, int rec, bool (*fn)(const char *,int));
+static void recurse(const char *path, int rec, bool(*fn)(const char *,int));
 
 static char oper = '=';
 static mode_t mode = 0;
 #endif
 
 R_API bool r_file_chmod(const char *file, const char *mod, int recursive) {
-#if __UNIX__
+#if R2__UNIX__
 	oper = '=';
 	mode = 0;
 	if (!parsemode (mod)) {
@@ -28,15 +28,18 @@ R_API bool r_file_chmod(const char *file, const char *mod, int recursive) {
 #endif
 }
 
-#if __UNIX__
+#if R2__UNIX__
 /* copied from sbase/chmod.c (suckless.org) */
 static bool chmodr(const char *path, int rflag) {
 	struct stat st;
-
-	if (stat (path, &st) == -1) {
+	int fd = open (path, O_RDONLY);
+	if (fd == -1) {
 		return false;
 	}
-
+	if (fstat (fd, &st) == -1) {
+		close (fd);
+		return false;
+	}
 	switch (oper) {
 	case '+':
 		st.st_mode |= mode;
@@ -49,14 +52,16 @@ static bool chmodr(const char *path, int rflag) {
 		break;
 	}
 #if !__wasi__
-	if (chmod (path, st.st_mode) == -1) {
-		eprintf ("chmod %s:", path);
+	if (fchmod (fd, st.st_mode) == -1) {
+		R_LOG_ERROR ("chmod %s", path);
+		close (fd);
 		return false;
 	}
 #endif
 	if (rflag) {
 		recurse (path, rflag, chmodr);
 	}
+	close (fd);
 	return true;
 }
 
@@ -139,7 +144,7 @@ static bool parsemode(const char *str) {
 			break;
 		/* error */
 		default:
-			eprintf ("%s: invalid mode\n", str);
+			R_LOG_ERROR ("%s: invalid mode", str);
 			return false;
 		}
 	}
@@ -150,31 +155,32 @@ static bool parsemode(const char *str) {
 }
 
 static char *agetcwd(void) {
-        char *buf = malloc (4096);
+	char *buf = malloc (4096);
 	if (!buf) {
 		return NULL;
 	}
 	if (!getcwd (buf, 4096)) {
-		eprintf ("getcwd:");
+		R_LOG_ERROR ("getcwd");
 	}
 	return buf;
 }
 
-static void recurse(const char *path, int rec, bool (*fn)(const char *,int)) {
-        char *cwd;
-        struct dirent *d;
-        struct stat st;
-        DIR *dp;
+static void recurse(const char *path, int rec, bool(*fn)(const char *,int)) {
+	char *cwd;
+	struct dirent *d;
+	struct stat st;
+	DIR *dp;
 
 	if (lstat (path, &st) == -1 || !S_ISDIR (st.st_mode)) {
 		return;
-	} else if (!(dp = opendir (path))) {
-		eprintf ("opendir %s:", path);
+	}
+	if (!(dp = opendir (path))) {
+		R_LOG_ERROR ("opendir %s", path);
 		return;
 	}
-        cwd = agetcwd ();
-        if (chdir (path) == -1) {
-                eprintf ("chdir %s:", path);
+	cwd = agetcwd ();
+	if (chdir (path) == -1) {
+		R_LOG_ERROR ("chdir %s", path);
 		closedir (dp);
 		free (cwd);
 		return;
@@ -187,7 +193,7 @@ static void recurse(const char *path, int rec, bool (*fn)(const char *,int)) {
 
 	closedir (dp);
 	if (chdir (cwd) == -1) {
-		eprintf ("chdir %s:", cwd);
+		R_LOG_ERROR ("chdir %s", cwd);
 	}
 	free (cwd);
 }

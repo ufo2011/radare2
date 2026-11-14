@@ -1,12 +1,9 @@
-OBJ_DALVIK=asm_dalvik.o
+OBJ_DALVIKPSEUDO+=$(LIBR)/arch/p/dalvik/pseudo.o
 
-STATIC_OBJ+=${OBJ_DALVIK}
-TARGET_DALVIK=asm_dalvik.${EXT_SO}
+TARGET_DALVIKPSEUDO=parse_dalvik_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_DALVIKPSEUDO}
+STATIC_OBJ+=${OBJ_DALVIKPSEUDO}
 
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_DALVIK}
-
-${TARGET_DALVIK}: ${OBJ_DALVIK}
-	${CC} $(call libname,asm_dalvik) ${LDFLAGS} \
-	-I../arch/dalvik ${CFLAGS} -o asm_dalvik.${EXT_SO} ${OBJ_DALVIK}
-endif
+${TARGET_DALVIKPSEUDO}: ${OBJ_DALVIKPSEUDO}
+	${CC} $(call libname,parse_dalvik_pseudo) -L../../util -lr_util \
+	$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_DALVIKPSEUDO} ${OBJ_DALVIKPSEUDO}

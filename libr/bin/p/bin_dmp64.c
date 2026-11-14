@@ -1,59 +1,53 @@
-/* radare2 - LGPL - Copyright 2020 - abcSup */
+/* radare2 - LGPL - Copyright 2020-2024 - abcSup */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_util/r_print.h>
-#include <r_lib.h>
 #include <r_bin.h>
-
 #include "dmp/dmp64.h"
 
 static Sdb *get_sdb(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o, NULL);
-	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, NULL);
+	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->bo->bin_obj;
 	return (obj && obj->kv) ? obj->kv: NULL;
 }
 
 static void destroy(RBinFile *bf) {
-	r_bin_dmp64_free ((struct r_bin_dmp64_obj_t*)bf->o->bin_obj);
+	r_bin_dmp64_free ((struct r_bin_dmp64_obj_t*)bf->bo->bin_obj);
 }
 
-static void header(RBinFile *bf) {
-	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->o->bin_obj;
-	struct r_bin_t *rbin = bf->rbin;
-	rbin->cb_printf ("DUMP_HEADER64:\n");
-	rbin->cb_printf ("  MajorVersion : 0x%08"PFMT32x"\n", obj->header->MajorVersion);
-	rbin->cb_printf ("  MinorVersion : 0x%08"PFMT32x"\n", obj->header->MinorVersion);
-	rbin->cb_printf ("  DirectoryTableBase : 0x%016"PFMT64x"\n", obj->header->DirectoryTableBase);
-	rbin->cb_printf ("  PfnDataBase : 0x%016"PFMT64x"\n", obj->header->PfnDataBase);
-	rbin->cb_printf ("  PsLoadedModuleList : 0x%016"PFMT64x"\n", obj->header->PsLoadedModuleList);
-	rbin->cb_printf ("  PsActiveProcessHead : 0x%016"PFMT64x"\n", obj->header->PsActiveProcessHead);
-	rbin->cb_printf ("  MachineImageType : 0x%08"PFMT32x"\n", obj->header->MachineImageType);
-	rbin->cb_printf ("  NumberProcessors : 0x%08"PFMT32x"\n", obj->header->NumberProcessors);
-	rbin->cb_printf ("  BugCheckCode : 0x%08"PFMT32x"\n", obj->header->BugCheckCode);
-	rbin->cb_printf ("  BugCheckParameter1 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[0]);
-	rbin->cb_printf ("  BugCheckParameter2 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[1]);
-	rbin->cb_printf ("  BugCheckParameter3 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[2]);
-	rbin->cb_printf ("  BugCheckParameter4 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[3]);
-	rbin->cb_printf ("  KdDebuggerDataBlock : 0x%016"PFMT64x"\n", obj->header->KdDebuggerDataBlock);
-	rbin->cb_printf ("  SecondaryDataState : 0x%08"PFMT32x"\n", obj->header->SecondaryDataState);
-	rbin->cb_printf ("  ProductType : 0x%08"PFMT32x"\n", obj->header->ProductType);
-	rbin->cb_printf ("  SuiteMask : 0x%08"PFMT32x"\n", obj->header->SuiteMask);
-
+static char *header(RBinFile *bf, int mode) {
+	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->bo->bin_obj;
+	RStrBuf *sb = r_strbuf_new ("");
+#define p(f,...) r_strbuf_appendf (sb, f, ##__VA_ARGS__)
+	p ("DUMP_HEADER64:\n");
+	p ("  MajorVersion : 0x%08"PFMT32x"\n", obj->header->MajorVersion);
+	p ("  MinorVersion : 0x%08"PFMT32x"\n", obj->header->MinorVersion);
+	p ("  DirectoryTableBase : 0x%016"PFMT64x"\n", obj->header->DirectoryTableBase);
+	p ("  PfnDataBase : 0x%016"PFMT64x"\n", obj->header->PfnDataBase);
+	p ("  PsLoadedModuleList : 0x%016"PFMT64x"\n", obj->header->PsLoadedModuleList);
+	p ("  PsActiveProcessHead : 0x%016"PFMT64x"\n", obj->header->PsActiveProcessHead);
+	p ("  MachineImageType : 0x%08"PFMT32x"\n", obj->header->MachineImageType);
+	p ("  NumberProcessors : 0x%08"PFMT32x"\n", obj->header->NumberProcessors);
+	p ("  BugCheckCode : 0x%08"PFMT32x"\n", obj->header->BugCheckCode);
+	p ("  BugCheckParameter1 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[0]);
+	p ("  BugCheckParameter2 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[1]);
+	p ("  BugCheckParameter3 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[2]);
+	p ("  BugCheckParameter4 : 0x%016"PFMT64x"\n", obj->header->BugCheckCodeParameter[3]);
+	p ("  KdDebuggerDataBlock : 0x%016"PFMT64x"\n", obj->header->KdDebuggerDataBlock);
+	p ("  SecondaryDataState : 0x%08"PFMT32x"\n", obj->header->SecondaryDataState);
+	p ("  ProductType : 0x%08"PFMT32x"\n", obj->header->ProductType);
+	p ("  SuiteMask : 0x%08"PFMT32x"\n", obj->header->SuiteMask);
 	if (obj->bmp_header) {
-		rbin->cb_printf ("\nBITMAP_DUMP:\n");
-		rbin->cb_printf ("  HeaderSize : 0x%08"PFMT64x"\n", obj->bmp_header->FirstPage);
-		rbin->cb_printf ("  BitmapSize : 0x%08"PFMT64x"\n", obj->bmp_header->Pages);
-		rbin->cb_printf ("  Pages : 0x%08"PFMT64x"\n", obj->bmp_header->TotalPresentPages);
+		p ("\nBITMAP_DUMP:\n");
+		p ("  HeaderSize : 0x%08"PFMT64x"\n", obj->bmp_header->FirstPage);
+		p ("  BitmapSize : 0x%08"PFMT64x"\n", obj->bmp_header->Pages);
+		p ("  Pages : 0x%08"PFMT64x"\n", obj->bmp_header->TotalPresentPages);
 	}
+#undef p
+	return r_strbuf_drain (sb);
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	RBinInfo *ret;
-	if (!(ret = R_NEW0 (RBinInfo))) {
-		return NULL;
-	}
-	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->o->bin_obj;
+	RBinInfo *ret = R_NEW0 (RBinInfo);
+	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->bo->bin_obj;
 
 	ret->arch = strdup ("x86");
 	ret->bits = 64;
@@ -80,27 +74,20 @@ static RBinInfo *info(RBinFile *bf) {
 		break;
 	default:
 		ret->os = strdup ("Unknown");
+		break;
 	}
 
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
+static bool sections_vec(RBinFile *bf) {
 	dmp_page_desc *page;
-	RList *ret;
 	RListIter *it;
-	RBinSection *ptr;
-	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->o->bin_obj;
+	struct r_bin_dmp64_obj_t *obj = (struct r_bin_dmp64_obj_t *)bf->bo->bin_obj;
 
-	if (!(ret = r_list_newf (free))) {
-		return NULL;
-	}
-
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 	r_list_foreach (obj->pages, it, page) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
-
+		RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ptr->name = strdup ("Memory_Section");
 		ptr->paddr = page->file_offset;
 		ptr->size = DMP_PAGE_SIZE;
@@ -108,24 +95,22 @@ static RList *sections(RBinFile *bf) {
 		ptr->vsize = DMP_PAGE_SIZE;
 		ptr->add = true;
 		ptr->perm = R_PERM_R;
-
-		r_list_append (ret, ptr);
 	}
-	return ret;
+	return true;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	r_return_val_if_fail (buf, false);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	R_RETURN_VAL_IF_FAIL (buf, false);
 	struct r_bin_dmp64_obj_t *res = r_bin_dmp64_new_buf (buf);
 	if (res) {
-		sdb_ns_set (sdb, "info", res->kv);
-		*bin_obj = res;
+		sdb_ns_set (bf->sdb, "info", res->kv);
+		bf->bo->bin_obj = res;
 		return true;
 	}
 	return false;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 magic[8];
 	if (r_buf_read_at (b, 0, magic, sizeof (magic)) == 8) {
 		return !memcmp (magic, DMP64_MAGIC, 8);
@@ -134,16 +119,19 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 }
 
 RBinPlugin r_bin_plugin_dmp64 = {
-	.name = "dmp64",
-	.desc = "Windows Crash Dump x64 r_bin plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "dmp64",
+		.author = "abcSup",
+		.desc = "Windows Crash Dump for x86-64",
+		.license = "LGPL-3.0-only",
+	},
 	.destroy = &destroy,
 	.get_sdb = &get_sdb,
 	.header = &header,
 	.info = &info,
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
-	.sections = &sections
+	.load = &load,
+	.check = &check,
+	.sections_vec = &sections_vec
 };
 
 #ifndef R2_PLUGIN_INCORE

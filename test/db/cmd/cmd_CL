@@ -1,0 +1,265 @@
+# merged: CL file; CLd decompile from dwarf line info
+NAME=CL address
+FILE=bins/elf/dwarf3_line
+CMDS=<<EOF
+CL~$$addr
+?e --
+CL~$$file
+?e --
+e bin.dbginfo=true
+af @ main
+s main
+CLd
+EOF
+EXPECT=<<EOF
+addr: 0x00001139
+addr: 0x00001141
+addr: 0x0000114a
+addr: 0x00001165
+addr: 0x00001168
+addr: 0x00001170
+addr: 0x00001179
+addr: 0x00001194
+addr: 0x00001197
+addr: 0x0000119b
+addr: 0x000011a0
+addr: 0x000011a2
+addr: 0x000011a6
+addr: 0x000011ab
+addr: 0x000011ad
+addr: 0x000011bc
+addr: 0x000011be
+addr: 0x000011d7
+addr: 0x000011e0
+addr: 0x000011e4
+addr: 0x000011ee
+addr: 0x000011f8
+addr: 0x000011fd
+addr: 0x000011ff
+--
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line//bar.c
+--
+// /usr/w/g/radare2/test/bins/src/dwarf-line.c:20 @ 0x000011ad main
+// dwarf-line.c:20
+// dwarf-line.c:21
+// dwarf-line.c:22
+// dwarf-line.c:24
+// dwarf-line.c:25
+// dwarf-line.c:26
+// dwarf-line.c:27
+EOF
+RUN
+
+# merged: CL dwarf5 file
+NAME=CL dwarf5 address
+FILE=bins/elf/dwarf5_line
+CMDS=<<EOF
+CL~$$addr
+?e --
+CL~$$file
+EOF
+EXPECT=<<EOF
+addr: 0x00001139
+addr: 0x00001141
+addr: 0x0000114a
+addr: 0x00001165
+addr: 0x00001168
+addr: 0x00001170
+addr: 0x00001179
+addr: 0x00001194
+addr: 0x00001197
+addr: 0x0000119b
+addr: 0x000011a0
+addr: 0x000011a2
+addr: 0x000011a6
+addr: 0x000011ab
+addr: 0x000011ad
+addr: 0x000011bc
+addr: 0x000011be
+addr: 0x000011d7
+addr: 0x000011e0
+addr: 0x000011e4
+addr: 0x000011ee
+addr: 0x000011f8
+addr: 0x000011fd
+addr: 0x000011ff
+--
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line//bar.c
+EOF
+RUN
+
+# merged: CL clang file
+NAME=CL clang address
+FILE=bins/elf/dwarf3_line_cl
+CMDS=<<EOF
+CL~$$addr
+?e --
+CL~$$file
+EOF
+EXPECT=<<EOF
+addr: 0x00001140
+addr: 0x00001148
+addr: 0x0000114d
+addr: 0x00001151
+addr: 0x00001155
+addr: 0x00001163
+addr: 0x00001170
+addr: 0x00001174
+addr: 0x00001176
+addr: 0x00001180
+addr: 0x00001188
+addr: 0x0000118d
+addr: 0x00001191
+addr: 0x00001195
+addr: 0x000011a3
+addr: 0x000011b0
+addr: 0x000011b4
+addr: 0x000011b6
+addr: 0x000011c0
+addr: 0x000011d6
+addr: 0x000011e1
+addr: 0x000011e4
+addr: 0x000011ea
+addr: 0x000011ed
+addr: 0x000011fb
+addr: 0x00001200
+addr: 0x00001205
+addr: 0x0000120a
+addr: 0x0000120c
+addr: 0x00001212
+--
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/./dwarf-line/bar.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+EOF
+RUN
+
+# merged: CL dwarf5 clang file
+NAME=CL dwarf5 clang address
+FILE=bins/elf/dwarf5_line_cl
+CMDS=<<EOF
+CL~$$addr
+?e --
+CL~$$file
+EOF
+EXPECT=<<EOF
+addr: 0x00001140
+addr: 0x00001148
+addr: 0x0000114d
+addr: 0x00001151
+addr: 0x00001155
+addr: 0x00001163
+addr: 0x00001170
+addr: 0x00001174
+addr: 0x00001176
+addr: 0x00001180
+addr: 0x00001188
+addr: 0x0000118d
+addr: 0x00001191
+addr: 0x00001195
+addr: 0x000011a3
+addr: 0x000011b0
+addr: 0x000011b4
+addr: 0x000011b6
+addr: 0x000011c0
+addr: 0x000011d6
+addr: 0x000011e1
+addr: 0x000011e4
+addr: 0x000011ea
+addr: 0x000011ed
+addr: 0x000011fb
+addr: 0x00001200
+addr: 0x00001205
+addr: 0x0000120a
+addr: 0x0000120c
+addr: 0x00001212
+--
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/./dwarf-line/bar.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+EOF
+RUN
+
+NAME=CL rel file
+FILE=bins/elf/dwarf3_line_rel
+CMDS=CL~$$file
+EXPECT=<<EOF
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line//bar.c
+EOF
+RUN
+
+NAME=CL dwarf5 rel file
+FILE=bins/elf/dwarf5_line_rel
+CMDS=CL~$$file
+EXPECT=<<EOF
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line//bar.c
+EOF
+RUN
+
+NAME=CL rel clang file
+FILE=bins/elf/dwarf3_line_rel_cl
+CMDS=CL~$$file
+EXPECT=<<EOF
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line/bar.c
+EOF
+RUN
+
+NAME=CL dwarf5 rel clang file
+FILE=bins/elf/dwarf5_line_rel_cl
+CMDS=CL~$$file
+EXPECT=<<EOF
+file: /tmp/dwarf-line-foo.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line.c
+file: /usr/w/g/radare2/test/bins/src/dwarf-line/bar.c
+EOF
+RUN
+
+NAME=CLd codemeta json offsets
+FILE=bins/elf/dwarf3_line
+CMDS=<<EOF
+e bin.dbginfo=true
+af @ main
+s main
+CLdj~{annotations[2].offset}
+CLdj~{annotations[2].type}
+EOF
+EXPECT=<<EOF
+4540
+offset
+EOF
+RUN
+
+NAME=CLd terminates when a function is at source line 0xffffffff
+FILE=bins/elf/dwarf-line-ffffffff
+TIMEOUT=10
+CMDS=<<EOF
+af
+CLd
+CL*
+CL @ entry0
+EOF
+EXPECT=<<EOF
+// /nonexistent/x.c:4294967295 @ 0x00400100 entry0
+// x.c:4294967295  // [01] -r-x section size 11 named .text
+'CL 0x00400100 /nonexistent/x.c:4294967295
+'CL 0x00400101 /nonexistent/x.c:4294967295
+file: /nonexistent/x.c
+line: 4294967295
+colu: 0
+addr: 0x00400100
+file: /nonexistent/x.c
+line: 4294967295
+colu: 0
+addr: 0x00400101
+EOF
+RUN

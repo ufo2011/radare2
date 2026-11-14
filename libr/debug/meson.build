@@ -11,15 +11,15 @@ r_debug_sources = [
   'dsignal.c',
   'snap.c',
   'trace.c',
-  'p/bfvm.c',
   'p/debug_bf.c',
   'p/debug_bochs.c',
   'p/debug_esil.c',
+  #'p/debug_rv32ima.c',
   'p/debug_gdb.c',
   'p/debug_io.c',
+  'p/debug_evm.c',
   'p/debug_native.c',
   'p/debug_null.c',
-  'p/debug_qnx.c',
   'p/debug_rap.c',
   'p/debug_winkd.c',
   #'p/native/arm.c',
@@ -34,8 +34,11 @@ r_debug_sources = [
 
 r_debug_deps = [
   r_util_dep,
-  r_hash_dep,
+  r_muta_dep,
   r_reg_dep,
+  r_esil_dep,
+  r_arch_dep,
+  r_bin_dep,
   r_syscall_dep,
   r_anal_dep,
   r_flag_dep,
@@ -46,11 +49,15 @@ r_debug_deps = [
   r_lang_dep,
   r_egg_dep,
   winkd_dep,
-  qnx_dep,
   gdb_dep,
   bochs_dep,
   r_socket_dep
 ]
+
+if not get_option('nogpl')
+  r_debug_sources += 'p/debug_qnx.c'
+  r_debug_deps += qnx_dep
+endif
 
 if host_machine.system() == 'linux' or host_machine.system() == 'android'
   r_debug_sources += ['p/native/linux/linux_debug.c']
@@ -111,6 +118,44 @@ r_debug = library('r_debug', r_debug_sources,
 r_debug_dep = declare_dependency(link_with: r_debug,
                                  include_directories: r_debug_inc)
 
+if get_option('blob')
+r_debug_static_deps = [
+  r_util_static_dep,
+  r_muta_static_dep,
+  r_reg_static_dep,
+  r_syscall_static_dep,
+  r_anal_static_dep,
+  r_arch_static_dep,
+  r_flag_static_dep,
+  r_io_static_dep,
+  r_bp_static_dep,
+  r_search_static_dep,
+  r_cons_static_dep,
+  r_lang_static_dep,
+  r_egg_static_dep,
+  r_socket_static_dep,
+  winkd_static_dep,
+  gdb_static_dep,
+  bochs_static_dep,
+]
+
+if not get_option('nogpl')
+  r_debug_static_deps += qnx_static_dep
+endif
+
+r_debug_static = static_library('r_debug_static', r_debug_sources,
+  include_directories: r_debug_inc,
+  c_args: library_cflags,
+  dependencies: r_debug_static_deps,
+  install: true,
+  implicit_include_directories: false,
+  install_rpath: rpath_lib,
+)
+
+r_debug_static_dep = declare_dependency(link_with: r_debug_static,
+  include_directories: r_debug_inc)
+endif
+
 pkgconfig_mod.generate(r_debug,
   subdirs: 'libr',
   version: r2_version,
@@ -119,9 +164,11 @@ pkgconfig_mod.generate(r_debug,
   libraries: pkgcfg_sanitize_libs,
   requires: [
     'r_util',
-    'r_hash',
+    'r_muta',
     'r_reg',
+    'r_bin',
     'r_syscall',
+    'r_arch',
     'r_anal',
     'r_flag',
     'r_io',

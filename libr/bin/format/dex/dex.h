@@ -5,6 +5,8 @@
 #include <r_util.h>
 #include <r_lib.h>
 #include <r_bin.h>
+#include <r_vec.h>
+#include <sdb/ht_uu.h>
 
 #define R_BIN_DEX_MAXSTR 256
 #define DEX_CLASS_SIZE (32)
@@ -107,6 +109,8 @@ typedef struct dex_method_t {
 	ut32 name_id;
 }) RBinDexMethod;
 
+R_VEC_TYPE (RVecDexMethod, RBinDexMethod);
+
 R_PACKED(
 typedef struct dex_class_t {
 	ut32 class_id; // index into typeids
@@ -120,6 +124,8 @@ typedef struct dex_class_t {
 	struct dex_class_data_item_t *class_data;
 }) RBinDexClass;
 
+R_VEC_TYPE_WITH_FINI (RVecRBinClass, RBinClass, r_bin_class_fini);
+
 R_PACKED(
 typedef struct dex_class_data_item_t {
 	ut64 static_fields_size;
@@ -129,7 +135,7 @@ typedef struct dex_class_data_item_t {
 }) RBinDexClassData;
 
 typedef struct r_bin_dex_obj_t {
-	int size;
+	ut32 size;
 	const char *file;
 	RBuffer *b;
 	struct dex_header_t header;
@@ -137,28 +143,39 @@ typedef struct r_bin_dex_obj_t {
 	struct dex_type_t *types;
 	struct dex_proto_t *protos;
 	struct dex_field_t *fields;
-	struct dex_method_t *methods;
+	RVecDexMethod dex_methods;
 	struct dex_class_t *classes;
-	RList *methods_list;
-	RList *trycatch_list;
-	RList *imports_list;
-	RList *classes_list;
+	RVecRBinSymbol symbols_vec;
+	RVecRBinImport imports_vec;
+	RVecRBinClass classes_vec;
+	RVecRBinTrycatch trycatch;
+	bool trycatch_loaded;
+	ut64 trycatch_budget; // try items, catch handlers and type name bytes dex_loadcode can still expand
 	RList *lines_list;
 	ut64 code_from;
 	ut64 code_to;
 	char *version;
 	Sdb *kv;
 	char **cal_strings;
+	ut32 cal_strings_size;
+	char **cal_protos;
+	ut32 cal_protos_size;
 	bool verbose;
+	RStrBuf *sb; // used for dexdump output
+	bool addrline_loaded;
+	const char *dexSubsystem;
+	bool simplifiedDemangling;
+	HtUU *method_addrs;
+	ut64 members_left; // encoded fields and methods the class data walk may still parse
 } RBinDexObj;
 
-struct r_bin_dex_str_t {
+typedef struct r_bin_dex_str_t {
 	char str[R_BIN_DEX_MAXSTR];
 	ut64 offset;
 	ut64 ordinal;
 	int size;
 	int last;
-};
+} RBinDexStr;
 
 struct dex_encoded_type_addr_pair_t {
 	ut64 type_idx;
@@ -187,9 +204,9 @@ struct dex_debug_local_t {
 	ut16 endAddress;
 };
 
-char* r_bin_dex_get_version(struct r_bin_dex_obj_t* bin);
-void r_bin_dex_free(struct r_bin_dex_obj_t *bin);
-struct r_bin_dex_obj_t *r_bin_dex_new_buf(RBuffer *buf, bool verbose);
-struct r_bin_dex_str_t *r_bin_dex_get_strings(struct r_bin_dex_obj_t *bin);
+R_IPI char* r_bin_dex_get_version(RBinDexObj * bin);
+R_IPI void r_bin_dex_free(RBinDexObj *bin);
+R_IPI RBinDexObj *r_bin_dex_new_buf(RBuffer *buf, bool verbose);
+R_IPI RBinDexStr *r_bin_dex_get_strings(RBinDexObj *bin);
 
 #endif

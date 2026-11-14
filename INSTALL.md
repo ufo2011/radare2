@@ -1,48 +1,73 @@
-# Installation
+# Installation Guide
 
-The [GHA CI](https://github.com/radareorg/radare2/actions) builds the packages for every commit and those are also
-available in the [release](https://github.com/radareorg/radare2/releases) page. But it is always recommended to
-install r2 from git.
+To get the latest packaged versions of Radare2, visit the [Releases page](https://github.com/radareorg/radare2/releases). For most users, installing directly from the Git repository is recommended to ensure you have the most recent features and updates.
 
-The most used and recommended way is by running this script which will build
-and install r2 from sources and install it **system wide** with **symlinks**.
+## Recommended Installation Method
 
-```
+For a system-wide installation using source code, execute the `sys/install.sh` script. This will compile Radare2 and set up symlinks for global usage.
+
+1. **Clone the Repository**
+
+```sh
 git clone https://github.com/radareorg/radare2
+```
+2. **Run the Installation Script**
+
+```sh
 radare2/sys/install.sh
 ```
 
-If you need to install it in your user's home or switch between multiple r2
-builds you may checkout the `meson` build and the [r2env](https://github.com/radareorg/r2env) Python tool.
+## Alternative Installation Options
 
-The focus on portability enables r2 to be built in many different ways for multiple
-operating systems easily by using the `./configure;make` or `meson` build systems.
+- **User Directory Installation**: If you prefer to install Radare2 in your home directory, use the `sys/user.sh` script.
+- **Manage Multiple Installations**: Utilize [r2env](https://github.com/radareorg/r2env) to handle multiple Radare2 versions on the same machine. It can be installed via Python's `pip` tool.
 
-r2env allows to build and install different versions of r2 in your home
-or system and it is available via Python's PIP tool.
-
-```
+```sh
 pip install r2env
 r2env init
-r2env install radare2@latest
+r2env add radare2@git
 ```
 
-## Uninstall
+## Building Flexibility
 
-In case of a polluted filesystem, you can uninstall the current version
-or remove all previous installations with one or more of those commands:
+Radare2's design prioritizes portability, making it straightforward to compile on various operating systems. You can build the software using either the `./configure && make` or `meson` build systems.
 
-```
+## Uninstallation Guide
+
+If you need to clean up your system or remove Radare2 installations, use the following commands as needed:
+
+- **Remove the Current Installation**
+
+```sh
 make uninstall
-make system-purge
-make purge
-git clean -xdf
-rm -rf shlr/capstone
 ```
 
-# Packaging status
+- **Completely Remove All Previous Installations**
+
+```sh
+make purge
+make system-purge
+```
+
+## Troubleshooting
+
+- **Clean Untracked Files**
+
+```sh
+git clean -xdf
+```
+- **Address Permission Issues**
+
+```sh
+sudo chown -R $USER
+```
+
+## Packaging Status
+
+For information on Radare2’s availability across various Linux distributions:
 
 <a href="https://repology.org/metapackage/radare2">
-<img src="https://repology.org/badge/vertical-allrepos/radare2.svg" alt="Packaging status" align="right" width="150px">
+  <img src="https://repology.org/badge/vertical-allrepos/radare2.svg" alt="Packaging status" align="right" width="150px">
 </a>
 
+This badge provides an overview of packaging status across different repositories.

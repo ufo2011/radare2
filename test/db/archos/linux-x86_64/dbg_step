@@ -1,0 +1,222 @@
+NAME=dbg.step
+FILE=bins/elf/ls-focal
+ARGS=-d
+CMDS=<<EOF
+.dr*
+s rip
+f a=rip
+wx 90
+pi 1 # hack this shouldnt be here
+ds
+.dr*
+?v rip-a
+EOF
+EXPECT=<<EOF
+nop
+0x1
+EOF
+RUN
+
+NAME=dbg.symbols
+FILE=bins/elf/ls-focal
+ARGS=-d
+CMDS=<<EOF
+id~?
+dk 9
+EOF
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=dso over a breakpoint
+FILE=bins/elf/ls-focal
+ARGS=-d
+CMDS=<<EOF
+dr rax=rip > /dev/null
+?vi rax-rip
+db rip
+dso
+dk 9
+?vi rax-rip~?^0$
+.dr*
+?vi rax-rip~?^0$
+EOF
+EXPECT=<<EOF
+0
+1
+0
+EOF
+RUN
+
+NAME=ds on calls and jumps
+FILE=bins/elf/analysis/calls_x64-jammy
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+5ds
+dr rip
+5ds
+dr rip
+5ds
+dr rip
+ds
+dr rip
+4ds
+dr rip
+ds
+dr rip
+ds
+dr rip
+ds
+dr rip
+dc
+EOF
+EXPECT=<<EOF
+0x004011ce
+0x004011b9
+0x004011a4
+0x004011a8
+0x0040118f
+0x0040117a
+0x00401165
+0x00401150
+Hello world
+EOF
+RUN
+
+NAME=dso on call 1
+FILE=bins/elf/analysis/calls_x64-jammy
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+4ds
+dr rip
+dso
+dr rip
+EOF
+EXPECT=<<EOF
+0x004011f0
+0x004011f5
+Hello world
+EOF
+RUN
+
+NAME=dso on call 2
+FILE=bins/elf/analysis/calls_x64-jammy
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+9ds
+dr rip
+dso
+dr rip
+EOF
+EXPECT=<<EOF
+0x004011db
+0x004011e0
+Hello world
+EOF
+RUN
+
+NAME=dso on call 3
+FILE=bins/elf/analysis/calls_x64-jammy
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+14ds
+dr rip
+dso
+dr rip
+EOF
+EXPECT=<<EOF
+0x004011c6
+0x004011cb
+Hello world
+EOF
+RUN
+
+NAME=dso on call 4
+FILE=bins/elf/analysis/calls_x64-jammy
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+19ds
+dr rip
+dso
+dr rip
+EOF
+EXPECT=<<EOF
+0x004011b1
+0x004011b6
+Hello world
+EOF
+RUN
+
+NAME=dbg.dsu
+FILE=bins/elf/analysis/calls_x64
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+dsu 0x400546
+dr rip
+EOF
+EXPECT=<<EOF
+0x00400546
+EOF
+RUN
+
+NAME=dbg.dsui
+FILE=bins/elf/analysis/calls_x64
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+dsui mov eax
+dr rip
+EOF
+EXPECT=<<EOF
+0x00400524
+EOF
+RUN
+
+NAME=dbg.dsei
+FILE=bins/elf/analysis/calls_x64
+ARGS=-a x86 -d
+BROKEN=1
+CMDS=<<EOF
+dcu main
+aei
+dsue 0,eax,==
+dr rip
+EOF
+EXPECT=<<EOF
+0x00400529
+Hello world
+EOF
+RUN
+
+NAME=dbg.dss
+FILE=bins/elf/analysis/calls_x64
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+4dss
+dr rip
+EOF
+EXPECT=<<EOF
+0x00400582
+EOF
+RUN
+
+NAME=dbg.dcu can reach main
+FILE=bins/elf/analysis/calls_x64-jammy
+ARGS=-a x86 -d
+CMDS=<<EOF
+dcu main
+?v $$
+EOF
+EXPECT=<<EOF
+0x4011e3
+Hello world
+EOF
+RUN

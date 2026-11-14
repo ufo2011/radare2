@@ -10,12 +10,22 @@ done
 EOF
 RUN
 
+# merged: ppc-elf; ppc-elf entry0 name issue
 NAME=ppc-aflm
 FILE=bins/elf/analysis/elf-ppc-execstack
 CMDS=<<EOF
 aac
 aflsa
 aflm
+?e --
+e asm.flags=false
+pid 4
+?e --
+?e
+e asm.flags=true
+pid 1
+af
+afi~name[1]
 EOF
 EXPECT=<<EOF
 sym._init:
@@ -35,6 +45,23 @@ fcn.100016f0:
 
 fcn.100017a0:
     fcn.10001fd0
+    fcn.10001fd0
+    fcn.10003ba0
+    fcn.100048e0
+    sym.imp.error
+    sym.imp.error
+    fcn.10003f90
+    fcn.10003f90
+    sym.imp.error
+    sym.imp.error
+    sym.imp.error
+    fcn.100016f0
+    fcn.10002660
+    fcn.10001fd0
+    fcn.100016f0
+    sym.imp.error
+    fcn.10001fd0
+    fcn.10006480
 
 fcn.10001fd0:
     sym.imp.strlen
@@ -48,22 +75,59 @@ fcn.10001fd0:
     sym.imp.error
     sym.imp.free
     fcn.10003f90
+    fcn.10008d80
+    fcn.10002d10
+    sym.imp.strcmp
+    sym.imp.error
+    sym.imp.free
+    fcn.10003f90
     sym.imp.unlink
     sym.imp.close
+    fcn.10007450
+    sym.imp.error
+    sym.imp.error
+    sym.imp.__errno_location
+    sym.imp.error
+    sym.imp.error
+    sym.imp.free
+    sym.imp.unlink
+    sym.imp.close
+    fcn.10003f90
+    fcn.100017a0
+    sym.imp.error
+    sym.imp.close
+    sym.imp.execlp
+    sym.imp.execl
+    sym.imp._exit
 
 fcn.10002660:
     fcn.10006120
     fcn.10004730
     sym.imp.elf_getdata
     fcn.1000f2d0
+    sym.imp.elf_getdata
+    fcn.10006120
+    fcn.10006120
     sym.imp.gelf_xlatetof
+    fcn.1000f2d0
     sym.imp.gelf_xlatetom
+    fcn.10006120
     sym.imp.abort
+
+fcn.10002d10:
+    sym.imp.elf_getdata
+
+fcn.10002e00:
+    sym.imp.elf_getdata
+    fcn.10003bc0
+    sym.imp.elf_getdata
 
 fcn.10002ff0:
     sym.imp.gelf_fsize
     fcn.10002e00
     fcn.10025f80
+    fcn.10025b30
+    sym.imp.gelf_getsym
 
 fcn.100030f0:
     fcn.10003bc0
@@ -108,12 +172,24 @@ fcn.100038d0:
     fcn.100030f0
     sym.imp.elf_flagscn
 
+fcn.10003ce0:
+    sym.imp.error
+
 fcn.10003e40:
     sym.imp.free
     sym.imp.elf_getdata
     sym.imp.elf_end
     sym.imp.fsync
     sym.imp.close
+    sym.imp.elf_end
+    sym.imp.close
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
 
 fcn.10003f90:
     sym.imp.unlink
@@ -123,13 +199,28 @@ fcn.10003fe0:
     sym.imp.getfilecon
     sym.imp.setfilecon
     sym.imp.freecon
+    sym.imp.__errno_location
+    sym.imp.error
+    sym.imp.is_selinux_enabled
+    sym.imp.__errno_location
+    sym.imp.error
+    sym.imp.freecon
+
+fcn.10004120:
+    sym.imp.__assert_fail
 
 fcn.10004390:
     sym.imp.memset
     sym.imp.elf_getdata
+    sym.imp.elf_getdata
     sym.imp.gelf_getsym
     fcn.10025b30
+    sym.imp.gelf_getsym
     sym.imp.gelf_update_sym
+    sym.imp.gelf_getsym
+    sym.imp.gelf_update_sym
+    sym.imp.__assert_fail
+    sym.imp.__assert_fail
     sym.imp.__assert_fail
 
 fcn.10004730:
@@ -148,6 +239,8 @@ fcn.100048e0:
     fcn.10004880
     sym.imp.strlen
     sym.imp.memcpy
+    sym.imp.strlen
+    sym.imp.memcpy
     sym.imp.__fxstat64
     sym.imp.fchown
     sym.imp.fchmod
@@ -159,6 +252,16 @@ fcn.100048e0:
     sym.imp.unlink
     sym.imp.__errno_location
     sym.imp.error
+    sym.imp.__errno_location
+    sym.imp.error
+    fcn.10003f90
+    sym.imp.elf_errmsg
+    sym.imp.error
+    sym.imp.__errno_location
+    sym.imp.error
+    fcn.10003f90
+    fcn.10003e40
+    sym.imp.unlink
 
 fcn.10005480:
     sym.imp.gelf_fsize
@@ -168,7 +271,11 @@ fcn.10005a00:
     fcn.10025b30
     sym.imp.gelf_getsym
     sym.imp.gelf_update_sym
+    sym.imp.elf_getdata
     sym.imp.elf_flagscn
+    sym.imp.error
+    sym.imp.error
+    sym.imp.gelf_update_sym
 
 fcn.10005cb0:
     sym.imp.memset
@@ -178,19 +285,38 @@ fcn.10005cb0:
 
 fcn.10006120:
     sym.imp.elf_getdata
+    sym.imp.elf_getdata
     fcn.10025b30
     sym.imp.gelf_getdyn
     sym.imp.gelf_update_dyn
     sym.imp.elf_flagscn
     sym.imp.__assert_fail
+    sym.imp.error
+    sym.imp.gelf_update_dyn
+    sym.imp.gelf_update_dyn
+    sym.imp.__assert_fail
+    sym.imp.__assert_fail
 
 fcn.10006480:
     fcn.10025f80
     sym.imp.gelf_update_phdr
+    fcn.1000e110
+    sym.imp.elf_flagphdr
+    sym.imp.gelf_update_shdr
+    sym.imp.elf_flagshdr
+    fcn.1000e110
+    sym.imp.gelf_update_ehdr
+    sym.imp.elf_flagehdr
+    fcn.10004120
+    sym.imp.realloc
+    sym.imp.memmove
+    fcn.10005480
+    sym.imp.error
     sym.imp.error
 
 fcn.10007380:
     sym.imp.malloc
+    sym.imp.error
 
 fcn.10007450:
     sym.imp.strlen
@@ -203,6 +329,50 @@ fcn.10007450:
     sym.imp.unlink
     sym.imp.close
     sym.imp.free
+    sym.imp.elf64_newehdr
+    sym.imp.gelf_update_ehdr
+    sym.imp.gelf_newphdr
+    sym.imp.memcpy
+    sym.imp.elf_flagelf
+    sym.imp.gelf_update_phdr
+    sym.imp.elf_newscn
+    sym.imp.gelf_update_shdr
+    sym.imp.elf_getdata
+    sym.imp.elf_getdata
+    sym.imp.memcpy
+    sym.imp.elf_getdata
+    sym.imp.elf_newdata
+    sym.imp.__strdup
+    sym.imp.memcpy
+    sym.imp.elf_getscn
+    sym.imp.gelf_getshdr
+    sym.imp.free
+    sym.imp.gelf_update_ehdr
+    fcn.10005cb0
+    sym.imp.gelf_fsize
+    fcn.10005480
+    sym.imp.mkstemp
+    sym.imp.mkstemp
+    sym.imp.__errno_location
+    sym.imp.error
+    sym.imp.elf32_newehdr
+    sym.imp.elf_errmsg
+    sym.imp.error
+    fcn.10007380
+    fcn.10005a00
+    sym.imp.elf_newscn
+    sym.imp.elf_newdata
+    sym.imp.elf_getdata
+    sym.imp.elf_newdata
+    sym.imp.__assert_fail
+    sym.imp.calloc
+    sym.imp.error
+    fcn.10005a00
+    sym.imp.abort
+    sym.imp.free
+    sym.imp.error
+    sym.imp.error
+    sym.imp.error
     sym.imp.__assert_fail
 
 fcn.10008d80:
@@ -217,14 +387,46 @@ fcn.10008d80:
     sym.imp.elf_getscn
     sym.imp.gelf_getshdr
     sym.imp.qsort
+    sym.imp.elf_getscn
+    sym.imp.gelf_getshdr
+    fcn.10005cb0
+    sym.imp.__strdup
+    fcn.10002d10
+    sym.imp.strcmp
     sym.imp.error
+    sym.imp.error
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
     sym.imp.elf_end
+    sym.imp.error
     fcn.10007380
+    sym.imp.memcpy
+    sym.imp.memcpy
     sym.imp.close
+    sym.imp.error
+    fcn.100030f0
+    sym.imp.__strdup
+    sym.imp.error
+    sym.imp.gelf_getphdr
+    sym.imp.pread
+    sym.imp.memmem
+    sym.imp.error
+    sym.imp.elf_errmsg
+    sym.imp.error
+    sym.imp.error
+    sym.imp.elf_errmsg
+    sym.imp.error
     sym.imp.__assert_fail
     sym.imp.open
+    sym.imp.__errno_location
+    sym.imp.error
 
 fcn.10008f70:
+    sym.imp.error
+
+fcn.10009270:
     sym.imp.error
 
 fcn.10009f00:
@@ -232,43 +434,139 @@ fcn.10009f00:
     sym.imp.strncmp
     sym.imp.strcmp
     sym.imp.elf_getdata
+    sym.imp.elf_getdata
     sym.imp.__assert_fail
+    sym.imp.error
     fcn.1000cbf0
     sym.imp.malloc
     fcn.1000cb20
     sym.imp.error
     fcn.1000c650
+    sym.imp.error
+    sym.imp.realloc
+    sym.imp.error
+    fcn.1000c650
+    sym.imp.elf_flagscn
+    fcn.10003bc0
+    sym.imp.error
+    sym.imp.elf_flagscn
+    sym.imp.elf_flagscn
+    sym.imp.elf_flagscn
+    sym.imp.error
+    fcn.10003bc0
+    sym.imp.error
+    sym.imp.__assert_fail
+    sym.imp.error
+    sym.imp.error
     sym.imp.free
+    sym.imp.error
+    sym.imp.free
+    fcn.1000c650
+    fcn.1000c2f0
+    fcn.10009270
+    fcn.1000c650
+    sym.imp.error
+    fcn.1000c2f0
+    sym.imp.error
+    fcn.1000c650
+    sym.imp.error
+    sym.imp.error
+    sym.imp.error
+    sym.imp.error
+    sym.imp.error
+    fcn.10003bc0
+    sym.imp.error
+    sym.imp.error
+    sym.imp.error
+    sym.imp.__assert_fail
+    sym.imp.error
+    sym.imp.__assert_fail
+    sym.imp.__assert_fail
+    sym.imp.__assert_fail
+    sym.imp.error
+    sym.imp.error
+
+fcn.1000b3e0:
+    sym.imp.calloc
+    sym.imp.error
 
 fcn.1000b540:
     fcn.1000c440
+    sym.imp.calloc
+
+fcn.1000b6c0:
+    sym.imp.malloc
+    fcn.1000cb20
+    sym.imp.error
+    sym.imp.calloc
 
 fcn.1000b8e0:
     sym.imp.calloc
     fcn.10025b30
     fcn.1000cbf0
+    fcn.1000cbf0
+    fcn.1000cbf0
     fcn.10025f80
     sym.imp.error
     fcn.1000c650
+    fcn.1000c650
+    fcn.1000c650
     sym.imp.free
     sym.imp.__assert_fail
+    fcn.1000cb20
+    sym.imp.calloc
+    fcn.1000cb20
+    sym.imp.error
+    sym.imp.calloc
+    sym.imp.error
+    sym.imp.calloc
+    fcn.1000c490
+    sym.imp.qsort
+    sym.imp.calloc
+    fcn.1000cb20
+    fcn.1000c650
+    fcn.1000c650
+    sym.imp.__assert_fail
 
-loc.1000c6a8:
+fcn.1000c650:
     sym.imp.free
+    sym.imp.free
+    sym.imp.free
+    sym.imp.free
+
+fcn.1000c730:
+    sym.imp.fprintf
+    sym.imp.abort
+
+fcn.1000cb20:
+    fcn.1000c730
+    sym.imp.free
+    sym.imp.calloc
+    sym.imp.abort
 
 fcn.1000cbf0:
     fcn.1000c730
     sym.imp.calloc
+    sym.imp.calloc
+    sym.imp.free
 
-loc.1000ce88:
+fcn.1000ce30:
+    sym.imp.memset
     sym.imp.memset
 
 fcn.1000d410:
     sym.imp.elf_getdata
+    sym.imp.elf_getdata
+    sym.imp.__assert_fail
+    sym.imp.error
+    sym.imp.error
+    sym.imp.__assert_fail
     sym.imp.__assert_fail
 
 fcn.1000d780:
     sym.imp.__assert_fail
+    fcn.1000d410
+    sym.imp.error
 
 fcn.1000e110:
     fcn.1000d410
@@ -276,40 +574,36 @@ fcn.1000e110:
 
 fcn.1000ef70:
     sym.imp.__assert_fail
+    sym.imp.elf_getdata
+    sym.imp.elf_getdata
+    sym.imp.__assert_fail
+    sym.imp.error
+    sym.imp.elf_flagscn
+    sym.imp.error
+    sym.imp.__assert_fail
+    sym.imp.__assert_fail
+
+fcn.1000f620:
+    sym.imp.__assert_fail
 
 fcn.100139b0:
     sym.imp.qsort
 
-fcn.1001d690:
+fcn.1001ce70:
+    sym.imp.error
+    fcn.10003430
     fcn.100033b0
 
-EOF
-RUN
+fcn.1001d690:
+    fcn.100033b0
+    sym.imp.__assert_fail
 
-NAME=ppc-elf
-FILE=bins/elf/analysis/elf-ppc-execstack
-CMDS=<<EOF
-e asm.flags=false
-pid 4
-EOF
-EXPECT=<<EOF
+--
 0x100014e0             7c290b78  mr r9, r1
 0x100014e4             54210036  rlwinm r1, r1, 0, 0, 0x1b
 0x100014e8             38000000  li r0, 0
 0x100014ec             9421fff0  stwu r1, -0x10(r1)
-EOF
-RUN
-
-NAME=ppc-elf entry0 name issue
-FILE=bins/elf/analysis/elf-ppc-execstack
-CMDS=<<EOF
-?e
-e asm.flags=true
-pid 1
-af
-afi~name[1]
-EOF
-EXPECT=<<EOF
+--
 
 0x100014e0   section..text:
 0x100014e0             7c290b78  mr r9, r1
@@ -331,6 +625,7 @@ RUN
 NAME=ppc-update-suffix-esil
 FILE=bins/elf/a6ppc.out
 CMDS=<<EOF
+aeim
 40ds
 dr?r3
 dr?r4
@@ -339,9 +634,9 @@ dr?r3
 dr?r4
 EOF
 EXPECT=<<EOF
-0xffffffbf
+0x00177fbf
 0x10000107
-0xffffffc1
+0x00177fc1
 0x1000010a
 EOF
 RUN
@@ -404,6 +699,7 @@ EOF
 RUN
 
 NAME=aoj f0ff2194
+REQUIRE=cs5
 FILE=-
 CMDS=<<EOF
 e asm.arch=ppc
@@ -422,7 +718,6 @@ EXPECT=<<EOF
     "mask": "ffffffff",
     "esil": "r1,-16,r1,+,=[4],-16,r1,+=",
     "sign": false,
-    "prefix": 0,
     "id": 1072,
     "opex": {
       "operands": [
@@ -442,8 +737,6 @@ EXPECT=<<EOF
     "size": 4,
     "type": "store",
     "esilcost": 12,
-    "scale": 0,
-    "refptr": 0,
     "cycles": 0,
     "failcycles": 0,
     "delay": 0,
@@ -452,5 +745,1371 @@ EXPECT=<<EOF
     "family": "cpu"
   }
 ]
+EOF
+RUN
+
+NAME=aoj f0ff2194 (cs6)
+REQUIRE=cs6
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+wx f0ff2194
+aoj~{}
+EOF
+EXPECT=<<EOF
+[
+  {
+    "opcode": "stwu r1, -0x10(r1)",
+    "disasm": "stwu r1, -0x10(r1)",
+    "pseudo": "word[r1 - 0x10] = r1",
+    "description": "Store Word with Update",
+    "mnemonic": "stwu",
+    "mask": "ffffffff",
+    "esil": "r1,-16,r1,+,=[4],-16,r1,+=",
+    "sign": false,
+    "id": 1005,
+    "opex": {
+      "operands": [
+        {
+          "type": "reg",
+          "value": "r1"
+        },
+        {
+          "type": "mem",
+          "base": "r1",
+          "disp": -16
+        }
+      ]
+    },
+    "addr": 0,
+    "bytes": "f0ff2194",
+    "size": 4,
+    "type": "store",
+    "esilcost": 12,
+    "cycles": 0,
+    "failcycles": 0,
+    "delay": 0,
+    "stack": "inc",
+    "stackptr": 16,
+    "family": "cpu"
+  }
+]
+EOF
+RUN
+
+NAME=ppc positive-condition branch is cjmp with edges
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 2c030000419e000838600001 4e800020
+af @ 0
+afb @ 0
+wx 419e0040 @ 0x100
+s 0x100
+ao~type
+EOF
+EXPECT=<<EOF
+0x00000000 0x00000008 00:0000 8 j 0x0000000c f 0x00000008
+0x00000008 0x0000000c 00:0000 4 j 0x0000000c
+0x0000000c 0x00000010 00:0000 4
+type: cjmp
+EOF
+RUN
+
+NAME=ppc isel classified as cmov
+REQUIRE=cs5
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 7c642c9e
+pd 1
+ao~type
+wx 7c604f9e
+pd 1
+ao~type
+EOF
+EXPECT=<<EOF
+            0x00000000      7c642c9e       isel r3, r4, r5, cr4eq
+type: cmov
+            0x00000000      7c604f9e       isel r3, 0, r9, cr7eq
+type: cmov
+EOF
+RUN
+
+NAME=ppc isel classified as cmov (cs6)
+REQUIRE=cs6
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 7c642c9e
+pd 1
+ao~type
+wx 7c604f9e
+pd 1
+ao~type
+EOF
+EXPECT=<<EOF
+            0x00000000      7c642c9e       isel r3, r4, r5, 4*cr4+eq
+type: cmov
+            0x00000000      7c604f9e       isel r3, 0, r9, 4*cr7+eq
+type: cmov
+EOF
+RUN
+
+NAME=ppc bctr/bctrl typed (cs6 BCCTR/BCCTRL alias coverage)
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 4e800420
+pd 1
+ao~type
+wx 4e800421
+pd 1
+ao~type
+EOF
+EXPECT=<<EOF
+            0x00000000      4e800420       bctr
+type: ujmp
+            0x00000000      4e800421       bctrl
+type: call
+EOF
+RUN
+
+# Conditional trap family (tw/twi/td/tdi + extended mnemonics) must type as trap.
+# Type-only assert: capstone gives extended forms version-dependent ids.
+NAME=ppc conditional traps typed
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 0c030000
+ao~type:
+wx 08030000
+ao~type:
+wx 7c632088
+ao~type:
+wx 7c831808
+ao~type:
+wx 7fe00008
+ao~type:
+EOF
+EXPECT=<<EOF
+type: trap
+type: trap
+type: trap
+type: trap
+type: trap
+EOF
+RUN
+
+# Return-from-interrupt terminates the basic block (type-only assert).
+NAME=ppc return-from-interrupt typed as ret
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+e asm.bits=32
+wx 4c000064
+ao~type:
+e asm.bits=64
+wx 4c000024
+ao~type:
+e asm.bits=32
+wx 4c000066
+ao~type:
+EOF
+EXPECT=<<EOF
+type: ret
+type: ret
+type: ret
+EOF
+RUN
+
+# Integer ALU forms that previously fell through to type: null.
+NAME=ppc integer alu classified
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 7c6400d0
+ao~type:
+wx 7c642810
+ao~type:
+wx 7c832878
+ao~type:
+wx 7c832b38
+ao~type:
+wx 7c832a38
+ao~type:
+wx 7c641e16
+ao~type:
+wx 5083403e
+ao~type:
+EOF
+EXPECT=<<EOF
+type: sub
+type: sub
+type: and
+type: or
+type: xor
+type: mod
+type: rol
+EOF
+RUN
+
+# Load/store multiple and string word.
+NAME=ppc load-store multiple classified
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx bb810008
+ao~type:
+wx bf810008
+ao~type:
+EOF
+EXPECT=<<EOF
+type: load
+type: store
+EOF
+RUN
+
+# Scalar floating point: stores, arith, compare, convert, abs, move.
+NAME=ppc scalar fp classified
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx d8230008
+ao~type:,family:
+wx fc22182a
+ao~type:,family:
+wx fc011000
+ao~type:,family:
+wx fc20081e
+ao~type:,family:
+wx fc200210
+ao~type:,family:
+wx fc201090
+ao~type:,family:
+EOF
+EXPECT=<<EOF
+type: store
+family: cpu
+type: add
+family: fpu
+type: cmp
+family: fpu
+type: cast
+family: fpu
+type: abs
+family: fpu
+type: mov
+family: fpu
+EOF
+RUN
+
+NAME=ppc-hello-ref
+FILE=bins/elf/hello.ppc
+CMDS=<<EOF
+f-str*
+e anal.strings=true
+aae
+axt 0x10000640
+EOF
+EXPECT=<<EOF
+(nofunc) 0x100004a0 [DATA:r--] addi r3, r9, str.Simple_PPC_program.
+EOF
+RUN
+
+# Only real (non-alias) instructions are asserted here. Extended mnemonics like
+# sldi/srdi are capstone aliases: cs4/cs5 emit a distinct PPC_INS_SLDI id, but
+# cs6 decodes them as the base rldicr/rldicl, so their op-type differs by
+# capstone version and is not safe to pin in a test.
+NAME=ppc64 op type/esil completeness
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 7d295036
+ao~mnemonic:,type:,esil:
+?e --
+wx 7d29e436
+ao~mnemonic:,type:,esil:
+?e --
+wx 7c841e74
+ao~mnemonic:,type:,esil:
+?e --
+wx 7c630034
+ao~mnemonic:,type:,esil:
+?e --
+wx 7c630074
+ao~mnemonic:,type:,esil:
+?e --
+wx 7cfe51ae
+ao~mnemonic:,type:,esil:
+?e --
+wx 7d3e432e
+ao~mnemonic:,type:,esil:
+?e --
+wx 7fca492a
+ao~mnemonic:,type:,esil:
+?e --
+wx 7d48522e
+ao~mnemonic:,type:,esil:
+?e --
+wx 7d200026
+ao~mnemonic:,type:,esil:
+?e --
+wx 7d910120
+ao~mnemonic:,type:,esil:
+?e --
+wx 7fc34816
+ao~mnemonic:,type:,esil:
+?e --
+wx 7b5a1028
+ao~mnemonic:,type:,esil:
+?e --
+wx 7949382c
+ao~mnemonic:,type:,esil:
+EOF
+EXPECT=<<EOF
+mnemonic: sld
+type: shl
+esil: r10,0x40,&,!,r10,0x3f,&,r9,<<,*,r9,=
+--
+mnemonic: srd
+type: shr
+esil: r28,0x40,&,!,r28,0x3f,&,r9,>>,*,r9,=
+--
+mnemonic: sradi
+type: sar
+esil: 0x8000000000000000,r4,&,!,!,0x7,r4,&,0xffffffffffffffff,&,!,!,&,ca,=,0x3,r4,ASR,r4,=
+--
+mnemonic: cntlzw
+type: mov
+esil: 32,r3,CLZ,r3,=
+--
+mnemonic: cntlzd
+type: mov
+esil: 64,r3,CLZ,r3,=
+--
+mnemonic: stbx
+type: store
+esil: r7,r30,r10,+,=[1]
+--
+mnemonic: sthx
+type: store
+esil: r9,r30,r8,+,=[2]
+--
+mnemonic: stdx
+type: store
+esil: r30,r10,r9,+,=[8]
+--
+mnemonic: lhzx
+type: load
+esil: r8,r10,+,[2],r10,=
+--
+mnemonic: mfcr
+type: mov
+--
+mnemonic: mtocrf
+type: mov
+--
+mnemonic: mulhwu
+type: mul
+esil: 32,0xffffffff,r9,&,0xffffffff,r3,&,*,>>,r30,=
+--
+mnemonic: rldic
+type: rol
+esil: 0x2,r26,ROL,0xfffffffc,&,r26,=
+--
+mnemonic: rldimi
+type: rol
+esil: 0x7,r10,ROL,0xffffff80,&,r9,0xffffffff0000007f,&,|,r9,=
+EOF
+RUN
+
+# Emulation: verify the ESIL actually computes the right value (not just the
+# string). Covers the dword shifts and the arithmetic-shift sign extension
+# (sradi via ASR). Only real, cs-version-stable instructions are used.
+NAME=ppc64 esil emulation: dword + arithmetic shifts
+FILE=-
+CMDS=<<EOF2
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+aei
+aeim
+ar r9=0xff
+ar r10=4
+s 0
+wx 7d295036
+ar PC=0
+aes
+?e sld
+ar r9
+ar r9=0xff00
+ar r28=4
+s 0
+wx 7d29e436
+ar PC=0
+aes
+?e srd
+ar r9
+ar r4=0xfffffffffffffff0
+s 0
+wx 7c841e74
+ar PC=0
+aes
+?e sradi_neg
+ar r4
+ar r4=0x100
+s 0
+wx 7c841e74
+ar PC=0
+aes
+?e sradi_pos
+ar r4
+EOF2
+EXPECT=<<EOF2
+sld
+0x00000ff0
+srd
+0x00000ff0
+sradi_neg
+0xfffffffffffffffe
+sradi_pos
+0x00000020
+EOF2
+RUN
+
+NAME=array stack var shadows interior phantom slots
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 986100809861008198610082986100834e800020
+af
+afvs 0x80 ucTemp char[4]
+afvs
+EOF
+EXPECT=<<EOF
+arg char[4] ucTemp @ r1+0x80
+EOF
+RUN
+
+NAME=multidim array stack var shadows interior slots
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 9861002090610040906100884e800020
+af
+afvs 0x20 grid int[9][9]
+afvs
+EOF
+EXPECT=<<EOF
+var int[9][9] grid @ r1+0x20
+EOF
+RUN
+
+NAME=scalar stack var keeps neighbour slots
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=64
+e cfg.bigendian=true
+wx 9061008090610088906100904e800020
+af
+afvs 0x80 x int64_t
+afvs
+EOF
+EXPECT=<<EOF
+arg int64_t x @ r1+0x80
+arg int64_t arg_88h @ r1+0x88
+arg int64_t arg_90h @ r1+0x90
+EOF
+RUN
+
+# merged: esil keeps real strings in data sections
+NAME=esil does not turn analysed code into a string
+FILE=bins/elf/ppc64_sudoku_dwarf
+CMDS=<<EOF
+e bin.relocs.apply=true
+aaa
+Cs. @ 0x10001d68
+pi 1 @ 0x10001d68
+?e --
+e bin.relocs.apply=true
+aaa
+Cs. @ 0x10001d78
+EOF
+EXPECT=<<EOF
+addi r1, r1, 0x20
+--
+"sh -c clear"
+EOF
+RUN
+
+NAME=ppc plt-call stub toc save is not recovered as an argument
+FILE=bins/elf/ppc64_sudoku_dwarf
+CMDS=<<EOF2
+aa
+afv @ loc.00000018.plt_call.__libc_start_main
+EOF2
+EXPECT=<<EOF2
+EOF2
+RUN
+
+NAME=a decorated stub name still finds its prototype in the types db
+FILE=bins/elf/ppc64_sudoku_dwarf
+CMDS=<<EOF2
+aa
+afs @ loc.00000018.plt_call.__libc_start_main
+EOF2
+EXPECT=<<EOF2
+int loc.00000018.plt_call.__libc_start_main (func main, int argc, char **ubp_av, func init, func fini, func rtld_fini, void *stack_end);
+EOF2
+RUN
+
+NAME=ppc toc restore load is not recovered as an argument
+FILE=bins/elf/ppc64_sudoku_dwarf
+CMDS=<<EOF2
+aa
+afs @ fcn.10000c54
+EOF2
+EXPECT=<<EOF2
+void fcn.10000c54 (int64_t arg1);
+EOF2
+RUN
+
+NAME=ppc64 esil emulation: ld does not update the base register
+FILE=-
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF2
+aei
+aeim
+ar r3=0x178000
+s 0
+wx e8830008
+ar PC=0
+aes
+?e ld
+ar r3
+ar r3=0x178000
+s 0
+wx e8830009
+ar PC=0
+aes
+?e ldu
+ar r3
+EOF2
+EXPECT=<<EOF2
+ld
+0x00178000
+ldu
+0x00178008
+EOF2
+RUN
+
+NAME=ppc-64 cc register sets and stack parameter save area
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc
+CMDS=<<EOF
+k anal/cc/cc.ppc-64.clobber
+k anal/cc/cc.ppc-64.preserve
+k anal/cc/cc.ppc-64.argn
+k anal/cc/cc.ppc-64.shadow
+EOF
+EXPECT=<<EOF
+r0,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,lr,ctr,xer,cr0,cr1,cr5,cr6,cr7,f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13
+r1,r2,r13,r14,r15,r16,r17,r18,r19,r20,r21,r22,r23,r24,r25,r26,r27,r28,r29,r30,r31,cr2,cr3,cr4,f14,f15,f16,f17,f18,f19,f20,f21,f22,f23,f24,f25,f26,f27,f28,f29,f30,f31
+stack
+112
+EOF
+RUN
+
+NAME=ppc-32 cc register sets and stack parameter save area
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e anal.arch=ppc
+CMDS=<<EOF
+k anal/cc/cc.ppc-32.clobber
+k anal/cc/cc.ppc-32.preserve
+k anal/cc/cc.ppc-32.argn
+k anal/cc/cc.ppc-32.shadow
+EOF
+EXPECT=<<EOF
+r0,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,lr,ctr,xer,cr0,cr1,cr5,cr6,cr7,f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13
+r1,r2,r13,r14,r15,r16,r17,r18,r19,r20,r21,r22,r23,r24,r25,r26,r27,r28,r29,r30,r31,cr2,cr3,cr4,f14,f15,f16,f17,f18,f19,f20,f21,f22,f23,f24,f25,f26,f27,f28,f29,f30,f31
+stack
+8
+EOF
+RUN
+
+NAME=ppc-64 clobber kills r3 arg after call
+FILE=malloc://32
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.cc=ppc-64
+CMDS=<<EOF
+wx 7c641b784800000d7c641b784e8000204e800020
+af @ 0
+afc ppc-64 @ 0
+af @ 0x10
+afc ppc-64 @ 0x10
+afva @ 0
+afvR @ 0
+EOF
+EXPECT=<<EOF
+      arg1  0x0
+EOF
+RUN
+
+NAME=ppc conditional return alias beqlr is a return with no immediate jump
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e anal.arch=ppc -e cfg.bigendian=true
+CMDS=<<EOF
+wx 4d820020
+aoj 1~{0.type}
+aoj 1~{0.esil}
+EOF
+EXPECT=<<EOF
+cret
+cr0,!,?{,lr,pc,=,},
+EOF
+RUN
+
+NAME=ppc beqctr aliases to a conditional ctr jump
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e anal.arch=ppc -e cfg.bigendian=true
+CMDS=<<EOF
+wx 4d820420
+aoj 1~{0.type}
+aoj 1~{0.esil}
+EOF
+EXPECT=<<EOF
+ucjmp
+cr0,!,?{,ctr,pc,=,},
+EOF
+RUN
+
+NAME=ppc beqctrl is a conditional call that links lr
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e anal.arch=ppc -e cfg.bigendian=true
+CMDS=<<EOF
+wx 4d820421
+aoj 1~{0.type}
+aoj 1~{0.esil}
+EOF
+EXPECT=<<EOF
+uccall
+pc,lr,=,cr0,!,?{,ctr,pc,=,},
+EOF
+RUN
+
+NAME=ppc bcctrl and bclrl link lr when not taken
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e anal.arch=ppc -e cfg.bigendian=true
+CMDS=<<EOF
+wx 4d8204214d820021
+aei
+aeim
+ar cr0=0x80
+ar ctr=0x100
+ar lr=0
+ar pc=0
+aes
+ar lr
+ar pc
+ar ctr
+s 4
+ar lr=0x100
+aes
+ar lr
+ar pc
+EOF
+EXPECT=<<EOF
+0x00000004
+0x00000004
+0x00000100
+0x00000008
+0x00000008
+EOF
+RUN
+
+NAME=ppc bcctrl and bclrl branch through old targets when taken
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e anal.arch=ppc -e cfg.bigendian=true
+CMDS=<<EOF
+wx 4d8204214d820021
+aei
+aeim
+ar cr0=0
+ar ctr=4
+ar lr=0
+ar pc=0
+aes
+ar lr
+ar pc
+ar ctr
+s 4
+ar lr=0x100
+aes
+ar lr
+ar pc
+EOF
+EXPECT=<<EOF
+0x00000004
+0x00000004
+0x00000004
+0x00000008
+0x00000100
+EOF
+RUN
+
+NAME=ppc beqlr does not create a basic block edge to address zero
+FILE=malloc://32
+ARGS=-a ppc -b 32 -e anal.arch=ppc -e cfg.bigendian=true -m 0x100
+CMDS=<<EOF
+wx 2c0300004d82002038600001 @ 0x100
+af @ 0x100
+afb @ 0x100~j 0x00000000?
+EOF
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=ppc pending toc base does not leak into a later decode window
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.gp=0x10000000
+CMDS=<<EOF
+wx 3d420001e92a0008
+ao 2 > /dev/null
+ao 1 @ 4 ~ptr:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=ppc anal.stateful=false disables toc tracking
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.gp=0x10000000 -e anal.stateful=false
+CMDS=<<EOF
+wx 3d420001e92a0008
+ao 2~ptr:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=ppc toc resolution is deterministic across repeated windows
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.gp=0x10000000
+CMDS=<<EOF
+wx 3d420001e92a0008
+ao 2~ptr:
+ao 2~ptr:
+EOF
+EXPECT=<<EOF
+ptr: 0x10010008
+ptr: 0x10010008
+EOF
+RUN
+
+NAME=ppc toc tracking survives the nested anal.mask sweep
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.gp=0x10000000 -e anal.mask=true
+CMDS=<<EOF
+wx 3d420001e92a0008
+ao 2~ptr:
+EOF
+EXPECT=<<EOF
+ptr: 0x10010008
+EOF
+RUN
+
+NAME=ppc toc tracking survives the aoj mask lookahead
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.gp=0x10000000
+CMDS=<<EOF
+wx 3d420001e92a0008
+aoj 2~{1.ptr}
+EOF
+EXPECT=<<EOF
+268501000
+EOF
+RUN
+
+NAME=ppc toc base with addis immediate -1
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.gp=0x10000000
+CMDS=<<EOF
+wx 3d42ffffe92a0008
+ao 2~ptr:
+EOF
+EXPECT=<<EOF
+ptr: 0x0fff0008
+EOF
+RUN
+
+NAME=ppc toc base with addis immediate -0x8000
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.gp=0x10000000
+CMDS=<<EOF
+wx 3d428000e92a0008
+ao 2~ptr:
+EOF
+EXPECT=<<EOF
+ptr: 0xffffffff90000008
+EOF
+RUN
+
+NAME=ppc generic mfspr mtspr and xer moves decode as mov with esil
+FILE=malloc://32
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 7c7042a67c7043a67c6102a67c6103a6
+aoj 4~{0.type}
+aoj 4~{0.esil}
+aoj 4~{1.type}
+aoj 4~{1.esil}
+aoj 4~{2.type}
+aoj 4~{2.esil}
+aoj 4~{3.type}
+aoj 4~{3.esil}
+EOF
+EXPECT=<<EOF
+mov
+spr_272,r3,=
+mov
+r3,spr_272,=
+mov
+xer,r3,=
+mov
+r3,xer,=
+EOF
+RUN
+
+NAME=ppc stwu stack tracking only for r1 base
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 9421fff894aafff8
+ao 2~stack
+EOF
+EXPECT=<<EOF
+stackop: inc
+stackptr: 8
+EOF
+RUN
+
+NAME=ppc stdu stack tracking only for r1 base
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx f821ff91f8aaff91
+ao 2~stack
+EOF
+EXPECT=<<EOF
+stackop: inc
+stackptr: 112
+EOF
+RUN
+
+NAME=ppc vle archinfo reports 2-byte min and 4-byte max op size
+FILE=malloc://16
+ARGS=-a ppc -b 32
+CMDS=<<EOF
+e asm.cpu=vle
+aia
+EOF
+EXPECT=<<EOF
+minopsz 2
+maxopsz 4
+invopsz 2
+dtalign 2
+codealign 2
+EOF
+RUN
+
+NAME=ppc vle decodes a word with the high bit set
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+e asm.cpu=vle
+wx 80640008
+pi 1
+aoj 1~{0.type}
+EOF
+EXPECT=<<EOF
+se_lbz r6 0x0(r4)
+load
+EOF
+RUN
+
+NAME=ppc record forms append cr0 esil and plain forms do not
+FILE=malloc://32
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 7c8532147c85321570a400017c80292d
+aoj 4~{0.esil}
+aoj 4~{1.esil}
+aoj 4~{2.esil}
+aoj 4~{3.esil}
+EOF
+EXPECT=<<EOF
+r6,r5,+,r4,=
+r6,r5,+,r4,=,0x80,0,r4,<,*,r4,0,<,+,cr0,=
+0x1,r5,&,r4,=,0x80,0,r4,<,*,r4,0,<,+,cr0,=
+r4,r5,=[4]
+EOF
+RUN
+
+NAME=ppc record form cr0 result drives a following branch
+FILE=malloc://32
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 2c2500007c863a154182000839000001 @ 0
+wx 38e00007 @ 16
+aei
+aeim
+ar r5=5
+ar r6=1
+ar r7=0xffffffffffffffff
+aes
+aes
+aes
+aes
+ar cr0
+ar r7
+ar r8
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000007
+0x00000000
+EOF
+RUN
+
+NAME=ppc32 record form cr0 compares the word result
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 34850001
+aoj 1~{0.esil}
+aei
+aeim
+ar r5=0x7fffffff
+aes
+ar r4
+ar cr0
+EOF
+EXPECT=<<EOF
+0x8000000000000000,r5,^,0x8000000000000000,0x1,r5,+,0xffffffff,&,^,<,0x1,r5,+,r4,=,ca,=,0x80,0,32,r4,~,<,*,32,r4,~,0,<,+,cr0,=
+0x80000000
+0x00000080
+EOF
+RUN
+
+NAME=ppc srawi shifts the sign-extended low word
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 7ca41e71
+aoj 1~{0.esil}
+aei
+aeim
+ar r5=0x8000000f
+aes
+ar r4
+ar ca
+ar cr0
+EOF
+EXPECT=<<EOF
+0x80000000,r5,&,!,!,0x7,r5,&,0xffffffff,&,!,!,&,ca,=,0x3,32,r5,~,ASR,r4,=,0x80,0,r4,<,*,r4,0,<,+,cr0,=
+0xfffffffff0000001
+0x00000001
+0x00000080
+EOF
+RUN
+
+NAME=callargs reads a ppc64 stack argument above the parameter save area
+FILE=malloc://256
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 386000503880005438a0005838c0005c38e0006039000064392000683940006c39600070f9610070480000594e800020
+wx 4e800020 @ 0x80
+w AA @ 0x50
+w BB @ 0x54
+w CC @ 0x58
+w DD @ 0x5c
+w EE @ 0x60
+w FF @ 0x64
+w GG @ 0x68
+w HH @ 0x6c
+w II @ 0x70
+af @ 0x80
+afn nine @ 0x80
+'td int nine(const char *a, const char *b, const char *c, const char *d, const char *e, const char *f, const char *g, const char *h, const char *i);
+tk func.nine.cc=ppc-64
+af @ 0
+a:callargs-q 0x28
+EOF
+EXPECT=<<EOF
+int nine("AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH", "II")
+EOF
+RUN
+
+NAME=callargs reads a ppc32 stack argument above the parameter save area
+FILE=malloc://256
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 386000503880005438a0005838c0005c38e0006039000064392000683940006c3960007091610008480000594e800020
+wx 4e800020 @ 0x80
+w AA @ 0x50
+w BB @ 0x54
+w CC @ 0x58
+w DD @ 0x5c
+w EE @ 0x60
+w FF @ 0x64
+w GG @ 0x68
+w HH @ 0x6c
+w II @ 0x70
+af @ 0x80
+afn nine @ 0x80
+'td int nine(const char *a, const char *b, const char *c, const char *d, const char *e, const char *f, const char *g, const char *h, const char *i);
+tk func.nine.cc=ppc-32
+af @ 0
+a:callargs-q 0x28
+EOF
+EXPECT=<<EOF
+int nine("AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH", "II")
+EOF
+RUN
+
+NAME=ppc-64 elfv2 cc parameter save area
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc
+CMDS=<<EOF
+k anal/cc/cc.elfv2.argn
+k anal/cc/cc.elfv2.shadow
+EOF
+EXPECT=<<EOF
+stack
+96
+EOF
+RUN
+
+NAME=callargs reads an elfv2 stack argument above the parameter save area
+FILE=malloc://256
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 386000503880005438a0005838c0005c38e0006039000064392000683940006c39600070f9610060480000594e800020
+wx 4e800020 @ 0x80
+w AA @ 0x50
+w BB @ 0x54
+w CC @ 0x58
+w DD @ 0x5c
+w EE @ 0x60
+w FF @ 0x64
+w GG @ 0x68
+w HH @ 0x6c
+w II @ 0x70
+af @ 0x80
+afn nine @ 0x80
+'td int nine(const char *a, const char *b, const char *c, const char *d, const char *e, const char *f, const char *g, const char *h, const char *i);
+tk func.nine.cc=elfv2
+af @ 0
+a:callargs-q 0x28
+EOF
+EXPECT=<<EOF
+int nine("AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH", "II")
+EOF
+RUN
+
+NAME=ppc.gnu decodes the full 6-bit primary opcode
+FILE=malloc://128
+ARGS=-a ppc.gnu -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 980100004400000248000010480000112c030000280300014082001060000000
+wx 4e8000204e8004204e800421 @ 32
+wx 4e8000214d8200204c820420 @ 44
+wx 429f0005408200114280001142800010 @ 56
+ao 1 @ 0~type
+ao 1 @ 4~type
+pi 1 @ 8
+ao 1 @ 8~type,jump
+ao 1 @ 12~type,jump,fail
+ao 1 @ 16~type
+ao 1 @ 20~type
+ao 1 @ 24~type,jump,fail
+ao 1 @ 32~type
+ao 1 @ 36~type
+ao 1 @ 40~type,fail
+ao 1 @ 44~type,fail
+ao 1 @ 48~type,fail
+ao 1 @ 52~type,fail
+ao 1 @ 56~type,jump,fail
+ao 1 @ 60~type,jump,fail
+ao 1 @ 64~type,jump,fail
+ao 1 @ 68~type,jump,fail
+wx 44000000 @ 72
+ao 1 @ 72~type
+wx 4c000064 @ 76
+ao 1 @ 76~type
+wx 4e0000204e40002042a00004 @ 80
+ao 1 @ 80~type,fail
+ao 1 @ 84~type,fail
+ao 1 @ 88~type
+EOF
+EXPECT=<<EOF
+type: null
+type: swi
+b 0x00000018
+type: jmp
+jump: 0x00000018
+type: call
+jump: 0x0000001c
+fail: 0x00000010
+type: cmp
+type: cmp
+type: cjmp
+jump: 0x00000028
+fail: 0x0000001c
+type: ret
+type: ujmp
+type: ucall
+fail: 0x0000002c
+type: ucall
+fail: 0x00000030
+type: cret
+fail: 0x00000034
+type: ucjmp
+fail: 0x00000038
+type: jmp
+jump: 0x0000003c
+type: ccall
+jump: 0x0000004c
+fail: 0x00000040
+type: call
+jump: 0x00000050
+fail: 0x00000044
+type: jmp
+jump: 0x00000054
+type: ill
+type: ret
+type: cjmp
+fail: 0x00000054
+type: cjmp
+fail: 0x00000058
+type: ill
+EOF
+RUN
+
+NAME=ppc.gnu function detection does not stop at byte stores
+FILE=malloc://16
+ARGS=-a ppc.gnu -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 380000009801000060000000 4e800020
+af
+afi~size
+EOF
+EXPECT=<<EOF
+size: 16
+EOF
+RUN
+
+NAME=ppc.gnu little-endian disassembly
+FILE=malloc://16
+ARGS=-a ppc.gnu -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+wx 10000048
+pi 1
+ao 1~type,jump
+EOF
+EXPECT=<<EOF
+b 0x00000010
+type: jmp
+jump: 0x00000010
+EOF
+RUN
+
+NAME=ppc register move does not make its destination an argument
+FILE=malloc://16
+ARGS=-a ppc -b 64 -e anal.arch=ppc -e cfg.bigendian=true -e anal.cc=ppc-64
+CMDS=<<EOF
+wx 7c681b787d2942144e800020
+af
+afv
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ r3
+arg int64_t arg2 @ r9
+EOF
+RUN
+
+NAME=ppc bcl 20,31 branch-always forms are jumps that set lr, not bdnz aliases
+REQUIRE=cs5
+FILE=malloc://64
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 429f0005 429f0004 429f0105 429f0007 42000005 42bf0009
+pi 6
+ao 1 @ 0~type,jump,fail,esil:
+ao 1 @ 4~type,jump,fail,esil:
+ao 1 @ 8~type,jump,fail,esil:
+ao 1 @ 12~type,jump,fail,esil:
+ao 1 @ 16~type,jump,fail
+EOF
+EXPECT=<<EOF
+bcl 20, 31, 0x4
+bc 20, 31, 0x8
+bcl 20, 31, 0x10c
+bcla 20, 31, 0x4
+bdnzl 0x14
+bcl 21, 31, 0x1c
+type: jmp
+esil: pc,lr,=,0x4,pc,=
+jump: 0x00000004
+type: jmp
+esil: 0x8,pc,=
+jump: 0x00000008
+type: call
+esil: pc,lr,=,0x10c,pc,=
+jump: 0x0000010c
+fail: 0x0000000c
+type: call
+esil: pc,lr,=,0x4,pc,=
+jump: 0x00000004
+fail: 0x00000010
+type: cjmp
+jump: 0x00000014
+fail: 0x00000014
+EOF
+RUN
+
+NAME=ppc bcl 20,31 branch-always forms are jumps that set lr, not bdnz aliases (cs6)
+REQUIRE=cs6
+FILE=malloc://64
+ARGS=-a ppc -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 429f0005 429f0004 429f0105 429f0007 42000005 42bf0009
+pi 6
+ao 1 @ 0~type,jump,fail,esil:
+ao 1 @ 4~type,jump,fail,esil:
+ao 1 @ 8~type,jump,fail,esil:
+ao 1 @ 12~type,jump,fail,esil:
+ao 1 @ 16~type,jump,fail
+EOF
+EXPECT=<<EOF
+bcl 0x14, 4*cr7+un, 4
+bc 0x14, 4*cr7+un, 8
+bcl 0x14, 4*cr7+un, 0x10c
+bcla 0x14, 4*cr7+un, 4
+bcl 0x10, lt, 0x14
+bcl 0x15, 4*cr7+un, 0x1c
+type: jmp
+esil: pc,lr,=,0x4,pc,=
+jump: 0x00000004
+type: jmp
+esil: 0x8,pc,=
+jump: 0x00000008
+type: call
+esil: pc,lr,=,0x10c,pc,=
+jump: 0x0000010c
+fail: 0x0000000c
+type: call
+esil: pc,lr,=,0x4,pc,=
+jump: 0x00000004
+fail: 0x00000010
+type: ccall
+jump: 0x00000014
+fail: 0x00000014
+EOF
+RUN
+
+NAME=ppc asm.bits toggle reopens capstone mode (cs6)
+REQUIRE=cs6
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 42108400
+pi 1
+e asm.bits=64
+pi 1
+e asm.bits=32
+pi 1
+EOF
+EXPECT=<<EOF
+bc 0x10, 4*cr4+lt, 0xffff8400
+bc 0x10, 4*cr4+lt, 0xffffffffffff8400
+bc 0x10, 4*cr4+lt, 0xffff8400
+EOF
+RUN
+
+NAME=ppc endian changes preserve custom register profiles
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+arp unit/legacy_unit/reg/test.regs
+ar eax=0x11223344
+ar eax
+e cfg.bigendian=true
+ar eax
+e cfg.bigendian=false
+ar eax
+e arch.endian=big
+ar eax
+e arch.endian=little
+ar eax
+EOF
+EXPECT=<<EOF
+0x11223344
+0x44332211
+0x11223344
+0x44332211
+0x11223344
+EOF
+RUN
+
+NAME=ppc xer flags follow endian flips after an arch reselect
+FILE=bins/elf/hello.ppc
+CMDS=<<EOF
+e cfg.bigendian=false
+e asm.arch=ppc
+e cfg.bigendian=true
+ar xer=0x20000000
+ar ca
+e arch.endian=little
+ar xer=0
+ar so=1
+ar xer
+e arch.endian=big
+ar xer=0x20000000
+ar ca
+pi 1 @ entry0
+EOF
+EXPECT=<<EOF
+0x00000001
+0x80000000
+0x00000001
+mr r9, r1
 EOF
 RUN

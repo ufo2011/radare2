@@ -1,0 +1,162 @@
+NAME=dalvik cmpl-float
+FILE=malloc://0x200
+ARGS=-a dalvik
+CMDS=<<EOF
+wx 2d000204
+aei
+aeim
+ar v0=0xa5a5a5a5; ar v2=0x7fc00000; ar v4=0x3f800000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x3f800000; ar v4=0x7fc00000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x40000000; ar v4=0x3f800000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x3f800000; ar v4=0x40000000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x3f800000; ar v4=0x3f800000; aeip; aes; ar v0
+EOF
+EXPECT=<<EOF
+0xffffffff
+0xffffffff
+0x00000001
+0xffffffff
+0x00000000
+EOF
+RUN
+
+NAME=dalvik cmpg-float
+FILE=malloc://0x200
+ARGS=-a dalvik
+CMDS=<<EOF
+wx 2e000204
+aei
+aeim
+ar v0=0xa5a5a5a5; ar v2=0x7fc00000; ar v4=0x3f800000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x3f800000; ar v4=0x7fc00000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x40000000; ar v4=0x3f800000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x3f800000; ar v4=0x40000000; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v2=0x3f800000; ar v4=0x3f800000; aeip; aes; ar v0
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000001
+0xffffffff
+0x00000000
+EOF
+RUN
+
+NAME=dalvik cmpl-double
+FILE=malloc://0x200
+ARGS=-a dalvik
+CMDS=<<EOF
+wx 2f000204
+aei
+aeim
+ar v0=0xa5a5a5a5; ar v3=0x7ff80000; ar v2=0; ar v5=0x3ff00000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=0; ar v5=0x7ff80000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x40000000; ar v2=0; ar v5=0x3ff00000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=0; ar v5=0x40000000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=0; ar v5=0x3ff00000; ar v4=0; aeip; aes; ar v0
+EOF
+EXPECT=<<EOF
+0xffffffff
+0xffffffff
+0x00000001
+0xffffffff
+0x00000000
+EOF
+RUN
+
+NAME=dalvik cmpg-double
+FILE=malloc://0x200
+ARGS=-a dalvik
+CMDS=<<EOF
+wx 30000204
+aei
+aeim
+ar v0=0xa5a5a5a5; ar v3=0x7ff80000; ar v2=0; ar v5=0x3ff00000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=0; ar v5=0x7ff80000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x40000000; ar v2=0; ar v5=0x3ff00000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=0; ar v5=0x40000000; ar v4=0; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=0; ar v5=0x3ff00000; ar v4=0; aeip; aes; ar v0
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000001
+0xffffffff
+0x00000000
+EOF
+RUN
+
+NAME=dalvik cmp-double reads the register pair
+FILE=malloc://0x200
+ARGS=-a dalvik
+CMDS=<<EOF
+wx 2f000204
+aei
+aeim
+ar v0=0xa5a5a5a5; ar v3=0x40000000; ar v2=0; ar v5=0x3ff00000; ar v4=7; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=7; ar v5=0x40000000; ar v4=0; aeip; aes; ar v0
+wx 30000204
+ar v0=0xa5a5a5a5; ar v3=0x40000000; ar v2=0; ar v5=0x3ff00000; ar v4=7; aeip; aes; ar v0
+ar v0=0xa5a5a5a5; ar v3=0x3ff00000; ar v2=7; ar v5=0x40000000; ar v4=0; aeip; aes; ar v0
+EOF
+EXPECT=<<EOF
+0x00000001
+0xffffffff
+0x00000001
+0xffffffff
+EOF
+RUN
+
+NAME=dalvik shr-long uses bit 63 as sign under bits=32
+FILE=malloc://0x100
+ARGS=-a dalvik -b 32
+CMDS=<<EOF
+wx a4000204a4000204
+aei
+aeip
+ar v2=0x80000000
+ar v3=1
+ar v4=1
+aes
+ar v0
+ar v1
+ar v2=0
+ar v3=0x80000000
+ar v4=0x41
+aes
+ar v0
+ar v1
+EOF
+EXPECT=<<EOF
+0xc0000000
+0x00000000
+0x00000000
+0xc0000000
+EOF
+RUN
+
+NAME=dalvik shr-long/2addr and overlapping registers sign-extend under bits=32
+FILE=malloc://0x100
+ARGS=-a dalvik -b 32
+CMDS=<<EOF
+wx c420a4000002
+aei
+aeip
+ar v0=0
+ar v1=0x80000000
+ar v2=1
+aes
+ar v0
+ar v1
+ar v2=1
+aes
+ar v0
+ar v1
+EOF
+EXPECT=<<EOF
+0x00000000
+0xc0000000
+0x00000000
+0xe0000000
+EOF
+RUN

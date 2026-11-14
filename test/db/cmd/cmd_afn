@@ -12,6 +12,35 @@ foobar
 EOF
 RUN
 
+NAME=rename API updates flags and notifies only on success
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+af+ 0x100 original
+af+ 0x200 occupied
+afb+ 0x100 0x100 4
+e cmd.fcn.rename=?e renamed
+an updated @ 0x100
+afn updated @ 0x100
+afnq occupied @ 0x100
+afn @ 0x100
+f@F:functions
+f-*
+?v original
+?v updated
+?v occupied
+EOF
+EXPECT=<<EOF
+renamed
+updated
+0x00000100 0 updated
+0x00000200 0 occupied
+0x0
+0x100
+0x200
+EOF
+RUN
+
 NAME=afn interrupt handler
 FILE=-
 CMDS=<<EOF
@@ -35,7 +64,7 @@ f@F:functions~483f4,48540
 f@F:*~483f4,48540
 afn mymain @ 0x08048540
 afn @ 0x08048540
-"?e The main flag shouldn't be renamed, it comes from bin:"
+"?e The main flag shouldnt be renamed, it comes from bin:"
 f@F:functions~483f4,48540
 ?e --
 f@F:*~483f4,48540
@@ -59,31 +88,31 @@ EXPECT=<<EOF
 0x08048540 92 main
 0x08048540 92 sym.main
 mymain
-The main flag shouldn't be renamed, it comes from bin:
+The main flag shouldnt be renamed, it comes from bin:
 0x080483f4 33 fcn.080483f4
-0x08048540 92 mymain
+0x08048540 85 mymain
 --
 0x080483f4 33 fcn.080483f4
 0x08048540 92 main
 0x08048540 92 sym.main
-0x08048540 92 mymain
+0x08048540 85 mymain
 myfunc
 Here the flag is owned by the fcn and should be renamed:
 0x080483f4 33 myfunc
-0x08048540 92 mymain
+0x08048540 85 mymain
 --
 0x080483f4 33 myfunc
 0x08048540 92 main
 0x08048540 92 sym.main
-0x08048540 92 mymain
+0x08048540 85 mymain
 Non-existing flags should be created
 0x080483f4 33 createdflag
-0x08048540 92 mymain
+0x08048540 85 mymain
 --
 0x080483f4 33 createdflag
 0x08048540 92 main
 0x08048540 92 sym.main
-0x08048540 92 mymain
+0x08048540 85 mymain
 EOF
 RUN
 
@@ -108,13 +137,14 @@ main
 func.main.arg.0=int,argc
 func.main.arg.1=char **,argv
 func.main.arg.2=char **,envp
-func.main.args=2
+func.main.args=3
 func.main.ret=int
 --
 --
 func.mein.arg.0=int,argc
 func.mein.arg.1=char **,argv
-func.mein.args=2
+func.mein.arg.2=char **,envp
+func.mein.args=3
 func.mein.ret=int
 EOF
 RUN

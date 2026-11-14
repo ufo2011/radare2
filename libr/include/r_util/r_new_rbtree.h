@@ -60,11 +60,15 @@ R_API void r_crbtree_free(RRBTree *tree);
 R_API RRBNode *r_crbtree_find_node(RRBTree *tree, void *data, RRBComparator cmp, void *user);
 R_API void *r_crbtree_find(RRBTree *tree, void *data, RRBComparator cmp, void *user);
 R_API bool r_crbtree_insert(RRBTree *tree, void *data, RRBComparator cmp, void *user);
+R_API void *r_crbtree_take(RRBTree *tree, void *data, RRBComparator cmp, void *user);
 R_API bool r_crbtree_delete(RRBTree *tree, void *data, RRBComparator cmp, void *user);
 R_API RRBNode *r_crbtree_first_node(RRBTree *tree);
 R_API RRBNode *r_crbtree_last_node(RRBTree *tree);
 R_API RRBNode *r_rbnode_next(RRBNode *node);
 R_API RRBNode *r_rbnode_prev(RRBNode *node);
+
+#define r_crbtree_foreach(tree, iter, type, stuff) \
+	for (iter = (tree != NULL)? r_crbtree_first_node (tree): NULL, stuff = (type*)((iter != NULL)? iter->data: NULL); iter; iter = r_rbnode_next (iter), stuff = (type*)((iter != NULL)? iter->data: NULL))
 
 #ifdef __cplusplus
 }

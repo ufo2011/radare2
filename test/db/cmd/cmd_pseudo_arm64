@@ -1,0 +1,324 @@
+NAME=ARM64 pseudo mul compound (x9 *= x10)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 297d0a9b
+pd 1~x9
+EOF
+EXPECT=<<EOF
+            0x00000000      297d0a9b       x9 *= x10
+EOF
+RUN
+
+NAME=ARM64 pseudo mul expanded (x9 = x10 * x11)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 497d0b9b
+pd 1~x9
+EOF
+EXPECT=<<EOF
+            0x00000000      497d0b9b       x9 = x10 * x11
+EOF
+RUN
+
+NAME=ARM64 pseudo mul w-register (w1 *= w2)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 217c021b
+pd 1~w1
+EOF
+EXPECT=<<EOF
+            0x00000000      217c021b       w1 *= w2
+EOF
+RUN
+
+NAME=ARM64 pseudo sdiv compound (x5 /= x6)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx a50cc69a
+pd 1~x5
+EOF
+EXPECT=<<EOF
+            0x00000000      a50cc69a       x5 /= x6
+EOF
+RUN
+
+NAME=ARM64 pseudo sdiv expanded (x5 = x6 / x7)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx c50cc79a
+pd 1~x5
+EOF
+EXPECT=<<EOF
+            0x00000000      c50cc79a       x5 = x6 / x7
+EOF
+RUN
+
+NAME=ARM64 pseudo udiv compound (w3 /= w4)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 6308c41a
+pd 1~w3
+EOF
+EXPECT=<<EOF
+            0x00000000      6308c41a       w3 /= w4
+EOF
+RUN
+
+NAME=ARM64 pseudo and compound (x3 &= x4)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 6300048a
+pd 1~x3
+EOF
+EXPECT=<<EOF
+            0x00000000      6300048a       x3 &= x4
+EOF
+RUN
+
+NAME=ARM64 pseudo and expanded (x3 = x4 & x5)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 8300058a
+pd 1~x3
+EOF
+EXPECT=<<EOF
+            0x00000000      8300058a       x3 = x4 & x5
+EOF
+RUN
+
+NAME=ARM64 pseudo orr compound (x7 |= x8)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx e70008aa
+pd 1~x7
+EOF
+EXPECT=<<EOF
+            0x00000000      e70008aa       x7 |= x8
+EOF
+RUN
+
+NAME=ARM64 pseudo orr expanded (x7 = x8 | x9)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 070109aa
+pd 1~x7
+EOF
+EXPECT=<<EOF
+            0x00000000      070109aa       x7 = x8 | x9
+EOF
+RUN
+
+NAME=ARM64 pseudo eor compound (x1 ^= x2)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 210002ca
+pd 1~x1
+EOF
+EXPECT=<<EOF
+            0x00000000      210002ca       x1 ^= x2
+EOF
+RUN
+
+NAME=ARM64 pseudo eor expanded (x1 = x2 ^ x3)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 410003ca
+pd 1~x1
+EOF
+EXPECT=<<EOF
+            0x00000000      410003ca       x1 = x2 ^ x3
+EOF
+RUN
+
+NAME=ARM64 pseudo add compound (x1 += x2)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 2100028b
+pd 1~x1
+EOF
+EXPECT=<<EOF
+            0x00000000      2100028b       x1 += x2
+EOF
+RUN
+
+NAME=ARM64 pseudo add expanded (x1 = x2 + x3)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 4100038b
+pd 1~x1
+EOF
+EXPECT=<<EOF
+            0x00000000      4100038b       x1 = x2 + x3
+EOF
+RUN
+
+NAME=ARM64 pseudo sub compound (x5 -= x6)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx a50006cb
+pd 1~x5
+EOF
+EXPECT=<<EOF
+            0x00000000      a50006cb       x5 -= x6
+EOF
+RUN
+
+NAME=ARM64 pseudo sub expanded (x5 = x6 - x7)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx c50007cb
+pd 1~x5
+EOF
+EXPECT=<<EOF
+            0x00000000      c50007cb       x5 = x6 - x7
+EOF
+RUN
+
+NAME=ARM64 pseudo smul compound (x2 *= x3)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 427c039b
+pd 1~x2
+EOF
+EXPECT=<<EOF
+            0x00000000      427c039b       x2 *= x3
+EOF
+RUN
+
+NAME=ARM64 pseudo fdiv compound (d2 /= d3)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx 4218631e
+pd 1~d2
+EOF
+EXPECT=<<EOF
+            0x00000000      4218631e       d2 /= d3
+EOF
+RUN
+
+NAME=ARM64 no variable substitution in frame pointer setup (add x29, sp, 0x20)
+FILE=malloc://4
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx fd830091
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      fd830091       x29 = sp + 0x20
+EOF
+RUN
+
+NAME=ARM64 variable substitution with frame pointer setup
+FILE=malloc://12
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e asm.pseudo=true
+wx ffc300d1fd7b02a9fd830091
+af
+pd 3~x29
+EOF
+EXPECT=<<EOF
+|           0x00000004      fd7b02a9       [var_20h] = (x29, 2)
+\           0x00000008      fd830091       x29 = sp + 0x20
+EOF
+RUN
+
+NAME=ARM64 pseudo compares set v and b.cond tests it
+FILE=malloc://80
+ARGS=-a arm -b 64 -e asm.pseudo=true -e asm.comments=false
+CMDS=<<EOF
+wx 1f0002eb 40000054 41000054 4a000054 4b000054 4c000054 4d000054 48000054 42000054 43000054 49000054 44000054 45000054 46000054 47000054 4e000054 1f00026a 1f0002ab
+pi 18
+EOF
+EXPECT=<<EOF
+v = x0 - x2
+if (!v) goto 0xc
+if (v) goto 0x10
+if (v >= 0) goto 0x14
+if (v < 0) goto 0x18
+if (v > 0) goto 0x1c
+if (v <= 0) goto 0x20
+if (((unsigned) v) > 0) goto 0x24
+if (((unsigned) v) >= 0) goto 0x28
+if (((unsigned) v) < 0) goto 0x2c
+if (((unsigned) v) <= 0) goto 0x30
+if (v < 0) goto 0x34
+if (v >= 0) goto 0x38
+if (overflow) goto 0x3c
+if (!overflow) goto 0x40
+goto 0x44
+v = w0 & w2
+v = x0 + x2
+EOF
+RUN
+
+NAME=ARM64 pseudo keeps the shifted or extended compare operand
+FILE=malloc://16
+ARGS=-a arm -b 64 -e asm.pseudo=true -e asm.comments=false
+CMDS=<<EOF
+wx 1f0801eb 1fc021eb 1f08026a
+pi 3
+EOF
+EXPECT=<<EOF
+v = x0 - (x1 << 2)
+v = x0 - (w1 sxtw)
+v = w0 & (w2 << 2)
+EOF
+RUN

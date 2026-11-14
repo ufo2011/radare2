@@ -1,11 +1,9 @@
-/* radare - LGPL - Copyright 2013-2021 - pancake */
+/* radare - LGPL - Copyright 2013-2025 - pancake */
 
 #include <r_cons.h>
+#include "private.h"
 #define W(y) r_cons_canvas_write(c,y)
 #define G(x,y) r_cons_canvas_gotoxy(c,x,y)
-
-#define useUtf8 (r_cons_singleton ()->use_utf8)
-#define useUtf8Curvy (r_cons_singleton ()->use_utf8_curvy)
 
 #define DOTTED_LINE_HORIZ "┄"
 #define DOTTED_LINE_VERT "┊"
@@ -25,8 +23,8 @@ enum {
 	NRM_NRM
 };
 
-static const char* utf8_line_vert (int dot_style) {
-	if (r_cons_singleton ()->dotted_lines) {
+static const char* utf8_line_vert(RCons *cons, int dot_style) {
+	if (cons->dotted_lines) {
 		switch (dot_style) {
 		case DOT_STYLE_NORMAL:      return RUNECODESTR_LINE_VERT;
 		case DOT_STYLE_CONDITIONAL: return DOTTED_LINE_VERT;
@@ -36,8 +34,8 @@ static const char* utf8_line_vert (int dot_style) {
 	return RUNECODESTR_LINE_VERT;
 }
 
-static const char* utf8_line_horiz (int dot_style) {
-	if (r_cons_singleton ()->dotted_lines) {
+static const char* utf8_line_horiz(RCons *cons, int dot_style) {
+	if (cons->dotted_lines) {
 		switch (dot_style) {
 		case DOT_STYLE_NORMAL:      return RUNECODESTR_LINE_HORIZ;
 		case DOT_STYLE_CONDITIONAL: return DOTTED_LINE_HORIZ;
@@ -47,9 +45,8 @@ static const char* utf8_line_horiz (int dot_style) {
 	return RUNECODESTR_LINE_HORIZ;
 }
 
-static void apply_line_style(RConsCanvas *c, int x, int y, int x2, int y2,
-		RCanvasLineStyle *style, int isvert) {
-	RCons *cons = r_cons_singleton ();
+static void apply_line_style(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style, int isvert) {
+	RCons *cons = c->cons;
 	switch (style->color) {
 	case LINE_UNCJMP:
 		c->attr = cons->context->pal.graph_trufae;
@@ -93,12 +90,12 @@ static void apply_line_style(RConsCanvas *c, int x, int y, int x2, int y2,
 		break;
 	case LINE_NOSYM_VERT:
 		if (G (x, y)) {
-			W (useUtf8 ? utf8_line_vert (style->dot_style) : "|");
+			W (cons->use_utf8? utf8_line_vert (cons, style->dot_style): "|");
 		}
 		break;
 	case LINE_NOSYM_HORIZ:
 		if (G (x, y)) {
-			W (useUtf8 ? utf8_line_horiz (style->dot_style) : "-");
+			W (cons->use_utf8? utf8_line_horiz (cons, style->dot_style): "-");
 		}
 		break;
 	case LINE_NONE:
@@ -107,9 +104,49 @@ static void apply_line_style(RConsCanvas *c, int x, int y, int x2, int y2,
 	}
 }
 
-static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int style, int dot_style) {
+static void draw_horizontal_segment(RConsCanvas *c, int x, int y, int width, const char *unit) {
+	const int from = R_MAX (x, -c->sx);
+	const int to = R_MIN (x + width, c->w - c->sx);
+	const int count = to - from;
+	if (count < 1 || !G (from, y)) {
+		return;
+	}
+	const size_t unit_len = strlen (unit);
+	size_t len;
+	if (r_mul_overflow_size_t (unit_len, count, &len) || len == SIZE_MAX) {
+		return;
+	}
+	char *segment = malloc (len + 1);
+	if (!segment) {
+		return;
+	}
+	if (unit_len == 1) {
+		memset (segment, *unit, len);
+	} else {
+		int i;
+		for (i = 0; i < count; i++) {
+			memcpy (segment + (i * unit_len), unit, unit_len);
+		}
+	}
+	segment[len] = '\0';
+	W (segment);
+	if (c->color) {
+		// Preserve the per-cell attributes of the former one-write-per-cell loop.
+		c->attr = r_str_constpool_get (&c->constpool, c->attr);
+		const ut64 loc = (ut64)c->y * c->w + c->x;
+		int i;
+		for (i = 1; i < count; i++) {
+			canvas_attrs_set (c->attrs, loc + i, c->attr);
+		}
+	}
+	free (segment);
+}
+
+static void draw_horizontal_line(RConsCanvas *c, int x, int y, int width, int style, int dot_style) {
+	RCons *cons = c->cons;
 	const char *l_corner = "?", *r_corner = "?";
-	int i;
+	const bool use_utf8 = cons->use_utf8;
+	const bool use_utf8_curvy = cons->use_utf8_curvy;
 
 	if (width < 1) {
 		return;
@@ -124,8 +161,8 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 
 	switch (style) {
 	case APEX_DOT:
-		if (useUtf8) {
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			if (use_utf8_curvy) {
 				l_corner = RUNECODESTR_CURVE_CORNER_BL;
 				r_corner = RUNECODESTR_CURVE_CORNER_TR;
 			} else {
@@ -138,8 +175,8 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		}
 		break;
 	case DOT_APEX:
-		if (useUtf8) {
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			if (use_utf8_curvy) {
 				l_corner = RUNECODESTR_CURVE_CORNER_TL;
 				r_corner = RUNECODESTR_CURVE_CORNER_BR;
 			} else {
@@ -152,8 +189,8 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		}
 		break;
 	case REV_APEX_APEX:
-		if (useUtf8) {
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			if (use_utf8_curvy) {
 				l_corner = RUNECODESTR_CURVE_CORNER_BL;
 				r_corner = RUNECODESTR_CURVE_CORNER_BR;
 			} else {
@@ -166,8 +203,8 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		}
 		break;
 	case DOT_DOT:
-		if (useUtf8) {
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			if (use_utf8_curvy) {
 				l_corner = RUNECODESTR_CURVE_CORNER_TL;
 				r_corner = RUNECODESTR_CURVE_CORNER_TR;
 			} else {
@@ -179,9 +216,9 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		}
 		break;
 	case NRM_DOT:
-		if (useUtf8) {
-			l_corner = utf8_line_horiz (dot_style);
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			l_corner = utf8_line_horiz (cons, dot_style);
+			if (use_utf8_curvy) {
 				r_corner = RUNECODESTR_CURVE_CORNER_TR;
 			} else {
 				r_corner = RUNECODESTR_CORNER_TR;
@@ -192,9 +229,9 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		}
 		break;
 	case NRM_APEX:
-		if (useUtf8) {
-			l_corner = utf8_line_horiz (dot_style);
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			l_corner = utf8_line_horiz (cons, dot_style);
+			if (use_utf8_curvy) {
 				r_corner = RUNECODESTR_CURVE_CORNER_BR;
 			} else {
 				r_corner = RUNECODESTR_CORNER_BR;
@@ -205,26 +242,26 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		}
 		break;
 	case DOT_NRM:
-		if (useUtf8) {
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			if (use_utf8_curvy) {
 				l_corner = RUNECODESTR_CURVE_CORNER_TL;
 			} else {
 				l_corner = RUNECODESTR_CORNER_TL;
 			}
-			r_corner = utf8_line_horiz (dot_style);
+			r_corner = utf8_line_horiz (cons, dot_style);
 		} else {
 			l_corner = ".";
 			r_corner = "-";
 		}
 		break;
 	case REV_APEX_NRM:
-		if (useUtf8) {
-			if (useUtf8Curvy) {
+		if (use_utf8) {
+			if (use_utf8_curvy) {
 				l_corner = RUNECODESTR_CURVE_CORNER_BL;
 			} else {
 				l_corner = RUNECODESTR_CORNER_BL;
 			}
-			r_corner = utf8_line_horiz (dot_style);
+			r_corner = utf8_line_horiz (cons, dot_style);
 		} else {
 			l_corner = "`";
 			r_corner = "-";
@@ -232,8 +269,8 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		break;
 	case NRM_NRM:
 	default:
-		if (useUtf8) {
-			l_corner = r_corner = utf8_line_horiz (dot_style);
+		if (use_utf8) {
+			l_corner = r_corner = utf8_line_horiz (cons, dot_style);
 		} else {
 			l_corner = r_corner = "-";
 		}
@@ -244,17 +281,8 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 		W (l_corner);
 	}
 
-	const char *hline = useUtf8 ? utf8_line_horiz (dot_style) : "-";
-	r_cons_break_push (NULL, NULL);
-	for (i = x + 1; i < x + width - 1; i++) {
-		if (r_cons_is_breaked ()) {
-			break;
-		}
-		if (G (i, y)) {
-			W (hline);
-		}
-	}
-	r_cons_break_pop ();
+	const char *hline = use_utf8? utf8_line_horiz (cons, dot_style): "-";
+	draw_horizontal_segment (c, x + 1, y, width - 2, hline);
 
 	if (G (x + width - 1, y)) {
 		W (r_corner);
@@ -262,25 +290,24 @@ static void draw_horizontal_line (RConsCanvas *c, int x, int y, int width, int s
 }
 
 static void draw_vertical_line(RConsCanvas *c, int x, int y, int height, int dot_style) {
-	int i;
-	/* do not render offscreen vertical lines */
-	if (x + c->sx < 0) {
+	st64 i;
+	RCons *cons = c->cons;
+	const st64 from = R_MAX ((st64)y, -(st64)c->sy);
+	const st64 to = R_MIN (R_MIN ((st64)y + height, (st64)c->h - c->sy), (st64)ST32_MAX + 1);
+	if ((st64)x + c->sx < 0 || (st64)x + c->sx >= c->w || from >= to) {
 		return;
 	}
-	if (x + c->sx > c->w) {
-		return;
-	}
-	const char *vline = useUtf8 ? utf8_line_vert (dot_style) : "|";
-	r_cons_break_push (NULL, NULL);
-	for (i = y; i < y + height; i++) {
-		if (r_cons_is_breaked ()) {
+	const char *vline = cons->use_utf8? utf8_line_vert (cons, dot_style): "|";
+	r_cons_break_push (c->cons, NULL, NULL);
+	for (i = from; i < to; i++) {
+		if (r_cons_is_breaked (c->cons)) {
 			break;
 		}
-		if (G (x, i)) {
+		if (G (x, (int)i)) {
 			W (vline);
 		}
 	}
-	r_cons_break_pop ();
+	r_cons_break_pop (c->cons);
 }
 
 R_API void r_cons_canvas_line_diagonal(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style) {
@@ -301,7 +328,7 @@ R_API void r_cons_canvas_line_diagonal(RConsCanvas *c, int x, int y, int x2, int
 	char chizzle[2] = {0}; // = '.';//my nizzle
 	// destination
 	int dx = abs (x2-x);
-        int dy = abs (y2-y);
+	int dy = abs (y2-y);
 	// source
 	int sx = (x < x2) ? 1 : -1;
 	int sy = (y < y2) ? 1 : -1;
@@ -332,7 +359,7 @@ loop:
 	if (!(x == x2 && y == y2)) {
 		int i = (*chizzle == '_' && sy < 0) ? 1 : 0;
 		if (G(x, y - i)) {
-			if (useUtf8) {
+			if (c->cons->use_utf8) {
 				switch (*chizzle) {
 				case '/':
 					W("╯");
@@ -369,7 +396,7 @@ loop:
 	c->attr = Color_RESET;
 }
 
-R_API void r_cons_canvas_line_square (RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style) {
+R_API void r_cons_canvas_line_square(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style) {
 	int min_x = R_MIN (x, x2);
 	int diff_x = R_ABS (x - x2);
 	int diff_y = R_ABS (y - y2);
@@ -399,7 +426,7 @@ R_API void r_cons_canvas_line_square (RConsCanvas *c, int x, int y, int x2, int 
 	c->attr = Color_RESET;
 }
 
-R_API void r_cons_canvas_line_square_defined (RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style, int bendpoint, int isvert) {
+R_API void r_cons_canvas_line_square_defined(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style, int bendpoint, int isvert) {
 	if (!c->linemode) {
 		r_cons_canvas_line (c, x, y, x2, y2, style);
 		return;
@@ -452,7 +479,7 @@ R_API void r_cons_canvas_line_square_defined (RConsCanvas *c, int x, int y, int 
 	c->attr = Color_RESET;
 }
 
-R_API void r_cons_canvas_line_back_edge (RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style, int ybendpoint1, int xbendpoint, int ybendpoint2, int isvert) {
+R_API void r_cons_canvas_line_back_edge(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style, int ybendpoint1, int xbendpoint, int ybendpoint2, int isvert) {
 	if (!c->linemode) {
 		r_cons_canvas_line (c, x, y, x2, y2, style);
 		return;

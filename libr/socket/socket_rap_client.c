@@ -1,29 +1,32 @@
-/* radare - LGPL - Copyright 2011-2020 - pancake */
+/* radare - LGPL - Copyright 2011-2026 - pancake */
 
 #include <r_socket.h>
 #include <r_util.h>
 
-static ut8 *r_rap_packet(ut8 type, ut32 len) {
-	ut8 *buf = malloc (len + 5);
-	if (buf) {
-		buf[0] = type;
-		r_write_be32 (buf + 1, len);
-	}
-	return buf;
-}
+#define RAP_CMD_MAX 16384
 
-static void r_rap_packet_fill(ut8 *buf, const ut8* src, int len) {
-	if (buf && src && len > 0) {
-		ut32 curlen = r_read_be32 (buf + 1);
-		memcpy (buf + 5, src, R_MIN (curlen, len));
+static bool rap_command_write(RSocket *s, ut8 type, const char *command) {
+	size_t packet_size;
+	if (r_add_overflow (strlen (command), (size_t)6, &packet_size) || packet_size > ST32_MAX) {
+		return false;
 	}
+	ut8 *packet = malloc (packet_size);
+	if (!packet) {
+		return false;
+	}
+	packet[0] = type;
+	r_write_be32 (packet + 1, packet_size - 5);
+	memcpy (packet + 5, command, packet_size - 5);
+	bool sent = r_socket_write (s, packet, packet_size) == (int)packet_size && r_socket_flush (s) > 0;
+	free (packet);
+	return sent;
 }
 
 R_API int r_socket_rap_client_open(RSocket *s, const char *file, int rw) {
 	r_socket_block_time (s, true, 1, 0);
 	size_t file_len0 = strlen (file) + 1;
 	if (file_len0 > 255) {
-		eprintf ("Filename too long\n");
+		R_LOG_ERROR ("Filename too long");
 		return -1;
 	}
 	char *buf = malloc (file_len0 + 7);
@@ -45,71 +48,58 @@ R_API int r_socket_rap_client_open(RSocket *s, const char *file, int rw) {
 		if (buf[0] == (char)(RAP_PACKET_OPEN | RAP_PACKET_REPLY)) {
 			fd = r_read_at_be32 (buf + 1, 1);
 		} else {
-			eprintf ("RapClientOpen: Bad packet 0x%02x\n", buf[0]);
+			R_LOG_ERROR ("RapClientOpen: Bad packet 0x%02x", buf[0]);
 		}
 	} else {
-		eprintf ("Cannot read 5 bytes from server\n");
+		R_LOG_ERROR ("Cannot read 5 bytes from server");
 	}
 	free (buf);
 	return fd;
 }
 
 R_API char *r_socket_rap_client_command(RSocket *s, const char *cmd, RCoreBind *c) {
-	char *buf = malloc (strlen (cmd) + 8);
-	if (!buf) {
+	R_RETURN_VAL_IF_FAIL (s && cmd, NULL);
+	if (!rap_command_write (s, RAP_PACKET_CMD, cmd)) {
 		return NULL;
 	}
-	/* send request */
-	buf[0] = RAP_PACKET_CMD;
-	size_t i = strlen (cmd) + 1;
-	r_write_be32 (buf + 1, i);
-	memcpy (buf + 5, cmd, i);
-	r_socket_write (s, buf, 5 + i);
-	r_socket_flush (s);
-	free (buf);
-	/* read response */
-	char bufr[8];
-	r_socket_read_block (s, (ut8*)bufr, 5);
-	while (bufr[0] == (char)(RAP_PACKET_CMD)) {
-		size_t cmd_len = r_read_at_be32 (bufr, 1);
-		char *rcmd = calloc (1, cmd_len + 1);
-		if (rcmd) {
-			r_socket_read_block (s, (ut8*)rcmd, cmd_len);
-			// char *res = r_core_cmd_str (core, rcmd);
-			char *res = c->cmdstr (c->core, rcmd);
-			if (res) {
-				int res_len = strlen (res) + 1;
-				ut8 *pkt = r_rap_packet ((RAP_PACKET_CMD | RAP_PACKET_REPLY), res_len);
-				r_rap_packet_fill (pkt, (const ut8*)res, res_len);
-				r_socket_write (s, pkt, 5 + res_len);
-				r_socket_flush (s);
-				free (res);
-				free (pkt);
-			}
-			free (rcmd);
+	for (;;) {
+		ut8 header[5];
+		if (r_socket_read_block (s, header, sizeof (header)) != sizeof (header)) {
+			R_LOG_ERROR ("Cannot read command reply");
+			return NULL;
 		}
-		/* read response */
-		bufr[0] = -1;
-		(void) r_socket_read_block (s, (ut8*)bufr, 5);
+		bool reply = header[0] == (RAP_PACKET_CMD | RAP_PACKET_REPLY);
+		if (!reply && header[0] != RAP_PACKET_CMD) {
+			R_LOG_ERROR ("Wrong reply for command 0x%02x", header[0]);
+			return NULL;
+		}
+		ut32 cmd_len = r_read_be32 (header + 1);
+		if (cmd_len > RAP_CMD_MAX || (reply && !cmd_len)) {
+			R_LOG_ERROR ("cmd_len is wrong");
+			return NULL;
+		}
+		char *payload = calloc (1, cmd_len + 1);
+		if (!payload) {
+			return NULL;
+		}
+		if (r_socket_read_block (s, (ut8*)payload, cmd_len) != (int)cmd_len) {
+			free (payload);
+			return NULL;
+		}
+		if (reply) {
+			return payload;
+		}
+		char *res = NULL;
+		if (c && c->cmdStr && (!c->cfgGetB || c->cfgGetB (c->core, "rap.reverse"))) {
+			res = c->cmdStr (c->core, payload);
+		}
+		free (payload);
+		bool sent = rap_command_write (s, RAP_PACKET_CMD | RAP_PACKET_REPLY, res? res: "");
+		free (res);
+		if (!sent) {
+			return NULL;
+		}
 	}
-	if (bufr[0] != (char)(RAP_PACKET_CMD | RAP_PACKET_REPLY)) {
-		eprintf ("Error: Wrong reply for command 0x%02x\n", bufr[0]);
-		return NULL;
-	}
-	size_t cmd_len = r_read_at_be32 (bufr, 1);
-	if (cmd_len < 1 || cmd_len > 16384) {
-		eprintf ("Error: cmd_len is wrong\n");
-		return NULL;
-	}
-	char *cmd_output = calloc (1, cmd_len + 1);
-	if (!cmd_output) {
-		eprintf ("Error: Allocating cmd output\n");
-		return NULL;
-	}
-	r_socket_read_block (s, (ut8*)cmd_output, cmd_len);
-	//ensure the termination
-	cmd_output[cmd_len] = 0;
-	return cmd_output;
 }
 
 R_API int r_socket_rap_client_write(RSocket *s, const ut8 *buf, int count) {
@@ -123,7 +113,7 @@ R_API int r_socket_rap_client_write(RSocket *s, const ut8 *buf, int count) {
 		count = RAP_PACKET_MAX;
 	}
 	if (!(tmp = (ut8 *)malloc (count + 5))) {
-		eprintf ("__rap_write: malloc failed\n");
+		R_LOG_ERROR ("rap_write malloc failed");
 		return -1;
 	}
 	tmp[0] = RAP_PACKET_WRITE;
@@ -133,7 +123,7 @@ R_API int r_socket_rap_client_write(RSocket *s, const ut8 *buf, int count) {
 	(void)r_socket_write (s, tmp, count + 5);
 	r_socket_flush (s);
 	if (r_socket_read_block (s, tmp, 5) != 5) { // TODO read_block?
-		eprintf ("__rap_write: error\n");
+		R_LOG_ERROR ("cannot read from socket");
 		ret = -1;
 	} else {
 		ret = r_read_be32 (tmp + 1);
@@ -163,37 +153,42 @@ R_API int r_socket_rap_client_read(RSocket *s, ut8 *buf, int count) {
 	// recv
 	int ret = r_socket_read_block (s, tmp, 5);
 	if (ret != 5 || tmp[0] != (RAP_PACKET_READ | RAP_PACKET_REPLY)) {
-		eprintf ("__rap_read: Unexpected rap read reply "
-			"(%d=0x%02x) expected (%d=0x%02x)\n",
+		R_LOG_WARN ("Unexpected rap read reply (%d=0x%02x) expected (%d=0x%02x)",
 			ret, tmp[0], 2, (RAP_PACKET_READ | RAP_PACKET_REPLY));
 		return -1;
 	}
 	int i = r_read_at_be32 (tmp, 1);
 	if (i > count) {
-		eprintf ("__rap_read: Unexpected data size %d vs %d\n", i, count);
+		R_LOG_WARN ("Unexpected data size %d vs %d", i, count);
 		return -1;
 	}
 	r_socket_read_block (s, buf, i);
 	return count;
 }
 
-R_API int r_socket_rap_client_seek(RSocket *s, ut64 offset, int whence) {
+R_API ut64 r_socket_rap_client_seek(RSocket *s, ut64 offset, int whence) {
+	R_RETURN_VAL_IF_FAIL (s, UT64_MAX);
 	ut8 tmp[10];
 	tmp[0] = RAP_PACKET_SEEK;
 	tmp[1] = (ut8)whence;
 	r_write_be64 (tmp + 2, offset);
-	(void)r_socket_write (s, &tmp, 10);
+	int ret = r_socket_write (s, &tmp, 10);
+	if (ret != 10) {
+		R_LOG_ERROR ("Truncated socket write %d vs %d", ret, 10);
+		r_sys_backtrace ();
+		return UT64_MAX;
+	}
 	r_socket_flush (s);
-	int ret = r_socket_read_block (s, (ut8*)&tmp, 9);
+	ret = r_socket_read_block (s, (ut8*)&tmp, 9);
 	if (ret != 9) {
-		eprintf ("Truncated socket read\n");
-		return -1;
+		R_LOG_ERROR ("Truncated socket read %d vs %d", ret, 9);
+		return UT64_MAX;
 	}
 	if (tmp[0] != (RAP_PACKET_SEEK | RAP_PACKET_REPLY)) {
 		// eprintf ("%d %d  - %02x %02x %02x %02x %02x %02x %02x\n",
 		// ret, whence, tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6]);
-		eprintf ("Unexpected seek reply (%02x -> %02x)\n", tmp[0], (RAP_PACKET_SEEK | RAP_PACKET_REPLY));
-		return -1;
+		R_LOG_WARN ("Unexpected seek reply (%02x -> %02x)", tmp[0], (RAP_PACKET_SEEK | RAP_PACKET_REPLY));
+		return UT64_MAX;
 	}
 	return r_read_at_be64 (tmp, 1);
 }

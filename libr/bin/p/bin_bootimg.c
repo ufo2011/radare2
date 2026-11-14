@@ -1,8 +1,5 @@
-/* radare - LGPL - Copyright 2015-2019 - pancake */
+/* radare - LGPL - Copyright 2015-2024 - pancake */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
 #include <r_bin.h>
 
 typedef struct boot_img_hdr BootImage;
@@ -47,7 +44,7 @@ typedef struct {
 	RBuffer *buf;
 } BootImageObj;
 
-static int bootimg_header_load(BootImageObj *obj, Sdb *db) {
+static bool bootimg_header_load(BootImageObj *obj, Sdb *db) {
 	char *n;
 	int i;
 	if (r_buf_size (obj->buf) < sizeof (BootImage)) {
@@ -75,186 +72,140 @@ static int bootimg_header_load(BootImageObj *obj, Sdb *db) {
 }
 
 static Sdb *get_sdb(RBinFile *bf) {
-	RBinObject *o = bf->o;
-	BootImageObj *ao;
-	if (!o) {
-		return NULL;
-	}
-	ao = o->bin_obj;
+	BootImageObj *ao = (BootImageObj *)R_UNWRAP3 (bf, bo, bin_obj);
 	return ao? ao->kv: NULL;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
 	BootImageObj *bio = R_NEW0 (BootImageObj);
-	if (!bio) {
-		return false;
-	}
 	bio->kv = sdb_new0 ();
 	if (!bio->kv) {
 		free (bio);
 		return false;
 	}
-	bio->buf = r_buf_ref (buf);
+	bio->buf = r_ref (buf);
 	if (!bootimg_header_load (bio, bio->kv)) {
+		r_unref (bio->buf);
 		free (bio);
 		return false;
 	}
-	sdb_ns_set (sdb, "info", bio->kv);
-	*bin_obj = bio;
+	sdb_ns_set (bf->sdb, "info", bio->kv);
+	bf->bo->bin_obj = bio;
 	return true;
 }
 
 static void destroy(RBinFile *bf) {
-	BootImageObj *bio = bf->o->bin_obj;
-	r_buf_free (bio->buf);
-	R_FREE (bf->o->bin_obj);
+	BootImageObj *bio = bf->bo->bin_obj;
+	r_unref (bio->buf);
+	R_FREE (bf->bo->bin_obj);
 }
 
 static ut64 baddr(RBinFile *bf) {
-	BootImageObj *bio = bf->o->bin_obj;
+	BootImageObj *bio = bf->bo->bin_obj;
 	return bio? bio->bi.kernel_addr: 0;
 }
 
-static RList *strings(RBinFile *bf) {
-	return NULL;
-}
-
 static RBinInfo *info(RBinFile *bf) {
-	RBinInfo *ret;
-	if (!bf || !bf->o || !bf->o->bin_obj) {
-		return NULL;
-	}
-	ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
-
-	ret->lang = NULL;
-	ret->file = bf->file? strdup (bf->file): NULL;
+	RBinInfo *ret = R_NEW0 (RBinInfo);
+	ret->file = bf->file ? strdup (bf->file) : NULL;
 	ret->type = strdup ("Android Boot Image");
 	ret->os = strdup ("android");
 	ret->subsystem = strdup ("unknown");
 	ret->machine = strdup ("arm");
 	ret->arch = strdup ("arm");
-	ret->has_va = 1;
-	ret->has_pi = 0;
+	ret->has_va = true;
 	ret->bits = 16;
-	ret->big_endian = 0;
-	ret->dbg_info = 0;
 	ret->rclass = strdup ("image");
 	return ret;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *buf) {
+static bool check(RBinFile *bf, RBuffer *buf) {
 	ut8 tmp[13];
 	int r = r_buf_read_at (buf, 0, tmp, sizeof (tmp));
 	return r > 12 && !strncmp ((const char *)tmp, "ANDROID!", 8);
 }
 
 static RList *entries(RBinFile *bf) {
-	BootImageObj *bio = bf->o->bin_obj;
-	RBinAddr *ptr = NULL;
+	BootImageObj *bio = R_UNWRAP3 (bf, bo, bin_obj);
 	if (!bio) {
 		return NULL;
 	}
-	BootImage *bi = &bio->bi;
-	RList *ret;
-
-	if (!(ret = r_list_newf (free))) {
+	RList *ret = r_list_newf (free);
+	if (!ret) {
 		return NULL;
 	}
-	if (!(ptr = R_NEW0 (RBinAddr))) {
-		return ret;
-	}
-	ptr->paddr = bi->page_size;
-	ptr->vaddr = bi->kernel_addr;
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
+	ptr->paddr = bio->bi.page_size;
+	ptr->vaddr = bio->bi.kernel_addr;
 	r_list_append (ret, ptr);
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	BootImageObj *bio = bf->o->bin_obj;
+static bool sections_vec(RBinFile *bf) {
+	BootImageObj *bio = bf->bo->bin_obj;
 	if (!bio) {
-		return NULL;
+		return false;
 	}
 	BootImage *bi = &bio->bi;
-	RList *ret = NULL;
-	RBinSection *ptr = NULL;
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
-	ret->free = free;
-
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("header");
 	ptr->size = sizeof (BootImage);
 	ptr->vsize = bi->page_size;
-	ptr->paddr = 0;
-	ptr->vaddr = 0;
-	ptr->perm = R_PERM_R; // r--
+	ptr->perm = R_PERM_R;
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("kernel");
 	ptr->size = bi->kernel_size;
 	ptr->vsize = ADD_REMAINDER (ptr->size, bi->page_size);
 	ptr->paddr = bi->page_size;
 	ptr->vaddr = bi->kernel_addr;
-	ptr->perm = R_PERM_R; // r--
+	ptr->perm = R_PERM_R;
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
 	if (bi->ramdisk_size > 0) {
 		ut64 base = bi->kernel_size + 2 * bi->page_size - 1;
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
+		ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ptr->name = strdup ("ramdisk");
 		ptr->size = bi->ramdisk_size;
 		ptr->vsize = ADD_REMAINDER (bi->ramdisk_size, bi->page_size);
 		ptr->paddr = ROUND_DOWN (base, bi->page_size);
 		ptr->vaddr = bi->ramdisk_addr;
-		ptr->perm = R_PERM_RX; // r-x
+		ptr->perm = R_PERM_RX;
 		ptr->add = true;
-		r_list_append (ret, ptr);
 	}
 
 	if (bi->second_size > 0) {
 		ut64 base = bi->kernel_size + bi->ramdisk_size + 2 * bi->page_size - 1;
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
+		ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ptr->name = strdup ("second");
 		ptr->size = bi->second_size;
 		ptr->vsize = ADD_REMAINDER (bi->second_size, bi->page_size);
 		ptr->paddr = ROUND_DOWN (base, bi->page_size);
 		ptr->vaddr = bi->second_addr;
-		ptr->perm = R_PERM_RX; // r-x
+		ptr->perm = R_PERM_RX;
 		ptr->add = true;
-		r_list_append (ret, ptr);
 	}
 
-	return ret;
+	return true;
 }
 
 RBinPlugin r_bin_plugin_bootimg = {
-	.name = "bootimg",
-	.desc = "Android Boot Image",
-	.license = "LGPL3",
+	.meta = {
+		.name = "bootimg",
+		.author = "pancake",
+		.desc = "Android Boot Image",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
 	.entries = entries,
-	.strings = &strings,
 	.info = &info,
 };
 

@@ -1,8 +1,65 @@
+NAME=strcpy lowerdashes
+FILE=bins/mach0/strcpy-overflow
+CMDS=<<EOF
+e pdc.optimize=false
+af;pdc~strcp
+EOF
+EXPECT=<<EOF
+    x0 = __strcpy_chk ("", x1, 32)
+EOF
+RUN
+
+NAME=td union
+FILE=malloc://32
+CMDS=<<EOF
+'td union Str { char str0[5]; char str1[11]; }
+tu
+tuc Str
+tu Str
+tu
+w hello world sucks
+pf 0[5]z[11]z str0 str1
+.tu Str
+EOF
+EXPECT=<<EOF
+Str
+union Str {
+  char str0[5];
+  char str1[11];
+};
+'pf 0[5]z[11]z str0 str1
+Str
+ str0 : 0x00000000 = "hello"
+ str1 : 0x00000000 = "hello world"
+ str0 : 0x00000000 = "hello"
+ str1 : 0x00000000 = "hello world"
+EOF
+RUN
+
+NAME=td union with nested struct
+FILE=malloc://32
+CMDS=<<EOF
+'td struct PadStr { char pad[6]; char str1[11]; }
+'td union Str { char str0[5]; PadStr str1; }
+w hello world sucks
+tu Str
+.tu Str
+EOF
+EXPECT=<<EOF
+'pf 0[5]z? str0 (PadStr)str1
+ str0 : 0x00000000 = "hello"
+ str1 : 
+                struct<PadStr>
+       pad : 0x00000000 = "hello "
+      str1 : 0x00000006 = "world sucks"
+EOF
+RUN
+
 NAME=td anonymous struct in typedef
 FILE=--
 CMDS=<<EOF
-"td typedef struct {int a;} Foo;"
-"td typedef struct { char *hello; int world[]; } Bar;"
+'td struct Foo {int a;};
+'td struct Bar { char *hello; int world[]; };
 ts~Foo,Bar
 ts Foo
 ts Bar
@@ -10,8 +67,50 @@ EOF
 EXPECT=<<EOF
 Bar
 Foo
-pf d a
-pf zd hello world
+'pf d a
+'pf zd hello world
+EOF
+RUN
+
+NAME=td tcc anonymous struct in typedef field names are not format strings
+FILE=--
+CMDS=<<EOF
+e types.plugin=tcc
+'td typedef struct { int a.%p.%p; char b[4]; } T;
+tk~typedef.T
+'td typedef struct { int a.b; char c[4]; } U;
+tk~typedef.U
+EOF
+EXPECT=<<EOF
+typedef.U=struct
+typedef.U.a.b=int32_t,0,0
+typedef.U.a.b.meta=0
+typedef.U.c=char,4,4
+typedef.U.c.meta=4
+typedef.U.fields=a.b,c
+<string>:1: error: ',' expected (got "%")
+<string>:1: error: ';' expected (got "p.")
+<string>:1: error: bracket expected
+<string>:1: error: '}' expected (got "%")
+<string>:1: error: declaration expected
+EOF
+RUN
+
+NAME=ts add and delete
+FILE=--
+CMDS=<<EOF
+ts-NSString
+'td typedef struct {int a;} Foo;
+ts
+ts Foo
+ts-Foo
+?e --
+ts~Foo
+EOF
+EXPECT=<<EOF
+Foo
+'pf d a
+--
 EOF
 RUN
 
@@ -36,10 +135,10 @@ EXPECT=<<EOF
             0x00000004      4155           push r13
             0x00000006      4154           push r12
 (int)
-0x00000008 = 1442089289
+0x00000008 = 0x55f48949
             0x0000000c      53             push rbx
             0x0000000d      89fd           mov ebp, edi
-            0x0000000f      4881eca80300.  sub rsp, 0x3a8
+            0x0000000f      4881eca803..   sub rsp, 0x3a8
 EOF
 RUN
 
@@ -72,6 +171,36 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=exact function type link overrides name lookup
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+wx c3
+af
+afn fallback_signature
+'td int fallback_signature(int fallback);
+'td char linked_signature(char linked);
+afs
+tl linked_signature = 0
+afs
+afn renamed_signature
+afs
+tl- 0
+afs
+'td struct NotAFunction { int value; };
+tl NotAFunction = 0
+afs
+EOF
+EXPECT=<<EOF
+int fallback_signature (int fallback);
+char fallback_signature (char linked);
+char renamed_signature (char linked);
+int renamed_signature (int fallback);
+int renamed_signature (int fallback);
+EOF
+RUN
+
 NAME=List type links
 CMDS=<<EOF
 tl int = 0x4
@@ -98,9 +227,23 @@ EXPECT=<<EOF
 (int)
 0x00000000 = -1
 (int)
-0x00000008 = 0
+0x00000008 = 0x00000000
 (char *)
 0x00000010 = "test"
+EOF
+RUN
+
+NAME=List type links as json
+CMDS=<<EOF
+tl int = 0x4
+w test @ 0x10
+tl char * = 0x10
+tlj
+tllj
+EOF
+EXPECT=<<EOF
+{"types":[{"0x00000004":"int"},{"0x00000010":"char *"}]}
+{"types":[{"int":[{"type":"d","offset":4,"value":0}]},{"char *":[{"type":"z","offset":16,"value":"test"}]}]}
 EOF
 RUN
 
@@ -110,10 +253,12 @@ CMDS=<<EOF
 e anal.vars.stackname=true
 e asm.lines.bb = false
 e asm.lines.jmp = false
+e asm.var.summary=0
 e io.cache=false
 e io.cache.read=false
 wc-*
 aa
+-e types.plugin=tcc
 s sym.Java_com_app_ndh_NDHActivity_print
 to bins/headers/jni.h
 td struct NULL { }
@@ -125,17 +270,48 @@ EOF
 EXPECT=<<EOF
 | ; var struct JNINativeInterface @ sp+0x12c
 | 0x00000f74      4b93           str r3, [JNINativeInterface]
-| 0x00000f76      039b           ldr r3, [NULL]                        ; JNINativeInterface.reserved0
+| 0x00000f76      039b           ldr r3, [var_134h]                    ; JNINativeInterface.reserved0
 | 0x00000f7e      d358           ldr r3, [r2, r3]                      ; JNINativeInterface.GetStringUTFChars
 | 0x00000f82      019a           ldr r2, [var_13ch]                    ; JNINativeInterface.reserved0
 | 0x0000100e      d358           ldr r3, [r2, r3]                      ; JNINativeInterface.GetStringLength
 | 0x00001012      019a           ldr r2, [var_13ch]                    ; JNINativeInterface.reserved0
 | 0x00001066      d258           ldr r2, [r2, r3]                      ; JNINativeInterface.NewStringUTF
+| 0x00001078      439a           ldr r2, [var_34h]                     ; JNINativeInterface.reserved0
 | 0x00001114      d258           ldr r2, [r2, r3]                      ; JNINativeInterface.NewStringUTF
+| 0x00001128      1a68           ldr r2, [r3]                          ; JNINativeInterface.reserved0
 | 0x0000112e      d258           ldr r2, [r2, r3]                      ; JNINativeInterface.NewStringUTF
-| 0x00001144      4b9a           ldr r2, [JNINativeInterface]
+| 0x00001144      4b9a           ldr r2, [JNINativeInterface]          ; JNINativeInterface.reserved0
 | 0x00001148      9a42           cmp r2, r3                            ; JNINativeInterface.reserved0
-12
+14
+EOF
+RUN
+
+NAME=tcc: quote as last byte after an error
+FILE=malloc://32
+CMDS=<<EOF
+-e types.plugin=tcc
+af+ 0 f
+afb+ 0 0 16
+'CF #define A '' "
+EOF
+EXPECT=<<EOF
+<string>:1: error: empty character constant
+<string>:1: error: missing terminating " character
+EOF
+RUN
+
+NAME=tcc: string literal in a define
+FILE=malloc://32
+CMDS=<<EOF
+-e types.plugin=tcc
+af+ 0 f
+afb+ 0 0 16
+'CF #define S "x y"
+'CF int f(int a, char *s);
+afs
+EOF
+EXPECT=<<EOF
+int32_t f (int32_t a, char *s);
 EOF
 RUN
 
@@ -156,8 +332,6 @@ int8_t
 long
 long long
 short
-size_t
-uid_t
 uint16_t
 uint32_t
 uint64_t
@@ -175,12 +349,13 @@ CMDS=<<EOF
 t int
 t-*
 t int
+s 0
 EOF
 EXPECT=<<EOF
-pf d
+'pf d
 EOF
 EXPECT_ERR=<<EOF
-Cannot find 'int' type
+ERROR: Cannot find 'int' type
 EOF
 RUN
 
@@ -202,7 +377,7 @@ NAME=t-struct
 FILE=-
 CMDS=<<EOF
 t-*
-"td struct three_elements{int x; char y; float z;}"
+'td struct three_elements{int x; char y; float z;}
 t-three_elements
 ts~?
 EOF
@@ -214,18 +389,15 @@ RUN
 NAME=t-union
 FILE=-
 CMDS=<<EOF
-"td union xoo{int x; int y; int z;}"
+'td union xoo{int x; int y; int z;}
 tk*~union
 t-xoo
 EOF
 EXPECT=<<EOF
 union.xoo=x,y,z
-union.xoo.x=int32_t,0,0
-union.xoo.x.meta=0
-union.xoo.y=int32_t,0,0
-union.xoo.y.meta=0
-union.xoo.z=int32_t,0,0
-union.xoo.z.meta=0
+union.xoo.x=int,0,0
+union.xoo.y=int,0,0
+union.xoo.z=int,0,0
 xoo=union
 EOF
 RUN
@@ -233,7 +405,7 @@ RUN
 NAME=typedef
 FILE=-
 CMDS=<<EOF
-"td typedef int Abracadabra"
+'td typedef int Abracadabra
 t-Abracadabra
 t~?Abracadabra
 EOF
@@ -280,7 +452,7 @@ FILE=-
 CMDS=<<EOF
 td typedef char FILE_NAME;
 tt FILE_NAME
-"td typedef bool FLAG;"
+'td typedef bool FLAG;
 tt FLAG
 EOF
 EXPECT=<<EOF
@@ -293,7 +465,7 @@ NAME=td struct
 FILE=-
 CMDS=<<EOF
 t-*
-"td struct test_struct{int x;int y;};"
+'td struct test_struct{int x;int y;};
 ts~?test_struct
 EOF
 EXPECT=<<EOF
@@ -301,10 +473,28 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=tsn <size>
+FILE=-
+CMDS=<<EOF
+'td struct One { int a; };
+'td struct Two { int a; int b; };
+'td struct AlsoTwo { char a[8]; };
+tsn 4+4
+tsn
+tsn?
+EOF
+EXPECT=<<EOF
+AlsoTwo
+Two
+| tsn <size>  list all structs matching the given size
+| tsn <size>  list all structs matching the given size
+EOF
+RUN
+
 NAME=enum32
 FILE=-
 CMDS=<<EOF
-"td enum v { t=0x123, p=0x321 };"
+'td enum v { t=0x123, p=0x321 };
 te~?
 tk v
 tk enum.v.t
@@ -321,7 +511,7 @@ RUN
 NAME=enum64
 FILE=-
 CMDS=<<EOF
-"td enum v { t=0x8000000000000001, p=0x8000000000000008 };"
+'td enum v { t=0x8000000000000001, p=0x8000000000000008 };
 te~?
 tk enum.v.t
 tk enum.v.p
@@ -341,9 +531,12 @@ t~char,double,float,int,long,short,size,uid,void # basic universal types
 t~addr,date,dox,name
 ts~addr,date,dox,name
 t addr
+s 0
 EOF
 EXPECT_ERR=<<EOF
-bins/other/error.h:2: warning: #error your compiler doesn't have support to my API
+ERROR: cpp: your compiler doesn't have support to my API
+ERROR: Cannot parse C type declarations
+ERROR: Cannot find 'addr' type
 EOF
 EXPECT=<<EOF
 char
@@ -359,8 +552,6 @@ int8_t
 long
 long long
 short
-size_t
-uid_t
 uint16_t
 uint32_t
 uint64_t
@@ -369,15 +560,6 @@ unsigned char
 unsigned int
 unsigned short
 void *
-addr
-addr_t
-date
-date_t
-dox
-dox_t
-name
-name_t
-pf [127]z[40]zd street city zip
 EOF
 RUN
 
@@ -403,8 +585,6 @@ int8_t
 long
 long long
 short
-size_t
-uid_t
 uint16_t
 uint32_t
 uint64_t
@@ -421,7 +601,7 @@ dox
 dox_t
 name
 name_t
-pf [127]z[40]zd street city zip
+'pf [127]z[40]zi street city zip
 EOF
 RUN
 
@@ -433,14 +613,14 @@ tk a=b
 t*
 EOF
 EXPECT=<<EOF
-tk a=b
+'tk a=b
 EOF
 RUN
 
 NAME=tp
 FILE=-
 CMDS=<<EOF
-"td struct person { int age; char name[10]; }"
+'td struct person { int age; char name[10]; }
 s 4
 w Carlos
 s 0
@@ -448,7 +628,7 @@ wx 13
 tp person @ 0x0
 EOF
 EXPECT=<<EOF
-  age : 0x00000000 = 19
+  age : 0x00000000 = 0x00000013
  name : 0x00000004 = "Carlos"
 EOF
 RUN
@@ -456,7 +636,7 @@ RUN
 NAME=unions
 FILE=-
 CMDS=<<EOF
-"td union x{float a;int b;}"
+'td union x{float a;int b;}
 tu
 EOF
 EXPECT=<<EOF
@@ -485,59 +665,59 @@ RUN
 NAME=td twice
 FILE=-
 CMDS=<<EOF
-"td int foo(int bar);"
-"td int foo(int bar);"
+'td int foo(int bar);
+'td int foo(int bar);
 tk~foo
 EOF
-EXPECT_ERR=<<EOF
-EOF
+EXPECT_ERR=
 EXPECT=<<EOF
 foo=func
-func.foo.arg.0=int32_t,bar
+func.foo=bar
+func.foo.arg.0=int,bar
 func.foo.args=1
 func.foo.cc=cdecl
-func.foo.ret=int32_t
+func.foo.ret=int
 EOF
 RUN
 
 NAME=struct of struct with ts and pf
 FILE=-
 CMDS=<<EOF
-"td struct bar { int a; int b; };"
-"td struct foo { int x; struct bar moo; };"
+'td struct bar { int a; int b; };
+'td struct foo { int x; struct bar moo; };
 ts foo
 .ts foo
 EOF
 EXPECT=<<EOF
-pf d? x (bar)moo
-   x : 0x00000000 = 0
+'pf d? x (bar)moo
+   x : 0x00000000 = 0x00000000
  moo : 
                 struct<bar>
-   a : 0x00000004 = 0
-   b : 0x00000008 = 0
+   a : 0x00000004 = 0x00000000
+   b : 0x00000008 = 0x00000000
 EOF
 RUN
 
 NAME=Array of struct with ts
 FILE=-
 CMDS=<<EOF
-"td struct bar { int a; int b; };"
-"td struct foo { int x; struct bar moo[2]; };"
+'td struct bar { int a; int b; };
+'td struct foo { int x; struct bar moo[2]; };
 ts foo
 .ts foo
 EOF
 EXPECT=<<EOF
-pf d[2]? x (bar)moo
-   x : 0x00000000 = 0
+'pf d[2]? x (bar)moo
+   x : 0x00000000 = 0x00000000
  moo : 
 [
                 struct<bar>
-   a : 0x00000004 = 0
-   b : 0x00000008 = 0
+   a : 0x00000004 = 0x00000000
+   b : 0x00000008 = 0x00000000
 
                 struct<bar>
-   a : 0x0000000c = 0
-   b : 0x00000010 = 0
+   a : 0x0000000c = 0x00000000
+   b : 0x00000010 = 0x00000000
 ]
 EOF
 RUN
@@ -545,7 +725,7 @@ RUN
 NAME=te <enum>
 FILE=-
 CMDS=<<EOF
-"td enum Foo {COW=1,BAR=2};"
+'td enum Foo {COW=1,BAR=2};
 te
 te Foo
 EOF
@@ -559,7 +739,7 @@ RUN
 NAME=te <enum> <value>
 FILE=-
 CMDS=<<EOF
-"td enum Foo {COW=1,BAR=2};"
+'td enum Foo {COW=1,BAR=2};
 te Foo 1
 EOF
 EXPECT=<<EOF
@@ -570,11 +750,29 @@ RUN
 NAME=teb <enum> <name>
 FILE=-
 CMDS=<<EOF
-"td enum Foo {COW=1,BAR=2};"
+'td enum Foo {COW=1,BAR=2};
 teb Foo COW
 EOF
 EXPECT=<<EOF
 0x1
+EOF
+RUN
+
+NAME=ten <value>
+FILE=-
+CMDS=<<EOF
+'td enum Alpha {ONE=1,TWO=2};
+'td enum Beta {UNO=2,DOS=3};
+ten 1+1
+tenq 2
+tenj 2
+EOF
+EXPECT=<<EOF
+Alpha.TWO = 0x2
+Beta.UNO = 0x2
+Alpha.TWO
+Beta.UNO
+[{"type":"Alpha","name":"TWO","value":2},{"type":"Beta","name":"UNO","value":2}]
 EOF
 RUN
 
@@ -595,26 +793,50 @@ afv~arg
 afv~arg
 EOF
 EXPECT=<<EOF
-int main (int argc, char **argv);
+int main (int argc, char **argv, char **envp);
 tn main
 afc amd64
 afvr rdi argc int
 afvr rsi argv char **
+afvr rdx envp char **
 
 original
-arg char ** argv @ rsi
 arg int argc @ rdi
+arg char ** argv @ rsi
 deleted
 recovered from signature
-arg char ** argv @ rsi
 arg int argc @ rdi
+arg char ** argv @ rsi
+arg char ** envp @ rdx
+EOF
+RUN
+
+NAME=truncated tp
+FILE=-
+CMDS=<<EOF
+'td struct foobar{uint32_t a; uint32_t b; uint32_t c; uint32_t d;}
+b 64
+woe 1
+tp foobar
+b 4
+tp foobar
+EOF
+EXPECT=<<EOF
+ a : 0x00000000 = 0x03020100
+ b : 0x00000004 = 0x07060504
+ c : 0x00000008 = 0x0b0a0908
+ d : 0x0000000c = 0x0f0e0d0c
+ a : 0x00000000 = 0x03020100
+ b : 0x00000004 = 0x07060504
+ c : 0x00000008 = 0x0b0a0908
+ d : 0x0000000c = 0x0f0e0d0c
 EOF
 RUN
 
 NAME=tp with varname
 FILE=bins/elf/struct_sample
 CMDS=<<EOF
-"td struct Books {char  title[50];char  author[50]; char  subject[100];};"
+'td struct Books {char  title[50];char  author[50]; char  subject[100];};
 aa
 s main
 aei
@@ -634,13 +856,27 @@ RUN
 NAME=tpx test
 FILE=-
 CMDS=<<EOF
-"td struct foo {char* a; int b;}"
+'td struct foo {char* a; int b;}
 tpx foo 41414141441414141414420010000000
 EOF
 EXPECT=<<EOF
  a : 0x00000000 = "AAAAD\x14\x14\x14\x14\x14B"
- b : 0x0000000c = 16
+ b : 0x0000000c = 0x00000010
 EOF
+RUN
+
+NAME=tpv accepts safe formats and rejects command separators
+FILE=-
+CMDS=<<EOF
+tpv int32_t @ 42
+'tk type.int32_t="d;?e TYPE_FORMAT_MARKER"
+tpv int32_t
+EOF
+EXPECT=<<EOF
+0x0000002a = 0x0000002a
+| tpv <type> [@addr]  show offset formatted for given type
+EOF
+EXPECT_ERR=
 RUN
 
 NAME=aht and arm
@@ -649,7 +885,7 @@ CMDS=<<EOF
 e asm.arch = arm
 e asm.bits = 32
 wx 082090e5040081e5
-"td struct foo {int a; int b; int c;};"
+'td struct foo {int a; int b; int c;};
 aht foo.c @ 0x00000000
 aht foo.b @ 0x00000004
 ?e
@@ -667,7 +903,7 @@ FILE=-
 CMDS=<<EOF
 e asm.arch=mips
 wx 08007fac040053800800538c
-"td struct foo {int a; int b; int c;};"
+'td struct foo {int a; int b; int c;};
 aht foo.c @ 0x00000000
 aht foo.c @ 0x00000008
 aht foo.b @ 0x00000004
@@ -682,12 +918,26 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=aht on an arm64 paired load takes the first slot
+FILE=malloc://16
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 408440a9
+'td struct foo {int a; int b; int c;};
+aht foo.c
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      408440a9       ldp x0, x1, [x2, foo.c]
+EOF
+RUN
+
 NAME=struct offset for dst operand with aht
 FILE=-
 CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=32
-"td struct foo {int a; int b ; int c;}"
+'td struct foo {int a; int b ; int c;}
 wx 8b40048951048d500883780800
 ?e
 aht foo.b @ 0x00000000
@@ -711,7 +961,7 @@ CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=64
 e asm.comments = false
-"td struct bar {int a ; int b; int c;}"
+'td struct bar {int a ; int b; int c;}
 wx 48C7C058190000488B5004488B4808483B500448BBEFBEADDE00000000488958089090C3
 af
 tl bar = 0x1958
@@ -733,7 +983,7 @@ CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=64
 e asm.comments = false
-"td struct bar {int a ; int b; int c;}"
+'td struct bar {int a ; int b; int c;}
 wx 48C7C058190000488B5004488B4808483B500448BBEFBEADDE00000000488958089090C3
 tl bar = 0x1958
 af
@@ -757,8 +1007,8 @@ e asm.arch=x86
 e asm.bits=64
 e asm.comments = false
 e asm.flags = false
-"td struct bar {int x; int y; int z;};"
-"td struct foo {int a; int b; int c;};"
+'td struct bar {int x; int y; int z;};
+'td struct foo {int a; int b; int c;};
 wx 48C7C000010000488B5008488B480448C7C000020000488B5008488B48049090C3
 tl bar = 0x200
 tl foo = 0x100
@@ -768,10 +1018,10 @@ pdf
 EOF
 EXPECT=<<EOF
 / 33: fcn.00000000 ();
-|           0x00000000      48c7c0000100.  mov rax, 0x100
+|           0x00000000      48c7c00001..   mov rax, 0x100
 |           0x00000007      488b5008       mov rdx, qword [rax + foo.c]
 |           0x0000000b      488b4804       mov rcx, qword [rax + foo.b]
-|           0x0000000f      48c7c0000200.  mov rax, 0x200
+|           0x0000000f      48c7c00002..   mov rax, 0x200
 |           0x00000016      488b5008       mov rdx, qword [rax + bar.z]
 |           0x0000001a      488b4804       mov rcx, qword [rax + bar.y]
 |           0x0000001e      90             nop
@@ -780,12 +1030,118 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=aat counts a stack frame of 8 KiB or more
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4881ec083000008b442404c3
+af
+aeim
+ar rip=0x0b
+'td struct foo {int a; int b;};
+tl foo=0x178000
+aat
+afv
+EOF
+EXPECT=<<EOF
+var struct var_4h @ rsp+0x4
+EOF
+RUN
+
+NAME=aat counts a stack frame under 8 KiB
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4881ec001f00008b442404c3
+af
+aeim
+ar rip=0x0b
+'td struct foo {int a; int b;};
+tl foo=0x178000
+aat
+afv
+EOF
+EXPECT=<<EOF
+var struct var_4h @ rsp+0x4
+EOF
+RUN
+
+NAME=aat does not link a struct below a large stack frame
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4881ec083000008b442404c3
+af
+aeim
+ar rip=0x0b
+'td struct foo {int a; int b;};
+tl foo=0x174ff8
+aat
+afv
+EOF
+EXPECT=<<EOF
+var int32_t var_4h @ rsp+0x4
+EOF
+RUN
+
+NAME=aat uses the restored SP after large and small frame epilogues
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4881ec083000008b4424044881c408300000c3
+af
+aeim
+ar rip=0x12
+ar rsp=0x178000
+'td struct foo {int a; int b;};
+# Large frame: match the local below the restored SP.
+tl foo=0x174ff8
+aat
+afv
+tl- 0x174ff8
+af-*
+af
+ar rip=0x12
+ar rsp=0x178000
+# Large frame: reject a link at the restored SP.
+tl foo=0x178000
+aat
+afv
+tl- 0x178000
+af-*
+wx 4881ec001f00008b4424044881c4001f0000c3
+af
+ar rip=0x12
+ar rsp=0x178000
+# Small frame: match the local below the restored SP.
+tl foo=0x176100
+aat
+afv
+tl- 0x176100
+af-*
+af
+ar rip=0x12
+ar rsp=0x178000
+# Small frame: reject a link at the restored SP.
+tl foo=0x178000
+aat
+afv
+EOF
+EXPECT=<<EOF
+var struct var_4h @ rsp+0x4
+var int32_t var_4h @ rsp+0x4
+var struct var_4h @ rsp+0x4
+var int32_t var_4h @ rsp+0x4
+EOF
+RUN
+
 NAME=Comments and var in struct offset propagation
 FILE=bins/elf/struct_sample
 CMDS=<<EOF
+e asm.var.summary=0
 aa
 s main
-"td struct Books {char  title[50];char  author[50]; char  subject[100];};"
+'td struct Books {char  title[50];char  author[50]; char  subject[100];};
 tl Books = 0x00177f18
 ?e
 pdf~Books
@@ -793,11 +1149,11 @@ EOF
 EXPECT=<<EOF
 
 |           ; var struct Books @ rbp-0xe0
-|           0x00000684      488d8520ffff.  lea rax, [Books]
+|           0x00000684      488d8520ff..   lea rax, [Books]
 |           0x00000695      488910         mov qword [rax], rdx        ; Books.title
-|           0x00000698      488d8520ffff.  lea rax, [Books]
+|           0x00000698      488d8520ff..   lea rax, [Books]
 |           0x000006ad      488908         mov qword [rax], rcx        ; Books.author
-|           0x000006b0      488d8520ffff.  lea rax, [Books]
+|           0x000006b0      488d8520ff..   lea rax, [Books]
 |           0x000006c5      488930         mov qword [rax], rsi        ; Books.subject
 |           0x000006d5      b800000000     mov eax, 0                  ; Books.subject
 EOF
@@ -807,7 +1163,7 @@ NAME=tl with ahr (return value hint)
 FILE=bins/elf/struct_2
 CMDS=<<EOF
 aa
-"td struct Test { int a; int  b; char *c;};"
+'td struct Test { int a; int  b; char *c;};
 s main
 ahr 0x00000597 @ 0x00000592
 tl Test = 0x00002020
@@ -819,7 +1175,7 @@ EXPECT=<<EOF
 
 |           0x000005a8      c70206000000   mov dword [edx], 6          ; Test.a
 |           0x000005ae      8b55f4         mov edx, dword [Test]       ; Test.a
-|           0x000005b1      c74204070000.  mov dword [edx + Test.b], 7
+|           0x000005b1      c742040700..   mov dword [edx + Test.b], 7
 EOF
 RUN
 
@@ -827,7 +1183,7 @@ NAME=Basic union test
 FILE=bins/elf/union_sample
 CMDS=<<EOF
 aa
-"td union Books {char  title[50];char  author[50]; char  subject[100];};"
+'td union Books {char  title[50];char  author[50]; char  subject[100];};
 tu
 tu Books
 s main
@@ -838,7 +1194,7 @@ pd 1
 EOF
 EXPECT=<<EOF
 Books
-pf [50]z[50]z[100]z title author subject
+'pf 0[50]z[50]z[100]z title author subject
 var union Books @ rbp-0x70
 |           0x000006d2      488d4590       lea rax, [Books]
 EOF
@@ -848,40 +1204,40 @@ NAME=ts function pointer test
 FILE=-
 CMDS=<<EOF
 e asm.bits=64
-ws hello @ 0xc
-"td struct foo {int x; int (*fp)(int a , int b ); char *b;};"
+ws hello @ 0x10
+'td struct foo {int x; int (*fp)(int a , int b ); char *b;};
 ts foo
 .ts foo
 EOF
 EXPECT=<<EOF
-pf dpz x fp b
-  x : 0x00000000 = 0
- fp : 0x00000004 = (qword)0x0000000000000000
-  b : 0x0000000c = "\x05hello"
+'pf d[4].pz x fp b
+  x : 0x00000000 = 0x00000000
+ fp : 0x00000008 = (qword)0x0000000000000000
+  b : 0x00000010 = "\x05hello"
 EOF
 RUN
 
 NAME=ts general pointers test
 FILE=-
 CMDS=<<EOF
-"td struct normal {int a;char b;};"
-"td struct pointer {char *y;struct normal *obj;};"
+'td struct normal {int a;char b;};
+'td struct pointer {char *y;struct normal *obj;};
 ts pointer
 EOF
 EXPECT=<<EOF
-pf zp y obj
+'pf zp y obj
 EOF
 RUN
 
 NAME=tsc test
 FILE=-
 CMDS=<<EOF
-"td struct three_elements{int x; char y; float z;}"
+'td struct three_elements{int x; char y; float z;}
 tsc three_elements
 EOF
 EXPECT=<<EOF
 struct three_elements {
-  int32_t x;
+  int x;
   char y;
   float z;
 };
@@ -891,14 +1247,97 @@ RUN
 NAME=tsc with array
 FILE=-
 CMDS=<<EOF
-"td struct with_array{int x; char y[50]; float z;}"
+'td struct with_array{int x; char y[50]; float z;}
 tsc with_array
 EOF
 EXPECT=<<EOF
 struct with_array {
-  int32_t x;
+  int x;
   char y[50];
   float z;
+};
+EOF
+RUN
+
+NAME=tsc pads only non-natural struct gaps
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+tk G=struct
+tk struct.G=a,b,c
+tk struct.G.a=int32_t,0,0
+tk struct.G.b=char *,8,0
+tk struct.G.c=int32_t,24,0
+tsc G
+EOF
+EXPECT=<<EOF
+struct G {
+  int32_t a;
+  char *b;
+  uint8_t pad_0x10[8]; // gap
+  int32_t c;
+};
+EOF
+RUN
+
+NAME=td sizes pointer members by asm.bits
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+'td struct P {char *p; int c;};
+tk struct.P.c
+EOF
+EXPECT=<<EOF
+int,8,0
+EOF
+RUN
+
+NAME=td sizes pointer members by asm.bits on 32bit
+FILE=-
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+'td struct P {char *p; int c;};
+tk struct.P.c
+EOF
+EXPECT=<<EOF
+int,4,0
+EOF
+RUN
+
+NAME=pad members keep their offsets across td and tsc
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+'td struct H {int32_t a; uint8_t pad[8]; char *b; int32_t c;};
+tk struct.H.b
+tk struct.H.c
+tsc H
+EOF
+EXPECT=<<EOF
+char *,16,0
+int32_t,24,0
+struct H {
+  int32_t a;
+  uint8_t pad[8];
+  char *b;
+  int32_t c;
+};
+EOF
+RUN
+
+NAME=tsc does not pad unions
+FILE=-
+CMDS=<<EOF
+tk U=union
+tk union.U=a,b
+tk union.U.a=int32_t,0,0
+tk union.U.b=int64_t,0,0
+tuc U
+EOF
+EXPECT=<<EOF
+union U {
+  int32_t a;
+  int64_t b;
 };
 EOF
 RUN
@@ -906,7 +1345,7 @@ RUN
 NAME=tec test
 FILE=-
 CMDS=<<EOF
-"td enum Foo {COW=1,BAR=2};"
+'td enum Foo {COW=1,BAR=2};
 tec Foo
 EOF
 EXPECT=<<EOF
@@ -920,14 +1359,14 @@ RUN
 NAME=tuc test
 FILE=-
 CMDS=<<EOF
-"td union x{int x; int y; int z;}"
+'td union x{int x; int y; int z;}
 tuc x
 EOF
 EXPECT=<<EOF
 union x {
-  int32_t x;
-  int32_t y;
-  int32_t z;
+  int x;
+  int y;
+  int z;
 };
 EOF
 RUN
@@ -935,7 +1374,7 @@ RUN
 NAME=ttc test
 FILE=-
 CMDS=<<EOF
-"td typedef char FILE_NAME;"
+'td typedef char FILE_NAME;
 ttc FILE_NAME
 EOF
 EXPECT=<<EOF
@@ -947,15 +1386,15 @@ NAME=tcd test
 FILE=-
 CMDS=<<EOF
 t-*
-"td typedef char FILE_NAME;"
-"td union x{int x; int y; int z;}"
-"td enum Foo {COW=1,BAR=2};"
-"td struct three_elements{int x; char y; float z;}"
+'td typedef char FILE_NAME;
+'td union x{int x; int y; int z;}
+'td enum Foo {COW=1,BAR=2};
+'td struct three_elements{int x; char y; float z;}
 tcd
 EOF
 EXPECT=<<EOF
-union x {int32_t x; int32_t y; int32_t z;};
-struct three_elements {int32_t x; char y; float z;};
+union x {int x; int y; int z;};
+struct three_elements {int x; char y; float z;};
 typedef char FILE_NAME;
 enum Foo {COW = 1, BAR = 2};
 EOF
@@ -964,32 +1403,37 @@ RUN
 NAME=typedef struct
 FILE=-
 CMDS=<<EOF
-to bins/headers/12272.h
+to bins/headers/12273.h
 ts A
 ts B
-ts O  # Broken but shouldn't hang
+ts C  # Broken but shouldn't hang
 ?e ----
-tk~typedef.A=,typedef.B=,typedef.O=,struct.A,struct.B,struct.O
+tk~typedef.A=,typedef.B=,typedef.C=,struct.A,struct.B,struct.C
 ?e
-ts~A,B,O
+ts~A,B,C,D
 EOF
 EXPECT=<<EOF
-pf dF num num2
-pf c ch
+'pf f num
+'pf dF num num2
+'pf c ch
 ----
 struct.A=num
 struct.A.num=float,0,0
-struct.A.num.meta=9
-struct.O=ptr
-struct.O.ptr=char *,0,0
-struct.O.ptr.meta=4
-typedef.A=struct
-typedef.B=struct
-typedef.O=struct O
+struct.B=num,num2
+struct.B.num=int,0,0
+struct.B.num.meta=0
+struct.B.num2=double,4,0
+struct.B.num2.meta=0
+struct.C=ch
+struct.C.ch=char,0,0
+struct.C.ch.meta=0
+typedef.B=struct B
+typedef.C=struct C
 
 A
 B
-O
+C
+D
 EOF
 RUN
 
@@ -1008,8 +1452,8 @@ tk~^struct.0,struct.1,struct.2,struct.3
 ts~^0,1,2,3,A,B
 EOF
 EXPECT=<<EOF
-pf f num
-pf c ch
+'pf f num
+'pf c ch
 
 
 A
@@ -1026,9 +1470,9 @@ aaft
 afv
 EOF
 EXPECT=<<EOF
-var size_t size @ rbp-0x14
-var char * dest @ rbp-0x10
 var char * src @ rbp-0x8
+var char * dest @ rbp-0x10
+var size_t size @ rbp-0x14
 EOF
 RUN
 
@@ -1041,9 +1485,9 @@ aaft
 afv
 EOF
 EXPECT=<<EOF
-var size_t size @ rbp-0x14
-var char * ptr @ rbp-0x10
 var char * src @ rbp-0x8
+var char * ptr @ rbp-0x10
+var size_t size @ rbp-0x14
 EOF
 RUN
 
@@ -1056,13 +1500,14 @@ aaft
 afv
 EOF
 EXPECT=<<EOF
-var size_t var_1ch @ rbp-0x1c
-var char * var_18h @ rbp-0x18
-var char * s @ rbp-0x10
 var char * var_8h @ rbp-0x8
+var char * s @ rbp-0x10
+var char * var_18h @ rbp-0x18
+var size_t var_1ch @ rbp-0x1c
 EOF
 RUN
 
+# merged: types afs [before]
 NAME=General type propgation
 FILE=bins/elf/hello_world
 CMDS=<<EOF
@@ -1070,13 +1515,23 @@ aa
 s main
 aaft
 afv
+?e --
+s main
+af
+tk~func.main
 EOF
 EXPECT=<<EOF
-var size_t var_20h @ rbp-0x20
-var size_t size @ rbp-0x1c
-var char * src @ rbp-0x18
-var char * s2 @ rbp-0x10
 var char * dest @ rbp-0x8
+var char * s2 @ rbp-0x10
+var char * src @ rbp-0x18
+var size_t size @ rbp-0x1c
+var size_t var_20h @ rbp-0x20
+--
+func.main.arg.0=int,argc
+func.main.arg.1=char **,argv
+func.main.arg.2=char **,envp
+func.main.args=3
+func.main.ret=int
 EOF
 RUN
 
@@ -1089,13 +1544,13 @@ aaft
 afv
 EOF
 EXPECT=<<EOF
-arg char ** argv @ esp+0x44
-var char * src @ ebp-0x1c
-var char * s2 @ ebp-0x18
-var size_t var_14h @ ebp-0x14
-var size_t size @ ebp-0x10
-var char * dest @ ebp-0xc
+arg int argc @ esp+0x44
 var int32_t var_8h @ ebp-0x8
+var char * dest @ ebp-0xc
+var size_t size @ ebp-0x10
+var size_t var_14h @ ebp-0x14
+var char * s2 @ ebp-0x18
+var char * src @ ebp-0x1c
 EOF
 RUN
 
@@ -1107,10 +1562,10 @@ s sym.funcarg
 afvr
 EOF
 EXPECT=<<EOF
-arg int64_t arg4 @ rcx
-arg int64_t arg3 @ rdx
-arg int64_t arg2 @ rsi
 arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+arg int64_t arg3 @ rdx
+arg int64_t arg4 @ rcx
 EOF
 RUN
 
@@ -1123,16 +1578,17 @@ s sym.funcarg
 afvr
 EOF
 EXPECT=<<EOF
-arg size_t arg4 @ rcx
-arg int64_t arg3 @ rdx
-arg char * arg2 @ rsi
 arg char * arg1 @ rdi
+arg char * arg2 @ rsi
+arg int64_t arg3 @ rdx
+arg size_t arg4 @ rcx
 EOF
 RUN
 
 NAME=Caller to callee propgation (64 bits)
 FILE=bins/elf/arg_down_prop
 CMDS=<<EOF
+e asm.var.summary=0
 e asm.lines = false
 e asm.xrefs = false
 aa
@@ -1142,10 +1598,10 @@ pd 1
 EOF
 EXPECT=<<EOF
 154: sym.funcarg (char *arg1, uint32_t arg2);
-; var uint32_t var_ch @ rbp-0xc
-; var char *var_8h @ rbp-0x8
 ; arg char *arg1 @ rdi
 ; arg uint32_t arg2 @ rsi
+; var char *var_8h @ rbp-0x8
+; var uint32_t var_ch @ rbp-0xc
 0x0000068a      55             push rbp
 EOF
 RUN
@@ -1153,6 +1609,7 @@ RUN
 NAME=Caller to caller propgation (32 bits)
 FILE=bins/elf/arg_down_32
 CMDS=<<EOF
+e asm.var.summary=0
 e asm.lines = false
 e asm.xrefs = false
 aa
@@ -1162,31 +1619,32 @@ pd 1
 EOF
 EXPECT=<<EOF
 147: sym.funcarg (char *arg_8h, uint32_t arg_ch);
-; var int32_t var_4h @ ebp-0x4
 ; arg char *arg_8h @ ebp+0x8
 ; arg uint32_t arg_ch @ ebp+0xc
+; var int32_t var_4h @ ebp-0x4
 0x0000054d      55             push ebp
 EOF
 RUN
 
 NAME=Type Propagation
 FILE=bins/pe/debugme.exe
-BROKEN=1
 CMDS=<<EOF
 aaaa
-pd 1 @ 0x00401792~?[n
-pd 1 @ 0x00401796~?[c
-pd 1 @ 0x0040179e~?[s
-pd 1 @ 0x004017b1~?[n
-pd 1 @ 0x004017b5~?[c
-pd 1 @ 0x004017bd~?[s
+s 0x0040151f
+a:tp
+pd 1 @ 0x00401792~?size_t n
+pd 1 @ 0x00401796~?int c
+pd 1 @ 0x0040179e~?void
+pd 1 @ 0x004017b1~?size_t n
+pd 1 @ 0x004017b5~?int c
+pd 1 @ 0x004017bd~?void
 pd 1 @ 0x0040186a~?[s2
-pd 1 @ 0x0040186e~?[s1
+pd 1 @ 0x0040186e~?s1
 pd 1 @ 0x0040152f~?[dwInitParam
 pd 1 @ 0x00401537~?[lpDialogFunc
 pd 1 @ 0x0040153f~?[hWndParent
 pd 1 @ 0x00401547~?[lpTemplateName
-pd 1 @ 0x00401554~?[hInstance
+pd 1 @ 0x00401554~?hInstance
 EOF
 EXPECT=<<EOF
 1
@@ -1228,9 +1686,219 @@ afv~sign
 afv~uint
 EOF
 EXPECT=<<EOF
-var signed int64_t var_34h @ rbp-0x34
-var signed int64_t var_30h @ rbp-0x30
+var signed int var_30h @ rbp-0x30
+var signed int var_34h @ rbp-0x34
 var uint32_t var_28h @ rbp-0x28
+EOF
+RUN
+
+NAME=callee argument loaded through a pointer argument gets the pointee type
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 488b3ee808000000c3909090909090904889f8c3
+af @ 0x10
+af @ 0
+afvt arg1 char **
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg char * arg1 @ rdi
+EOF
+RUN
+
+NAME=callee argument loaded through a copy chain strips one level only
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 488b064889c7e805000000c39090904889f8c3
+af @ 0x10
+af @ 0
+afvt arg1 char **
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg char * arg1 @ rdi
+EOF
+RUN
+
+NAME=lea on a register pointer argument keeps the callee type flat
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 488d7e08e807000000c39090909090904889f8c3
+af @ 0x10
+af @ 0
+afvt arg1 char *
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg char * arg1 @ rdi
+EOF
+RUN
+
+NAME=dereferencing a void pointer argument leaves the callee type alone
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 488b3ee808000000c3909090909090904889f8c3
+af @ 0x10
+af @ 0
+afvt arg1 void *
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+EOF
+RUN
+
+NAME=callee argument loaded through an arm64 load and register copy
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 080040f9e00308aa02000094c0035fd600040091c0035fd6
+af @ 0x10
+af @ 0
+afvt arg1 char **
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg char * arg1 @ x0
+EOF
+RUN
+
+NAME=a taken conditional move from memory counts as a dereference
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480f453ee807000000c39090909090904889f8c3
+af @ 0x10
+af @ 0
+afvt arg1 char **
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg char * arg1 @ rdi
+EOF
+RUN
+
+NAME=a void pointer callee arg does not overwrite an existing type fact
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec20837df80577029090488d7df831f6ba04000000e810000000c9c3
+wx c3 @ 0x30
+af @ 0x30
+afn memset @ 0x30
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var uint32_t s @ rbp-0x8
+EOF
+RUN
+
+NAME=callee argument dereferenced through an arm64 load gets the pointee type
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200040f903000094c0035fd61f2003d500040091c0035fd6
+af @ 0x10
+af @ 0
+afvt arg1 char **
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg char * arg1 @ x0
+EOF
+RUN
+
+NAME=canary named from the guard compare and not from the trace position
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec2064488b042528000000488945f8488b45f88b55ef6448330425280000007405e814000000c9c3
+wx c3 @ 0x40
+af+ 0x40 sym.imp.__stack_chk_fail
+afb+ 0x40 0x40 1
+af @ 0
+s 0
+aaft
+afv
+EOF
+EXPECT=<<EOF
+var int64_t canary @ rbp-0x8
+var int32_t var_11h @ rbp-0x11
+EOF
+RUN
+
+NAME=canary named when the success path overwrites the compared register
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec2064488b042528000000488945f8488b45f864482b0425280000007507c9b801000000c3e810000000
+wx c3 @ 0x40
+af+ 0x40 sym.imp.__stack_chk_fail
+afb+ 0x40 0x40 1
+af @ 0
+s 0
+aaft
+afv
+EOF
+EXPECT=<<EOF
+var int64_t canary @ rbp-0x8
+EOF
+RUN
+
+NAME=canary named when the guard compares the slot in memory
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec2064488b0c252800000048894df864488b0c2528000000483b4df87405e817000000c9c3
+wx c3 @ 0x40
+af+ 0x40 sym.imp.__stack_chk_fail
+afb+ 0x40 0x40 1
+af @ 0
+s 0
+aaft
+afv
+EOF
+EXPECT=<<EOF
+var uint64_t canary @ rbp-0x8
+EOF
+RUN
+
+NAME=canary named when stack_chk_fail sits in an out of line block
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec2064488b042528000000488945f8488b45f86448330425280000007502c9c3e815000000
+wx c3 @ 0x40
+af+ 0x40 sym.imp.__stack_chk_fail
+afb+ 0x40 0x40 1
+af @ 0
+s 0
+aaft
+afv
+EOF
+EXPECT=<<EOF
+var int64_t canary @ rbp-0x8
 EOF
 RUN
 
@@ -1243,14 +1911,14 @@ s main
 afv
 EOF
 EXPECT=<<EOF
-var int64_t var_34h @ rbp-0x34
-var signed int64_t var_30h @ rbp-0x30
-var uint32_t var_2ch @ rbp-0x2c
-var FILE * stream @ rbp-0x28
-var char * s @ rbp-0x20
-var char * var_18h @ rbp-0x18
-var char * var_10h @ rbp-0x10
 var int64_t canary @ rbp-0x8
+var char * var_10h @ rbp-0x10
+var char * var_18h @ rbp-0x18
+var char * s @ rbp-0x20
+var FILE * stream @ rbp-0x28
+var uint32_t var_2ch @ rbp-0x2c
+var signed int var_30h @ rbp-0x30
+var int32_t var_34h @ rbp-0x34
 EOF
 RUN
 
@@ -1265,61 +1933,61 @@ s sym.processCmd
 afv
 EOF
 EXPECT=<<EOF
-var char ** var_14e0h @ rbp-0x14e0
-var int64_t var_14d4h @ rbp-0x14d4
-var int64_t wstatus @ rbp-0x14cc
-var int64_t options @ rbp-0x14c8
-var int64_t var_14c4h @ rbp-0x14c4
-var signed int64_t var_14c0h @ rbp-0x14c0
-var int64_t var_14bch @ rbp-0x14bc
-var pid_t pid @ rbp-0x14b8
-var uint32_t var_14b4h @ rbp-0x14b4
-var uint32_t var_14b0h @ rbp-0x14b0
-var int64_t var_14ach @ rbp-0x14ac
-var char * var_14a8h @ rbp-0x14a8
-var char * s @ rbp-0x14a0
-var char * var_1498h @ rbp-0x1498
-var char * src @ rbp-0x1490
-var char * v2 @ rbp-0x1488
-var char * var_1480h @ rbp-0x1480
-var void * var_1478h @ rbp-0x1478
-var char * dest @ rbp-0x1470
-var void * var_1420h @ rbp-0x1420
-var char * s1 @ rbp-0x1020
-var int64_t var_18h @ rbp-0x18
-arg char ** argv @ rsi
 arg int argc @ rdi
-var char * str @ rbp-0xb0
-var signed int var_a4h @ rbp-0xa4
-var signed int64_t var_a0h @ rbp-0xa0
-var uint32_t var_9ch @ rbp-0x9c
-var int64_t var_98h @ rbp-0x98
-var int64_t var_94h @ rbp-0x94
-var int64_t var_90h @ rbp-0x90
-var int64_t var_8ch @ rbp-0x8c
-var int64_t var_88h @ rbp-0x88
-var int64_t var_84h @ rbp-0x84
-var int64_t var_80h @ rbp-0x80
-var int64_t var_7ch @ rbp-0x7c
-var int64_t var_78h @ rbp-0x78
-var int64_t var_74h @ rbp-0x74
-var int64_t var_70h @ rbp-0x70
-var int64_t var_6ch @ rbp-0x6c
-var int64_t var_68h @ rbp-0x68
-var int64_t var_64h @ rbp-0x64
-var char * var_60h @ rbp-0x60
-var char * var_58h @ rbp-0x58
-var char * var_50h @ rbp-0x50
-var char * var_48h @ rbp-0x48
-var uint32_t var_40h @ rbp-0x40
-var char * s1 @ rbp-0x38
-var char * s @ rbp-0x30
-var char * var_28h @ rbp-0x28
-var char * var_20h @ rbp-0x20
+arg char ** argv @ rsi
 var int64_t var_18h @ rbp-0x18
-var int64_t var_8h @ rbp-0x8
-arg char * arg2 @ rsi
+var char * s1 @ rbp-0x1020
+var void * var_1420h @ rbp-0x1420
+var char * dest @ rbp-0x1470
+var void * var_1478h @ rbp-0x1478
+var char * var_1480h @ rbp-0x1480
+var char * v2 @ rbp-0x1488
+var char * src @ rbp-0x1490
+var char * var_1498h @ rbp-0x1498
+var char * s @ rbp-0x14a0
+var char * var_14a8h @ rbp-0x14a8
+var int32_t var_14ach @ rbp-0x14ac
+var uint32_t var_14b0h @ rbp-0x14b0
+var uint32_t var_14b4h @ rbp-0x14b4
+var pid_t pid @ rbp-0x14b8
+var int32_t var_14bch @ rbp-0x14bc
+var signed int var_14c0h @ rbp-0x14c0
+var int32_t var_14c4h @ rbp-0x14c4
+var int32_t var_14c8h @ rbp-0x14c8
+var int64_t wstatus @ rbp-0x14cc
+var int32_t var_14d4h @ rbp-0x14d4
+var char ** var_14e0h @ rbp-0x14e0
 arg signed int arg1 @ rdi
+arg char * arg2 @ rsi
+var int64_t var_8h @ rbp-0x8
+var int64_t var_18h @ rbp-0x18
+var char * var_20h @ rbp-0x20
+var char * var_28h @ rbp-0x28
+var char * s @ rbp-0x30
+var char * s1 @ rbp-0x38
+var uint64_t var_40h @ rbp-0x40
+var char * var_48h @ rbp-0x48
+var char * var_50h @ rbp-0x50
+var char * var_58h @ rbp-0x58
+var char * var_60h @ rbp-0x60
+var int32_t var_64h @ rbp-0x64
+var int32_t var_68h @ rbp-0x68
+var int32_t var_6ch @ rbp-0x6c
+var int32_t var_70h @ rbp-0x70
+var int32_t var_74h @ rbp-0x74
+var int32_t var_78h @ rbp-0x78
+var int32_t var_7ch @ rbp-0x7c
+var int32_t var_80h @ rbp-0x80
+var int32_t var_84h @ rbp-0x84
+var int32_t var_88h @ rbp-0x88
+var int32_t var_8ch @ rbp-0x8c
+var int32_t var_90h @ rbp-0x90
+var int32_t var_94h @ rbp-0x94
+var int32_t var_98h @ rbp-0x98
+var uint32_t var_9ch @ rbp-0x9c
+var signed int var_a0h @ rbp-0xa0
+var signed int var_a4h @ rbp-0xa4
+var char * str @ rbp-0xb0
 EOF
 RUN
 
@@ -1333,28 +2001,72 @@ aaft
 afv
 EOF
 EXPECT=<<EOF
-var int32_t var_1454h @ sp+0x0
-var void * var_1438h @ fp-0x1440
-var char * s1 @ fp-0x1040
-var int32_t wstatus @ fp-0x4c
-var int32_t var_40h @ fp-0x48
-var char * var_3ch @ fp-0x44
-var int32_t var_38h @ fp-0x40
-var int32_t var_34h @ fp-0x3c
-var int32_t var_30h @ fp-0x38
-var pid_t pid @ fp-0x34
-var char * v2 @ fp-0x30
-var int32_t var_24h @ fp-0x2c
-var char * src @ fp-0x28
-var int32_t var_1ch @ fp-0x24
-var char * var_18h @ fp-0x20
-var char * s @ fp-0x1c
-var char * var_10h @ fp-0x18
-var int32_t var_ch @ fp-0x14
-var int32_t var_8h @ fp-0x10
-var char * option @ fp-0xc
 arg int argc @ r0
 arg char ** argv @ r1
+var uint32_t v5 @ sp+0x0
+var char * dest @ fp-0xc
+var pid_t var_14h @ fp-0x10
+var int32_t var_18h @ fp-0x14
+var char * var_1ch @ fp-0x18
+var char * s @ fp-0x1c
+var char * c @ fp-0x20
+var int32_t var_28h @ fp-0x24
+var char * src @ fp-0x28
+var int32_t var_30h @ fp-0x2c
+var char * v2 @ fp-0x30
+var pid_t pid @ fp-0x34
+var int32_t var_3ch @ fp-0x38
+var int32_t var_40h @ fp-0x3c
+var void * var_44h @ fp-0x40
+var char * var_48h @ fp-0x44
+var int32_t var_4ch @ fp-0x48
+var int32_t wstatus @ fp-0x4c
+var char * s1 @ fp-0x1040
+var void * var_1444h @ fp-0x1440
+EOF
+RUN
+
+NAME=aft propagates a callee stack argument past the register args on arm32
+FILE=malloc://256
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 0730a0e300308de50c0000eb1eff2fe1
+wx 1eff2fe1 @ 0x40
+af @ 0x40
+afn five @ 0x40
+'td int five(int a, int b, int c, int d, int myarg5);
+af @ 0
+aaft
+afv
+EOF
+EXPECT=<<EOF
+arg int a @ r0
+arg int b @ r1
+arg int c @ r2
+arg int32_t myarg5 @ sp+0x0
+EOF
+RUN
+
+NAME=aft propagates a callee stack argument above the mips o32 home area
+FILE=malloc://256
+ARGS=-a mips -b 32 -e cfg.bigendian=true -e anal.cc=o32
+CMDS=<<EOF
+wx 24080007afa800100c0000100000000003e0000800000000
+wx 03e0000800000000 @ 0x40
+af @ 0x40
+afn five @ 0x40
+'td int five(int a, int b, int c, int d, int myarg5);
+tk func.five.cc=o32
+af @ 0
+aaft
+afv
+EOF
+EXPECT=<<EOF
+arg int a @ a0
+arg int b @ a1
+arg int c @ a2
+arg int d @ a3
+arg int32_t myarg5 @ sp+0x10
 EOF
 RUN
 
@@ -1367,13 +2079,13 @@ s main
 afv
 EOF
 EXPECT=<<EOF
-var int64_t var_25h @ rbp-0x25
-var signed int64_t var_24h @ rbp-0x24
-var uint32_t var_20h @ rbp-0x20
-var int64_t var_1ch @ rbp-0x1c
-var char * var_18h @ rbp-0x18
-var long int var_10h @ rbp-0x10
 var char * var_8h @ rbp-0x8
+var long int var_10h @ rbp-0x10
+var char * var_18h @ rbp-0x18
+var int32_t var_1ch @ rbp-0x1c
+var uint32_t var_20h @ rbp-0x20
+var signed int var_24h @ rbp-0x24
+var int8_t var_25h @ rbp-0x25
 EOF
 RUN
 
@@ -1386,21 +2098,22 @@ s main
 afv
 EOF
 EXPECT=<<EOF
-var char ** var_28h @ rbp-0x28
-var char ** var_20h @ rbp-0x20
-var int64_t var_14h @ rbp-0x14
-var void * var_10h @ rbp-0x10
-var int64_t var_4h @ rbp-0x4
-arg char ** envp @ rdx
-arg char ** argv @ rsi
 arg int argc @ rdi
+arg char ** argv @ rsi
+arg char ** envp @ rdx
+var int32_t var_4h @ rbp-0x4
+var void * var_10h @ rbp-0x10
+var int32_t var_14h @ rbp-0x14
+var char ** var_20h @ rbp-0x20
+var char ** var_28h @ rbp-0x28
 EOF
 RUN
 
 NAME=constrained type
 FILE=bins/elf/constr_type
 CMDS=<<EOF
-e anal.types.constraint = true
+e types.constraint = true
+e asm.var.summary=0
 aaa
 s sym.single_cond
 pd 1~4h
@@ -1412,10 +2125,10 @@ s sym.range_or
 pd 1~4h
 EOF
 EXPECT=<<EOF
-|           ; var signed int64_t var_4h  { > 0xa} @ rbp-0x4
-|           ; var signed int64_t var_14h  { > 0x0 && <= 0x9} @ rbp-0x14
-|           ; var signed int64_t var_4h  { > 0x64 && <= 0xc7} @ rbp-0x4
-|           ; var signed int64_t var_4h  { > 0xff && <= 0x12b || > 0x14 && <= 0x31 || > 0x6f && <= 0xdd} @ rbp-0x4
+|           ; var signed int var_4h  { > 0xa } @ rbp-0x4
+|           ; var signed int var_14h  { > 0x0 && <= 0x9 } @ rbp-0x14
+|           ; var signed int var_4h  { > 0x64 && <= 0xc7 } @ rbp-0x4
+|           ; var signed int var_4h  { > 0xff && <= 0x12b || > 0x14 && <= 0x31 || > 0x6f && <= 0xdd } @ rbp-0x4
 EOF
 RUN
 
@@ -1446,33 +2159,14 @@ RUN
 
 NAME=types size
 CMDS=<<EOF
-"td struct s1 { int a; int size; int b; };"
+'td struct s1 { int a; int size; int b; };
 tk~struct.s1
 EOF
 EXPECT=<<EOF
 struct.s1=a,size,b
-struct.s1.a=int32_t,0,0
-struct.s1.a.meta=0
-struct.s1.b=int32_t,8,0
-struct.s1.b.meta=0
-struct.s1.size=int32_t,4,0
-struct.s1.size.meta=0
-EOF
-RUN
-
-NAME=types afs [before]
-FILE=bins/elf/hello_world
-CMDS=<<EOF
-s main
-af
-tk~func.main
-EOF
-EXPECT=<<EOF
-func.main.arg.0=int,argc
-func.main.arg.1=char **,argv
-func.main.arg.2=char **,envp
-func.main.args=3
-func.main.ret=int
+struct.s1.a=int,0,0
+struct.s1.b=int,8,0
+struct.s1.size=int,4,0
 EOF
 RUN
 
@@ -1481,14 +2175,15 @@ FILE=bins/elf/hello_world
 CMDS=<<EOF
 s main
 af
-"afs int main(int argc);"
+'afs int main(int argc);
 tk~func.main
 EOF
 EXPECT=<<EOF
-func.main.arg.0=int32_t,argc
+func.main=argc
+func.main.arg.0=int,argc
 func.main.args=1
 func.main.cc=cdecl
-func.main.ret=int32_t
+func.main.ret=int
 EOF
 RUN
 
@@ -1499,235 +2194,33 @@ e anal.vars.stackname=true
 s 0x4e2420
 af
 afs
-"afs no_type(int a, char **b);"
+'afs no_type(int a, char **b);
 afs
-"afs char type(int a, char **b);"
+'afs char type(int a, char **b);
 afs
 EOF
 EXPECT=<<EOF
 void fcn.004e2420 (int64_t arg1, int64_t arg2, int64_t arg3, int64_t arg4, int64_t arg5, int64_t arg6, int64_t arg_8h);
-int32_t no_type (int32_t a, char **b);
-char type (int32_t a, char **b);
+void no_type (int a, char **b);
+char type (int a, char **b);
 EOF
 RUN
 
+# merged: afs sym.imp.*; types afs [before] 2
 NAME=afs fcnname with dots
 FILE=bins/elf/hello_world
 CMDS=<<EOF
 af
 afs
-"afs foo.bar();"
+'afs foo.bar();
 afs
-"afs char foo.bar(int a, ...);"
+'afs char foo.bar(int a, ...);
 afs
-EOF
-EXPECT=<<EOF
-void entry0 (int64_t arg3);
-int32_t foo.bar ();
-char foo.bar (int32_t a);
-EOF
-RUN
-
-NAME=afs sym.imp.*
-FILE=bins/elf/hello_world
-CMDS=<<EOF
+?e --
 s sym.imp.strlen
 af
 afs
-EOF
-EXPECT=<<EOF
-size_t strlen (const char *s);
-EOF
-RUN
-
-NAME=td crash
-FILE=-
-CMDS=<<EOF
-"td struct;"
-"td struct crash __attribute__((packed)) { };"
-EOF
-EXPECT=<<EOF
-EOF
-RUN
-
-NAME=tn common
-FILE=bins/pe/pe.exe
-CMDS=<<EOF
-tna 8
-tnn 8
-tn
-tn- 0x8
-tn- 8
-tn
-tn-*
-tn
-EOF
-EXPECT=<<EOF
-RtlRaiseException
-FreeLibraryAndExitThread
-ExitProcess
-FatalExit
-RaiseException
-ExitThread
-8
-0x8
-RtlRaiseException
-FreeLibraryAndExitThread
-ExitProcess
-FatalExit
-RaiseException
-ExitThread
-EOF
-RUN
-
-NAME=td union
-FILE=-
-CMDS=<<EOF
-"td union foo {int a;char b;}"
-tu*~foo
-ts*~foo
-t*~foo
-t foo
-tu* foo
-EOF
-EXPECT=<<EOF
-pf.foo dc a b
-tk foo=union
-tk union.foo=a,b
-tk union.foo.a=int32_t,0,0
-tk union.foo.a.meta=0
-tk union.foo.b=char,0,0
-tk union.foo.b.meta=2
-pf dc a b
-pf.foo dc a b
-EOF
-RUN
-
-NAME=td uint64_t
-FILE=-
-CMDS=<<EOF
-wx 0xa00f
-wx 0x401f @ 0x4
-wx 0800000000000080 @ 0x8
-"td struct foo {int a; int b; uint64_t c;};"
-tl foo @ 0x0
-pd 1
-EOF
-EXPECT=<<EOF
-(foo)
- a : 0x00000000 = 4000
- b : 0x00000004 = 8000
- c : 0x00000008 = (qword)0x8000000000000008
-EOF
-RUN
-
-NAME=td empty struct
-FILE=-
-CMDS=<<EOF
-wx 0xa00f
-wx 0x401f @ 0x4
-wx 0800000000000080 @ 0x8
-"td struct foo {};"
-tl foo @ 0x0
-pd 1
-EOF
-EXPECT=<<EOF
-(foo)
-EOF
-RUN
-
-NAME=type xrefs
-FILE=bins/elf/ls.odd
-CMDS=<<EOF
-aaaa
-txf main
-?e =
-txf fcn.00011b90
-?e =
-txt size_t
-?e =
-txt size_t *
-EOF
-EXPECT=<<EOF
-int
-char **
-int64_t
-char *
-=
-uint32_t
-int64_t
-char *
-size_t *
-size_t
-void *
-wint_t
-=
-fcn.0000f770
-fcn.00011b90
-fcn.00010010
-fcn.0000e780
-fcn.0000c0f0
-=
-fcn.00011b90
-fcn.00014d50
-EOF
-RUN
-
-NAME=aht aligned
-FILE=-
-CMDS=<<EOF
-e asm.arch=x86
-e asm.bits=64
-"td struct foo {char gap;int bar __attribute__((__aligned__(4)));};"
-"td struct foo2 {char gap[1];int bar __attribute__((__aligned__(4)));};"
-"td struct foo3 {char gap[3];int bar __attribute__((__aligned__(4)));};"
-"td struct foo4 {char gap[4];int bar;};"
-"td struct foo5 {int gap;int bar;};"
-ahts 4 ~foo
-?e =
-wx c7400400000000
-aht foo.bar
-pd 1
-EOF
-EXPECT=<<EOF
-foo.bar
-foo2.bar
-foo3.bar
-foo4.bar
-foo5.bar
-=
-            0x00000000      c74004000000.  mov dword [rax + foo.bar], 0
-EOF
-RUN
-
-NAME=ahts nested
-FILE=-
-CMDS=<<EOF
-"td struct foo {int bar;int cow;};"
-"td struct spam {int ham;struct foo _foo;int eggs;};"
-ahts 8 ~spam
-EOF
-EXPECT=<<EOF
-spam._foo.cow
-EOF
-RUN
-
-NAME=aaft io.va side effect
-FILE=-
-ARGS=-eio.va=0 -a x86 -b 64
-CMDS=<<EOF
-af
-aaft
-e io.va
-EOF
-EXPECT=<<EOF
-false
-EOF
-RUN
-
-NAME=types afs [before] 2
-FILE=bins/elf/hello_world
-CMDS=<<EOF
+?e --
 aaa
 s main
 afs
@@ -1737,12 +2230,18 @@ afs
 afsj~{}
 EOF
 EXPECT=<<EOF
+void entry0 (int64_t arg1);
+void foo.bar ();
+char foo.bar (int a, ...);
+--
+size_t sym.imp.strlen (const char *s);
+--
 int main (int argc, char **argv, char **envp);
 {
   "name": "main",
   "noreturn": false,
   "ret": "int",
-  "cc": "amd64",
+  "callconv": "amd64",
   "argc": 3,
   "args": [
     {
@@ -1762,12 +2261,12 @@ int main (int argc, char **argv, char **envp);
     }
   ]
 }
-char * strcpy (char *dest, const char *src);
+char * sym.imp.strcpy (char *dest, const char *src);
 {
   "name": "sym.imp.strcpy",
   "noreturn": false,
   "ret": "char *",
-  "cc": "amd64",
+  "callconv": "amd64",
   "argc": 2,
   "args": [
     {
@@ -1782,5 +2281,3982 @@ char * strcpy (char *dest, const char *src);
     }
   ]
 }
+EOF
+RUN
+
+NAME=td crash
+FILE=-
+CMDS=<<EOF
+'td struct;
+'td struct crash __attribute__((packed)) { };
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=tn common
+FILE=bins/pe/pe.exe
+CMDS=<<EOF
+tna 8
+tnn 8
+tn
+tn- 0x8
+tn- 8
+tn
+tn-*
+tn
+EOF
+EXPECT=<<EOF
+cxa_bad_cast
+err
+errc
+ZSt9terminatev
+RtlRaiseException
+cxa_bad_typeid
+cxa_call_unexpected
+Unwind_Resume
+FreeLibraryAndExitThread
+objc_exception_rethrow
+cxa_throw_bad_array_new_length
+std::terminate__
+ExitProcess
+cxa_throw
+FatalExit
+Unwind_SjLj_Resume
+objc_exception_throw
+RaiseException
+errx
+ExitThread
+cxa_end_cleanup
+8
+cxa_pure_virtual
+cxa_rethrow
+0x8
+cxa_bad_cast
+err
+errc
+ZSt9terminatev
+RtlRaiseException
+cxa_bad_typeid
+cxa_call_unexpected
+Unwind_Resume
+FreeLibraryAndExitThread
+objc_exception_rethrow
+cxa_throw_bad_array_new_length
+std::terminate__
+ExitProcess
+cxa_throw
+FatalExit
+Unwind_SjLj_Resume
+objc_exception_throw
+RaiseException
+errx
+ExitThread
+cxa_end_cleanup
+cxa_pure_virtual
+cxa_rethrow
+EOF
+RUN
+
+NAME=td union
+FILE=-
+CMDS=<<EOF
+'td union foo {int a;char b;}
+tu*~foo
+ts*~foo
+t*~foo
+t foo
+tu* foo
+EOF
+EXPECT=<<EOF
+'pf.foo 0dc a b
+'tk foo=union
+'tk union.foo=a,b
+'tk union.foo.a=int,0,0
+'tk union.foo.b=char,0,0
+'pf 0dc a b
+'pf.foo 0dc a b
+EOF
+RUN
+
+NAME=Struct format exports keep command separators literal
+FILE=malloc://32
+CMDS=<<EOF
+'tk evil=struct
+'tk struct.evil="a;f injected"
+'tk struct.evil.a;f injected=int,0,0
+t evil
+ts evil
+.t evil > /dev/null
+.ts evil > /dev/null
+ts. evil > /dev/null
+.ts* evil
+pf.evil > /dev/null
+f~injected
+EOF
+EXPECT=<<EOF
+'pf d a;f injected
+'pf d a;f injected
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=Union format exports keep command separators literal
+FILE=malloc://32
+CMDS=<<EOF
+'tk evil=union
+'tk union.evil="a;f injected"
+'tk union.evil.a;f injected=int,0,0
+t evil
+tu evil
+.t evil > /dev/null
+.tu evil > /dev/null
+tu. evil > /dev/null
+.tu* evil
+pf.evil > /dev/null
+f~injected
+EOF
+EXPECT=<<EOF
+'pf 0d a;f injected
+'pf 0d a;f injected
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=Type format exports keep command substitutions literal
+FILE=malloc://32
+CMDS=<<EOF
+'tk evil=type
+'tk type.evil="d a`f injected`"
+t evil
+.t evil > /dev/null
+f~injected
+'tk type.evil="d a$(f injected)"
+t evil
+.t evil > /dev/null
+f~injected
+EOF
+EXPECT=<<EOF
+'pf d a`f injected`
+'pf d a$(f injected)
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=td uint64_t
+FILE=-
+CMDS=<<EOF
+wx 0xa00f
+wx 0x401f @ 0x4
+wx 0800000000000080 @ 0x8
+'td struct foo {int a; int b; uint64_t c;};
+tl foo @ 0x0
+pd 1
+EOF
+EXPECT=<<EOF
+(foo)
+ a : 0x00000000 = 0x00000fa0
+ b : 0x00000004 = 0x00001f40
+ c : 0x00000008 = (qword)0x8000000000000008
+EOF
+RUN
+
+NAME=td empty struct
+FILE=-
+CMDS=<<EOF
+wx 0xa00f
+wx 0x401f @ 0x4
+wx 0800000000000080 @ 0x8
+'td struct foo {};
+tl foo @ 0x0
+pd 1
+EOF
+EXPECT=<<EOF
+(foo)
+EOF
+RUN
+
+NAME=type xrefs
+FILE=bins/elf/ls.odd
+CMDS=<<EOF
+aaaa
+txf main
+?e =
+txf fcn.00011b90
+?e =
+txt size_t
+?e =
+txt mbstate_t *
+EOF
+EXPECT=<<EOF
+int64_t
+uint8_t
+char *
+int16_t
+int8_t
+int
+char **
+=
+int64_t
+char *
+uint32_t
+int32_t
+uint64_t
+uint8_t
+size_t
+void *
+mbstate_t *
+wint_t
+int8_t
+=
+fcn.0000f770
+fcn.00011b90
+fcn.00010010
+fcn.00014d50
+fcn.0000e780
+fcn.0000c0f0
+=
+fcn.00011b90
+fcn.00014d50
+EOF
+RUN
+
+NAME=aht aligned
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+'td struct foo {char gap;int bar __attribute__((__aligned__(4)));};
+'td struct foo2 {char gap[1];int bar __attribute__((__aligned__(4)));};
+'td struct foo3 {char gap[3];int bar __attribute__((__aligned__(4)));};
+'td struct foo4 {char gap[4];int bar;};
+'td struct foo5 {int gap;int bar;};
+ahts 4 ~foo
+?e =
+wx c7400400000000
+aht foo.bar
+pd 1
+EOF
+EXPECT=<<EOF
+foo.bar
+foo2.bar
+foo3.bar
+foo4.bar
+foo5.bar
+=
+            0x00000000      c740040000..   mov dword [rax + foo.bar], 0
+EOF
+RUN
+
+NAME=ahts nested
+FILE=-
+CMDS=<<EOF
+'td struct foo {int bar;int cow;};
+'td struct spam {int ham;struct foo _foo;int eggs;};
+ahts 8 ~spam
+EOF
+EXPECT=<<EOF
+spam._foo.cow
+EOF
+RUN
+
+NAME=ahts union nested
+FILE=-
+CMDS=<<EOF
+'td struct ahtpair {int a;int b;};
+'td union ahtunion {int raw;struct ahtpair pair;};
+ahts 4 ~ahtunion.
+EOF
+EXPECT=<<EOF
+ahtunion.pair.b
+EOF
+RUN
+
+NAME=aaft io.va side effect
+FILE=-
+ARGS=-eio.va=0 -a x86 -b 64
+CMDS=<<EOF
+af
+aaft
+e io.va
+EOF
+EXPECT=<<EOF
+false
+EOF
+RUN
+
+NAME=typedef stuff
+FILE=--
+ARGS=-e asm.os=linux
+CMDS=<<EOF
+'td typedef int Number;
+tt
+tt Number
+tk~Number
+t Number
+EOF
+EXPECT=<<EOF
+Number
+gid_t
+off64_t
+off_t
+pid_t
+size_t
+ssize_t
+time_t
+uid_t
+int
+Number=typedef
+typedef.Number=int
+'pf d
+EOF
+RUN
+
+NAME=ts stops at a typedef cycle
+FILE=--
+CMDS=<<EOF
+tk aa=typedef
+tk typedef.aa=bb
+tk bb=typedef
+tk typedef.bb=aa
+ts aa
+tss aa
+tk cc=typedef
+tk typedef.cc=cc
+ts cc
+tss cc
+'td typedef int t1;
+'td typedef t1 t2;
+ts t2
+EOF
+EXPECT=<<EOF
+0
+0
+'pf d
+EOF
+RUN
+
+NAME=ts follows a typedef chain longer than any depth bound to its end
+FILE=--
+CMDS=<<EOF
+'td typedef int t0;
+'td typedef t0 t1;
+'td typedef t1 t2;
+'td typedef t2 t3;
+'td typedef t3 t4;
+'td typedef t4 t5;
+'td typedef t5 t6;
+'td typedef t6 t7;
+'td typedef t7 t8;
+'td typedef t8 t9;
+'td typedef t9 t10;
+ts t10
+ts t8
+tss t10
+EOF
+EXPECT=<<EOF
+'pf d
+'pf d
+4
+EOF
+RUN
+
+NAME=x86-32 type propagation (no double counting)
+FILE=bins/elf/ioli/crackme0x07
+CMDS=<<EOF
+e anal.vars.stackname=true
+aaa
+s fcn.080485b9
+afv~format
+afv~var_11h
+EOF
+EXPECT=<<EOF
+var char * format @ esp+0x4
+var char * var_11h @ ebp-0xd
+EOF
+RUN
+
+NAME=Double pointer via chain dereference
+FILE=bins/elf/double_ptr
+CMDS=<<EOF
+aa
+aaft
+s main
+afv~ptr
+EOF
+EXPECT=<<EOF
+var char ** ptr @ rbp-0x18
+EOF
+RUN
+
+NAME=a:tp plugin type propagation single function
+FILE=bins/elf/double_ptr
+CMDS=<<EOF
+aa
+s main
+a:tp
+afv~ptr
+EOF
+EXPECT=<<EOF
+var char ** ptr @ rbp-0x18
+EOF
+RUN
+
+NAME=a:tp plugin help
+FILE=--
+CMDS=<<EOF
+aei
+a:tp?
+EOF
+EXPECT=<<EOF
+Usage: a:tp  propagate types for current function
+| a:tpall     propagate types for every function (aaft)
+| a:tpsynth   synthesize struct types from pointer-argument and allocator-return accesses (afts)
+| a:tpsynth*  show the synthesis as r2 commands without applying (afts*)
+| a:tpsynthj  apply the synthesis and report it in json (aftsj)
+| a:tp?       show this help
+EOF
+RUN
+
+NAME=a:tp all functions
+FILE=bins/elf/double_ptr
+CMDS=<<EOF
+aa
+a:tpall
+s main
+afv~ptr
+EOF
+EXPECT=<<EOF
+var char ** ptr @ rbp-0x18
+EOF
+RUN
+
+NAME=a:tp with rollback enabled
+FILE=bins/elf/double_ptr
+CMDS=<<EOF
+aa
+e types.rollback=true
+s main
+a:tp
+afv~ptr
+EOF
+EXPECT=<<EOF
+var char ** ptr @ rbp-0x18
+EOF
+RUN
+
+# merged: a:tp config rollback can be enabled; a:tp preserves variable after rollback
+NAME=a:tp config rollback default off
+FILE=bins/elf/double_ptr
+CMDS=<<EOF
+e types.rollback
+?e --
+e types.rollback=true
+e types.rollback
+?e --
+aa
+e types.rollback=true
+s main
+a:tp
+afv~ptr
+EOF
+EXPECT=<<EOF
+false
+--
+true
+--
+var char ** ptr @ rbp-0x18
+EOF
+RUN
+
+NAME=a:tp disabled in debugger mode
+FILE=bins/elf/double_ptr
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+e cfg.debug=true
+af
+a:tp
+EOF
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+WARN: Type propagation is disabled in debugger mode
+EOF
+RUN
+
+NAME=a:tp no function at current offset
+FILE=bins/elf/double_ptr
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+aei
+s 0
+a:tp
+EOF
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+WARN: Cannot find function at current offset
+EOF
+RUN
+
+NAME=a:tp works after manual aei
+FILE=bins/elf/double_ptr
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+s main
+aei
+af
+afva
+a:tp
+afv~var_18h
+EOF
+EXPECT=<<EOF
+var uint64_t var_18h @ rbp-0x18
+EOF
+RUN
+
+NAME=a:tp works after manual aei
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+e io.cache=true
+wx 48c745f810000000488b7df8e805000000c3
+f sym.imp.myfunc @ 0x16
+af @ 0x16
+afs void sym.imp.myfunc(size_t sz) @ 0x16
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var size_t sz @ rbp-0x8
+EOF
+RUN
+
+NAME=types json fields
+FILE=bins/mach0/mac-ls
+ARGS=-b64
+CMDS=<<EOF
+tsj NSString~{}
+-b32
+?e --
+tsj NSString~{}
+EOF
+EXPECT=<<EOF
+{
+  "name": "NSString",
+  "format": "pqzd p0 p1 str len",
+  "fields": [
+    {
+      "name": "p0",
+      "type": "void *",
+      "offset": 0,
+      "size": 8
+    },
+    {
+      "name": "p1",
+      "type": "size_t",
+      "offset": 8,
+      "size": 8
+    },
+    {
+      "name": "str",
+      "type": "char *",
+      "offset": 16,
+      "size": 8
+    },
+    {
+      "name": "len",
+      "type": "int",
+      "offset": 24,
+      "size": 4
+    }
+  ]
+}
+--
+{
+  "name": "NSString",
+  "format": "pdzd p0 p1 str len",
+  "fields": [
+    {
+      "name": "p0",
+      "type": "void *",
+      "offset": 0,
+      "size": 4
+    },
+    {
+      "name": "p1",
+      "type": "size_t",
+      "offset": 4,
+      "size": 4
+    },
+    {
+      "name": "str",
+      "type": "char *",
+      "offset": 8,
+      "size": 4
+    },
+    {
+      "name": "len",
+      "type": "int",
+      "offset": 12,
+      "size": 4
+    }
+  ]
+}
+EOF
+RUN
+
+NAME=visibility hidden metadata parsing
+FILE=--
+CMDS=<<CMDS
+to bins/other/visibility_test.h
+tk ~PadStr
+CMDS
+EXPECT=<<EXPECT
+PadStr=struct
+struct.PadStr=pad,str1
+struct.PadStr.pad=char,0,6
+struct.PadStr.pad.@.visibility=hidden
+struct.PadStr.str1=char,6,11
+EXPECT
+RUN
+
+NAME=visibility hidden pf format
+FILE=malloc://32
+CMDS=<<CMDS
+to bins/other/visibility_test.h
+ts PadStr
+CMDS
+EXPECT=<<EXPECT
+'pf [6].[11]z str1
+EXPECT
+RUN
+
+NAME=visibility hidden tsc output
+FILE=--
+CMDS=<<CMDS
+to bins/other/visibility_test.h
+tsc PadStr
+CMDS
+EXPECT=<<EXPECT
+struct PadStr {
+  char pad[6]; /// @visibility(hidden)
+  char str1[11];
+};
+EXPECT
+RUN
+
+NAME=visibility hidden field display
+FILE=malloc://32
+CMDS=<<CMDS
+to bins/other/visibility_test.h
+w hello world sucks
+.ts PadStr
+CMDS
+EXPECT=<<EXPECT
+ str1 : 0x00000006 = "world sucks"
+EXPECT
+RUN
+
+NAME=@pack(1) attribute removes padding
+FILE=--
+CMDS=<<CMDS
+to bins/other/packed_test.h
+tk ~struct.packed
+CMDS
+EXPECT=<<EXPECT
+struct.packed=a,b,c
+struct.packed.@.pack=1
+struct.packed.a=char,0,0
+struct.packed.b=int,1,0
+struct.packed.c=char,5,0
+EXPECT
+RUN
+
+NAME=struct without pack has natural alignment
+FILE=--
+CMDS=<<CMDS
+to bins/other/packed_test.h
+tk ~struct.normal
+CMDS
+EXPECT=<<EXPECT
+struct.normal=a,b,c
+struct.normal.a=char,0,0
+struct.normal.b=int,4,0
+struct.normal.c=char,8,0
+EXPECT
+RUN
+
+NAME=packed struct pf format (no padding)
+FILE=--
+CMDS=<<CMDS
+to bins/other/packed_test.h
+ts packed
+CMDS
+EXPECT=<<EXPECT
+'pf cdc a b c
+EXPECT
+RUN
+
+NAME=normal struct pf format (with padding)
+FILE=--
+CMDS=<<CMDS
+to bins/other/packed_test.h
+ts normal
+CMDS
+EXPECT=<<EXPECT
+'pf c[3].dc a b c
+EXPECT
+RUN
+
+NAME=__attribute__((packed)) syntax
+FILE=--
+CMDS=<<CMDS
+'td struct foo __attribute__((packed)) { char a; int b; };
+tk ~struct.foo
+CMDS
+EXPECT=<<EXPECT
+struct.foo=a,b
+struct.foo.@.packed=true
+struct.foo.a=char,0,0
+struct.foo.b=int,1,0
+EXPECT
+RUN
+
+NAME=@aligned attribute on field
+FILE=--
+CMDS=<<CMDS
+'td struct bar { char gap; int val __attribute__((__aligned__(8))); };
+tk ~struct.bar
+CMDS
+EXPECT=<<EXPECT
+struct.bar=gap,val
+struct.bar.gap=char,0,0
+struct.bar.val=int,8,0
+struct.bar.val.@.aligned=8
+EXPECT
+RUN
+
+NAME=packed struct type print
+FILE=malloc://32
+CMDS=<<CMDS
+to bins/other/packed_test.h
+wx 4112345678ff
+tp packed
+CMDS
+EXPECT=<<EXPECT
+ a : 0x00000000 = 'A'
+ b : 0x00000001 = 0x78563412
+ c : 0x00000005 = '.'
+EXPECT
+RUN
+
+NAME=normal struct type print
+FILE=malloc://32
+CMDS=<<CMDS
+to bins/other/packed_test.h
+wx 41000000123456784200000000000000
+tp normal
+CMDS
+EXPECT=<<EXPECT
+ a : 0x00000000 = 'A'
+ b : 0x00000004 = 0x78563412
+ c : 0x00000008 = 'B'
+EXPECT
+RUN
+
+NAME=tcc malformed preprocessor directives do not crash or hang
+FILE=--
+CMDS=<<CMDS
+-e types.plugin=tcc
+'td #pragma pack(3)
+'td #line 1 2
+'td #else
+'td #endif
+'td /* unterminated comment
+'td #if #"stale"
+'td int a[*1];
+'td struct ok { char a; int b; }
+tk ~struct.ok=
+CMDS
+EXPECT=<<EXPECT
+struct.ok=a,b
+<string>:1: error: invalid pack pragma
+<string>: error: #line
+<string>:1: error: #else without matching #if
+<string>:1: error: #endif without matching #if
+<string>:1: error: unexpected end of file in comment
+<string>:1: error: declaration expected
+<string>:1: error: identifier5 expected
+<string>:1: error: constant expression expected
+<string>:1: error: missing #endif
+<string>:1: error: declaration expected
+<string>:1: error: pointer expected
+<string>:1: error: declaration expected
+EXPECT
+RUN
+
+NAME=tsv struct with offsets
+FILE=--
+CMDS=<<EOF
+'td struct foo {int a;int b;}
+tsv foo
+EOF
+EXPECT=<<EOF
+0x00000000 struct foo {
+0x00000000   int a;
+0x00000004   int b;
+0x00000008 };
+EOF
+RUN
+
+NAME=tuv union with offsets
+FILE=--
+CMDS=<<EOF
+'td union bar {int a;short b;}
+tuv bar
+EOF
+EXPECT=<<EOF
+0x00000000 union bar {
+0x00000000   int a;
+0x00000000   short b;
+0x00000004 };
+EOF
+RUN
+
+NAME=tv struct view
+FILE=--
+CMDS=<<EOF
+'td struct point {int x;int y;}
+tv point
+EOF
+EXPECT=<<EOF
+0x00000000 struct point {
+0x00000000   int x;
+0x00000004   int y;
+0x00000008 };
+EOF
+RUN
+
+NAME=tv union view
+FILE=--
+CMDS=<<EOF
+'td union value {int i;float f;}
+tv value
+EOF
+EXPECT=<<EOF
+0x00000000 union value {
+0x00000000   int i;
+0x00000000   float f;
+0x00000004 };
+EOF
+RUN
+
+NAME=tv enum view
+FILE=--
+CMDS=<<EOF
+'td enum status {ok=0,err=1}
+tv status
+EOF
+EXPECT=<<EOF
+0x00000000 enum status {
+0x00000000   ok = 0x0;
+0x00000001   err = 0x1;
+0x00000000 };
+EOF
+RUN
+
+NAME=tv basic type view
+FILE=--
+CMDS=<<EOF
+tv int
+EOF
+EXPECT=<<EOF
+0x00000000 type int; // size=4
+0x00000004
+EOF
+RUN
+
+NAME=tfv xref resolves afs prototype on prefixed function name
+FILE=malloc://64
+ARGS=-a x86 -b 64 -e types.xrefs=true
+CMDS=<<EOF
+wa mov edi, 5
+wa call 0x20 @ 0x5
+wa ret @ 0x20
+af @ 0x20
+afn sym.foo @ 0x20
+s 0x20
+'afs int sym.foo(int myarg)
+af @ 0x0
+afn caller @ 0x0
+tfv sym.foo
+EOF
+EXPECT=<<EOF
+             ; XREF[x] 0x00000005 caller
+0x00000000 int sym.foo ( // cc:cdecl ret:?
+0x00000000   int myarg // stack
+0x00000004 );
+EOF
+RUN
+
+NAME=tfv xref resolves afs prototype on import-prefixed function name
+FILE=malloc://64
+ARGS=-a x86 -b 64 -e types.xrefs=true
+CMDS=<<EOF
+wa mov edi, 5
+wa call 0x20 @ 0x5
+wa ret @ 0x20
+af @ 0x20
+afn sym.imp.bar @ 0x20
+s 0x20
+'afs int sym.imp.bar(int myarg)
+af @ 0x0
+afn caller @ 0x0
+tfv sym.imp.bar
+EOF
+EXPECT=<<EOF
+             ; XREF[x] 0x00000005 caller
+0x00000000 int sym.imp.bar ( // cc:cdecl ret:?
+0x00000000   int myarg // stack
+0x00000004 );
+EOF
+RUN
+
+NAME=aaft function with switch table
+FILE=bins/jmptbl/test_gcc_5.5.0_64.out
+CMDS=<<EOF
+aa
+aaft
+s main
+afv
+?e =
+afb
+EOF
+EXPECT=<<EOF
+arg uint32_t argc @ rdi
+=
+0x00000580 0x0000058d 00:0000 13 j 0x00000622 f 0x0000058d
+0x0000058d 0x0000059f 00:0000 18 s 0x00000622 s 0x000005b2 s 0x000005c0 s 0x000005ce s 0x000005dc s 0x000005ea s 0x000005f8 s 0x00000606 s 0x00000614 s 0x0000059f
+0x0000059f 0x000005ab 00:0000 12 j 0x000005ab
+0x000005ab 0x000005b2 00:0000 7
+0x000005b2 0x000005c0 00:0000 14 j 0x000005ab
+0x000005c0 0x000005ce 00:0000 14 j 0x000005ab
+0x000005ce 0x000005dc 00:0000 14 j 0x000005ab
+0x000005dc 0x000005ea 00:0000 14 j 0x000005ab
+0x000005ea 0x000005f8 00:0000 14 j 0x000005ab
+0x000005f8 0x00000606 00:0000 14 j 0x000005ab
+0x00000606 0x00000614 00:0000 14 j 0x000005ab
+0x00000614 0x00000622 00:0000 14 j 0x000005ab
+0x00000622 0x00000633 00:0000 17 j 0x000005ab
+EOF
+RUN
+
+NAME=aaft function with unreachable block
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4889f8c3
+wx 48c7c303000000c3 @ 0x10
+af+ 0 fcn.unreach
+afb+ 0 0 4
+afb+ 0 0x10 8
+aaft
+afb
+?e ok
+EOF
+EXPECT=<<EOF
+0x00000000 0x00000004 00:0000 4
+0x00000010 0x00000018 00:0000 8
+ok
+EOF
+RUN
+
+NAME=aaft function without basic blocks
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+af+ 0 fcn.empty
+aaft
+?e ok
+EOF
+EXPECT=<<EOF
+ok
+EOF
+RUN
+
+NAME=td struct and union array counts reach sdb via base type serializer
+FILE=-
+CMDS=<<EOF
+'td struct KS {int a; char buf[16];}
+'td union KU {char buf[8]; int x;}
+tk KS
+tk struct.KS
+tk struct.KS.buf
+tk KU
+tk union.KU
+tk union.KU.buf
+tsc KS
+tuc KU
+EOF
+EXPECT=<<EOF
+struct
+a,buf
+char,4,16
+union
+buf,x
+char,0,8
+struct KS {
+  int a;
+  char buf[16];
+};
+union KU {
+  char buf[8];
+  int x;
+};
+EOF
+RUN
+
+NAME=td array dimensions in hex
+FILE=malloc://32
+CMDS=<<EOF
+"td struct Hex { char pad[0x8]; int x; char tail[0x10]; };"
+tk struct.Hex.x
+tk struct.Hex.tail
+"td typedef struct Tg { char b[0x10]; } TgT;"
+tk struct.Tg.b
+"td typedef union Ug { char c[0x18]; int v; } UgT;"
+tk union.Ug.c
+tsc Hex
+EOF
+EXPECT=<<EOF
+int,8,0
+char,12,16
+char,0,16
+char,0,24
+struct Hex {
+  char pad[8];
+  int x;
+  char tail[16];
+};
+EOF
+RUN
+
+NAME=tsc struct member type with comma survives
+FILE=-
+CMDS=<<EOF
+tk tpl=struct
+tk struct.tpl=p
+'tk struct.tpl.p=pair<int, char>,8,0
+tsc tpl
+tsv tpl
+EOF
+EXPECT=<<EOF
+struct tpl {
+  uint8_t pad_0x0[8]; // gap
+  pair<int, char> p;
+};
+0x00000000 struct tpl {
+0x00000008   pair<int, char> p;
+0x00000008 };
+EOF
+RUN
+
+NAME=tuc union member type with comma survives
+FILE=-
+CMDS=<<EOF
+tk utpl=union
+tk union.utpl=p,q
+'tk union.utpl.p=pair<int, char>,0,4
+tk union.utpl.q=int32_t,0,0
+tuc utpl
+tuv utpl
+EOF
+EXPECT=<<EOF
+union utpl {
+  pair<int, char> p[4];
+  int32_t q;
+};
+0x00000000 union utpl {
+0x00000000   pair<int, char> p[4];
+0x00000000   int32_t q;
+0x00000004 };
+EOF
+RUN
+
+NAME=comma member type resolves for sizeof and pf format
+FILE=-
+CMDS=<<EOF
+'tk pair<int, char>=struct
+'tk struct.pair<int, char>=a,b
+'tk struct.pair<int, char>.a=int32_t,0,0
+'tk struct.pair<int, char>.b=int32_t,4,0
+tk outer=struct
+tk struct.outer=p,x
+'tk struct.outer.p=pair<int, char>,0,0
+tk struct.outer.x=int32_t,8,0
+tss outer
+ts outer
+EOF
+EXPECT=<<EOF
+12
+'pf ?[4].d (pair<int, char>)p x
+EOF
+RUN
+
+NAME=aaft conflicting types from parallel branches meet to void pointer
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488b7df8e84b000000eb39 @ 0
+wx 488d0549000000488945f8eb13 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+w hello @ 0x80
+f str.hello @ 0x80
+af @ 0x60
+afn takes_file @ 0x60
+"td struct fobj {int x;}; int takes_file(struct fobj *f);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var void * f @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft parallel-branch meet is independent of the branch order
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488d056d000000488945f8eb37 @ 0
+wx 488b7df8e827000000eb15 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+w hello @ 0x80
+f str.hello @ 0x80
+af @ 0x60
+afn takes_file @ 0x60
+"td struct fobj {int x;}; int takes_file(struct fobj *f);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var void * f @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft later stronger evidence on the same path upgrades the type
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec20488b7df8e84f000000488d0568000000488945f8c9c3 @ 0
+wx c3 @ 0x60
+w hello @ 0x80
+f str.hello @ 0x80
+af @ 0x60
+afn takes_u64 @ 0x60
+"td int takes_u64(uint64_t v);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var char * v @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft matching types from parallel branches stay intact
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488d057d000000488945f8eb37 @ 0
+wx 488d0549000000488945f8eb13 @ 0x30
+wx c9c3 @ 0x50
+w hello @ 0x80
+w world @ 0x90
+f str.hello @ 0x80
+f str.world @ 0x90
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var char * var_8h @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft equal-rank scalar conflict from parallel branches meets to the wider default int
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488b7df8e84b000000eb39 @ 0
+wx 488b7df8e837000000eb15 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+wx c3 @ 0x70
+af @ 0x60
+afn takes_size @ 0x60
+af @ 0x70
+afn takes_wint @ 0x70
+"td typedef unsigned int wint_t;"
+"td int takes_size(size_t v); int takes_wint(wint_t v);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var int64_t v @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft equal-rank scalar meet is independent of the branch order
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488b7df8e85b000000eb39 @ 0
+wx 488b7df8e827000000eb15 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+wx c3 @ 0x70
+af @ 0x60
+afn takes_size @ 0x60
+af @ 0x70
+afn takes_wint @ 0x70
+"td typedef unsigned int wint_t;"
+"td int takes_size(size_t v); int takes_wint(wint_t v);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var int64_t v @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft const and plain string pointers from parallel branches meet to char pointer
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488d056d000000488945f8eb37 @ 0
+wx 488b7df8e827000000eb15 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+w hello @ 0x80
+f str.hello @ 0x80
+af @ 0x60
+afn takes_str @ 0x60
+"td int takes_str(char *s);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var char * s @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft typed and primitive pointer conflict from parallel branches meets to void pointer
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488b7df8e84b000000eb39 @ 0
+wx 488b7df8e837000000eb15 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+wx c3 @ 0x70
+af @ 0x60
+afn takes_file @ 0x60
+af @ 0x70
+afn takes_szp @ 0x70
+"td struct fobj {int x;}; int takes_file(struct fobj *f); int takes_szp(size_t *p);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var void * p @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft typed and primitive pointer meet is independent of the branch order
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7424488b7df8e85b000000eb39 @ 0
+wx 488b7df8e827000000eb15 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+wx c3 @ 0x70
+af @ 0x60
+afn takes_file @ 0x60
+af @ 0x70
+afn takes_szp @ 0x70
+"td struct fobj {int x;}; int takes_file(struct fobj *f); int takes_szp(size_t *p);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var void * f @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft three parallel pointer facts meet to void pointer
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff742483ff05742f488b7df8e846000000eb34 @ 0
+wx 488b7df8e837000000eb15 @ 0x30
+wx 488d0539000000488945f8eb03 @ 0x40
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+wx c3 @ 0x70
+w hello @ 0x80
+f str.hello @ 0x80
+af @ 0x60
+afn takes_file @ 0x60
+af @ 0x70
+afn takes_szp @ 0x70
+"td struct fobj {int x;}; int takes_file(struct fobj *f); int takes_szp(size_t *p);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg uint64_t arg1 @ rdi
+var void * p @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft three parallel pointer facts meet independent of the branch order
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff742483ff05742f488d0568000000488945f8eb32 @ 0
+wx 488b7df8e827000000eb15 @ 0x30
+wx 488b7df8e827000000eb05 @ 0x40
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+wx c3 @ 0x70
+w hello @ 0x80
+f str.hello @ 0x80
+af @ 0x60
+afn takes_file @ 0x60
+af @ 0x70
+afn takes_szp @ 0x70
+"td struct fobj {int x;}; int takes_file(struct fobj *f); int takes_szp(size_t *p);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg uint64_t arg1 @ rdi
+var void * f @ rbp-0x8
+EOF2
+RUN
+
+NAME=aaft homes leading float-class parameters on the float registers
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x20 @ 4
+wx f20f1045f8 @ 8
+wx f20f104df0 @ 13
+wa call 0x100 @ 18
+wa leave @ 23
+wa ret @ 24
+wa ret @ 0x100
+af+ 0x100 sq
+afb+ 0x100 0x100 1
+af @ 0
+td typedef double mydouble;
+td double sq(const double a, mydouble b);
+tk func.sq.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double a @ rbp-0x8
+var mydouble b @ rbp-0x10
+EOF2
+RUN
+
+NAME=aaft homes a float parameter declared without an arity key
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x20 @ 4
+wa mov rdi, qword [rbp - 8] @ 8
+wx f20f1045f0 @ 12
+wa call 0x100 @ 17
+wa leave @ 22
+wa ret @ 23
+wa ret @ 0x100
+af+ 0x100 sq
+afb+ 0x100 0x100 1
+af @ 0
+tk sq=func
+tk func.sq.arg.0=double,x
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var int64_t var_8h @ rbp-0x8
+var double x @ rbp-0x10
+EOF2
+RUN
+
+NAME=aaft homes an integer after a float on the first integer register
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+wx f20f1045f8 @ 8
+wa mov rsi, qword [rbp - 0x10] @ 13
+wa mov rdi, qword [rbp - 0x18] @ 17
+wa call 0x100 @ 21
+wa leave @ 26
+wa ret @ 27
+wa ret @ 0x100
+af+ 0x100 f3
+afb+ 0x100 0x100 1
+af @ 0
+td int f3(double a, int b);
+tk func.f3.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double a @ rbp-0x8
+var int64_t var_10h @ rbp-0x10
+var int64_t b @ rbp-0x18
+EOF2
+RUN
+
+NAME=aaft homes every argument of a mixed prototype on its own class
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+wa mov rdi, qword [rbp - 8] @ 8
+# movsd xmm0, qword [rbp - 0x10]
+wx f20f1045f0 @ 12
+wa mov rsi, qword [rbp - 0x18] @ 17
+wa mov rdx, qword [rbp - 0x20] @ 21
+wa call 0x100 @ 25
+wa leave @ 30
+wa ret @ 31
+wa ret @ 0x100
+af+ 0x100 mixed
+afb+ 0x100 0x100 1
+af @ 0
+"td struct S {long x;};"
+"td enum nar { N_A = 1 };"
+td typedef enum nar Nar;
+td void mixed(struct S *p, double d, bool flag, Nar e);
+tk func.mixed.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var struct S * p @ rbp-0x8
+var double d @ rbp-0x10
+var bool flag @ rbp-0x18
+var Nar e @ rbp-0x20
+EOF2
+RUN
+
+NAME=aaft counts integer and float registers apart in an interleaved prototype
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+# movsd xmm0, qword [rbp - 8]
+wx f20f1045f8 @ 8
+wa mov rdi, qword [rbp - 0x10] @ 13
+# movsd xmm1, qword [rbp - 0x18]
+wx f20f104de8 @ 17
+wa mov rsi, qword [rbp - 0x20] @ 22
+wa mov rdx, qword [rbp - 0x28] @ 26
+wa call 0x100 @ 30
+wa leave @ 35
+wa ret @ 36
+wa ret @ 0x100
+af+ 0x100 interleave
+afb+ 0x100 0x100 1
+af @ 0
+td int interleave(double a, int b, double c);
+tk func.interleave.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double a @ rbp-0x8
+var int64_t b @ rbp-0x10
+var double c @ rbp-0x18
+var int64_t var_20h @ rbp-0x20
+var int64_t var_28h @ rbp-0x28
+EOF2
+RUN
+
+NAME=aaft keeps the positional homes for a struct returned by value
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+# movsd xmm0, qword [rbp - 8]
+wx f20f1045f8 @ 8
+wa mov rsi, qword [rbp - 0x10] @ 13
+wa mov rdi, qword [rbp - 0x18] @ 17
+wa call 0x100 @ 21
+wa leave @ 26
+wa ret @ 27
+wa ret @ 0x100
+af+ 0x100 byval
+afb+ 0x100 0x100 1
+af @ 0
+"td struct R {long x; long y; long z;};"
+td int byval(double a, int b);
+tk func.byval.ret=struct R
+tk func.byval.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double a @ rbp-0x8
+var int64_t b @ rbp-0x10
+var int64_t var_18h @ rbp-0x18
+EOF2
+RUN
+
+NAME=aaft stops counting at an enum wider than a word
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+# movsd xmm0, qword [rbp - 8]
+wx f20f1045f8 @ 8
+wa mov rdi, qword [rbp - 0x10] @ 13
+wa mov rsi, qword [rbp - 0x18] @ 17
+wa mov rdx, qword [rbp - 0x20] @ 21
+wa call 0x100 @ 25
+wa leave @ 30
+wa ret @ 31
+wa ret @ 0x100
+af+ 0x100 wideenum
+afb+ 0x100 0x100 1
+af @ 0
+"td enum wide { W_A = 1 };"
+tk type.wide.size=128
+td int wideenum(double a, enum wide e, long c);
+tk func.wideenum.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double a @ rbp-0x8
+var int64_t var_10h @ rbp-0x10
+var enum wide e @ rbp-0x18
+var long c @ rbp-0x20
+EOF2
+RUN
+
+NAME=aaft homes a format string float vararg on the first float register
+FILE=malloc://1024
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wz %lf %s @ 0x200
+fs strings
+f str.fmt 7 @ 0x200
+fs *
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+wa lea rdi, [rip + 0x1f1] @ 8
+# movsd xmm0, qword [rbp - 8]
+wx f20f1045f8 @ 15
+wa mov rsi, qword [rbp - 0x10] @ 20
+wa mov al, 1 @ 24
+wa call 0x100 @ 26
+wa leave @ 31
+wa ret @ 32
+wa ret @ 0x100
+af+ 0x100 printf
+afb+ 0x100 0x100 1
+af @ 0
+tk func.printf.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double var_8h @ rbp-0x8
+var char * var_10h @ rbp-0x10
+EOF2
+RUN
+
+NAME=aaft keeps a scanf conversion on the integer registers
+FILE=malloc://1024
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wz %f %s @ 0x200
+fs strings
+f str.fmt 6 @ 0x200
+fs *
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+wa lea rdi, [rip + 0x1f1] @ 8
+wa mov rsi, qword [rbp - 8] @ 15
+wa mov rdx, qword [rbp - 0x10] @ 19
+wa call 0x100 @ 23
+wa leave @ 28
+wa ret @ 29
+wa ret @ 0x100
+af+ 0x100 scanf
+afb+ 0x100 0x100 1
+af @ 0
+tk func.scanf.cc=amd64
+aaft
+afv @ 0~var_10h
+EOF2
+EXPECT=<<EOF2
+var char * var_10h @ rbp-0x10
+EOF2
+RUN
+
+NAME=aaft spills a float vararg to the first stack slot and keeps the integer registers
+FILE=malloc://2048
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wz %f%f%f%f%f%f%f%f%f%s @ 0x300
+fs strings
+f str.fmt 21 @ 0x300
+fs *
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x40 @ 4
+wa lea rdi, [rip + 0x2f1] @ 8
+wa mov rsi, qword [rbp - 8] @ 15
+wa mov rax, qword [rbp - 0x20] @ 19
+wa mov qword [rsp], rax @ 23
+wa mov al, 8 @ 27
+wa call 0x100 @ 29
+wa leave @ 34
+wa ret @ 35
+wa ret @ 0x100
+af+ 0x100 printf
+afb+ 0x100 0x100 1
+af @ 0
+tk func.printf.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var char * var_8h @ rbp-0x8
+var float var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=aaft keeps the float registers once the integer ones run out
+FILE=malloc://1024
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wz %d%d%d%d%d%d%lf @ 0x200
+fs strings
+f str.fmt 15 @ 0x200
+fs *
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x30 @ 4
+wa lea rdi, [rip + 0x1f1] @ 8
+# movsd xmm0, qword [rbp - 8]
+wx f20f1045f8 @ 15
+wa mov al, 1 @ 20
+wa call 0x100 @ 22
+wa leave @ 27
+wa ret @ 28
+wa ret @ 0x100
+af+ 0x100 printf
+afb+ 0x100 0x100 1
+af @ 0
+tk func.printf.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double var_8h @ rbp-0x8
+EOF2
+RUN
+
+NAME=aft homes a leading float on a reverse stack convention
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+k anal/cc/pasfp=cc
+k anal/cc/cc.pasfp.argn=stack_rev
+k anal/cc/cc.pasfp.fparg0=xmm0
+k anal/cc/cc.pasfp.ret0=rax
+e anal.cc=pasfp
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x20 @ 4
+# movsd xmm0, qword [rbp - 8]
+wx f20f1045f8 @ 8
+wa mov rax, qword [rbp - 0x10] @ 13
+wa mov qword [rsp], rax @ 17
+wa call 0x100 @ 21
+wa leave @ 26
+wa ret @ 27
+wa ret @ 0x100
+af+ 0x100 revstack
+afb+ 0x100 0x100 1
+af @ 0
+td void revstack(double a, int b);
+tk func.revstack.cc=pasfp
+aft @ 0
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double a @ rbp-0x8
+var int64_t b @ rbp-0x10
+EOF2
+RUN
+
+NAME=aft stops counting at an integer spelling wider than a register
+FILE=malloc://512
+ARGS=-a x86 -b 32
+CMDS=<<EOF2
+k anal/cc/hfcall=cc
+k anal/cc/cc.hfcall.arg0=ecx
+k anal/cc/cc.hfcall.arg1=edx
+k anal/cc/cc.hfcall.arg2=ebx
+k anal/cc/cc.hfcall.argn=stack
+k anal/cc/cc.hfcall.fparg0=xmm0
+k anal/cc/cc.hfcall.ret0=eax
+e anal.cc=hfcall
+wa push ebp @ 0
+wa mov ebp, esp @ 1
+wa sub esp, 0x20 @ 3
+wa mov ecx, dword [ebp - 8] @ 6
+wa mov edx, dword [ebp - 0xc] @ 9
+wa mov ebx, dword [ebp - 0x14] @ 12
+wa call 0x100 @ 15
+wa leave @ 20
+wa ret @ 21
+wa ret @ 0x100
+af+ 0x100 wideint
+afb+ 0x100 0x100 1
+af @ 0
+td void wideint(unsigned long long a, float b, int c);
+tk func.wideint.cc=hfcall
+aft @ 0
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var uint64_t a @ ebp-0x8
+var float b @ ebp-0xc
+var int32_t c @ ebp-0x14
+EOF2
+RUN
+
+NAME=aaft leaves a long double parameter on the integer sequence
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x20 @ 4
+wa mov rdi, qword [rbp - 8] @ 8
+wx f20f1045f0 @ 12
+wa call 0x100 @ 17
+wa leave @ 22
+wa ret @ 23
+wa ret @ 0x100
+af+ 0x100 sq
+afb+ 0x100 0x100 1
+af @ 0
+td double sq(long double x);
+tk func.sq.cc=amd64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var long double x @ rbp-0x8
+var int64_t var_10h @ rbp-0x10
+EOF2
+RUN
+
+NAME=aaft keeps the integer sequence for a cc with no float sequence
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=ms
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x20 @ 4
+wa mov rcx, qword [rbp - 8] @ 8
+wx f20f1045f0 @ 12
+wa call 0x100 @ 17
+wa leave @ 22
+wa ret @ 23
+wa ret @ 0x100
+af+ 0x100 sq
+afb+ 0x100 0x100 1
+af @ 0
+td double sq(double x);
+tk func.sq.cc=ms
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double x @ rbp-0x8
+var int64_t var_10h @ rbp-0x10
+EOF2
+RUN
+
+NAME=aaft keeps the integer sequence for a grouped float location
+FILE=malloc://512
+ARGS=-a arm -b 64 -e anal.cc=arm64
+CMDS=<<EOF2
+wa sub sp, sp, 0x20 @ 0
+wa ldr x0, [sp, 8] @ 4
+wx e00b40fd @ 8
+wa bl 0x100 @ 12
+wx ff830091 @ 16
+wa ret @ 20
+wa ret @ 0x100
+af+ 0x100 sq
+afb+ 0x100 0x100 4
+af @ 0
+td double sq(double x);
+tk func.sq.cc=arm64
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double x @ sp+0x8
+var int64_t var_10h @ sp+0x10
+EOF2
+RUN
+
+NAME=aaft keeps the integer sequence for a stack-spelled float location
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa sub rsp, 0x20 @ 4
+wa mov rdi, qword [rbp - 8] @ 8
+wx f20f1045f0 @ 12
+wa call 0x100 @ 17
+wa leave @ 22
+wa ret @ 23
+wa ret @ 0x100
+af+ 0x100 sq
+afb+ 0x100 0x100 1
+afc dyncc:rdi,rsi:rax!F^0 @ 0x100
+af @ 0
+td double sq(double x);
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+var double x @ rbp-0x8
+var int64_t var_10h @ rbp-0x10
+EOF2
+RUN
+
+NAME=aaft float and double facts from parallel branches meet to double
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF2
+wx 554889e54883ec2085ff74240f1245f8e84b000000eb39 @ 0
+wx 0f1245f8e837000000eb15 @ 0x30
+wx c9c3 @ 0x50
+wx c3 @ 0x60
+wx c3 @ 0x70
+af @ 0x60
+afn takes_f @ 0x60
+af @ 0x70
+afn takes_d @ 0x70
+"td int takes_f(float v); int takes_d(double v);"
+af @ 0
+aaft
+afv @ 0
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+var double v @ rbp-0x8
+EOF2
+RUN
+
+NAME=aft frees the first integer register for a caller's leading double
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa mov rax, qword [rdi + 8] @ 4
+wa call rax @ 8
+wa leave @ 10
+wa ret @ 11
+af @ 0
+afn c @ 0
+afvt arg1 "struct S *" @ 0
+td int cb(int v);
+tk S=struct
+tk struct.S=x,fp
+tk struct.S.x=int,0,0
+tk struct.S.fp=cb,8,0
+td void c(double a, struct S *p);
+aei
+aeim
+aft @ 0
+afv @ 0
+?e calllink
+tk calllink.00000008
+EOF2
+EXPECT=<<EOF2
+arg struct S * arg1 @ rdi
+calllink
+cb
+EOF2
+RUN
+
+NAME=aft frees the first integer register for a leading double without afvt
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa mov rax, qword [rdi + 8] @ 4
+wa call rax @ 8
+wa leave @ 10
+wa ret @ 11
+af @ 0
+afn c @ 0
+td int cb(int v);
+tk S=struct
+tk struct.S=x,fp
+tk struct.S.x=int,0,0
+tk struct.S.fp=cb,8,0
+td void c(double a, struct S *p);
+aei
+aeim
+aft @ 0
+afv @ 0
+?e calllink
+tk calllink.00000008
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+calllink
+cb
+EOF2
+RUN
+
+NAME=aft keeps the first integer register for a caller's leading long
+FILE=malloc://512
+ARGS=-a x86 -b 64 -e anal.cc=amd64
+CMDS=<<EOF2
+wa push rbp @ 0
+wa mov rbp, rsp @ 1
+wa mov rax, qword [rdi + 8] @ 4
+wa call rax @ 8
+wa leave @ 10
+wa ret @ 11
+af @ 0
+afn c @ 0
+afvt arg1 "struct S *" @ 0
+td int cb(int v);
+tk S=struct
+tk struct.S=x,fp
+tk struct.S.x=int,0,0
+tk struct.S.fp=cb,8,0
+td void c(long a, struct S *p);
+aei
+aeim
+aft @ 0
+afv @ 0
+?e calllink
+tk calllink.00000008
+EOF2
+EXPECT=<<EOF2
+arg struct S * arg1 @ rdi
+calllink
+EOF2
+RUN
+
+NAME=aft types a memset stack local from the stated object size
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF
+wx 554889e54881eca0000000c78578ffffff01000000488dbd78ffffffba8800000031f6e808000000c9c3
+wx c3 @ 0x30
+af @ 0x30
+afn memset @ 0x30
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var uint8_t [136] var_88h @ rbp-0x88
+EOF
+RUN
+
+NAME=aft recovers a string split across adjacent stack stores
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec2048b8414141414141414148ba4242424242424200488945e0488955e8488d45e04889c7e850000000c9c3 @ 0
+wx c3 @ 0x80
+af @ 0x80
+afn puts @ 0x80
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+afvx
+pd 1 @ 0x20
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [16] s @ rbp-0x20
+afvR
+         s  0x24
+afvW
+         s  0x1c,0x20
+|           0x00000020      488955e8       mov qword [s[8]], rdx
+var char [16] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft does not merge unterminated adjacent stack locals
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec2048b8414141414141414148ba4242424242424242488945e0488955e8488d45e04889c7e850000000c9c3 @ 0
+wx c3 @ 0x80
+af @ 0x80
+afn puts @ 0x80
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int64_t var_18h @ rbp-0x18
+var char * s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft recovers a stack string passed by a direct lea
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d7de0e8d3000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+pd 1 @ 32
+EOF
+EXPECT=<<EOF
+var char [16] s @ rbp-0x20
+|           0x00000020      488955e8       mov qword [s[8]], rdx
+EOF
+RUN
+
+NAME=aft includes string initialization after address materialization
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec30488d7de048b8414141414141414148ba4242424242424200488945e0488955e8e8d3000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [16] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft sees a terminator overwritten between lea and call
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d45e04889c7c645ef42e8cc000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int8_t var_11h @ rbp-0x11
+var int64_t var_18h @ rbp-0x18
+var char * s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft sees a store starting before the stack string
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d45e04889c748b84141414101010101488945dce8c2000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int64_t var_18h @ rbp-0x18
+var char * s @ rbp-0x20
+var int64_t var_24h @ rbp-0x24
+EOF
+RUN
+
+NAME=aft decodes the overlapping part of a supported store
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d7de048b84141414143434343488945dce8c5000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [16] s @ rbp-0x20
+var int64_t var_24h @ rbp-0x24
+EOF
+RUN
+
+NAME=aft invalidates string evidence overwritten by a wide store
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d45e04889c7f30f7f45dce8cb000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+arg double arg1 @ xmm0
+var int64_t var_18h @ rbp-0x18
+var char * s @ rbp-0x20
+var double var_24h @ rbp-0x24
+EOF
+RUN
+
+NAME=aft accepts a short whitespace string beside another local
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec30c745e061090d00c745e441414141488d7de0e8e1000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int32_t var_1ch @ rbp-0x1c
+var char [4] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft accepts a string terminated by a traced zero store
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048c745e80000000048b8414109410d410a41488945e0488d7de0e8d9000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [9] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft preserves SP-relative string indices across stack adjustments
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4883ec3048b8414141414141414148ba424242424242420048894424084883ec104889542420488d7c2418e8d00000004883c440c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+afvx
+pd 1 @ 24
+pd 1 @ 33
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [16] s @ rsp+0x18
+afvR
+         s  0x26
+afvW
+         s  0x18,0x21
+|           0x00000018      4889442408     mov qword [s], rax
+|           0x00000021      4889542420     mov qword [s[8]], rdx
+var char [16] s @ rsp+0x18
+EOF
+RUN
+
+NAME=aft recovers a stack string from a char local without a prior fact
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d45e04889c7e8d0000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+afvt var_20h char
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [16] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft requires a char pointer parameter for stack strings
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d7de0e8d3000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(void *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int64_t var_18h @ rbp-0x18
+var int64_t s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft keeps a proven char array above later pointer evidence
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3048b8414141414141414148ba4242424242424200488945e0488955e8488d7de0e8d3000000488d45e04889c7e8d7000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+wx c3 @ 0x110
+af @ 0x110
+afn other @ 0x110
+'td int other(char **s);
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [16] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft records a new stack array fact for subsequent parallel meets
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3085ff742748b8414141414141414148ba4242424242424200488945e0488955e8488d7de0e8cf000000eb0c488d45e04889c7e8d1000000c9c3 @ 0
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+afvt var_20h char
+wx c3 @ 0x110
+af @ 0x110
+afn other @ 0x110
+'td int other(char **s);
+aft
+afv
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+var char ** s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft does not combine stack stores from non-monotonic sibling blocks
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3085ff7414eb7200000000000000000000000000000000000048b84141414141414141488945e0488d7de0e8c9000000eb67000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000048b84242424242424200488945e8eb1000000000000000000000000000000000c9c3
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+var int64_t var_18h @ rbp-0x18
+var char s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft enlarges a reused stack string and preserves its new accesses
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec30c745e041414100488d7de0e8e800000048b84141414141414141488945e048b84242424242424200488945e8488d7de0e8c3000000c745e041414100488d7de0e8b3000000c9c3
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+afvx
+pd 1 @ 0x30
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char [16] s @ rbp-0x20
+afvR
+         s  0xf,0x34,0x44
+afvW
+         s  0x8,0x22,0x30,0x3d
+|           0x00000030      488945e8       mov qword [s[8]], rax
+var char [16] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft merges different stack string lengths in a diamond
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3085ff7412c745e041414100488d7de0e8e4000000eb2548b84141414141414141488945e048b84242424242424200488945e8488d7de0e8bd000000c9c3
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+aft
+afv
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+var char [16] s @ rbp-0x20
+arg int64_t arg1 @ rdi
+var char [16] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft merges different stack string lengths with reversed branches
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec3085ff742748b84141414141414141488945e048b84242424242424200488945e8488d7de0e8cf000000eb10c745e041414100488d7de0e8bd000000c9c3
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+aft
+afv
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+var char [16] s @ rbp-0x20
+arg int64_t arg1 @ rdi
+var char [16] s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft requires a traced terminator instead of initial stack zeroes
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec30c745e041414141488d7de0e8e8000000c9c3
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var char s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft keeps unwritten gaps between stack stores
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec30c745e041414141c745e842424200488d7de0e8e1000000c9c3
+wx c3 @ 0x100
+af @ 0x100
+afn puts @ 0x100
+'td int puts(const char *s);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int32_t var_18h @ rbp-0x18
+var char s @ rbp-0x20
+EOF
+RUN
+
+NAME=aft keeps a named type on a memset stack local
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF
+wx 554889e54881eca0000000c78578ffffff01000000488dbd78ffffffba8800000031f6e808000000c9c3
+wx c3 @ 0x30
+af @ 0x30
+afn memset @ 0x30
+'td void *memset(void *s, int c, size_t n);
+'td struct mys {int a; int b;};
+af @ 0
+'afvt var_88h struct mys
+aft
+afv
+EOF
+EXPECT=<<EOF
+var struct mys var_88h @ rbp-0x88
+EOF
+RUN
+
+NAME=aft does not shrink a local below its width on a partial clear
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF
+wx 554889e548c745f800000000488d7df831f6ba04000000e814000000c9c3
+wx c3 @ 0x30
+af @ 0x30
+afn memset @ 0x30
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int64_t var_8h @ rbp-0x8
+EOF
+RUN
+
+NAME=aft ignores a size-function call through an adjusted pointer
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF
+wx 554889e54881eca0000000c78578ffffff01000000488dbd78ffffff4883c71031f6ba20000000e814000000c9c3
+wx c3 @ 0x40
+af @ 0x40
+afn memset @ 0x40
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var int32_t s @ rbp-0x88
+EOF
+RUN
+
+NAME=aft types a memset stack local through the x86-32 push chain
+FILE=malloc://256
+ARGS=-a x86 -b 32 -e types.sizes=true
+CMDS=<<EOF
+wx 5589e581eca0000000c78578ffffff010000008d8578ffffff68880000006a0050e81a00000083c40cc9c3
+wx c3 @ 0x40
+af @ 0x40
+afn memset @ 0x40
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+var uint8_t [136] var_88h @ ebp-0x88
+EOF
+RUN
+
+NAME=aft merges branch-dependent memset sizes to the larger one
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF
+wx 554889e54881eca0000000c78578ffffff0100000085ff7415488dbd78ffffff31f6ba40000000e824000000eb12488dbd78ffffff31f6ba88000000e80f000000c9c3
+wx c3 @ 0x50
+af @ 0x50
+afn memset @ 0x50
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+aft
+afv~var_88h
+EOF
+EXPECT=<<EOF
+var uint8_t [136] var_88h @ rbp-0x88
+EOF
+RUN
+
+NAME=single block function with the state restore enabled
+FILE=malloc://64
+ARGS=-a x86 -b 64 -e types.bbstate=true
+CMDS=<<EOF
+wx 488b3ee808000000c3909090909090904889f8c3
+af @ 0x10
+af @ 0
+afvt arg1 char **
+s 0
+aaft
+afv @ 0x10
+EOF
+EXPECT=<<EOF
+arg char * arg1 @ rdi
+EOF
+RUN
+
+NAME=a loop body value does not survive the header that overwrites it
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF
+wx 554889e54883ec20ba0400000085ff740aba00010000ebf0909090488d7de031f6e81a000000c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF
+EXPECT=<<EOF
+var int64_t var_20h @ rbp-0x20
+EOF
+RUN
+
+NAME=a sibling branch size does not leak into a call on another path
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF
+wx 554889e54883ec2085ff740cba00010000eb149090909090488d7de031f6e81d000000eb029090c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+arg size_t n @ rdx
+var int64_t s @ rbp-0x20
+EOF
+RUN
+
+NAME=disabling the per-block state restore keeps the inherited sibling branch state
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=false
+CMDS=<<EOF
+wx 554889e54883ec2085ff740cba00010000eb149090909090488d7de031f6e81d000000eb029090c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF
+EXPECT=<<EOF
+var uint8_t [256] var_20h @ rbp-0x20
+EOF
+RUN
+
+NAME=a loop body value the header never touches survives after the loop
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx 554889e54883ec20ba0400000085ff7407ba00010000ebf5488d7de031f6e81d000000c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [256] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=disabling bbstate keeps the loop body value after the loop
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=false
+CMDS=<<EOF2
+wx 554889e54883ec20ba0400000085ff7407ba00010000ebf5488d7de031f6e81d000000c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [256] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=a header rewriting the same value still overrides the loop body
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx 554889e54883ec20ba04000000ba0400000085ff7407ba00010000ebf0488d7de031f6e818000000c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var int64_t var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=loop arm state does not leak into the sibling arm
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx 554889e54883ec2085ff7407ba00010000ebf5488d7de031f6e822000000ebe8
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+arg size_t n @ rdx
+var int64_t s @ rbp-0x20
+EOF2
+RUN
+
+NAME=a restored block reads its own branch stack writes
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=true
+CMDS=<<EOF2
+# entry sets size 0x100 in edx and 0x30 at rbp-0x10; the sibling branch lowers both to 0x40 and returns; the join memsets with the register size, then with the reloaded stack size
+wx 554889e54883ec70ba0001000048c745f03000000085ff750eba4000000048c745f040000000c3488d7de031f6e84e000000488d7da031f6488b55f0e83f000000c9c3
+wx c3 @ 0x80
+af+ 0x80 memset
+afb+ 0x80 0x80 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_
+EOF2
+EXPECT=<<EOF2
+var uint8_t [256] var_20h @ rbp-0x20
+var uint8_t [48] var_60h @ rbp-0x60
+EOF2
+RUN
+
+NAME=disabling the state restore takes registers and stack from the same block
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=false
+CMDS=<<EOF2
+# entry sets size 0x100 in edx and 0x30 at rbp-0x10; the sibling branch lowers both to 0x40 and returns; the join memsets with the register size, then with the reloaded stack size
+wx 554889e54883ec70ba0001000048c745f03000000085ff750eba4000000048c745f040000000c3488d7de031f6e84e000000488d7da031f6488b55f0e83f000000c9c3
+wx c3 @ 0x80
+af+ 0x80 memset
+afb+ 0x80 0x80 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_
+EOF2
+EXPECT=<<EOF2
+var uint8_t [64] var_20h @ rbp-0x20
+var uint8_t [64] var_60h @ rbp-0x60
+EOF2
+RUN
+
+NAME=a slot tracked before the dirty-byte cap is still rewound
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=true
+CMDS=<<EOF2
+# entry stores 0x30 at rbp-8, then rep stosb runs the dirty bytes past the cap; the sibling lowers it to 0x40; the join reloads it
+wx 554889e54881ec0012000048c745f830000000488dbd00eeffffb90011000031c0f3aa85ff750948c745f840000000c3488b55f8488d7de031f6e841000000c9c3
+wx c3 @ 0x80
+af+ 0x80 memset
+afb+ 0x80 0x80 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [48] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=a slot first written past the dirty-byte cap is not rewound
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=true
+CMDS=<<EOF2
+# rep stosb leaves 0xff9 dirty bytes, so the entry's qword store of 0x30 at rbp-8 crosses the cap and is dropped whole; the sibling lowers it to 0x40; the join reloads the sibling's value
+wx 554889e54881ec00120000488dbd00eeffffb9f10f000031c0f3aa48c745f83000000085ff750948c745f840000000c3488b55f8488d7de031f6e841000000c9c3
+wx c3 @ 0x80
+af+ 0x80 memset
+afb+ 0x80 0x80 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [64] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=a store straddling the stack map edge is restored in its mapped part
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=true
+CMDS=<<EOF2
+# rbp+0xc is the last dword of the stack map, so the qword store is clipped; the sibling lowers it to 0x40 and the join reloads the dword
+wx 554889e54883ec7048c7450c3000000085ff750948c7450c40000000c38b550c488d7da031f6e855000000c9c3
+wx c3 @ 0x80
+af+ 0x80 memset
+afb+ 0x80 0x80 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_
+EOF2
+EXPECT=<<EOF2
+var uint8_t [48] var_60h @ rbp-0x60
+EOF2
+RUN
+
+NAME=a slot first written by a sibling block is rewound to zero at the join
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=true
+CMDS=<<EOF2
+# the entry never writes rbp-0x10; only the returning sibling stores 0x40 there
+wx 554889e54883ec70ba0001000085ff750eba4000000048c745f040000000c3488d7de031f6e856000000488d7da031f6488b55f0e847000000c9c3
+wx c3 @ 0x80
+af+ 0x80 memset
+afb+ 0x80 0x80 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_
+EOF2
+EXPECT=<<EOF2
+var uint8_t [256] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=a restored block keeps the pointer type its own lineage stored
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e asm.os=android -e types.bbstate=true
+CMDS=<<EOF2
+# entry calls GetEnv(&env) at rbp-0x10; the returning sibling overwrites the slot with 1; the join loads env->functions->FindClass and calls it
+wx 554889e54883ec70488d75f0e86f00000085ff750948c745f001000000c3488b45f0488b00488b4030ffd0c9c3
+wx c3 @ 0x80
+af+ 0x80 JNIInvokeInterface.GetEnv
+afb+ 0x80 0x80 1
+af @ 0
+s 0
+aft
+pd 6 @ 0x1e~call
+EOF2
+EXPECT=<<EOF2
+|           0x00000029      ffd0           call rax                    ; jclass JNINativeInterface.FindClass(JNIEnv *env, const char *name)
+EOF2
+RUN
+
+NAME=a restored block drops the pointer type a sibling block stored
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e asm.os=android -e types.bbstate=true
+CMDS=<<EOF2
+# entry zeroes rbp-0x10; the returning sibling calls GetEnv(&env) with rsi=rbp-0x10; the join loads env->functions->FindClass and calls it
+wx 554889e54883ec7048c745f00000000085ff750a488d75f0e863000000c3488b45f0488b00488b4030ffd0c9c3
+wx c3 @ 0x80
+af+ 0x80 JNIInvokeInterface.GetEnv
+afb+ 0x80 0x80 1
+af @ 0
+s 0
+aft
+pd 6 @ 0x1e~call
+EOF2
+EXPECT=<<EOF2
+|           0x00000029      ffd0           call rax
+EOF2
+RUN
+
+NAME=a loop exit keeps the memory the loop wrote
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=true
+CMDS=<<EOF2
+# linear emulation runs the body once, so the exit reloads 0x10, not 0x40
+wx 554889e54883ec3048c745f80000000048837df8407d07488345f810ebf2488b55f8488d7de031f6e813000000c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [16] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=a header byte write keeps the rest of the body's register value
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx 554889e54883ec20ba05000000b20485ff7404b601ebf6488d7de031f6e81e000000c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [260] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=a loop header containing a call keeps its clobbered state at the exit
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx 554889e54883ec20e83300000085c07407ba00010000ebf0488d7de031f6e825000000c9c3
+wx c3 @ 0x40
+wx c3 @ 0x48
+af+ 0x40 readfd
+afb+ 0x40 0x40 1
+af+ 0x48 memset
+afb+ 0x48 0x48 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv
+EOF2
+EXPECT=<<EOF2
+var int64_t s @ rbp-0x20
+EOF2
+RUN
+
+NAME=a loop header containing a call keeps the stack the body wrote at the exit
+FILE=malloc://256
+ARGS=-a x86 -b 64 -e types.sizes=true -e types.bbstate=true
+CMDS=<<EOF2
+# entry stores 0x30 at rbp-8, the body lowers it to 0x10; the exit reloads it for memset
+wx 554889e54883ec3048c745f830000000e82b00000085c0740a48c745f810000000ebed488b55f8488d7de031f6e816000000c9c3
+wx c3 @ 0x40
+wx c3 @ 0x48
+af+ 0x40 readfd
+afb+ 0x40 0x40 1
+af+ 0x48 memset
+afb+ 0x48 0x48 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_20h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [16] var_20h @ rbp-0x20
+EOF2
+RUN
+
+NAME=a foreign loop's state does not reach another loop's exit
+FILE=malloc://128
+ARGS=-a x86 -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx 554889e54883ec2085ff741485f675f885c97404c9c39090ba00010000ebf190488d7de031f6e815000000c9c3
+wx c3 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv
+EOF2
+EXPECT=<<EOF2
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+arg size_t n @ rdx
+arg int64_t arg4 @ rcx
+var int64_t s @ rbp-0x20
+EOF2
+RUN
+
+NAME=ppc64be header carry bit is restored at the loop exit
+FILE=malloc://128
+ARGS=-a ppc -b 64 -e cfg.bigendian=true -e types.sizes=true
+CMDS=<<EOF2
+wx f821ffa138a0007f392000013529ffff4182000c300900004bfffff47ca52914f8010028386100283880000048000015382100604e800020
+wx 4e800020 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_28h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [255] var_28h @ r1+0x28
+EOF2
+RUN
+
+NAME=ppc64be loop body value survives after the loop
+FILE=malloc://128
+ARGS=-a ppc -b 64 -e cfg.bigendian=true -e types.sizes=true
+CMDS=<<EOF2
+wx f821ffa138a000042f890000419e000c38a001004bfffff4f801002838610028388000004800001d382100604e800020
+wx 4e800020 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_28h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [256] var_28h @ r1+0x28
+EOF2
+RUN
+
+NAME=arm64 loop body value survives after the loop
+FILE=malloc://128
+ARGS=-a arm -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx ffc300d1ff0b00f91f0000716000005402208052fdffff17e04300910100805208000094c0035fd6
+wx c0035fd6 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_10h
+EOF2
+EXPECT=<<EOF2
+var uint8_t [256] var_10h @ sp+0x10
+EOF2
+RUN
+
+NAME=an arm64 word write in the header overrides the loop body
+FILE=malloc://128
+ARGS=-a arm -b 64 -e types.sizes=true
+CMDS=<<EOF2
+wx ffc300d1ff0b00f9820080521f0000716000005402208052fcffff17e04300910100805207000094c0035fd6
+wx c0035fd6 @ 0x40
+af+ 0x40 memset
+afb+ 0x40 0x40 1
+'td void *memset(void *s, int c, size_t n);
+af @ 0
+s 0
+aft
+afv~var_10h
+EOF2
+EXPECT=<<EOF2
+var int64_t var_10h @ sp+0x10
+EOF2
+RUN
+
+NAME=td keeps the pointer with the type in function pointer members
+FILE=-
+CMDS=<<EOF
+'td struct S { int (*cb)(int *n, char *s); };
+tk~func.S
+EOF
+EXPECT=<<EOF
+func.S.cb=n,s
+func.S.cb.arg.0=int *,n
+func.S.cb.arg.1=char *,s
+func.S.cb.args=2
+func.S.cb.cc=cdecl
+func.S.cb.ret=int
+EOF
+RUN
+
+NAME=td stores an empty parameter list as zero arguments
+FILE=-
+CMDS=<<EOF
+'td int voidfn(void);
+'td int spacedfn( );
+tk~func.voidfn
+tk~func.spacedfn
+EOF
+EXPECT=<<EOF
+func.voidfn.args=0
+func.voidfn.cc=cdecl
+func.voidfn.ret=int
+func.spacedfn.args=0
+func.spacedfn.cc=cdecl
+func.spacedfn.ret=int
+EOF
+RUN
+
+NAME=td stores a void parameter list on a member as zero arguments
+FILE=-
+ARGS=-b 64
+CMDS=<<EOF
+'td struct A2 { float (*m)(void); void *x; };
+tk~func.A2
+tss A2.m
+tss A2
+EOF
+EXPECT=<<EOF
+func.A2.m.args=0
+func.A2.m.cc=cdecl
+func.A2.m.ret=float
+8
+16
+EOF
+RUN
+
+NAME=tss reports the target word size for pointers
+FILE=-
+ARGS=-b 64
+CMDS=<<EOF
+tss int *
+tss void *
+tss int
+EOF
+EXPECT=<<EOF
+8
+8
+4
+EOF
+RUN
+
+NAME=an array of pointers uses the target word size as its stride
+FILE=malloc://64
+ARGS=-a x86 -b 64 -e asm.sub.var=true
+CMDS=<<EOF
+wx 48890424488944240848894424104889442418c3
+af
+"afvt arg_8h int *[4]"
+pdf~mov
+EOF
+EXPECT=<<EOF
+|           0x00000000      48890424       mov qword [rsp], rax
+|           0x00000004      4889442408     mov qword [arg_8h], rax
+|           0x00000009      4889442410     mov qword [arg_8h[1]], rax
+|           0x0000000e      4889442418     mov qword [arg_8h[2]], rax
+EOF
+RUN
+
+NAME=td stores the variadic slot in the canonical ,... form
+FILE=-
+CMDS=<<EOF
+'td int myvarfn(const char *fmt, ...);
+tk~func.myvarfn
+EOF
+EXPECT=<<EOF
+func.myvarfn=fmt,...
+func.myvarfn.arg.0=const char *,fmt
+func.myvarfn.arg.1=,...
+func.myvarfn.args=2
+func.myvarfn.cc=cdecl
+func.myvarfn.ret=int
+EOF
+RUN
+
+NAME=td parses function pointer parameters in prototypes
+FILE=-
+CMDS=<<EOF
+'td void once(void (*cb)(int));
+'td int apply(int (*fn)(int, int), int seed);
+'td void qual(void (* const q)(int));
+tk~func.once
+tk~func.apply
+tk~func.qual
+EOF
+EXPECT=<<EOF
+func.once=cb
+func.once.arg.0=void (*)(int),cb
+func.once.args=1
+func.once.cc=cdecl
+func.once.ret=void
+func.apply=fn,seed
+func.apply.arg.0=int (*)(int, int),fn
+func.apply.arg.1=int,seed
+func.apply.args=2
+func.apply.cc=cdecl
+func.apply.ret=int
+func.qual=q
+func.qual.arg.0=void (*)(int),q
+func.qual.args=1
+func.qual.cc=cdecl
+func.qual.ret=void
+EOF
+RUN
+
+NAME=td keeps a nested function pointer argument in one slot
+FILE=-
+CMDS=<<EOF
+'td struct N { int (*cb)(int (*inner)(int, int), char c); };
+tk~func.N
+EOF
+EXPECT=<<EOF
+func.N.cb=inner,c
+func.N.cb.arg.0=int (*)(int, int),inner
+func.N.cb.arg.1=char,c
+func.N.cb.args=2
+func.N.cb.cc=cdecl
+func.N.cb.ret=int
+EOF
+RUN
+
+NAME=reanalysis drops the stale higher arg keys of a previously wider function
+FILE=bins/elf/pltrel/add.so
+CMDS=<<EOF
+s sym.add2
+af
+tk func.sym.add2.arg.2=int,stale2
+tk func.sym.add2.arg.3=int,stale3
+tk func.sym.add2.args=4
+af-
+af
+k anal/types/func.sym.add2.args
+k anal/types/func.sym.add2.arg.1
+k anal/types/func.sym.add2.arg.2
+k anal/types/func.sym.add2.arg.3
+EOF
+EXPECT=<<EOF
+2
+int64_t,arg2
+EOF
+RUN
+
+NAME=DWARF struct member needing sdb sanitization survives the save round-trip
+FILE=bins/elf/dwarf2_many_comp_units.elf
+ARGS=-e bin.dbginfo=true
+CMDS=<<EOF
+tk struct.Bird
+tk struct.Bird._vptr_Bird
+tsc Bird
+EOF
+EXPECT=<<EOF
+_vptr_Bird
+int (**)(...),2,0
+struct Bird {
+  int (**)(...) _vptr_Bird;
+};
+EOF
+RUN
+
+NAME=struct and union members are sized with the target pointer width
+FILE=-
+ARGS=-b 64
+CMDS=<<EOF
+'td struct VB { void *a; void *b; };
+'td struct AR { char *p[4]; int n; };
+'td union U { void *p; int n; };
+tss struct VB
+tss struct AR
+tss union U
+EOF
+EXPECT=<<EOF
+16
+36
+8
+EOF
+RUN
+
+NAME=struct size follows the target word size
+FILE=-
+ARGS=-b 16
+CMDS=<<EOF
+'td struct VB { void *a; void *b; };
+tss char *
+tss struct VB
+EOF
+EXPECT=<<EOF
+2
+4
+EOF
+RUN
+
+NAME=Windows fixed-width integer aliases resolve in CIL binaries
+FILE=bins/cil/hello.exe
+CMDS=<<EOF
+k anal/types/LONG
+k anal/types/type.LONG
+k anal/types/type.LONG.size
+k anal/types/ULONG
+k anal/types/type.ULONG
+k anal/types/type.ULONG.size
+k anal/types/ULONGLONG
+k anal/types/type.ULONGLONG
+k anal/types/type.ULONGLONG.size
+k anal/types/u_long
+k anal/types/type.u_long
+k anal/types/type.u_long.size
+tss l_timeval
+tsj l_timeval
+EOF
+EXPECT=<<EOF
+type
+d
+32
+type
+d
+32
+type
+q
+64
+type
+d
+32
+8
+{"name":"l_timeval","format":"dd tv_sec tv_usec","fields":[{"name":"tv_sec","type":"LONG","offset":0,"size":4},{"name":"tv_usec","type":"LONG","offset":4,"size":4}]}
+EOF
+RUN
+
+NAME=pd shows the instruction under a function typelink without a format
+FILE=malloc://8
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 9090c3
+'td int foo(int x);
+tl foo = 0
+pd 2
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+EOF
+RUN
+
+NAME=C11 aligned_alloc returns the allocation
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+tk~aligned_alloc
+tfc aligned_alloc
+EOF
+EXPECT=<<EOF
+aligned_alloc=func
+func.aligned_alloc.arg.0=size_t,alignment
+func.aligned_alloc.arg.1=size_t,size
+func.aligned_alloc.args=2
+func.aligned_alloc.ret=void *
+void * aligned_alloc (size_t alignment, size_t size);
+EOF
+RUN
+
+NAME=posix and glibc prototypes
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+e asm.os=linux
+tf lseek~func.lseek.ret=
+tf stat~func.stat.arg.1
+tf fdopen~ret
+tf lseek64~ret
+tf errno_location~ret
+tf ctype_b_loc~ret
+tf fprintf_chk~func.fprintf_chk.arg.3
+tf longjmp_chk~noreturn
+tf signal~func.signal.ret
+EOF
+EXPECT=<<EOF
+func.lseek.ret=off_t
+func.stat.arg.1=void *,buf
+func.fdopen.ret=file*
+func.lseek64.ret=off64_t
+func.errno_location.ret=int *
+func.ctype_b_loc.ret=const unsigned short **
+func.fprintf_chk.arg.3=,...
+func.longjmp_chk.noreturn=true
+func.signal.ret=void *
+EOF
+RUN
+
+NAME=GLib string and utility prototypes
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tfc g_strcmp0
+tfc g_str_equal
+tfc g_strdup
+tfc g_strsplit
+tfc g_strdup_printf
+tfc g_strdup_vprintf
+tfc g_strconcat
+tfc g_string_new
+tfc g_string_append_printf
+tfc g_utf8_validate
+tfc g_malloc_n
+tfc g_memdup
+tfc g_memdup2
+tfc g_shell_parse_argv
+tfc g_file_get_contents
+EOF
+EXPECT=<<EOF
+int g_strcmp0 (const char * str1, const char * str2);
+gboolean g_str_equal (gconstpointer v1, gconstpointer v2);
+gchar * g_strdup (const gchar * str);
+gchar ** g_strsplit (const gchar * string, const gchar * delimiter, gint max_tokens);
+gchar * g_strdup_printf (const gchar * format, ...);
+gchar * g_strdup_vprintf (const gchar * format, va_list args);
+gchar * g_strconcat (const gchar * string1, ...);
+GString * g_string_new (const gchar * init);
+void g_string_append_printf (GString * string, const gchar * format, ...);
+gboolean g_utf8_validate (const gchar * str, gssize max_len, const gchar ** end);
+gpointer g_malloc_n (gsize n_blocks, gsize n_block_bytes);
+gpointer g_memdup (gconstpointer mem, guint byte_size);
+gpointer g_memdup2 (gconstpointer mem, gsize byte_size);
+gboolean g_shell_parse_argv (const gchar * command_line, gint * argcp, gchar *** argvp, GError ** error);
+gboolean g_file_get_contents (const gchar * filename, gchar ** contents, gsize * length, GError ** error);
+EOF
+RUN
+
+NAME=GLib types follow the active binary
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tk g_strcmp0~?
+tk g_object_get_data~?
+tk g_file_copy~?
+o bins/elf/ls
+tk g_strcmp0~?
+tk g_object_get_data~?
+tk g_file_copy~?
+ob 0
+tk g_strcmp0~?
+tk g_object_get_data~?
+tk g_file_copy~?
+EOF
+EXPECT=<<EOF
+1
+1
+1
+0
+0
+0
+1
+1
+1
+EOF
+RUN
+
+NAME=GLib scalar types follow target pointer width
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tss gboolean
+tss gsize
+tss gssize
+tss gpointer
+tss GStrv
+tss gunichar
+tss gunichar2
+tss GType
+tss GCallback
+tss GClosureNotify
+e asm.bits=32
+tss gboolean
+tss gsize
+tss gssize
+tss gpointer
+tss GStrv
+tss gunichar
+tss gunichar2
+tss GType
+tss GCallback
+tss GClosureNotify
+EOF
+EXPECT=<<EOF
+4
+8
+8
+8
+8
+4
+2
+8
+8
+8
+4
+4
+4
+4
+4
+4
+2
+4
+4
+4
+EOF
+RUN
+
+NAME=GLib prototypes survive target OS changes
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tf g_strcmp0~func.g_strcmp0.ret=
+e asm.os=windows
+tf g_strcmp0~func.g_strcmp0.ret=
+e asm.os=macos
+tf g_strcmp0~func.g_strcmp0.ret=
+e asm.os=android
+tf g_strcmp0~func.g_strcmp0.ret=
+te GNormalizeMode 3
+te GFileTest 16
+EOF
+EXPECT=<<EOF
+func.g_strcmp0.ret=int
+func.g_strcmp0.ret=int
+func.g_strcmp0.ret=int
+func.g_strcmp0.ret=int
+G_NORMALIZE_ALL_COMPOSE
+G_FILE_TEST_EXISTS
+EOF
+RUN
+
+NAME=GLib imported functions use built-in prototypes
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+af @ sym.imp.g_strcmp0
+afsq @ sym.imp.g_strcmp0
+af @ sym.imp.g_strdup
+afsq @ sym.imp.g_strdup
+af @ sym.imp.g_object_get_data
+afsq @ sym.imp.g_object_get_data
+af @ sym.imp.g_file_new_for_path
+afsq @ sym.imp.g_file_new_for_path
+EOF
+EXPECT=<<EOF
+int sym.imp.g_strcmp0 (const char *str1, const char *str2);
+gchar * sym.imp.g_strdup (const gchar *str);
+gpointer sym.imp.g_object_get_data (GObject *object, const gchar *key);
+GFile * sym.imp.g_file_new_for_path (const char *path);
+EOF
+RUN
+
+NAME=GLib collection and variant imports have prototypes
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tfc g_hash_table_new_full
+tfc g_option_context_parse
+tfc g_variant_dict_lookup
+tfc g_ptr_array_sort
+EOF
+EXPECT=<<EOF
+GHashTable * g_hash_table_new_full (GHashFunc hash_func, GEqualFunc key_equal_func, GDestroyNotify key_destroy_func, GDestroyNotify value_destroy_func);
+gboolean g_option_context_parse (GOptionContext * context, gint * argc, gchar *** argv, GError ** error);
+gboolean g_variant_dict_lookup (GVariantDict * dict, const gchar * key, const gchar * format_string, ...);
+void g_ptr_array_sort (GPtrArray * array, GCompareFunc compare_func);
+EOF
+RUN
+
+NAME=GObject data and signal imports have prototypes
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tfc g_object_get_data
+tfc g_object_set_data_full
+tfc g_object_ref
+tfc g_signal_connect_data
+tfc g_object_new
+tt GClosureNotify
+tt GDestroyNotify
+EOF
+EXPECT=<<EOF
+gpointer g_object_get_data (GObject * object, const gchar * key);
+void g_object_set_data_full (GObject * object, const gchar * key, gpointer data, GDestroyNotify destroy);
+gpointer g_object_ref (gpointer object);
+gulong g_signal_connect_data (gpointer instance, const gchar * detailed_signal, GCallback c_handler, gpointer data, GClosureNotify destroy_data, GConnectFlags connect_flags);
+gpointer g_object_new (GType object_type, const gchar * first_property_name, ...);
+void (*)(gpointer, GClosure *)
+void (*)(gpointer)
+EOF
+RUN
+
+NAME=GIO file and IPC imports have prototypes
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tfc g_file_copy
+tfc g_dbus_proxy_call_sync
+tfc g_subprocess_new
+tfc g_unix_input_stream_new
+tfc g_desktop_app_info_get_string
+tss GBusType
+tss GConnectFlags
+EOF
+EXPECT=<<EOF
+gboolean g_file_copy (GFile * source, GFile * destination, GFileCopyFlags flags, GCancellable * cancellable, GFileProgressCallback progress_callback, gpointer progress_callback_data, GError ** error);
+GVariant * g_dbus_proxy_call_sync (GDBusProxy * proxy, const gchar * method_name, GVariant * parameters, GDBusCallFlags flags, gint timeout_msec, GCancellable * cancellable, GError ** error);
+GSubprocess * g_subprocess_new (GSubprocessFlags flags, GError ** error, const gchar * argv0, ...);
+GInputStream * g_unix_input_stream_new (gint fd, gboolean close_fd);
+char * g_desktop_app_info_get_string (GDesktopAppInfo * info, const char * key);
+4
+4
+EOF
+RUN
+
+NAME=Indexed type loads include transitive dependencies
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+t-*
+tol types-gio
+tk g_strcmp0
+tk g_object_get_data
+tk g_file_copy
+EOF
+EXPECT=<<EOF
+func
+func
+func
+EOF
+RUN
+
+NAME=Indexed type loads reject path traversal
+FILE=bins/elf/gnome-extensions
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+tol types-../types
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+WARN: Invalid type database name 'types-../types'
+EOF
+RUN
+
+NAME=a function keeps its prototype when a struct tag shares its name
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+tk func.stat.ret=int
+tk func.stat.args=2
+tk func.stat.arg.0=const char *,path
+tk func.stat.arg.1=void *,buf
+tk stat=struct
+tk struct.stat=st_dev,st_ino
+af+ 0 sym.imp.stat
+afb+ 0 0 10
+afsq @ 0
+EOF
+EXPECT=<<EOF
+int sym.imp.stat (const char *path, void *buf);
+EOF
+RUN
+
+NAME=DWARF type formats keep scalar encodings and recognize vtable pointers
+FILE=bins/elf/dwarf2_many_comp_units.elf
+ARGS=-e bin.dbginfo=true
+CMDS=<<EOF_CMDS
+tk type.int
+ts Bird
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+d
+'pf [2].p _vptr_Bird
+EOF_EXPECT
+RUN
+
+NAME=C++ qualified members and function pointers have valid formats
+FILE=-
+ARGS=-b 64
+CMDS=<<EOF_CMDS
+t-*
+'tk bool=type
+'tk type.bool=b
+'tk int=type
+'tk type.int=d
+'tk char *=type
+'tk type.char *=z
+'tk Mode=enum
+'tk enum.Mode=Zero
+'tk enum.Mode.Zero=0
+'tk Alias=typedef
+'tk typedef.Alias=const int volatile
+'tk Qualified=struct
+'tk struct.Qualified=flag,value,mode,alias
+'tk struct.Qualified.flag=volatile bool const,0,0
+'tk struct.Qualified.value=int const volatile,1,0
+'tk struct.Qualified.mode=Mode const,5,0
+'tk struct.Qualified.alias=Alias const,9,0
+'tk Pointers=struct
+'tk struct.Pointers=vtable,callback,ptr,ref,rref,text
+'tk struct.Pointers.vtable=int (**)(),0,0
+'tk struct.Pointers.callback=void (*)(),8,0
+'tk struct.Pointers.ptr=int*,16,0
+'tk struct.Pointers.ref=Object &,24,0
+'tk struct.Pointers.rref=Object &&,32,0
+'tk struct.Pointers.text=const char *,40,0
+ts Qualified
+ts Pointers
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+'pf bdEd flag value (Mode)mode alias
+'pf pppppz vtable callback ptr ref rref text
+EOF_EXPECT
+RUN
+
+NAME=JSON type listings retain fields without inventing formats for incomplete types
+FILE=-
+CMDS=<<EOF_CMDS
+t-*
+'tk Incomplete=struct
+'tk struct.Incomplete=value
+'tk struct.Incomplete.value=Missing,0,0
+'tk IncompleteUnion=union
+'tk union.IncompleteUnion=value
+'tk union.IncompleteUnion.value=Missing,0,0
+tsj
+tuj
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+[{"name":"Incomplete","fields":[{"name":"value","type":"Missing","offset":0,"size":1}]}]
+[{"name":"IncompleteUnion","fields":[{"name":"value","type":"Missing","offset":0,"size":1}]}]
+EOF_EXPECT
+RUN
+
+NAME=Empty enums produce valid JSON in single and complete listings
+FILE=-
+CMDS=<<EOF
+t-*
+tk Empty=enum
+tk Full=enum
+tk enum.Full=Zero,One
+tk enum.Full.Zero=0
+tk enum.Full.One=1
+tk Last=enum
+tej
+tej Empty
+tej Full
+tej Last
+EOF
+EXPECT=<<EOF
+{"Empty":{},"Full":{"Zero":0,"One":1},"Last":{}}
+{"name":"Empty","values":{}}
+{"name":"Full","values":{"Zero":0,"One":1}}
+{"name":"Last","values":{}}
+EOF
+RUN
+
+NAME=Signed access inference preserves fixed-width stack variables
+FILE=malloc://128
+ARGS=-a x86 -b 64
+CMDS=<<EOF_CMDS
+wx 554889e54883ec200fbe45ff0fbf45fc486345f8488b45f04883f8007c00c9c3
+af
+aaft
+afv
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+var int8_t var_1h @ rbp-0x1
+var int16_t var_4h @ rbp-0x4
+var signed int var_8h @ rbp-0x8
+var int64_t var_10h @ rbp-0x10
+EOF_EXPECT
+RUN
+
+NAME=struct JSON and views preserve canonical aligned member offsets
+FILE=--
+ARGS=-b 64
+CMDS=<<EOF
+'td struct rea_vfs_prefix { int iVersion; int szOsFile; int mxPathname; void *pNext; const char *zName; void *pAppData; };
+tsj rea_vfs_prefix
+tss rea_vfs_prefix
+tsv rea_vfs_prefix
+EOF
+EXPECT=<<EOF
+{"name":"rea_vfs_prefix","format":"ddd[4].pzp iVersion szOsFile mxPathname pNext zName pAppData","fields":[{"name":"iVersion","type":"int","offset":0,"size":4},{"name":"szOsFile","type":"int","offset":4,"size":4},{"name":"mxPathname","type":"int","offset":8,"size":4},{"name":"pNext","type":"void *","offset":16,"size":8},{"name":"zName","type":"const char *","offset":24,"size":8},{"name":"pAppData","type":"void *","offset":32,"size":8}]}
+40
+0x00000000 struct rea_vfs_prefix {
+0x00000000   int iVersion;
+0x00000004   int szOsFile;
+0x00000008   int mxPathname;
+0x00000010   void *pNext;
+0x00000018   const char *zName;
+0x00000020   void *pAppData;
+0x00000028 };
+EOF
+RUN
+
+NAME=struct member array extents retain alignment gaps
+FILE=--
+ARGS=-b 64
+CMDS=<<EOF
+'td struct rea_layout { char tag; int values[3]; long long end; };
+tsj rea_layout
+tss rea_layout
+EOF
+EXPECT=<<EOF
+{"name":"rea_layout","format":"c[3].[3]dq tag values end","fields":[{"name":"tag","type":"char","offset":0,"size":1},{"name":"values","type":"int","offset":4,"size":12,"array_size":3},{"name":"end","type":"long long","offset":16,"size":8}]}
+24
+EOF
+RUN
+
+NAME=aggregate size uses maximum canonical member extent and rejects overflow
+FILE=--
+CMDS=<<EOF
+tk rea_gap=struct
+tk struct.rea_gap=a,b
+tk struct.rea_gap.a=int,16,0
+tk struct.rea_gap.b=int,4,0
+tss rea_gap
+tk rea_union=union
+tk union.rea_union=c,q
+tk union.rea_union.c=char,0,0
+tk union.rea_union.q=long long,0,0
+tss rea_union
+tk struct.rea_gap.a=int,18446744073709551615,0
+tss rea_gap
+EOF
+EXPECT=<<EOF
+20
+8
+0
+EOF
+RUN
+
+NAME=tcc skipped include must not pop the include stack
+FILE=-
+CMDS=<<EOF
+e types.plugin=tcc
+'td #include "/x_overflow.h"
+'td #include "/missing.h"
+'td struct foo { int x; };
+ts foo
+?e done
+EOF
+EXPECT=<<EOF
+'pf d x
+done
+EOF
+RUN
+
+NAME=td ignores an eleventh attribute on one line
+FILE=--
+CMDS=<<CMDS
+'td struct s { int x; /// @a @b @c @d @e @f @g @h @i @j @k }
+tk ~struct.s
+?e done
+CMDS
+EXPECT=<<EXPECT
+done
+EXPECT
+RUN
+
+NAME=td forward declaration attributes do not leak into the next type
+FILE=--
+CMDS=<<CMDS
+'td struct a __attribute__((x)); struct a __attribute__((x)); struct b { int y; };
+tk~struct.b
+CMDS
+EXPECT=<<EXPECT
+struct.b=y
+struct.b.y=int,0,0
+EXPECT
+RUN
+
+NAME=tss measures nested empty aggregates sharing member types once
+FILE=--
+TIMEOUT=10
+CMDS=<<EOF
+'td union L0 {char z[0];};
+'td union L1 {union L0 a; union L0 b; union L0 c; union L0 d;};
+'td union L2 {union L1 a; union L1 b; union L1 c; union L1 d;};
+'td union L3 {union L2 a; union L2 b; union L2 c; union L2 d;};
+'td union L4 {union L3 a; union L3 b; union L3 c; union L3 d;};
+'td union L5 {union L4 a; union L4 b; union L4 c; union L4 d;};
+'td union L6 {union L5 a; union L5 b; union L5 c; union L5 d;};
+'td union L7 {union L6 a; union L6 b; union L6 c; union L6 d;};
+'td union L8 {union L7 a; union L7 b; union L7 c; union L7 d;};
+'td union L9 {union L8 a; union L8 b; union L8 c; union L8 d;};
+'td union L10 {union L9 a; union L9 b; union L9 c; union L9 d;};
+'td union L11 {union L10 a; union L10 b; union L10 c; union L10 d;};
+'td union L12 {union L11 a; union L11 b; union L11 c; union L11 d;};
+'td union L13 {union L12 a; union L12 b; union L12 c; union L12 d;};
+'td union L14 {union L13 a; union L13 b; union L13 c; union L13 d;};
+'td union L15 {union L14 a; union L14 b; union L14 c; union L14 d;};
+'td struct S0 {char z[0];};
+'td struct S1 {struct S0 a; struct S0 b; struct S0 c; struct S0 d;};
+'td struct S2 {struct S1 a; struct S1 b; struct S1 c; struct S1 d;};
+'td struct S3 {struct S2 a; struct S2 b; struct S2 c; struct S2 d;};
+'td struct S4 {struct S3 a; struct S3 b; struct S3 c; struct S3 d;};
+'td struct S5 {struct S4 a; struct S4 b; struct S4 c; struct S4 d;};
+'td struct S6 {struct S5 a; struct S5 b; struct S5 c; struct S5 d;};
+'td struct S7 {struct S6 a; struct S6 b; struct S6 c; struct S6 d;};
+'td struct S8 {struct S7 a; struct S7 b; struct S7 c; struct S7 d;};
+'td struct S9 {struct S8 a; struct S8 b; struct S8 c; struct S8 d;};
+'td struct S10 {struct S9 a; struct S9 b; struct S9 c; struct S9 d;};
+'td struct S11 {struct S10 a; struct S10 b; struct S10 c; struct S10 d;};
+'td struct S12 {struct S11 a; struct S11 b; struct S11 c; struct S11 d;};
+'td struct S13 {struct S12 a; struct S12 b; struct S12 c; struct S12 d;};
+'td struct S14 {struct S13 a; struct S13 b; struct S13 c; struct S13 d;};
+'td struct S15 {struct S14 a; struct S14 b; struct S14 c; struct S14 d;};
+k anal/types/type.L15.size~?
+tss L15
+tss S15
+EOF
+EXPECT=<<EOF
+0
+1
+172
+EOF
+RUN
+
+NAME=aaft on chained backward jumps keeps the loop map linear
+FILE=malloc://16384
+ARGS=-a x86 -b 64 -e types.bbstate=true
+CMDS=<<EOF
+# 8000 jumps to the previous instruction: every block heads a loop holding the rest of the chain
+wx 9090
+wow 75fc @ 2!16000
+wx c3 @ 16002
+af
+aaft
+afi~^size
+afb~?
+EOF
+EXPECT=<<EOF
+size: 16003
+8002
+EOF
+RUN
+
+NAME=@aligned attribute on field before a function pointer field
+FILE=--
+CMDS=<<CMDS
+'td struct bar { char gap; int val __attribute__((__aligned__(8))); }; struct cow { void (*fp)(int); };
+tk ~struct.bar
+CMDS
+EXPECT=<<EXPECT
+struct.bar=gap,val
+struct.bar.gap=char,0,0
+struct.bar.val=int,8,0
+struct.bar.val.@.aligned=8
+EXPECT
+RUN
+
+NAME=srandom returns nothing
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+tk func.srandom.ret
+tfc srandom
+EOF
+EXPECT=<<EOF
+void
+void srandom (uint32_t seed);
 EOF
 RUN

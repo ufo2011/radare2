@@ -1,76 +1,84 @@
-/* radare - LGPL - Copyright 2011-2018 - pancake */
+/* radare - LGPL - Copyright 2011-2026 - pancake */
 
 #include <r_bin.h>
+#include "cxx2/cxx2.h"
 
-#define RS(from, to) (replace_seq ((const char **)&in, &out, (const char *)(from), to))
+// R2R db/formats/mangling/rust
 
-static bool replace_seq (const char **in, char **out, const char *seq, char value) {
-	size_t len = strlen (seq);
+#define RS(from, to) (replace_seq ((const char **)&in, &out, &len, (const char *)(from), to))
 
-	if (strncmp (*in, seq, len)) {
+static bool replace_seq(const char **in, char **out, size_t *remaining, const char *seq, char value) {
+	size_t slen = strlen (seq);
+
+	if (strncmp (*in, seq, slen)) {
 		return false;
 	}
 
 	**out = value;
 
-	*in += len;
+	*in += slen;
 	*out += 1;
+	*remaining -= slen;
 
 	return true;
 }
 
-R_API char *r_bin_demangle_rust (RBinFile *binfile, const char *sym, ut64 vaddr) {
-	int len;
-	char *str, *out, *in;
+R_API char *r_bin_demangle_rust(RBinFile *binfile, const char *sym, ut64 vaddr) {
+	// Rust v0 (RFC 2603) symbols start with "_R" and use their own grammar.
+	const char *p = sym;
+	if (p && p[0] == '_' && p[1] == '_' && p[2] == 'R') {
+		p++;
+	}
+	if (p && p[0] == '_' && p[1] == 'R') {
+		char *v0 = r_demangle_rust_v0 (sym);
+		if (v0) {
+			return v0;
+		}
+	}
+	// legacy mangling: Itanium-mangled name plus $..$ escapes
+	char *str = r_bin_demangle_cxx (binfile, sym, vaddr);
 
-	str = r_bin_demangle_cxx (binfile, sym, vaddr);
-	
 	if (!str) {
 		return str;
 	}
 
-	out = in = str;
-	len = strlen (str);
-
-	if (*in == '_') {
-		in++;
-		len--;
-	}
-
-	while ((len = strlen (in)) > 0) {
-		if (!(*in == '$' && (RS("$SP$", '@')
-				|| RS("$BP$", '*')
-				|| RS("$RF$", '&')
-				|| RS("$LT$", '<')
-				|| RS("$GT$", '>')
-				|| RS("$LP$", '(')
-				|| RS("$RP$", ')')
-				|| RS("$C$", ',')
+	char *in = str;
+	char *out = str;
+	size_t len = strlen (str);
+	while (len > 0) {
+		if (!(*in == '$' && (RS ("$SP$", '@')
+				|| RS ("$BP$", '*')
+				|| RS ("$RF$", '&')
+				|| RS ("$LT$", '<')
+				|| RS ("$GT$", '>')
+				|| RS ("$LP$", '(')
+				|| RS ("$RP$", ')')
+				|| RS ("$C$", ',')
 				// maybe a good idea to replace all utf-sequences by regexp \$u[0-9a-f]{2}\$ or so
-				|| RS("$u20$", ' ')
-				|| RS("$u22$", '\"')
-				|| RS("$u27$", '\'')
-				|| RS("$u2b$", '+')
-				|| RS("$u3b$", ';')
-				|| RS("$u5b$", '[')
-				|| RS("$u5d$", ']')
-				|| RS("$u7e$", '~')))) {
+				|| RS ("$u20$", ' ')
+				|| RS ("$u22$", '\"')
+				|| RS ("$u27$", '\'')
+				|| RS ("$u2b$", '+')
+				|| RS ("$u3b$", ';')
+				|| RS ("$u5b$", '[')
+				|| RS ("$u5d$", ']')
+				|| RS ("$u7e$", '~')))) {
 			if (*in == '.') {
-				if (len > 0 && in[1] == '.') {
+				if (len > 1 && in[1] == '.') {
+					*out++ = ':';
+					*out++ = ':';
 					in += 2;
-					*out++ = ':';
-					*out++ = ':';
-					len--;
+					len -= 2;
 				} else {
-					in += 1;
-					*out = '-';
+					in++;
+					len--;
 				}
 			} else {
 				*out++ = *in++;
+				len--;
 			}
 		}
 	}
 	*out = '\0';
-
 	return str;
 }

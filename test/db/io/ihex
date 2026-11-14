@@ -10,3 +10,146 @@ goto 0x246e
 return 0
 EOF
 RUN
+
+NAME=IHEX: simple test
+FILE=ihex://bins/other/test.ihex
+CMDS=<<EOF
+o
+p8 16
+s 0x8000
+px 64*3
+EOF
+EXPECT=<<EOF
+ 3 * r-x 0x0000808c ihex://bins/other/test.ihex
+ffffffffffffffffffffffffffffffff
+- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+0x00008000  8200 8135 8200 9daf 8200 9daf 8200 9daf  ...5............
+0x00008010  8200 9daf 8200 9daf 8200 9daf 8200 9daf  ................
+0x00008020  8200 9daf 8200 9daf 8200 9daf 8200 9daf  ................
+0x00008030  8200 9daf 8200 9daf 8200 9daf 8200 9daf  ................
+0x00008040  ffff ffff ffff ffff ffff ffff ffff ffff  ................
+0x00008050  ffff ffff ffff ffff ffff ffff ffff ffff  ................
+0x00008060  ffff ffff ffff ffff ffff ffff ffff ffff  ................
+0x00008070  ffff ffff ffff ffff ffff ffff ffff ffff  ................
+0x00008080  6865 6c6c 6f20 776f 726c 6400 ffff ffff  hello world.....
+0x00008090  ffff ffff ffff ffff ffff ffff ffff ffff  ................
+0x000080a0  ffff ffff ffff ffff ffff ffff ffff ffff  ................
+0x000080b0  ffff ffff ffff ffff ffff ffff ffff ffff  ................
+EOF
+RUN
+
+NAME=IHEX: segment boundaries
+FILE=ihex://bins/other/td.hex
+CMDS=<<EOF
+px 0x20 @ 0x70000
+EOF
+EXPECT=<<EOF
+- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+0x00070000  5d1b 4153 2000 1d40 1007 75a0 103c ead2  ].AS ..@..u..<..
+0x00070010  2000 0000 1007 0040 1007 7594 0000 0000   ......@..u.....
+EOF
+RUN
+
+NAME=IHEX: the EOF record does not rewrite the last data record
+FILE=-
+CMDS=<<EOF
+?e :020000040800F2 > .tmp_ihex_eof.hex
+?e :0400000001020304F2 >> .tmp_ihex_eof.hex
+?e :0400100011121314A2 >> .tmp_ihex_eof.hex
+?e :00000001FF >> .tmp_ihex_eof.hex
+o ihex://.tmp_ihex_eof.hex
+p8 4 @ 0x8000000
+p8 4 @ 0x8000010
+rm .tmp_ihex_eof.hex
+EOF
+EXPECT=<<EOF
+01020304
+11121314
+EOF
+RUN
+
+NAME=IHEX: many records load in linear time
+FILE=ihex://bins/ihex/many-records.hex
+TIMEOUT=5
+CMDS=<<EOF
+:r~?
+p8 4
+p8 2 @ 0xfffe
+EOF
+EXPECT=<<EOF
+32768
+41ff41ff
+41ff
+EOF
+RUN
+
+NAME=IHEX: records in random order load in linear time
+FILE=ihex://bins/ihex/shuffled-records.hex
+TIMEOUT=3
+CMDS=<<EOF
+:r~?
+:r~:0..2
+p8 9 @ 0x30000
+EOF
+EXPECT=<<EOF
+32768
+0x0003fff8-0x0003fff9
+0x0003fff0-0x0003fff1
+41ffffffffffffff41
+EOF
+RUN
+
+NAME=IHEX: :i prints valid 16-byte records
+FILE=ihex://bins/other/test.ihex
+CMDS=<<EOF
+:i
+EOF
+EXPECT=<<EOF
+:108000008200813582009DAF82009DAF82009DAFCE
+:1080100082009DAF82009DAF82009DAF82009DAF28
+:1080200082009DAF82009DAF82009DAF82009DAF18
+:1080300082009DAF82009DAF82009DAF82009DAF08
+:0C80800068656C6C6F20776F726C640098
+:00000001FF
+EOF
+RUN
+
+NAME=IHEX: out of order and overlapping records are all loaded
+FILE=ihex://bins/ihex/overlapping-records.hex
+CMDS=<<EOF
+p8 8
+:r
+EOF
+EXPECT=<<EOF
+41ff42ff434443ff
+0x00000004-0x00000007
+0x00000002-0x00000003
+0x00000000-0x00000001
+EOF
+RUN
+
+NAME=IHEX: unknown record types are rejected
+FILE=-
+CMDS=<<EOF
+o ihex://bins/ihex/unknown-record-type.hex
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Unknown ihex record type 0a
+ERROR: ihex: failed to parse file
+ERROR: Cannot open file ihex://bins/ihex/unknown-record-type.hex
+EOF
+RUN
+
+NAME=IHEX: the checksum of the last record is checked
+FILE=-
+CMDS=<<EOF
+o ihex://bins/ihex/bad-checksum-last-record.hex
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Checksum failed in ihex record (:0100050043FF)
+ERROR: ihex: failed to parse file
+ERROR: Cannot open file ihex://bins/ihex/bad-checksum-last-record.hex
+EOF
+RUN

@@ -1,14 +1,10 @@
-/* radare - LGPL - Copyright 2007-2021 - pancake */
+/* radare - LGPL - Copyright 2007-2026 - pancake */
 
 #include <errno.h>
-#include <r_io.h>
 #include <r_lib.h>
-#include <r_util.h>
-#include <r_cons.h>
-#include <r_debug.h> /* only used for BSD PTRACE redefinitions */
-#include <string.h>
+#include <r_core.h>
 
-#if __linux__ ||  __APPLE__ || __WINDOWS__ || __NetBSD__ || __KFBSD__ || __OpenBSD__
+#if __linux__ ||  __APPLE__ || R2__WINDOWS__ || __NetBSD__ || __KFBSD__ || __OpenBSD__ || __serenity__ || __HAIKU__
 #define DEBUGGER_SUPPORTED 1
 #else
 #define DEBUGGER_SUPPORTED 0
@@ -18,10 +14,17 @@
 #define MAGIC_EXIT 123
 
 #include <signal.h>
-#if __UNIX__
+#if R2__UNIX__ && !APPLE_SDK_IPHONEOS
+#if !defined(__HAIKU__)
 #include <sys/ptrace.h>
+#endif
 #include <sys/types.h>
 #include <sys/wait.h>
+#endif
+
+#if __HAIKU__
+#include <kernel/OS.h>
+#include <kernel/image.h>
 #endif
 
 #if __APPLE__
@@ -43,7 +46,7 @@
 #include <mach-o/nlist.h>
 #endif
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 #include <windows.h>
 #include <tlhelp32.h>
 #include <winbase.h>
@@ -51,13 +54,7 @@
 #include <r_util/r_w32dw.h>
 #endif
 
-/*
- * Creates a new process and returns the result:
- * -1 : error
- *  0 : ok
- */
-
-#if __WINDOWS__
+#if R2__WINDOWS__
 typedef struct {
 	HANDLE hnd;
 	ut64 winbase;
@@ -82,11 +79,19 @@ static int setup_tokens(void) {
 	}
 	err = 0;
 err_enable:
+	if (err) {
+		// read before CloseHandle, which clobbers the thread error code
+		// systems without SeDebugPrivilege (reactos, some wine setups) cannot
+		// grant it and debugging own child processes works anyway, so this is
+		// only worth reporting when it is an unexpected failure
+		if (GetLastError () == ERROR_NO_SUCH_PRIVILEGE) {
+			R_LOG_DEBUG ("SeDebugPrivilege is not available on this system");
+		} else {
+			r_sys_perror ("setup_tokens");
+		}
+	}
 	if (tok) {
 		CloseHandle (tok);
-	}
-	if (err) {
-		r_sys_perror ("setup_tokens");
 	}
 	return err;
 }
@@ -98,7 +103,7 @@ struct __createprocess_params {
 };
 
 static int __createprocess_wrap(void *params) {
-	STARTUPINFO si = { 0 };
+	STARTUPINFO si = {0};
 	// TODO: Add DEBUG_PROCESS to support child process debugging
 	struct __createprocess_params *p = params;
 	return CreateProcess (p->appname, p->cmdline, NULL, NULL, FALSE,
@@ -108,7 +113,7 @@ static int __createprocess_wrap(void *params) {
 
 static int fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
 	PROCESS_INFORMATION pi;
-	STARTUPINFO si = { 0 };
+	STARTUPINFO si = {0};
 	si.cb = sizeof (si);
 	DEBUG_EVENT de;
 	int pid, tid;
@@ -141,7 +146,7 @@ static int fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
 	wrap->params.func.user = &p;
 	r_w32dw_waitret (wrap);
 	if (!r_w32dw_ret (wrap)) {
-		r_w32dw_err (wrap);
+		(void)r_w32dw_err (wrap);
 		r_sys_perror ("fork_and_ptraceme/CreateProcess");
 		free (appname_);
 		free (cmdline_);
@@ -166,7 +171,7 @@ static int fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
 
 	/* check if is a create process debug event */
 	if (de.dwDebugEventCode != CREATE_PROCESS_DEBUG_EVENT) {
-		eprintf ("exception code 0x%04x\n", (ut32)de.dwDebugEventCode);
+		R_LOG_ERROR ("exception code 0x%04x", (ut32)de.dwDebugEventCode);
 		goto err_fork;
 	}
 
@@ -176,11 +181,11 @@ static int fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
 	wrap->pi.hThread = pi.hThread;
 	wrap->winbase = (ut64)de.u.CreateProcessInfo.lpBaseOfImage;
 
-	eprintf ("Spawned new process with pid %d, tid = %d\n", pid, tid);
+	R_LOG_INFO ("Spawned new process with pid %d, tid = %d", pid, tid);
 	return pid;
 
 err_fork:
-	eprintf ("Error: Cannot create new process.\n");
+	R_LOG_ERROR ("Cannot create new process");
 	TerminateProcess (pi.hProcess, 1);
 	r_w32dw_free (io->dbgwrap);
 	io->dbgwrap = NULL;
@@ -190,11 +195,11 @@ err_fork:
 }
 #else // windows
 
-#if (__APPLE__ && __POWERPC__) || !__APPLE__
+#if ((__APPLE__ && __POWERPC__) || !__APPLE__) && !defined(__HAIKU__)
 
-#if __APPLE__ || __BSD__
+#if __APPLE__ || R2__BSD__
 static void inferior_abort_handler(int pid) {
-	eprintf ("Inferior received signal SIGABRT. Executing BKPT.\n");
+	R_LOG_ERROR ("Inferior received signal SIGABRT. Executing BKPT");
 }
 #endif
 
@@ -202,7 +207,11 @@ static void trace_me(void) {
 #if __APPLE__
 	r_sys_signal (SIGTRAP, SIG_IGN); //NEED BY STEP
 #endif
-#if __APPLE__ || __BSD__
+#if __serenity__
+	if (ptrace (PT_TRACE_ME, 0, 0, 0) != 0) {
+		r_sys_perror ("ptrace-traceme");
+	}
+#elif __APPLE__ || R2__BSD__
 	/* we can probably remove this #if..as long as PT_TRACE_ME is redefined for OSX in r_debug.h */
 	r_sys_signal (SIGABRT, inferior_abort_handler);
 	if (ptrace (PT_TRACE_ME, 0, 0, 0) != 0) {
@@ -223,32 +232,31 @@ static void trace_me(void) {
 #if __APPLE__ && !__POWERPC__
 static void handle_posix_error(int err) {
 	switch (err) {
-	case 0:
-		// eprintf ("Success\n");
+	case 0: // success, no error so far
 		break;
 	case 22:
-		eprintf ("posix_spawnp: Invalid argument\n");
+		R_LOG_ERROR ("posix_spawnp: Invalid argument");
 		break;
 	case 86:
-		eprintf ("Unsupported architecture. Please specify -b 32\n");
+		R_LOG_ERROR ("Unsupported architecture. Please specify -b 32");
 		break;
 	default:
-		eprintf ("posix_spawnp: unknown error %d\n", err);
-		perror ("posix_spawnp");
+		R_LOG_ERROR ("posix_spawnp: unknown error %d", err);
+		r_sys_perror ("posix_spawnp");
 		break;
 	}
 }
 #endif
 
+#if !defined(__HAIKU__)
 static RRunProfile* _get_run_profile(RIO *io, int bits, char **argv) {
-	char *expr = NULL;
 	int i;
-	RRunProfile *rp = r_run_new (NULL);
+	RRunProfile *rp = r_run_new ("");
 	if (!rp) {
 		return NULL;
 	}
 	for (i = 0; argv[i]; i++) {
-		rp->_args[i] = argv[i];
+		rp->_args[i] = strdup (argv[i]);
 	}
 	rp->_args[i] = NULL;
 	if (!argv[0]) {
@@ -257,36 +265,40 @@ static RRunProfile* _get_run_profile(RIO *io, int bits, char **argv) {
 	}
 	rp->_program = strdup (argv[0]);
 
-	rp->_dodebug = true;
-	if (io->runprofile && *io->runprofile) {
+	const char *runprofile = io->runprofile;
+	if (R_STR_ISNOTEMPTY (runprofile)) {
 		if (!r_run_parsefile (rp, io->runprofile)) {
-			eprintf ("Can't find profile '%s'\n", io->runprofile);
+			R_LOG_ERROR ("Can't find profile '%s'", io->runprofile);
 			r_run_free (rp);
 			return NULL;
 		}
 		if (strstr (io->runprofile, R_SYS_DIR ".rarun2.")) {
 			(void)r_file_rm (io->runprofile);
 		}
-	} else if (io->envprofile) {
-		if (!r_run_parse (rp, io->envprofile)) {
-			eprintf ("Can't parse default rarun2 profile\n");
+	} else {
+		if (!io->envprofile) {
+			char **env = r_sys_get_environ ();
+			io->envprofile = r_run_get_environ_profile (env);
+		}
+		if (io->envprofile && !r_run_parse (rp, io->envprofile)) {
+			R_LOG_ERROR ("Can't parse default rarun2 profile");
 			r_run_free (rp);
 			return NULL;
 		}
 	}
 	if (bits == 64) {
-		r_run_parseline (rp, expr=strdup ("bits=64"));
+		r_run_parseline (rp, "bits=64");
 	} else if (bits == 32) {
-		r_run_parseline (rp, expr=strdup ("bits=32"));
+		r_run_parseline (rp, "bits=32");
 	}
-	free (expr);
-	if (r_run_config_env (rp)) {
-		eprintf ("Can't config the environment.\n");
+	if (!r_run_config_env (rp)) {
+		R_LOG_ERROR ("Cannot configure the environment");
 		r_run_free (rp);
 		return NULL;
 	}
 	return rp;
 }
+#endif
 
 #if __APPLE__ && !__POWERPC__
 
@@ -303,10 +315,9 @@ static void handle_posix_redirection(RRunProfile *rp, posix_spawn_file_actions_t
 	}
 }
 
-// __UNIX__ (not windows)
-static int fork_and_ptraceme_for_mac(RIO *io, int bits, const char *cmd) {
+// macos
+static int platform_fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
 	pid_t p = -1;
-	char **argv;
 	posix_spawn_file_actions_t fileActions;
 	ut32 ps_flags = POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK;
 	sigset_t no_signals;
@@ -330,7 +341,8 @@ static int fork_and_ptraceme_for_mac(RIO *io, int bits, const char *cmd) {
 	ps_flags |= POSIX_SPAWN_START_SUSPENDED;
 #define _POSIX_SPAWN_DISABLE_ASLR 0x0100
 	int ret;
-	argv = r_str_argv (cmd, NULL);
+	char *ncmd = strdup (cmd);
+	char **argv = r_str_argv (ncmd, NULL);
 	if (!argv) {
 		posix_spawn_file_actions_destroy (&fileActions);
 		return -1;
@@ -357,13 +369,42 @@ static int fork_and_ptraceme_for_mac(RIO *io, int bits, const char *cmd) {
 		handle_posix_error (ret);
 	}
 	r_str_argv_free (argv);
+	free (ncmd);
 	r_run_free (rp);
 	posix_spawn_file_actions_destroy (&fileActions);
 	return p; // -1 ?
 }
 #endif // __APPLE__ && !__POWERPC__
 
-#if (!(__APPLE__ && !__POWERPC__))
+#if __HAIKU__
+// spawn the team with load_image() so the debugger can attach before its suspended main thread runs
+static int platform_fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
+	char **argv = r_str_argv (cmd, NULL);
+	if (!argv || !argv[0]) {
+		r_str_argv_free (argv);
+		return -1;
+	}
+	int argc = 0;
+	while (argv[argc]) {
+		argc++;
+	}
+	extern char **environ;
+	const thread_id th = load_image (argc, (const char **)argv, (const char **)environ);
+	r_str_argv_free (argv);
+	if (th < B_OK) {
+		R_LOG_ERROR ("load_image: %s", strerror (th));
+		return -1;
+	}
+	thread_info ti;
+	if (get_thread_info (th, &ti) != B_OK) {
+		kill_thread (th);
+		return -1;
+	}
+	// the main thread stays suspended until the debugger attaches
+	return (int)ti.team;
+}
+
+#elif (!(__APPLE__ && !__POWERPC__))
 typedef struct fork_child_data_t {
 	RIO *io;
 	int bits;
@@ -375,6 +416,10 @@ static void fork_child_callback(void *user) {
 	char **argv = r_str_argv (data->cmd, NULL);
 	if (!argv) {
 		exit (1);
+	}
+	if (!data->io->envprofile) {
+		char **env = r_sys_get_environ ();
+		data->io->envprofile = r_run_get_environ_profile (env);
 	}
 	r_sys_clearenv ();
 	RRunProfile *rp = _get_run_profile (data->io, data->bits, argv);
@@ -389,7 +434,9 @@ static void fork_child_callback(void *user) {
 	exit (1);
 }
 
-static int fork_and_ptraceme_for_unix(RIO *io, int bits, const char *cmd) {
+// unix
+static int platform_fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
+	RCons *cons = ((RCore *)(io->coreb.core))->cons;
 	int ret, status, child_pid;
 	void *bed = NULL;
 	fork_child_data child_data;
@@ -398,23 +445,23 @@ static int fork_and_ptraceme_for_unix(RIO *io, int bits, const char *cmd) {
 	child_data.cmd = cmd;
 	child_pid = r_io_ptrace_fork (io, fork_child_callback, &child_data);
 	if (child_pid == -1 || child_pid == 0) {
-		perror ("fork_and_ptraceme");
+		r_sys_perror ("fork_and_ptraceme");
 		return -1;
 	} do {
 		ret = waitpid (child_pid, &status, WNOHANG);
 		if (ret == -1) {
-			perror ("waitpid");
+			r_sys_perror ("waitpid");
 			return -1;
 		}
-		bed = r_cons_sleep_begin ();
+		bed = r_cons_sleep_begin (cons);
 		usleep (100000);
-		r_cons_sleep_end (bed);
-	} while (ret != child_pid && !r_cons_is_breaked ());
+		r_cons_sleep_end (cons, bed);
+	} while (ret != child_pid && !r_cons_is_breaked (cons));
 	if (!WIFSTOPPED (status)) {
 		return -1;
 	}
-	if (WEXITSTATUS (status) == MAGIC_EXIT || r_cons_is_breaked ()) {
-		eprintf ("Killing child process %d due to an error\n", (int)child_pid);
+	if (WEXITSTATUS (status) == MAGIC_EXIT || r_cons_is_breaked (cons)) {
+		R_LOG_INFO ("Killing child process %d due to an error", (int)child_pid);
 		kill (child_pid, SIGSTOP);
 		return -1;
 	}
@@ -423,46 +470,43 @@ static int fork_and_ptraceme_for_unix(RIO *io, int bits, const char *cmd) {
 #endif
 
 static int fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
-	// Before calling the platform implementation, append arguments to the command if they have been provided
-	char *_eff_cmd = io->args ? r_str_appendf (strdup (cmd), " %s", io->args) : strdup(cmd);
-	int r = 0;
-
-#if __APPLE__ && !__POWERPC__
-	r = fork_and_ptraceme_for_mac (io, bits, _eff_cmd);
-#else
-	r = fork_and_ptraceme_for_unix (io, bits, _eff_cmd);
-#endif
+	char *_eff_cmd = io->args ? r_str_appendf (strdup (cmd), " %s", io->args) : strdup (cmd);
+	int r = platform_fork_and_ptraceme (io, bits, _eff_cmd);
 	free (_eff_cmd);
 	return r;
 }
 #endif
 
 static bool __plugin_open(RIO *io, const char *file, bool many) {
-	if (!strncmp (file, "waitfor://", 10)) {
+	if (r_str_startswith (file, "waitfor://")) {
 		return true;
 	}
-	if (!strncmp (file, "pidof://", 8)) {
+	if (r_str_startswith (file, "pidof://")) {
 		return true;
 	}
-	return (!strncmp (file, "dbg://", 6) && file[6]);
+	return r_str_startswith (file, "dbg://") && file[6];
 }
 
-#include <r_core.h>
 static int get_pid_of(RIO *io, const char *procname) {
-	RCore *c = io->corebind.core;
-	if (c && c->dbg && c->dbg->h) {
+	RCore *c = io->coreb.core;
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+		return -1;
+	}
+	// check sandbox
+	RDebugPlugin *plugin = R_UNWRAP4 (c, dbg, current, plugin);
+	if (plugin) {
 		RListIter *iter;
 		RDebugPid *proc;
 		RDebug *d = c->dbg;
-		RList *pids = d->h->pids (d, 0);
+		RList *pids = plugin->pids (d, 0);
 		r_list_foreach (pids, iter, proc) {
 			if (strstr (proc->path, procname)) {
-				eprintf ("Matching PID %d %s\n", proc->pid, proc->path);
+				R_LOG_INFO ("Matching PID %d %s", proc->pid, proc->path);
 				return proc->pid;
 			}
 		}
 	} else {
-		eprintf ("Cannot enumerate processes\n");
+		R_LOG_ERROR ("Cannot enumerate processes");
 	}
 	return -1;
 }
@@ -471,9 +515,12 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	RIOPlugin *_plugin;
 	RIODesc *ret = NULL;
 	char uri[128];
-	if (!strncmp (file, "waitfor://", 10)) {
-		const char *procname = file + 10;
-		eprintf ("Waiting for %s\n", procname);
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+		return NULL;
+	}
+	if (r_str_startswith (file, "waitfor://")) {
+		const char *procname = file + strlen ("waitfor://");
+		R_LOG_INFO ("Waiting for %s", procname);
 		while (true) {
 			int target_pid = get_pid_of (io, procname);
 			if (target_pid != -1) {
@@ -483,11 +530,11 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 			}
 			r_sys_usleep (100);
 		}
-	} else if (!strncmp (file, "pidof://", 8)) {
+	} else if (r_str_startswith (file, "pidof://")) {
 		const char *procname = file + 8;
 		int target_pid = get_pid_of (io, procname);
 		if (target_pid == -1) {
-			eprintf ("Cannot find matching process for %s\n", file);
+			R_LOG_ERROR ("Cannot find matching process for %s", file);
 			return NULL;
 		}
 		snprintf (uri, sizeof (uri), "dbg://%d", target_pid);
@@ -496,36 +543,49 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	if (__plugin_open (io, file, 0)) {
 		const char *pidfile = file + 6;
 		char *endptr;
-		int pid = (int)strtol (pidfile, &endptr, 10);
-		if (endptr == pidfile || pid < 0) {
-			pid = -1;
+		errno = 0;
+		long parsed_pid = strtol (pidfile, &endptr, 10);
+		int pid = -1;
+		if (isdigit (*pidfile) && !*endptr) {
+			if (errno == ERANGE || parsed_pid <= 0 || parsed_pid > INT_MAX) {
+				R_LOG_ERROR ("Invalid PID: %s", pidfile);
+				return NULL;
+			}
+			pid = (int)parsed_pid;
 		}
 		if (pid == -1) {
 			pid = fork_and_ptraceme (io, io->bits, file + 6);
 			if (pid == -1) {
 				return NULL;
 			}
-#if __WINDOWS__
-			sprintf (uri, "w32dbg://%d", pid);
+#if R2__WINDOWS__
+			snprintf (uri, sizeof (uri), "w32dbg://%d", pid);
 			_plugin = r_io_plugin_resolve (io, (const char *)uri, false);
 			if (!_plugin || !_plugin->open) {
 				return NULL;
 			}
 			if ((ret = _plugin->open (io, uri, rw, mode))) {
-				RCore *c = io->corebind.core;
+				RCore *c = io->coreb.core;
 				RW32Dw *wrap = (RW32Dw *)ret->data;
 				c->dbg->user = wrap;
 			}
 #elif __APPLE__
-			sprintf (uri, "smach://%d", pid);		//s is for spawn
+			snprintf (uri, sizeof (uri), "smach://%d", pid); //s is for spawn
 			_plugin = r_io_plugin_resolve (io, (const char *)uri + 1, false);
 			if (!_plugin || !_plugin->open || !_plugin->close) {
 				return NULL;
 			}
 			ret = _plugin->open (io, uri, rw, mode);
+#elif __HAIKU__
+			snprintf (uri, sizeof (uri), "hdbg://%d", pid);
+			_plugin = r_io_plugin_resolve (io, (const char *)uri, false);
+			if (!_plugin || !_plugin->open) {
+				return NULL;
+			}
+			ret = _plugin->open (io, uri, rw, mode);
 #else
 			// TODO: use io_procpid here? faster or what?
-			sprintf (uri, "ptrace://%d", pid);
+			snprintf (uri, sizeof (uri), "ptrace://%d", pid);
 			_plugin = r_io_plugin_resolve (io, (const char *)uri, false);
 			if (!_plugin || !_plugin->open) {
 				return NULL;
@@ -539,9 +599,9 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 				return NULL;
 			}
 			ret = _plugin->open (io, uri, rw, mode);
-#if __WINDOWS__
+#if R2__WINDOWS__
 			if (ret) {
-				RCore *c = io->corebind.core;
+				RCore *c = io->coreb.core;
 				RW32Dw *wrap = (RW32Dw *)ret->data;
 				c->dbg->user = wrap;
 			}
@@ -556,19 +616,23 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 }
 
 RIOPlugin r_io_plugin_debug = {
-	.name = "debug",
-	.desc = "Attach to native debugger instance",
-	.license = "LGPL3",
+	.meta = {
+		.name = "debug",
+		.desc = "Attach to native debugger instance",
+		.license = "LGPL-3.0-only",
+		.author = "pancake",
+	},
 	.uris = "dbg://,pidof://,waitfor://",
-	.author = "pancake",
 	.open = __open,
 	.check = __plugin_open,
 	.isdbg = true,
 };
 #else
 RIOPlugin r_io_plugin_debug = {
-	.name = "debug",
-	.desc = "Debug a program or pid. (NOT SUPPORTED FOR THIS PLATFORM)",
+	.meta = {
+		.name = "debug",
+		.desc = "Debug a program or pid. (NOT SUPPORTED FOR THIS PLATFORM)",
+	},
 };
 #endif
 

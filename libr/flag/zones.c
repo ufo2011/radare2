@@ -1,14 +1,11 @@
-/* radare - LGPL - Copyright 2016-2021 - pancake */
+/* radare - LGPL - Copyright 2016-2025 - pancake */
 
 #include <r_flag.h>
-#include <r_util.h>
 
-#define DB f->zones
-
-static RFlagZoneItem *r_flag_zone_get (RFlag *f, const char *name) {
-	RListIter *iter;
+R_API RFlagZoneItem *r_flag_zone_get(RFlag *f, const char *name) {
+	R_RETURN_VAL_IF_FAIL (f && name, NULL);
 	RFlagZoneItem *zi;
-	r_list_foreach (DB, iter, zi) {
+	R_VEC_FOREACH (&f->zones, zi) {
 		if (!strcmp (name, zi->name)) {
 			return zi;
 		}
@@ -16,11 +13,10 @@ static RFlagZoneItem *r_flag_zone_get (RFlag *f, const char *name) {
 	return NULL;
 }
 
-static RFlagZoneItem *r_flag_zone_get_inrange (RFlag *f, ut64 from, ut64 to) {
-	RListIter *iter;
+static RFlagZoneItem *r_flag_zone_get_inrange(RFlag *f, ut64 from, ut64 to) {
 	RFlagZoneItem *zi;
-	r_list_foreach (DB, iter, zi) {
-		if (R_BETWEEN (from, zi->from, to)) {
+	R_VEC_FOREACH (&f->zones, zi) {
+		if (R_INBETWEEN (zi->from, zi->to, from, to)) {
 			return zi;
 		}
 	}
@@ -28,7 +24,7 @@ static RFlagZoneItem *r_flag_zone_get_inrange (RFlag *f, ut64 from, ut64 to) {
 }
 
 R_API bool r_flag_zone_add(RFlag *f, const char *name, ut64 addr) {
-	r_return_val_if_fail (f && name && *name, false);
+	R_RETURN_VAL_IF_FAIL (f && R_STR_ISNOTEMPTY (name), false);
 	RFlagZoneItem *zi = r_flag_zone_get (f, name);
 	if (zi) {
 		if (addr < zi->from) {
@@ -38,124 +34,161 @@ R_API bool r_flag_zone_add(RFlag *f, const char *name, ut64 addr) {
 			zi->to = addr;
 		}
 	} else {
-		if (!DB) {
-			r_flag_zone_reset (f);
+		zi = RVecFlagZoneItem_emplace_back (&f->zones);
+		if (!zi) {
+			return false;
 		}
-		zi = R_NEW0 (RFlagZoneItem);
 		zi->name = strdup (name);
+		if (!zi->name) {
+			RVecFlagZoneItem_pop_back (&f->zones);
+			return false;
+		}
+		r_name_filter (zi->name, -1);
 		zi->from = zi->to = addr;
-		r_list_append (DB, zi);
 	}
 	return true;
 }
 
 R_API bool r_flag_zone_reset(RFlag *f) {
-	r_list_free (f->zones);
-	f->zones = r_list_newf (r_flag_zone_item_free);
+	R_RETURN_VAL_IF_FAIL (f, false);
+	RVecFlagZoneItem_clear (&f->zones);
 	return true;
 }
 
 R_API bool r_flag_zone_del(RFlag *f, const char *name) {
-	RListIter *iter;
+	R_RETURN_VAL_IF_FAIL (f && name, false);
+	size_t i = 0;
 	RFlagZoneItem *zi;
-	r_list_foreach (DB, iter, zi) {
+	R_VEC_FOREACH (&f->zones, zi) {
 		if (!strcmp (name, zi->name)) {
-			r_list_delete (DB, iter);
+			RVecFlagZoneItem_remove (&f->zones, i);
 			return true;
 		}
+		i++;
 	}
 	return false;
 }
 
-
 R_API void r_flag_zone_item_free(void *a) {
-	RFlagZoneItem *zi = a;
-	free (zi->name);
-	free (zi);
+	if (R_UNLIKELY (a)) {
+		RFlagZoneItem *zi = a;
+		r_flag_zone_item_fini (zi);
+		free (zi);
+	}
 }
 
-R_API bool r_flag_zone_around(RFlag *f, ut64 addr, const char **prev, const char **next) {
-	RListIter *iter;
+R_API bool r_flag_zone_around(RFlag *f, ut64 addr, const char ** R_NULLABLE prev, const char ** R_NULLABLE next) {
+	R_RETURN_VAL_IF_FAIL (f, false);
 	RFlagZoneItem *zi;
-	*prev = *next = NULL;
-	ut64 h = UT64_MAX, l = 0LL;
+	if (prev) {
+		*prev = NULL;
+	}
+	if (next) {
+		*next = NULL;
+	}
+	ut64 h = UT64_MAX, l = UT64_MAX;
 
-	r_list_foreach (DB, iter, zi) {
+	bool res = false;
+	R_VEC_FOREACH (&f->zones, zi) {
 		if (zi->from > addr) {
 			if (h == UT64_MAX) {
 				h = zi->from;
-				*next = zi->name;
+				if (next) {
+					*next = zi->name;
+				}
+				res = true;
 			} else {
 				if (zi->from < h) {
 					h = zi->from;
-					*next = zi->name;
+					if (next) {
+						*next = zi->name;
+					}
+					res = true;
 				}
 			}
 		}
 		if (zi->from < addr) {
 			if (l == UT64_MAX) {
 				l = zi->from;
-				*prev = zi->name;
+				if (prev) {
+					*prev = zi->name;
+				}
+				res = true;
 			} else {
 				if (zi->from >= l) {
 					l = zi->from;
-					*prev = zi->name;
+					if (prev) {
+						*prev = zi->name;
+					}
+					res = true;
 				}
 			}
 		}
 		if (zi->to <= addr) {
 			if (l == UT64_MAX) {
 				l = zi->to;
-				*prev = zi->name;
+				if (prev) {
+					*prev = zi->name;
+				}
+				res = true;
 			} else {
 				if (zi->to >= l) {
 					l = zi->to;
-					*prev = zi->name;
+					res = true;
+					if (prev) {
+						*prev = zi->name;
+					}
 				}
 			}
 		}
 		if (zi->to > addr) {
 			if (h == UT64_MAX) {
 				h = zi->to;
-				*next = zi->name;
+				res = true;
+				if (next) {
+					*next = zi->name;
+				}
 			} else {
 				if (zi->to < h) {
 					h = zi->to;
-					*next = zi->name;
+					res = true;
+					if (next) {
+						*next = zi->name;
+					}
 				}
 			}
 		}
 	}
-	return true;
+	return res;
 }
 
 R_API RList *r_flag_zone_barlist(RFlag *f, ut64 from, ut64 bsize, int rows) {
+	R_RETURN_VAL_IF_FAIL (f, NULL);
 	RList *list = r_list_newf (NULL);
 	int i;
 	for (i = 0; i < rows; i++) {
 		RFlagZoneItem *zi = r_flag_zone_get_inrange (f, from, from + bsize);
-		if (zi) {
-			r_list_append (list, zi->name);
-		} else {
-			r_list_append (list, "");
-		}
+		r_list_append (list, zi? zi->name: "");
 		from += bsize;
 	}
 	return list;
 }
 
-R_API bool r_flag_zone_list(RFlag *f, int mode) {
-	RListIter *iter;
+R_API char *r_flag_zone_list(RFlag *f, int mode) {
+	R_RETURN_VAL_IF_FAIL (f, NULL);
 	RFlagZoneItem *zi;
-	r_list_foreach (DB, iter, zi) {
+	RStrBuf *sb = r_strbuf_new ("");
+	R_VEC_FOREACH (&f->zones, zi) {
 		if (mode == '*') {
-			f->cb_printf ("fz %s @ 0x08%"PFMT64x"\n", zi->name, zi->from);
-			f->cb_printf ("f %s %"PFMT64d" 0x08%"PFMT64x"\n", zi->name,
+			r_strbuf_appendf (sb, "'@0x%08"PFMT64x"'fz %s\n", zi->from, zi->name);
+			r_strbuf_appendf (sb, "'f %s %"PFMT64d" 0x%08"PFMT64x"\n", zi->name,
 				zi->to - zi->from, zi->from);
+		} else if (mode == 'q') {
+			r_strbuf_appendf (sb, "%s\n", zi->name);
 		} else {
-			f->cb_printf ("0x08%"PFMT64x"  0x%08"PFMT64x"  %s\n",
+			r_strbuf_appendf (sb, "0x%08"PFMT64x"  0x%08"PFMT64x"  %s\n",
 					zi->from, zi->to, zi->name);
 		}
 	}
-	return true;
+	return r_strbuf_drain (sb);
 }

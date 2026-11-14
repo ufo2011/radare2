@@ -1,13 +1,12 @@
-/* radare - LGPL - Copyright 2007-2015 - ret2libc */
+/* radare - LGPL - Copyright 2007-2025 - pancake, ret2libc */
 
 #include <r_util.h>
 
-static void tree_dfs_node (RTreeNode *r, RTreeVisitor *vis) {
-	RStack *s;
+static void tree_dfs_node(RTreeNode *r, RTreeVisitor *vis) {
 	RListIter *it;
 	RTreeNode *n;
 
-	s = r_stack_new (16);
+	RStack *s = r_stack_new (16);
 	if (!s) {
 		return;
 	}
@@ -34,7 +33,7 @@ static void tree_dfs_node (RTreeNode *r, RTreeVisitor *vis) {
 	r_stack_free (s);
 }
 
-static void r_tree_node_free (RTreeNode *n) {
+static void r_tree_node_free(RTreeNode *n) {
 	r_list_free (n->children);
 	if (n->free) {
 		n->free (n->data);
@@ -42,36 +41,33 @@ static void r_tree_node_free (RTreeNode *n) {
 	free (n);
 }
 
-static void node_free (RTreeNode *n, RTreeVisitor *vis) {
+static void node_free(RTreeNode *n, RTreeVisitor *vis) {
 	r_tree_node_free (n);
 }
 
-static void free_all_children (RTree *t) {
-	RTreeVisitor vis = { 0 };
+static void free_all_children(RTree *t) {
+	RTreeVisitor vis = {0};
 	vis.post_visit = (RTreeNodeVisitCb)node_free;
 	r_tree_bfs (t, &vis);
 }
 
-static void update_depth (RTreeNode *n, RTreeVisitor *vis) {
+static void update_depth(RTreeNode *n, RTreeVisitor *vis) {
 	n->depth = n->parent ? n->parent->depth + 1 : 0;
 }
 
-static RTreeNode *node_new (RTree *t, void *data) {
+static RTreeNode *node_new(RTree *t, void *data) {
 	RTreeNode *n = R_NEW0 (RTreeNode);
-	if (!n) {
-		return NULL;
-	}
 	n->children = r_list_new ();
 	n->data = data;
 	n->tree = t;
 	return n;
 }
 
-R_API RTree *r_tree_new (void) {
+R_API RTree *r_tree_new(void) {
 	return R_NEW0 (RTree);
 }
 
-R_API void r_tree_free (RTree* t) {
+R_API void r_tree_free(RTree* t) {
 	if (!t) {
 		return;
 	}
@@ -80,7 +76,7 @@ R_API void r_tree_free (RTree* t) {
 	free (t);
 }
 
-R_API void r_tree_reset (RTree *t) {
+R_API void r_tree_reset(RTree *t) {
 	if (!t) {
 		return;
 	}
@@ -94,9 +90,9 @@ R_API void r_tree_reset (RTree *t) {
  *       of the tree so the node will be NULL. */
 /* TODO: allow to replace the root of the tree and make it a child of the new
  *       node */
-R_API RTreeNode *r_tree_add_node (RTree *t, RTreeNode *node, void *child_data) {
+R_API RTreeNode *r_tree_add_node(RTree *t, RTreeNode *node, void *child_data) {
 	RTreeNode *child;
-	RTreeVisitor vis = { 0 };
+	RTreeVisitor vis = {0};
 
 	/* a NULL node is allowed only the first time, to set the root */
 	if (!t || (node && node->tree != t) || (t->root && !node)) {
@@ -119,7 +115,7 @@ R_API RTreeNode *r_tree_add_node (RTree *t, RTreeNode *node, void *child_data) {
 	return child;
 }
 
-R_API void r_tree_dfs (RTree *t, RTreeVisitor *vis) {
+R_API void r_tree_dfs(RTree *t, RTreeVisitor *vis) {
 	if (!t || !t->root) {
 		return;
 	}
@@ -127,7 +123,7 @@ R_API void r_tree_dfs (RTree *t, RTreeVisitor *vis) {
 	tree_dfs_node (t->root, vis);
 }
 
-R_API void r_tree_bfs (RTree *t, RTreeVisitor *vis) {
+R_API void r_tree_bfs(RTree *t, RTreeVisitor *vis) {
 	RQueue *q;
 
 	if (!t || !t->root) {

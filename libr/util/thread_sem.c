@@ -16,9 +16,6 @@
 
 R_API RThreadSemaphore *r_th_sem_new(unsigned int initial) {
 	RThreadSemaphore *sem = R_NEW (RThreadSemaphore);
-	if (!sem) {
-		return NULL;
-	}
 #if HAVE_PTHREAD
 #  if R_SEM_NAMED_ONLY
 	uuid_t uuid;
@@ -27,13 +24,15 @@ R_API RThreadSemaphore *r_th_sem_new(unsigned int initial) {
 	name[0] = '/';
 	uuid_unparse (uuid, name + 1);
 	if (strlen (name) > R_SEM_NAME_LEN_MAX-1) {
-	    name[R_SEM_NAME_LEN_MAX-1] = '\0';
+		name[R_SEM_NAME_LEN_MAX-1] = '\0';
 	}
-	sem->sem = sem_open (name, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, initial);
-	if (sem->sem == SEM_FAILED) {
+	sem_t *s = sem_open (name, O_CREAT | O_EXCL, S_IRUSR | S_IWUSR, initial);
+	if (s == SEM_FAILED) {
 		free (sem);
 		return NULL;
 	}
+	sem_unlink (name);
+	sem->sem = s;
 #  else
 	sem->sem = malloc (sizeof (sem_t));
 	if (!sem->sem) {
@@ -46,7 +45,7 @@ R_API RThreadSemaphore *r_th_sem_new(unsigned int initial) {
 		return NULL;
 	}
 #  endif
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 	sem->sem = CreateSemaphore (NULL, (LONG)initial, ST32_MAX, NULL);
 	if (!sem->sem) {
 		free (sem);
@@ -69,7 +68,7 @@ R_API void r_th_sem_free(RThreadSemaphore *sem) {
 		free (sem->sem);
 #  endif
 	}
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 	CloseHandle (sem->sem);
 #endif
 	free (sem);
@@ -78,7 +77,7 @@ R_API void r_th_sem_free(RThreadSemaphore *sem) {
 R_API void r_th_sem_post(RThreadSemaphore *sem) {
 #if HAVE_PTHREAD
 	sem_post (sem->sem);
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 	ReleaseSemaphore (sem->sem, 1, NULL);
 #endif
 }
@@ -86,7 +85,7 @@ R_API void r_th_sem_post(RThreadSemaphore *sem) {
 R_API void r_th_sem_wait(RThreadSemaphore *sem) {
 #if HAVE_PTHREAD
 	sem_wait (sem->sem);
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 	WaitForSingleObject (sem->sem, INFINITE);
 #endif
 }

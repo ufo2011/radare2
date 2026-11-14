@@ -3,8 +3,28 @@
 #ifndef INCLUDE_P_SPP_H
 #define INCLUDE_P_SPP_H
 
-#if __UNIX__
+#include <ctype.h>
+
+#if R2__UNIX__
 #include <unistd.h>
+#endif
+
+#if __WIN32__
+#undef SPP_HAVE_SYSTEM
+#define SPP_HAVE_SYSTEM 0
+#undef R2__WINDOWS__
+#define R2__WINDOWS__ 1
+#endif
+#ifdef _MSC_VER
+#undef SPP_HAVE_SYSTEM
+#define SPP_HAVE_SYSTEM 0
+#undef R2__WINDOWS__
+#define R2__WINDOWS__ 1
+#endif
+
+#if HAVE_SYSTEM == 0
+#undef SPP_HAVE_SYSTEM
+#define SPP_HAVE_SYSTEM 0
 #endif
 
 static char *spp_var_get(char *var) {
@@ -15,13 +35,13 @@ static int spp_var_set(const char *var, const char *val) {
 	return r_sys_setenv (var, val);
 }
 
-#if HAVE_SYSTEM
+#if SPP_HAVE_SYSTEM
 /* Should be dynamic buffer */
 static char *cmd_to_str(const char *cmd) {
 	char *out = (char *)calloc (4096, 1);
 	char *tout;
 	int ret = 0, len = 0, outlen = 4096;
-	FILE *fd = popen (cmd, "r");
+	FILE *fd = r_sandbox_popen (cmd, "r");
 	while (fd) {
 		len += ret;
 		ret = fread (out + len, 1, 1023, fd);
@@ -53,20 +73,16 @@ static TAG_CALLBACK(spp_set) {
 	if (!state->echo[state->ifl]) {
 		return 0;
 	}
-	for (eq=buf; eq[0]; eq++) {
-		switch (eq[0]) {
-		case '-':
-		case '.':
-			eq[0] = '_';
-			break;
-		}
-	}
-	eq = strchr (buf, ' ');
+	eq = strpbrk (buf, " \t");
 	if (eq) {
 		*eq = '\0';
 		val = eq + 1;
+		while (IS_SPACE (*val)) {
+			val++;
+		}
 	}
 	if (spp_var_set (buf, val) == -1) {
+		state->failed = true;
 		fprintf (stderr, "Invalid variable name '%s' at line %d\n", buf, state->lineno);
 	}
 	return 0;
@@ -80,6 +96,7 @@ static TAG_CALLBACK(spp_get) {
 	var = spp_var_get (buf);
 	if (var) {
 		out_printf (out, "%s", var);
+		free (var);
 	}
 	return 0;
 }
@@ -90,7 +107,11 @@ static TAG_CALLBACK(spp_getrandom) {
 		return 0;
 	}
 	// XXX srsly? this is pretty bad random
+#if R2__WINDOWS__
+	srand (r_sys_getpid ());
+#else
 	srandom (r_sys_getpid ()); // TODO: change this to be portable
+#endif
 	max = atoi (buf);
 	if (max > 0) {
 		max = (int)(rand () % max);
@@ -111,6 +132,7 @@ static TAG_CALLBACK(spp_add) {
 		var = spp_var_get (buf);
 		if (var) {
 			ret = atoi (var);
+			free (var);
 		}
 		ret += atoi (eq + 1);
 		snprintf (res, sizeof (res), "%d", ret);
@@ -161,7 +183,8 @@ static TAG_CALLBACK(spp_error) {
 		return 0;
 	}
 	fprintf (stderr, "ERROR: %s (line=%d)\n", buf, state->lineno);
-	return -1;
+	state->failed = true;
+	return 0;
 }
 
 static TAG_CALLBACK(spp_warning) {
@@ -176,32 +199,72 @@ static TAG_CALLBACK(spp_system) {
 	if (!state->echo[state->ifl]) {
 		return 0;
 	}
-#if HAVE_SYSTEM
+#if SPP_HAVE_SYSTEM
 	char *str = cmd_to_str (buf);
 	out_printf (out, "%s", str);
-	free(str);
+	free (str);
 #endif
 	return 0;
 }
 
 static TAG_CALLBACK(spp_include) {
-	char *incdir;
 	if (!state->echo[state->ifl]) {
 		return 0;
 	}
-	incdir = getenv("SPP_INCDIR");
-	if (incdir) {
-		char *b = strdup (incdir);
-		char *p = realloc (b, strlen (b) + strlen (buf) + 3);
-		if (p) {
-			b = p;
-			strcat (b, "/");
-			strcat (b, buf);
-			spp_file (b, out);
+	size_t buflen = strlen (buf);
+	if (buflen >= 2 && *buf == '"' && buf[buflen - 1] == '"') {
+		buf[--buflen] = 0;
+		buf++;
+		buflen--;
+	}
+	bool absolute = *buf == '/' || (*buf == '\\' && buf[1] == '\\')
+		|| (buflen >= 3 && isalpha ((unsigned char)*buf) && buf[1] == ':' && (buf[2] == '/' || buf[2] == '\\'));
+	if (absolute) {
+		spp_file (buf, out);
+		return 0;
+	}
+	char *incdir = r_sys_getenv ("SPP_INCDIR");
+#if R2__WINDOWS__
+	const char separator = ';';
+#else
+	const char separator = ':';
+#endif
+	char *next = incdir;
+	const char *dir = state->include_dir? state->include_dir: (incdir? NULL: ".");
+	bool found = false;
+	while (dir || next) {
+		if (!dir) {
+			dir = next;
+			next = strchr (next, separator);
+			if (next) {
+				*next++ = 0;
+			}
 		}
-		free (b);
-	} else {
-		spp_file(buf, out);
+		if (!*dir) {
+			dir = ".";
+		}
+		size_t dirlen = strlen (dir);
+		if (dirlen > SIZE_MAX - buflen - 2) {
+			break;
+		}
+		char *path = malloc (dirlen + buflen + 2);
+		if (!path) {
+			break;
+		}
+		memcpy (path, dir, dirlen);
+		path[dirlen] = '/';
+		memcpy (path + dirlen + 1, buf, buflen + 1);
+		found = spp_open_file (path, out);
+		free (path);
+		if (found) {
+			break;
+		}
+		dir = NULL;
+	}
+	free (incdir);
+	if (!found) {
+		fprintf (stderr, "Cannot find '%s'\n", buf);
+		state->failed = true;
 	}
 	return 0;
 }
@@ -209,27 +272,22 @@ static TAG_CALLBACK(spp_include) {
 static TAG_CALLBACK(spp_if) {
 	char *var = spp_var_get(buf);
 	state->echo[state->ifl + 1] = (var && *var != '0' && *var != '\0') ? 1 : 0;
+	free (var);
 	return 1;
 }
 
 /* {{ ifeq $path / }} */
 static TAG_CALLBACK(spp_ifeq) {
-	char *value = buf;
-	char *eq = strchr(buf, ' ');
+	char *eq = strpbrk (buf, " \t");
 	if (eq) {
-		*eq = '\0';
-		value = spp_var_get(value);
-		if (value && !strcmp(value, eq+1)) {
-			state->echo[state->ifl + 1] = 1;
-		} else state->echo[state->ifl + 1] = 0;
-//fprintf(stderr, "IFEQ(%s)(%s)=%d\n", buf, eq+1, echo[ifl]);
-	} else {
-		value = spp_var_get(buf);
-		if (!value || *value=='\0')
-			state->echo[state->ifl + 1] = 1;
-		else state->echo[state->ifl + 1] = 0;
-//fprintf(stderr, "IFEQ(%s)(%s)=%d\n", buf, value, echo[ifl]);
+		*eq++ = 0;
+		while (IS_SPACE (*eq)) {
+			eq++;
+		}
 	}
+	char *value = spp_var_get (buf);
+	state->echo[state->ifl + 1] = eq? value && !strcmp (value, eq): !value || !*value;
+	free (value);
 	return 1;
 }
 
@@ -260,7 +318,7 @@ static TAG_CALLBACK(spp_grepline) {
 	ptr = strchr(buf, ' ');
 	if (ptr) {
 		*ptr= '\0';
-		fd = fopen (buf, "r");
+		fd = r_sandbox_fopen (buf, "r");
 		line = atoi (ptr+1);
 		if (fd) {
 			while (!feof (fd) && line--) {
@@ -284,7 +342,7 @@ static TAG_CALLBACK(spp_else) {
 
 static TAG_CALLBACK(spp_ifnot) {
 	spp_if (state, out, buf);
-	spp_else (state, out, buf);
+	state->echo[state->ifl + 1] = !state->echo[state->ifl + 1];
 	return 1;
 }
 
@@ -298,7 +356,7 @@ static TAG_CALLBACK(spp_ifin) {
 	if (ptr) {
 		*ptr='\0';
 		var = getenv(buf);
-		if (strstr (ptr + 1, var)) {
+		if (var && strstr (ptr + 1, var)) {
 			state->echo[state->ifl + 1] = 1;
 		}
 	}
@@ -319,50 +377,47 @@ static TAG_CALLBACK(spp_default) {
 	return 0;
 }
 
-#if HAVE_SYSTEM
-static FILE *spp_pipe_fd = NULL;
-#endif
-
 static TAG_CALLBACK(spp_pipe) {
-#if HAVE_SYSTEM
-	spp_pipe_fd = popen (buf, "w");
+#if SPP_HAVE_SYSTEM
+	state->pipe_fd = r_sandbox_popen (buf, "w");
 #endif
 	return 0;
 }
-
-static char *spp_switch_str = NULL;
 
 static TAG_CALLBACK(spp_switch) {
 	char *var = spp_var_get (buf);
 	if (var) {
-		spp_switch_str = strdup (var);
+		state->switch_str = strdup (var);
 	} else {
-		spp_switch_str = strdup ("");
+		state->switch_str = strdup ("");
 	}
+	free (var);
 	return 1;
 }
 
 static TAG_CALLBACK(spp_case) {
-	state->echo[state->ifl] = strcmp (buf, spp_switch_str)?0:1;
+	state->echo[state->ifl] = state->switch_str && !strcmp (buf, state->switch_str);
 	return 0;
 }
 
 static TAG_CALLBACK(spp_endswitch) {
-	free (spp_switch_str);
-	spp_switch_str = NULL;
+	free (state->switch_str);
+	state->switch_str = NULL;
 	return -1;
 }
 
 static TAG_CALLBACK(spp_endpipe) {
-#if HAVE_SYSTEM
-	/* TODO: Get output here */
+#if SPP_HAVE_SYSTEM
+	if (!state->pipe_fd) {
+		return 0;
+	}
 	int ret = 0, len = 0;
 	int outlen = 4096;
 	char *str = (char *)malloc (4096);
 	char *tstr;
 	do {
 		len += ret;
-		ret = fread (str + len, 1, 1023, spp_pipe_fd);
+		ret = fread (str + len, 1, 1023, state->pipe_fd);
 		if (ret + 1024 > outlen) {
 			outlen += 4096;
 			tstr = realloc (str, outlen);
@@ -375,19 +430,17 @@ static TAG_CALLBACK(spp_endpipe) {
 	} while (ret > 0);
 	str[len] = '\0';
 	out_printf (out, "%s", str);
-	if (spp_pipe_fd) {
-		pclose (spp_pipe_fd);
-	}
-	spp_pipe_fd = NULL;
+	pclose (state->pipe_fd);
+	state->pipe_fd = NULL;
 	free (str);
 #endif
 	return 0;
 }
 
 static PUT_CALLBACK(spp_fputs) {
-#if HAVE_SYSTEM
-	if (spp_pipe_fd) {
-		fprintf (spp_pipe_fd, "%s", buf);
+#if SPP_HAVE_SYSTEM
+	if (out->proc->state.pipe_fd) {
+		fprintf (out->proc->state.pipe_fd, "%s", buf);
 	} else
 #endif
 	{

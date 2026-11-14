@@ -1,0 +1,1701 @@
+/* radare2 - LGPL - Copyright 2009-2026 - pancake */
+
+#if R_INCLUDE_BEGIN
+
+// R2R db/cmd/cmd_meta
+
+char *getcommapath(RCore *core);
+
+typedef struct {
+	RCore *core;
+	ut64 filter_offset;
+	int filter_format;
+	size_t filter_count;
+	PJ *pj;
+	Sdb *fscache;
+} FilterStruct;
+
+static RCoreHelpMessage help_msg_C = {
+	"Usage:", "C[-LCvsdfm*?][*?] [...]", " # Metadata management",
+	"C", "", "list meta info in human friendly form",
+	"C*", "", "list meta info in r2 commands",
+	"C*.", "", "list meta info of current offset in r2 commands",
+	"C-", " [len] [[@]addr]", "delete metadata at given address range",
+	"C.", "", "list meta info of current offset in human friendly form",
+	"CC!", " [@addr]", "edit comment with $EDITOR",
+	"CC", "[?] [-] [comment-text] [@addr]", "add/remove comment",
+	"CC.", "[addr]", "show comment in current address",
+	"CCa", "[+-] [addr] [base64:..|text]", "add/remove comment at given address",
+	"CCu", " [comment-text] [@addr]", "add unique comment",
+	"CF", "[sz] [fcn-sign..] [@addr]", "function signature",
+	"CL", "[-][*] [file:line] [addr]", "show or add 'code line' information (bininfo)",
+	"CS", "[-][space]", "manage meta-spaces to filter comments, etc..",
+	"C[Cthsdmf]", "", "list comments/types/hidden/strings/data/magic/formatted in human friendly form",
+	"C[Cthsdmf]*", "", "list comments/types/hidden/strings/data/magic/formatted in r2 commands",
+	"Cd", "[-] [size] [repeat] [@addr]", "hexdump data array (Cd 4 10 == dword [10])",
+	"Cd.", " [@addr]", "show size of data at current address",
+	"Cf", "[?][-] [sz] [0|cnt][fmt] [a0 a1...] [@addr]", "format memory (see pf?)",
+	"Cb", "[?][-] [addr] [@addr]", "bind both addresses for reflines purposes",
+	"Cr", "[?][-] [sz] [r2cmd] [@addr]", "run the given command to replace SZ bytes in the disasm",
+	"Ch", "[-] [size] [@addr]", "hide data",
+	"Cm", "[-] [sz] [fmt..] [@addr]", "magic parse (see pm?)",
+	"Cs", "[?] [-] [size] [@addr]", "add string",
+	"Ct", "[?*j,=.-] [annotation] [@addr]", "manage type analysis annotations",
+	"Ct.", "[@addr]", "show type analysis annotation at current or specified address",
+	"Cv", "[?][bsr]", "add comments to args",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_CC = {
+	"Usage:", "CC[-+!*au] [base64:..|str] @ addr", "",
+	"CC!", "", "edit comment using cfg.editor (vim, ..)",
+	"CC", " [text]", "append comment at current address",
+	"CC", "", "list all comments in human friendly form",
+	"CC*", "", "list all comments in r2 commands",
+	"CC+", " [text]", "append comment at current address",
+	"CC,", " [table-query]", "list comments in table format",
+	"CCF", " [file]", "show or set comment file",
+	"CC-", " @ cmt_addr", "remove comment at given address",
+	"CC.", "", "show comment at current offset",
+	"CCb", "", "list comments in basic block",
+	"CCb-", "", "delete all comments in current basic block",
+	"CCf", "", "list comments in function",
+	"CCf-", "", "delete all comments in current function",
+	"CCu", " base64:AA== @ addr", "add comment in base64",
+	"CCu", " good boy @ addr", "add good boy comment at given address",
+	NULL
+};
+
+// IMHO 'code-line' should be universal concept, instead of dbginfo/dwarf/...
+static RCoreHelpMessage help_msg_CL = {
+	"Usage: CL", ".j-", "@addr - code-line refs (bin.dbginfo, asm.dwarf)",
+	"CL", "", "list all code line information (virtual address <-> source file:line)",
+	"CLd", "[aoj*]", "decompile current function from dwarf line info (usable via cmd.pdc)",
+	"CLf", " [addr]", "show filename for current or given offset",
+	"CLj", "", "same as above, in JSON (see dir.source for paths)",
+	"CLt", " [path]", "show a source-file tree (scr.utf8; r2 filesystem /cl)",
+	"CLu", "[jt]", "list DWARF compilation-unit source paths (JSON/tree; r2 filesystem /cu)",
+	"CL*", "", "same as above but in r2 commands format",
+	"CL.", "", "show list all code line information (virtual address <-> source file:line)",
+	"CL-", "*", "remove all the cached codeline information",
+	"CLL", "[bf]", "show source code line associated to current offset",
+	"CLLb", "", "show source lines covered by the current basic block",
+	"CLLf", "", "show source lines covered by the current function (see CLL@@i or list)",
+	"CL+", "file:line @ addr", "register new file:line source details, r2 will slurp the line",
+	"CL", " addr file:line", "register new file:line source details, r2 will slurp the line",
+	"CL", " addr base64:text", "register new source details for given address using base64",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_Ct = {
+	"Usage: Ct", "[?*j,=.-] [annotation] [@ addr]", " # Manage address-based type analysis annotations",
+	"Ct", "", "list all type analysis annotations",
+	"Ct", " [base64:..|annotation] [@ addr]", "append an annotation at the current or specified address",
+	"Ct=", " [base64:..|annotation] [@ addr]", "set the annotation at the current or specified address",
+	"Ct.", " [@ addr]", "show the annotation at the current or specified address",
+	"Ct-", " [@ addr]", "remove the annotation at the current or specified address",
+	"Ct-*", "", "remove all type analysis annotations in the current metaspace",
+	"Ct*", "", "list all type analysis annotations as r2 commands",
+	"Ctj", "", "list all type analysis annotations as JSON",
+	"Ct,", " [table-query]", "list all type analysis annotations as a table",
+	"NOTE:", "", "Ct annotations are display metadata and do not change analyzed types",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_CS = {
+	"Usage: CS", "[*] [+-][metaspace|addr]", " # Manage metaspaces",
+	"CS", "", "display metaspaces",
+	"CS", " *", "select all metaspaces",
+	"CS", " metaspace", "select metaspace or create if it doesn't exist",
+	"CS", "-metaspace", "remove metaspace",
+	"CS", "-*", "remove all metaspaces",
+	"CS", "+foo", "push previous metaspace and set",
+	"CS", "-", "pop to the previous metaspace",
+	//	"CSm", " [addr]", "move metas at given address to the current metaspace",
+	"CSr", " newname", "rename selected metaspace",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_Cs = {
+	"Usage:", "Cs[ga-*.] ([size]) [@addr]", "",
+	"Cs", " [size] @addr", "add string (guess latin1/utf16le)",
+	"Cs", "", "list all strings in human friendly form",
+	"Cs*", "", "list all strings in r2 commands",
+	"Cs-", " [@addr]", "remove string",
+	"Cs.", "", "show string at current address",
+	"Cs..", "", "show string + info about it at current address",
+	"Cs.j", "", "show string at current address in JSON",
+	"Cs8", " [size] ([@addr])", "add utf8 string",
+	"Csa", " [size] ([@addr])", "add ascii/latin1 string",
+	"Csg", " [size] ([@addr])", "as above but addr not needed",
+	"Csw", " [size] ([@addr])", "add wide string (utf16)",
+	"Csz", " [size] ([@addr])", "define zero terminated strings (with size as maxlen)",
+	"Css", " ([range]) ([@addr])", "define all strings found in given range or section",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_Cvb = {
+	"Usage:", "Cvb", "[name] [comment]",
+	"Cvb?", "", "show this help",
+	"Cvb", "", "list all base pointer args/vars comments in human friendly format",
+	"Cvb*", "", "list all base pointer args/vars comments in r2 format",
+	"Cvb-", "[name]", "delete comments for var/arg at current offset for base pointer",
+	"Cvb", " [name]", "show comments for var/arg at current offset for base pointer",
+	"Cvb", " [name] [comment]", "add/append comment for the variable with the current name",
+	"Cvb!", "[name]", "edit comment using cfg editor",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_Cvr = {
+	"Usage:", "Cvr", "[name] [comment]",
+	"Cvr?", "", "show this help",
+	"Cvr", "", "list all register based args comments in human friendly format",
+	"Cvr*", "", "list all register based args comments in r2 format",
+	"Cvr-", "[name]", "delete comments for register based arg for that name",
+	"Cvr", "[name]", "show comments for register based arg for that name",
+	"Cvr", "[name] [comment]", "add/append comment for the variable",
+	"Cvr!", "[name]", "edit comment using cfg editor",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_Cvs = {
+	"Usage:", "Cvs", "[name] [comment]",
+	"Cvs!", "[name]", "edit comment using cfg editor",
+	"Cvs", "", "list all stack based args/vars comments in human friendly format",
+	"Cvs", "[name] [comment]", "add/append comment for the variable",
+	"Cvs", "[name]", "show comments for stack pointer var/arg with that name",
+	"Cvs*", "", "list all stack based args/vars comments in r2 format",
+	"Cvs-", "[name]", "delete comments for stack pointer var/arg with that name",
+	"Cvs?", "", "show this help",
+	NULL
+};
+
+static bool print_meta_offset(RCore *core, ut64 addr, PJ *pj) {
+	const RBinAddrline *al = r_bin_addrline_get (core->bin, addr);
+	if (!al) {
+		return false;
+	}
+	const char *al_file = r_bin_addrline_str (core->bin, al->file);
+	if (!al_file) {
+		return false;
+	}
+	if (pj) {
+		pj_o (pj);
+		pj_ks (pj, "file", al_file);
+		pj_kn (pj, "line", al->line);
+		pj_kn (pj, "colu", al->column);
+		pj_kn (pj, "addr", addr);
+		if (r_file_exists (al_file)) {
+			char *row = r_file_slurp_line (al_file, al->line, 0);
+			pj_ks (pj, "text", row);
+			free (row);
+		} else {
+			// R_LOG_ERROR ("Cannot open '%s'", file);
+		}
+		pj_end (pj);
+		return true;
+	}
+	int line = al->line;
+
+	r_cons_printf (core->cons, "file: %s\nline: %u\ncolu: %u\naddr: 0x%08"PFMT64x"\n", al_file, al->line, al->column, addr);
+	int line_old = line;
+	if (line >= 2) {
+		line -= 2;
+	}
+	if (r_file_exists (al_file)) {
+		int i;
+		for (i = 0; i < 5; i++) {
+			char *row = r_file_slurp_line (al_file, line + i, 0);
+			if (row) {
+				r_cons_printf (core->cons, "%c %.3x  %s\n", al->line + i == line_old ? '>' : ' ', line + i, row);
+				free (row);
+			}
+		}
+	} else if (line > 0) {
+		R_LOG_ERROR ("Cannot open '%s'", al_file);
+	}
+	return true;
+}
+
+
+static bool print_addrinfo2_json(void *user, const RBinAddrline *item) {
+	FilterStruct *fs = (FilterStruct *)user;
+	ut64 offset = item->addr;
+	if (offset == UT64_MAX) {
+		return true;
+	}
+#if 0
+	if (colonpos && (fs->filter_offset == UT64_MAX || fs->filter_offset == offset)) {
+		if (fs->filter_format) {
+			*colonpos = ':';
+	//		r_cons_printf (core->cons, "CL %s %s\n", k, subst);
+		} else {
+			*colonpos = 0;
+	//		r_cons_printf (core->cons, "file: %s\nline: %s\naddr: 0x%08"PFMT64x"\n", subst, colonpos + 1, offset);
+		}
+		fs->filter_count++;
+	}
+#endif
+	const char *file = r_bin_addrline_str (fs->core->bin, item->file);
+	int line = item->line;
+	PJ *pj = fs->pj;
+	if (pj) {
+		pj_o (pj);
+		pj_ks (pj, "file", file);
+		pj_kn (pj, "line", item->line);
+		if (item->column > 0) {
+			pj_kn (pj, "column", item->column);
+		}
+		pj_kn (pj, "addr", item->addr);
+		const char *cached_existence = sdb_const_get (fs->fscache, file, NULL);
+		bool file_exists = false;
+		if (cached_existence) {
+			file_exists = !strcmp (cached_existence, "1");
+		} else {
+			if (r_file_exists (file)) {
+				sdb_set (fs->fscache, file, "1", 0);
+			} else {
+				sdb_set (fs->fscache, file, "0", 0);
+			}
+		}
+		if (file_exists) {
+			char *row = r_file_slurp_line (file, line, 0);
+			pj_ks (pj, "text", file);
+			free (row);
+		}
+		pj_end (pj);
+	}
+	return true;
+}
+
+static bool print_addrinfo2(void *user, const RBinAddrline *item) {
+	FilterStruct *fs = (FilterStruct*)user;
+	ut64 offset = item->addr;
+	if (offset == UT64_MAX) {
+		return true;
+	}
+	if (fs->filter_offset == UT64_MAX || fs->filter_offset == offset) {
+		const char *file = r_bin_addrline_str (fs->core->bin, item->file);
+		if (fs->filter_format) {
+			// TODO add column if defined
+			char *sfile = r_str_sanitize_r2 (file);
+			r_cons_printf (fs->core->cons, "'CL 0x%08"PFMT64x" %s:%u\n", item->addr, sfile, item->line);
+			free (sfile);
+		} else {
+			r_cons_printf (fs->core->cons, "file: %s\nline: %u\ncolu: %u\naddr: 0x%08"PFMT64x"\n",
+				file, item->line, item->column, item->addr);
+		}
+		fs->filter_count++;
+	}
+	// TODO: return false if filter_offset is found ?
+
+	return true;
+}
+
+static int cmd_meta_add_fileline(RBinFile *bf, const char *fileline, ut64 offset) {
+	char *file = strdup (fileline);
+	char *line = strchr (file, ':');
+	if (line) {
+		*line++ = 0;
+	}
+	ut32 linenum = line ? atoi (line) : 0;
+	bf->addrline.al_add (&bf->addrline, offset, file, NULL, linenum, 0);
+	free (file);
+	return 0;
+}
+
+static bool cmd_meta_lineinfo_print_source(RCore *core, ut64 at) {
+	char *text = r_bin_addrline_tostring (core->bin, at, 0);
+	bool found = R_STR_ISNOTEMPTY (text);
+	if (found) {
+		r_cons_printf (core->cons, "0x%08"PFMT64x"  %s\n", at, text);
+	}
+	free (text);
+	return found;
+}
+
+// CLd command family (in its own file to keep this one small)
+#include "cmd_meta_cld.inc.c"
+
+static void cmd_meta_lineinfo_units(RCore *core, bool json) {
+	RList *files = NULL;
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (bf && r_config_get_b (core->config, "bin.dbginfo")) {
+		RVecDwarfAbbrevDecl *abbrevs = r_bin_dwarf_parse_abbrev (bf);
+		if (abbrevs) {
+			files = r_bin_dwarf_parse_comp_unit_files (bf, abbrevs);
+			r_bin_dwarf_free_debug_abbrev (abbrevs);
+		}
+	}
+	PJ *pj = json? r_core_pj_new (core): NULL;
+	if (pj) {
+		pj_a (pj);
+	}
+	RListIter *iter;
+	const char *file;
+	r_list_foreach (files, iter, file) {
+		if (pj) {
+			pj_s (pj, file);
+		} else {
+			r_cons_println (core->cons, file);
+		}
+	}
+	if (pj) {
+		pj_end (pj);
+		r_cons_println (core->cons, pj_string (pj));
+		pj_free (pj);
+	}
+	r_list_free (files);
+}
+
+static int cmd_meta_lineinfo_tree(RCore *core, const char *input, bool units) {
+	if (*input == '?' && !input[1]) {
+		r_cons_cmd_help (core->cons, help_msg_CL);
+		return 0;
+	}
+	if (*input && *input != ' ') {
+		r_core_return_invalid_command (core, units? "CLut": "CLt", *input);
+		return 0;
+	}
+	RFSPlugin *plugin = r_libstore_find_name (core->fs->libstore, "r2");
+	if (!plugin || !plugin->dir) {
+		R_LOG_ERROR ("The r2 filesystem plugin is unavailable");
+		r_core_return_code (core, 1);
+		return 0;
+	}
+	RFSRoot root = { .p = plugin, .cob = core->fs->cob };
+	const char *subpath = r_str_trim_head_ro (input);
+	while (*subpath == '/') {
+		subpath++;
+	}
+	char *path = r_str_newf ("/%s%s%s", units? "cu": "cl", *subpath? "/": "", subpath);
+	if (path) {
+		r_str_trim_path (path);
+		r_core_return_code (core, core_fs_tree (core, &root, path, 64)? 0: 1);
+		free (path);
+	}
+	return 0;
+}
+
+static int cmd_meta_lineinfo(RCore *core, const char *input) {
+	int ret;
+	ut64 offset = UT64_MAX; // use this as error value
+	bool remove = false;
+	bool use_json = false;
+	int all = false;
+	const char *p = input;
+	char *file_line = NULL;
+
+	FilterStruct fs = { core, UT64_MAX, 0, 0, NULL };
+
+	if (*p == '?') {
+		r_cons_cmd_help (core->cons, help_msg_CL);
+		return 0;
+	}
+	if (*p == 'd') { // "CLd" - decompile current function from dwarf line info
+		return cmd_meta_lineinfo_decompile (core, p + 1);
+	}
+	if (*p == 't') {
+		return cmd_meta_lineinfo_tree (core, p + 1, false);
+	}
+	if (*p == 'u') {
+		if (p[1] == 't') {
+			return cmd_meta_lineinfo_tree (core, p + 2, true);
+		}
+		if (p[1] == '?' && !p[2]) {
+			r_cons_cmd_help (core->cons, help_msg_CL);
+		} else if (!p[1] || (p[1] == 'j' && !p[2])) {
+			cmd_meta_lineinfo_units (core, p[1] == 'j');
+			r_core_return_code (core, 0);
+		} else {
+			r_core_return_invalid_command (core, "CLu", p[1]);
+		}
+		return 0;
+	}
+	if (*p == 'L') { // "CLL"
+		if (p[1] == 'f') { // "CLLf"
+			r_core_cmd0 (core, "CLL@@i");
+			// same as CLL@@i = r_core_cmd0 (core, "list");
+			return 0;
+		}
+		if (p[1] == 'b') { // "CLLb"
+			RAnalBlock *bb = r_anal_bb_from_offset (core->anal, core->addr);
+			if (bb) {
+				int i;
+				for (i = 0; i < bb->ninstr; i++) {
+					cmd_meta_lineinfo_print_source (core, r_anal_block_ninstr (bb, i));
+				}
+			}
+			return 0;
+		}
+		ut64 at = core->addr;
+		if (p[1] == ' ') {
+			at = r_num_get (core->num, p + 2);
+		}
+		cmd_meta_lineinfo_print_source (core, at);
+		return 0;
+	}
+	if (*p == 'f') { // "CLf"
+		int retries = 5;
+		ut64 addr = core->addr;
+		if (p[1] == ' ') {
+			addr = r_num_math (core->num, p + 1);
+		}
+retry:
+		;
+		char *s = r_bin_addrline_tostring (core->bin, addr, 3);
+		if (!s) {
+			RAnalOp *op = r_core_anal_op (core, addr, 0);
+			if (op) {
+				addr += op->size;
+				r_anal_op_free (op);
+				if (retries-- > 0) {
+					goto retry;
+				}
+			}
+		}
+		if (s) {
+			r_str_after (s, ':');
+			r_cons_println (core->cons, s);
+			free (s);
+			r_core_return_code (core, 0);
+		} else {
+			r_core_return_code (core, 1);
+		}
+		return 0;
+	}
+	if (*p == '-') { // "CL-"
+		p++;
+		remove = true;
+	}
+	if (*p == 'j') { // "CLj"
+		p++;
+		use_json = true;
+	}
+	if (*p == '.') { // "CL."
+		p++;
+		offset = core->addr;
+	}
+	if (*p == '+') { // "CL+"
+		offset = core->addr;
+		p = r_str_trim_head_ro (p + 1);
+		RBinFile *bf = r_bin_cur (core->bin);
+		if (bf) {
+			ret = cmd_meta_add_fileline (bf, p, offset);
+		}
+		return 0;
+	}
+	if (*p == ' ') { // "CL "
+		p = r_str_trim_head_ro (p + 1);
+		if (!strchr (p, ' ')) {
+			offset = r_num_math (core->num, p);
+			p = "";
+		}
+	} else if (*p == '*') {
+		p++;
+		all = true;
+		fs.filter_format = '*';
+	} else {
+		fs.filter_format = 0;
+	}
+	if (all && core->bin->cur) {
+		if (remove) {
+			r_bin_addrline_reset (core->bin);
+		} else {
+			r_bin_addrline_foreach (core->bin, print_addrinfo2, &fs);
+		}
+		return 0;
+	}
+
+	p = r_str_trim_head_ro (p);
+	char *myp = strdup (p);
+	char *sp = strchr (myp, ' ');
+	if (sp) {
+		*sp = 0;
+		sp++;
+		if (offset == UT64_MAX) {
+			offset = r_num_math (core->num, myp);
+		}
+
+		char *pheap = NULL;
+		if (r_str_startswith (sp, "base64:")) {
+			int len = 0;
+			ut8 *o = sdb_decode (sp + 7, &len);
+			if (!o) {
+				R_LOG_ERROR ("Invalid base64");
+				return 0;
+			}
+			sp = pheap = (char *)o;
+		}
+		RBinFile *bf = r_bin_cur (core->bin);
+		if (bf) {
+			// R_LOG_ERROR ("deprecated way to add addrinfo metadata");
+			ret = cmd_meta_add_fileline (bf, sp, offset);
+		} else {
+			R_LOG_TODO ("Support global SdbAddrinfo or dummy rbinfile to handle this case");
+			ret = 0;
+		}
+		free (file_line);
+		free (myp);
+		free (pheap);
+		return ret;
+	}
+	free (myp);
+	if (remove) {
+		r_bin_addrline_reset_at (core->bin, offset);
+	} else {
+		// taken from r2 // TODO: we should move this addrinfo sdb logic into RBin.. use HT
+		fs.filter_offset = offset;
+		fs.filter_count = 0;
+		fs.fscache = sdb_new0 ();
+		PJ *pj = NULL;
+		if (use_json) {
+			pj = r_core_pj_new (core);
+			fs.pj = pj;
+			pj_a (pj);
+			r_bin_addrline_foreach (core->bin, print_addrinfo2_json, &fs);
+		} else {
+			r_bin_addrline_foreach (core->bin, print_addrinfo2, &fs);
+		}
+		if (fs.filter_count == 0) {
+			print_meta_offset (core, offset, pj);
+		}
+		if (use_json) {
+			pj_end (pj);
+			char *s = pj_drain (pj);
+			if (s) {
+				r_cons_printf (core->cons, "%s\n", s);
+				free (s);
+			}
+		}
+		sdb_free (fs.fscache);
+	}
+	return 0;
+}
+
+static void cmd_meta_comment_del_in_block(RCore *core, RAnalBlock *bb) {
+	ut64 i;
+	for (i = 0; i < bb->size; i++) {
+		r_meta_del (core->anal, R_META_TYPE_COMMENT, bb->addr + i, 1);
+	}
+}
+
+static void cmd_meta_comment_del_in_scope(RCore *core, bool basic_block) {
+	if (basic_block) {
+		RAnalBlock *bb = r_anal_bb_from_offset (core->anal, core->addr);
+		if (bb) {
+			cmd_meta_comment_del_in_block (core, bb);
+		}
+		return;
+	}
+	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->addr, 0);
+	if (fcn) {
+		RAnalBlock **iter;
+		RAnalBlock *bb;
+		R_VEC_FOREACH (&fcn->bbs, iter) {
+			bb = *iter;
+			cmd_meta_comment_del_in_block (core, bb);
+		}
+	}
+}
+
+static void cmd_meta_comment_print_in_scope(RCore *core, bool basic_block, int rad, const char *tq, RTable *t) {
+	if (basic_block) {
+		RAnalBlock *bb = r_anal_bb_from_offset (core->anal, core->addr);
+		if (bb) {
+			r_meta_print_list_in_range (core->anal, R_META_TYPE_COMMENT, rad, bb->addr, bb->size, tq, t);
+		}
+		return;
+	}
+	r_meta_print_list_in_function (core->anal, R_META_TYPE_COMMENT, rad, core->addr, tq, t);
+}
+
+static void cmd_meta_comment_scope(RCore *core, const char *input, bool basic_block) {
+	switch (input[2]) {
+	case '-': // "CCb-" "CCf-"
+		cmd_meta_comment_del_in_scope (core, basic_block);
+		break;
+	case ',': { // "CCb," "CCf,"
+		RTable *t = r_core_table_new (core, "comments");
+		cmd_meta_comment_print_in_scope (core, basic_block, ',', input + 3, t);
+		break;
+	}
+	case 'j': // "CCbj" "CCfj"
+		cmd_meta_comment_print_in_scope (core, basic_block, 'j', NULL, NULL);
+		break;
+	case '*': // "CCb*" "CCf*"
+		cmd_meta_comment_print_in_scope (core, basic_block, 1, NULL, NULL);
+		break;
+	default:
+		cmd_meta_comment_print_in_scope (core, basic_block, 0, NULL, NULL);
+		break;
+	}
+}
+
+static int cmd_meta_comment(RCore *core, const char *input) {
+	ut64 addr = core->addr;
+	switch (input[1]) {
+	case '?':
+		r_cons_cmd_help (core->cons, help_msg_CC);
+		break;
+	case ',': // "CC,"
+		{
+			RTable *t = r_core_table_new (core, "meta");
+			r_meta_print_list_all (core->anal, R_META_TYPE_COMMENT, ',', input + 2, t);
+		}
+		break;
+	case 'F': // "CC,"
+		if (input[2] == '?') {
+			r_cons_cmd_help_match (core->cons, help_msg_CC, "CCF", 0, true);
+		} else if (input[2] == ' ') {
+			const char *fn = input + 2;
+			const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+			fn = r_str_trim_head_ro (fn);
+			if (R_STR_ISNOTEMPTY (comment)) {
+				// append filename in current comment
+				char *nc = r_str_newf ("%s ,(%s)", comment, fn);
+				r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, nc);
+				free (nc);
+			} else {
+				char *newcomment = r_str_newf (",(%s)", fn);
+				r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, newcomment);
+				free (newcomment);
+			}
+		} else {
+			const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+			if (R_STR_ISNOTEMPTY (comment)) {
+				char *cmtfile = r_str_between (comment, ",(", ")");
+				if (R_STR_ISNOTEMPTY (cmtfile)) {
+					char *cwd = getcommapath (core);
+					r_cons_printf (core->cons, "%s"R_SYS_DIR"%s\n", cwd, cmtfile);
+					free (cwd);
+				}
+				free (cmtfile);
+			}
+		}
+		break;
+	case '.': // "CC."
+		{
+			ut64 at = input[2]? r_num_math (core->num, input + 2): addr;
+			const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, at);
+			if (R_STR_ISNOTEMPTY (comment)) {
+				r_cons_println (core->cons, comment);
+			}
+		}
+		break;
+	case 0: // "CC"
+		r_meta_print_list_all (core->anal, R_META_TYPE_COMMENT, 0, NULL, NULL);
+		break;
+	case 'b': // "CCb"
+		cmd_meta_comment_scope (core, input, true);
+		break;
+	case 'f': // "CCf"
+		cmd_meta_comment_scope (core, input, false);
+		break;
+	case 'j': // "CCj"
+		r_meta_print_list_all (core->anal, R_META_TYPE_COMMENT, 'j', input + 2, NULL);
+		break;
+	case '!': // "CC!"
+		{
+			const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+			char *out = r_core_editor (core, NULL, comment, NULL);
+			if (out) {
+				r_str_ansi_strip (out);
+				//r_meta_set (core->anal->meta, R_META_TYPE_COMMENT, addr, 0, out);
+				r_core_call_at (core, addr, "CC-");
+				//r_meta_del (core->anal->meta, input[0], addr, addr+1);
+				r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, out);
+				free (out);
+			}
+		}
+		break;
+	case '+':
+	case ' ':
+		{
+		const char *arg = r_str_trim_head_ro (input + 2);
+		const char *newcomment = arg;
+		if (r_str_startswith (arg, "base64:")) {
+			char *s = (char *)sdb_decode (arg + 7, NULL);
+			if (s) {
+				newcomment = s;
+			} else {
+				R_LOG_ERROR ("Invalid base64 string");
+				break;
+			}
+		}
+		const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+		char *nc = strdup (newcomment);
+		r_str_unescape (nc);
+		r_str_ansi_strip (nc);
+		if (comment) {
+			char *text = r_str_newf ("%s %s", comment, nc);
+			r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, text);
+			free (text);
+		} else {
+			r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, nc);
+			if (r_config_get_b (core->config, "cmd.undo")) {
+				char *a = r_str_newf ("'CC-0x%08"PFMT64x, addr);
+				char *b = r_str_newf ("'@0x%08"PFMT64x"'CC %s", addr, nc);
+				RCoreUndo *uc = r_core_undo_new (core->addr, b, a);
+				r_core_undo_push (core, uc);
+				free (a);
+				free (b);
+			}
+		}
+		free (nc);
+		}
+		break;
+	case '*': // "CC*"
+		r_meta_print_list_all (core->anal, R_META_TYPE_COMMENT, 1, NULL, NULL);
+		break;
+	case '-': // "CC-"
+		if (input[2] == '*') { // "CC-*"
+			r_meta_del (core->anal, R_META_TYPE_COMMENT, UT64_MAX, UT64_MAX);
+		} else if (input[2]) { // "CC-$$+32"
+			ut64 arg = r_num_math (core->num, input + 2);
+			r_meta_del (core->anal, R_META_TYPE_COMMENT, arg, 1);
+		} else { // "CC-"
+			r_meta_del (core->anal, R_META_TYPE_COMMENT, core->addr, 1);
+		}
+		break;
+	case 'u': // "CCu"
+		{
+		const char *arg = input + 2;
+		while (*arg && *arg == ' ') {
+			arg++;
+		}
+		char *newcomment = r_str_startswith (arg, "base64:")
+			? (char *)sdb_decode (arg + 7, NULL): strdup (arg);
+		if (newcomment) {
+			const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+			if (!comment || (comment && !strstr (comment, newcomment))) {
+				r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, newcomment);
+			}
+			free (newcomment);
+		}
+		}
+		break;
+	case 'a': // "CCa"
+		{
+		const char *sp = strchr (input, ' ');
+		if (!sp) {
+			r_cons_cmd_help_match (core->cons, help_msg_CC, "CCa", 0, true);
+			return false;
+		}
+		char *s = strdup (sp + 1);
+		char *p = strchr (s, ' ');
+		if (p) {
+			*p++ = 0;
+		}
+		ut64 addr;
+		if (input[2] == '-') {
+			if (input[3]) {
+				addr = r_num_math (core->num, input+3);
+				r_meta_del (core->anal,
+						R_META_TYPE_COMMENT,
+						addr, 1);
+			} else {
+				r_cons_cmd_help_match (core->cons, help_msg_CC, "CCa", 0, true);
+			}
+			free (s);
+			return true;
+		}
+		addr = r_num_math (core->num, s);
+		// Comment at
+		if (p) {
+			char *newcomment = r_str_startswith (p, "base64:")
+				? (char *)sdb_decode (p + 7, NULL): strdup (p);
+			if (!newcomment) {
+				R_LOG_ERROR ("Invalid comment");
+				free (s);
+				return false;
+			}
+			if (input[2] == '+') {
+				const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+				if (comment) {
+					char *text = r_str_newf ("%s\n%s", comment, newcomment);
+					r_meta_set (core->anal, R_META_TYPE_COMMENT, addr, 1, text);
+					free (text);
+				} else {
+					r_meta_set (core->anal, R_META_TYPE_COMMENT, addr, 1, newcomment);
+				}
+			} else {
+				r_meta_set (core->anal, R_META_TYPE_COMMENT, addr, 1, newcomment);
+			}
+			free (newcomment);
+		} else {
+			r_cons_cmd_help_match (core->cons, help_msg_CC, "CCa", 0, true);
+		}
+		free (s);
+		return true;
+		}
+	}
+	return true;
+}
+
+static char *meta_vartype_decode(const char *text) {
+	if (R_STR_ISEMPTY (text)) {
+		return NULL;
+	}
+	if (r_str_startswith (text, "base64:")) {
+		char *decoded = (char *)sdb_decode (text + 7, NULL);
+		if (!decoded) {
+			R_LOG_ERROR ("Invalid base64 string");
+		}
+		return decoded;
+	}
+	char *decoded = strdup (text);
+	if (decoded) {
+		r_str_unescape (decoded);
+	}
+	return decoded;
+}
+
+static void meta_vartype_set(RCore *core, const char *input, bool append) {
+	const char *arg = r_str_trim_head_ro (input);
+	char *annotation = meta_vartype_decode (arg);
+	if (!annotation) {
+		r_cons_cmd_help (core->cons, help_msg_Ct);
+		return;
+	}
+	const ut64 addr = core->addr;
+	const char *current = append
+		? r_meta_get_string (core->anal, R_META_TYPE_VARTYPE, addr)
+		: NULL;
+	if (current) {
+		char *text = r_str_newf ("%s %s", current, annotation);
+		if (text) {
+			r_meta_set_string (core->anal, R_META_TYPE_VARTYPE, addr, text);
+			free (text);
+		}
+	} else {
+		r_meta_set_string (core->anal, R_META_TYPE_VARTYPE, addr, annotation);
+	}
+	free (annotation);
+}
+
+static int cmd_meta_vartype_comment(RCore *core, const char *input) {
+	ut64 addr = core->addr;
+	switch (input[1]) {
+	case '?': // "Ct?"
+		r_cons_cmd_help (core->cons, help_msg_Ct);
+		break;
+	case 0: // "Ct"
+		r_meta_print_list_all (core->anal, R_META_TYPE_VARTYPE, 0, NULL, NULL);
+		break;
+	case ' ': // "Ct <vartype comment> @ addr"
+		meta_vartype_set (core, input + 2, true);
+		break;
+	case '=': // "Ct="
+		meta_vartype_set (core, input + 2, false);
+		break;
+	case '.': // "Ct. @ addr"
+		{
+		ut64 at = input[2]? r_num_math (core->num, input + 2): addr;
+		const char *comment = r_meta_get_string (core->anal, R_META_TYPE_VARTYPE, at);
+		if (R_STR_ISNOTEMPTY (comment)) {
+			r_cons_println (core->cons, comment);
+		}
+		}
+		break;
+	case '-': // "Ct-"
+		if (!input[2]) {
+			r_meta_del (core->anal, R_META_TYPE_VARTYPE, core->addr, 1);
+		} else if (input[2] == '*' && !input[3]) {
+			r_meta_del (core->anal, R_META_TYPE_VARTYPE, 0, UT64_MAX);
+		} else {
+			r_cons_cmd_help (core->cons, help_msg_Ct);
+		}
+		break;
+	case '*': // "Ct*"
+		r_meta_print_list_all (core->anal, R_META_TYPE_VARTYPE, 1, NULL, NULL);
+		break;
+	case 'j': // "Ctj"
+		r_meta_print_list_all (core->anal, R_META_TYPE_VARTYPE, 'j', NULL, NULL);
+		break;
+	case ',': { // "Ct,"
+		RTable *t = r_core_table_new (core, "meta");
+		r_meta_print_list_all (core->anal, R_META_TYPE_VARTYPE, ',', input + 2, t);
+		}
+		break;
+	default:
+		r_cons_cmd_help (core->cons, help_msg_Ct);
+		break;
+	}
+	return true;
+}
+
+typedef struct {
+	RCore *core;
+	ut64 addr;
+	ut8 *buf;
+	int bufsz;
+	bool first;
+} StringSearchOptions;
+
+static bool read_section_or_io(RCore *core, RBinSection *section, ut64 addr, ut8 *buf, int len) {
+	if (section && addr >= section->vaddr) {
+		const ut64 delta = addr - section->vaddr;
+		ut64 paddr;
+		if (delta < section->size && len <= section->size - delta &&
+			!r_add_overflow_ut64 (section->paddr, delta, &paddr)) {
+			return r_io_pread_at (core->io, paddr, buf, len) == len;
+		}
+	}
+	return r_io_read_at (core->io, addr, buf, len);
+}
+
+static int cb_strhit(RSearchKeyword * R_NULLABLE kw, void *user, ut64 where) {
+	StringSearchOptions *sso = (StringSearchOptions*)user;
+	if (where < sso->addr || where - sso->addr >= sso->bufsz) {
+		return true;
+	}
+	if (sso->first) {
+		sso->first = false;
+		if (where > sso->addr) {
+			r_meta_set_with_subtype (sso->core->anal, R_META_TYPE_STRING, 0,
+				sso->addr, where - sso->addr, "");
+		}
+	}
+	const ut64 delta = where - sso->addr;
+	const char *name = (const char *)(sso->buf + delta);
+	const size_t maxlen = sso->bufsz - delta;
+	char *hname = r_str_ndup (name, maxlen);
+	if (hname) {
+		const size_t n = strlen (hname) + 1;
+		r_meta_set (sso->core->anal, R_META_TYPE_STRING, where, n, hname);
+		free (hname);
+	}
+	return true;
+}
+
+static bool cmd_Cs(RCore *core, const char *input, R_INOUT ut64 *addr, R_INOUT int *n, R_OUT char *name, size_t name_size) {
+	int name_len = 0;
+
+	if (!name_size) {
+		return false;
+	}
+	// TODO 256 is the limit. and that shouldnt be a hard limit
+	if (input[1] == 'w' || input[1] == 'g') { // "Csw" "Csg"
+		int i, j;
+		char tmp[256] = {0};
+		(void)r_io_read_at (core->io, *addr, (ut8*)tmp, sizeof (tmp) - 3);
+		name_len = r_str_nlen_w (tmp, sizeof (tmp) - 3);
+		// handle wide strings
+		for (i = 0, j = 0; i + 1 < name_size; i++, j++) {
+			name[i] = tmp[j];
+			if (!tmp[j]) {
+				break;
+			}
+			if (!tmp[j + 1]) {
+				if (j + 3 < sizeof (tmp) && tmp[j + 3]) {
+					break;
+				}
+				j++;
+			}
+		}
+		name[name_size - 1] = '\0';
+	} else if (input[1] == 'p') { // "Csp" // pascal string
+		// TODO: add support for wide pascal strings
+		ut8 fourbuf[4];
+		(void)r_io_read_at (core->io, *addr, (ut8*)fourbuf, sizeof (fourbuf));
+		if (*n == 0 || *n > 4) {
+			// autoguess
+			if (!fourbuf[0] && !fourbuf[1]) {
+				*n = 4;
+			} else if (!fourbuf[1]) {
+				*n = 2;
+			} else {
+				*n = 1;
+			}
+		}
+		switch (*n) {
+		case 4:
+			name_len = r_read_le32 (fourbuf);
+			break;
+		case 2:
+			name_len = r_read_le16 (fourbuf);
+			break;
+		case 1:
+			name_len = fourbuf[0];
+			break;
+		case -4:
+			name_len = r_read_be32 (fourbuf);
+			break;
+		case -2:
+			name_len = r_read_be16 (fourbuf);
+			break;
+		case -1:
+			name_len = fourbuf[0];
+			break;
+		default:
+			R_LOG_ERROR ("Invalid pascal length field size. Must be -4, -2, -1, 1, 2, 4");
+			return false;
+		}
+		if (name_len >= 0 && (size_t)name_len < name_size) {
+			char tmp[256] = {0};
+			const size_t delta = R_ABS (*n);
+			(void)r_io_read_at (core->io, *addr + delta, (ut8*)tmp, sizeof (tmp) - 3);
+			r_str_ncpy (name, tmp, name_len + 1);
+			// TODO: use api instead: r_meta_set (core->anal, 'd', *addr, delta, name);
+			r_core_cmdf (core, "Cd%d@0x%08"PFMT64x, (int)delta, *addr);
+			{
+				char *tmp_name = r_name_filter_dup (name);
+				r_core_cmdf (core, "f str.pascal.%s@0x%08"PFMT64x, tmp_name, *addr);
+				free (tmp_name);
+			}
+			*addr += delta;
+			*n = name_len;
+		} else {
+			R_LOG_ERROR ("Invalid pascal string value length (%d)", name_len);
+			return false;
+		}
+	} else if (input[1] == 'a' || input[1] == '8' || input[1] == 'z') {
+		// "Cs8" "Csa" "Csz" // utf8, ascii and zero-terminated strings handling
+		(void)r_io_read_at (core->io, *addr, (ut8*)name, name_size - 1);
+		name[name_size - 1] = '\0';
+		name_len = strlen (name);
+	} else if (input[1] == 0 || input[1] == ' ') {
+		// same as Cs8 or Csa
+		(void)r_io_read_at (core->io, *addr, (ut8*)name, name_size - 1);
+		name[name_size - 1] = '\0';
+		name_len = strlen (name);
+	} else {
+		R_LOG_WARN ("Unknown Cs subcommand %c", input[1]);
+		(void)r_io_read_at (core->io, *addr, (ut8*)name, name_size - 1);
+		name[name_size - 1] = '\0';
+		name_len = strlen (name);
+	}
+	if (*n == 0) {
+		*n = name_len + 1;
+	} else if (*n > 0 && *n < name_len) {
+		name[*n] = 0;
+	}
+	return true;
+}
+
+static int cmd_meta_others(RCore *core, const char *input) {
+	char *t = 0, *p, name[256] = {0};
+	const char *p2;
+	int n, repeat = 1;
+	ut64 addr = core->addr;
+
+	int type = input[0];
+	if (!type) {
+		return 0;
+	}
+	int subtype = input[1];
+	if (type == 's' && subtype == 'z') {
+		subtype = 0;
+	}
+
+	switch (subtype) {
+	case '?':
+		switch (input[0]) {
+		case 'f': // "Cf?"
+			r_cons_cmd_help_match (core->cons, help_msg_C, "Cf", 0, true);
+			r_cons_println (core->cons,
+				"'sz' indicates the byte size taken up by struct.\n"
+				"'fmt' is a 'pf?' style format string. It controls only the display format.\n\n"
+				"You may wish to have 'sz' != sizeof (fmt) when you have a large struct\n"
+				"but have only identified specific fields in it. In that case, use 'fmt'\n"
+				"to show the fields you know about (perhaps using 'skip' fields), and 'sz'\n"
+				"to match the total struct size in mem.\n");
+			break;
+		case 's': // "Cs?"
+			r_cons_cmd_help (core->cons, help_msg_Cs);
+			break;
+		default:
+			r_cons_println (core->cons, "See C?");
+			break;
+		}
+		break;
+	case '-': // "Cf-", "Cd-", ...
+		switch (input[2]) {
+		case '*': // "Cf-*", "Cd-*", ...
+			r_meta_del (core->anal, input[0], 0, UT64_MAX);
+			break;
+		case ' ':
+			if ((p2 = strchr (input + 3, ' '))) {
+				ut64 i;
+				ut64 size = r_num_math (core->num, input + 3);
+				ut64 rep = r_num_math (core->num, p2 + 1);
+				ut64 cur_addr = addr;
+				if (!size) {
+					break;
+				}
+				for (i = 0; i < rep && UT64_MAX - cur_addr > size; i++, cur_addr += size) {
+					r_meta_del (core->anal, input[0], cur_addr, size);
+				}
+				break;
+			} else {
+				addr = r_num_math (core->num, input + 3);
+				/* fallthrough */
+			}
+		default:
+			r_meta_del (core->anal, input[0], addr, 1);
+			break;
+		}
+		break;
+	case '*': // "Cf*", "Cd*", ...
+		r_meta_print_list_all (core->anal, input[0], 1, NULL, NULL);
+		break;
+	case 'j': // "Cfj", "Cdj", ...
+		r_meta_print_list_all (core->anal, input[0], 'j', NULL, NULL);
+		break;
+	case '!': // "Cf!", "Cd!", ...
+		{
+			const char *comment = r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+			char *out = r_core_editor (core, NULL, comment, NULL);
+			if (out) {
+				r_str_ansi_strip (out);
+				//r_meta_set (core->anal->meta, R_META_TYPE_COMMENT, addr, 0, out);
+				r_core_call_at (core, addr, "CC-");
+				//r_meta_del (core->anal->meta, input[0], addr, addr+1);
+				r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, out);
+				free (out);
+			}
+		}
+		break;
+	case '.': // "Cf.", "Cd.", ...
+		if (input[2] == '.') { // "Cs.."
+			ut64 size;
+			RAnalMetaItem *mi = r_meta_get_at (core->anal, addr, type, &size);
+			if (mi) {
+				char *m = r_meta_print (core->anal, mi, addr, size, input[3], NULL, NULL, false);
+				if (m) {
+					r_cons_print (core->cons, m);
+					free (m);
+				}
+			}
+			break;
+		} else if (input[2] == 'j') { // "Cs.j"
+			ut64 size;
+			RAnalMetaItem *mi = r_meta_get_at (core->anal, addr, type, &size);
+			if (mi) {
+				char *m = r_meta_print (core->anal, mi, addr, size, input[2], NULL, NULL, false);
+				if (m) {
+					r_cons_print (core->cons, m);
+					free (m);
+				}
+				r_cons_newline (core->cons);
+			}
+			break;
+		}
+		ut64 size;
+		RAnalMetaItem *mi = r_meta_get_at (core->anal, addr, type, &size);
+		if (!mi) {
+			break;
+		}
+		if (type == 's') {
+			char *esc_str;
+			bool esc_bslash = core->print->esc_bslash;
+			switch (mi->subtype) {
+			case R_STRING_ENC_UTF8:
+				esc_str = r_str_escape_utf8 (mi->str, false, esc_bslash);
+				break;
+			case 0: // temporary legacy workaround
+				esc_bslash = false;
+				// falltrhru
+			default:
+				esc_str = r_str_escape_latin1 (mi->str, false, esc_bslash, false);
+				break;
+			}
+			if (esc_str) {
+				r_cons_printf (core->cons, "\"%s\"\n", esc_str);
+				free (esc_str);
+			} else {
+				r_cons_println (core->cons, "<oom>");
+			}
+		} else if (type == 'd') {
+			r_cons_printf (core->cons, "%"PFMT64u"\n", size);
+		} else {
+			r_cons_println (core->cons, mi->str);
+		}
+		break;
+	case 's': // "Css"
+		{
+			ut64 range = UT64_MAX;
+			RBinSection *section = NULL;
+			if (input[0] && input[1] && input[2]) {
+				range = r_num_math (core->num, input + 3);
+			}
+			if (range == UT64_MAX || range == 0) {
+				// get cursection size
+				section = r_bin_get_section_at (r_bin_cur_object (core->bin), core->addr, true);
+				if (section) {
+					range = section->vaddr + section->vsize - core->addr;
+				}
+				// TODO use debug maps if cfg.debug=true?
+			}
+			if (range == UT64_MAX || range == 0) {
+				R_LOG_ERROR ("Invalid memory range passed to Css");
+			} else if (range > 32 * 1024 * 1024) {
+				R_LOG_ERROR ("Range is too large");
+			} else {
+				ut8 *buf = malloc (range + 1);
+				if (buf) {
+					buf[range] = 0;
+					const ut64 addr = core->addr;
+					const int minstr = r_config_get_i (core->config, "bin.str.min");
+					const int maxstr = r_config_get_i (core->config, "bin.str.max");
+					if (!section) {
+						section = r_bin_get_section_at (r_bin_cur_object (core->bin), addr, true);
+					}
+					if (read_section_or_io (core, section, addr, buf, (int)range)) {
+						RSearch *ss = r_search_new (R_SEARCH_STRING);
+						r_search_set_string_limits (ss, minstr, maxstr);
+						StringSearchOptions sso = {
+							.addr = addr,
+							.core = core,
+							.buf = buf,
+							.bufsz = (int)range,
+							.first = true
+						};
+						// r_print_hexdump (core->print, addr, buf, range, 8,1,1);
+						r_search_set_callback (ss, cb_strhit, &sso);
+						r_search_begin (ss);
+						r_search_update (ss, addr, buf, range);
+						r_search_free (ss);
+					} else {
+						R_LOG_ERROR ("Cannot read %"PFMT64u, range);
+					}
+					free (buf);
+				} else {
+					R_LOG_ERROR ("Cannot allocate");
+				}
+#if 0
+				r_core_cmdf (core, "/z 8 100@0x%08"PFMT64x"@e:search.in=range@e:search.from=0x%"PFMT64x"@e:search.to=0x%"PFMT64x,
+						core->addr, core->addr, core->addr + range);
+				r_core_cmd0 (core, "Csz @@ hit*;f-hit*");
+#else
+#endif
+			}
+		}
+		break;
+	case ' ': // "Cf", "Cd", ...
+	case '\0':
+	case 'g':
+	case 'a':
+	case '1':
+	case 'w':
+	case 'p':
+	case 'b':
+	case 'r':
+	case '2':
+	case '4':
+	case '8': // "Cd8"
+		if (type == 'd') {  // "Cd4"
+			switch (input[1]) {
+			case '1':
+			case '2':
+			case '4':
+			case '8':
+				input--;
+				break;
+			}
+		}
+		if (!input[1] && !core->tmpseek) {
+			r_meta_print_list_all (core->anal, type, 0, NULL, NULL);
+			break;
+		}
+		int len = (!input[1] || input[1] == ' ') ? 2 : 3;
+		t = strdup (input);
+		if (!t) {
+			return false;
+		}
+		if (strlen (t) > len) {
+			char *rep = strchr (t + len, '[');
+			if (!rep) {
+				rep = strchr (t + len, ' ');
+			}
+			if (*input == 'd') {
+				if (rep) {
+					char *end = NULL;
+					if (*rep == '[') {
+						size_t depth = 1;
+						char *q;
+						for (q = rep + 1; *q; q++) {
+							if (*q == '[') {
+								depth++;
+							} else if (*q == ']' && !--depth) {
+								end = q;
+								break;
+							}
+						}
+					}
+					if (end) {
+						*end = 0;
+					}
+					repeat = r_num_math (core->num, rep + 1);
+					if (end) {
+						*end = ']';
+					}
+				}
+			}
+		}
+		if (repeat < 1) {
+			repeat = 1;
+		}
+		int off = (!input[1] || input[1] == ' ') ? 1 : 2;
+		char *args = (char *)r_str_trim_head_ro (t + off);
+		bool use_flag_name = false;
+		p = NULL;
+		n = 0;
+		r_str_ncpy (name, args, sizeof (name));
+		if (type != 'C') {
+			n = r_num_math (core->num, args);
+			if (type == 'f') { // "Cf"
+				p = strchr (args, ' ');
+				if (p) {
+					p = (char *)r_str_trim_head_ro (p);
+					if (*p == '.') {
+						const char *realformat = r_print_format_byname (core->print, p + 1);
+						if (realformat) {
+							p = (char *)realformat;
+						} else {
+							R_LOG_WARN ("Cannot resolve format '%s'", p + 1);
+							free (t);
+							break;
+						}
+					}
+					if (n < 1) {
+						n = r_print_format_struct_size (core->print, p, 0, 0);
+						if (n < 1) {
+							R_LOG_WARN ("Cannot resolve struct size for '%s'", p);
+							n = 32; //
+						}
+					}
+					// make sure we do not overflow on r_print_format
+					if (n > core->blocksize) {
+						n = core->blocksize;
+					}
+					int r = r_print_format (core->print, addr, core->block,
+						n, p, 0, NULL, NULL);
+					if (r < 0) {
+						n  = -1;
+					}
+				} else {
+					r_cons_cmd_help_match (core->cons, help_msg_C, "Cf", 0, true);
+					free (t);
+					break;
+				}
+			} else if (type == 's') { // "Cs"
+				// the string contents come from memory, so anything after the size is a mistake
+				const char *extra = strchr (args, ' ');
+				if (extra) {
+					extra = r_str_trim_head_ro (extra);
+				}
+				if (extra && *extra) {
+					R_LOG_ERROR ("Unexpected argument '%s'. Usage: Cs [size] @addr", extra);
+					free (t);
+					return false;
+				}
+				if (!cmd_Cs (core, input, &addr, &n, name, sizeof (name))) {
+					free (t);
+					return false;
+				}
+			}
+			if (n < 1) {
+				free (t);
+				return false;
+			}
+			if (type != 's' && (!*args || n > 0)) {
+				p = strchr (args, ' ');
+				if (p) {
+					*p++ = '\0';
+					p = (char *)r_str_trim_head_ro (p);
+					r_str_ncpy (name, p, sizeof (name));
+				} else {
+					use_flag_name = type != 'b';
+				}
+			}
+		}
+		if (!n) {
+			n++;
+		}
+		if (type == 's') {
+			switch (input[1]) {
+			case 'a':
+			case '8':
+			case 'z':
+			case 'w':
+				subtype = input[1];
+				break;
+			default:
+				subtype = R_STRING_ENC_GUESS;
+			}
+			r_meta_set_with_subtype (core->anal, type, subtype, addr, n, name);
+		} else {
+			int repcnt;
+			for (repcnt = 0; repcnt < repeat; repcnt++, addr += n) {
+				const char *meta_name = name;
+				char flag_name[256];
+				if (use_flag_name) {
+					RFlagItem *fi = r_flag_get_in (core->flags, addr);
+					if (fi) {
+						r_str_ncpy (flag_name, fi->name, sizeof (flag_name));
+						meta_name = flag_name;
+					}
+				}
+				r_meta_set (core->anal, type, addr, n, meta_name);
+			}
+		}
+		free (t);
+		// r_meta_cleanup (core->anal->meta, 0LL, UT64_MAX);
+		break;
+	default:
+		R_LOG_ERROR ("Missing space after CC");
+		break;
+	}
+
+	return true;
+}
+
+static void comment_var_help(RCore *core, char type) {
+	switch (type) {
+	case 'b':
+		r_cons_cmd_help (core->cons, help_msg_Cvb);
+		break;
+	case 's':
+		r_cons_cmd_help (core->cons, help_msg_Cvs);
+		break;
+	case 'r':
+		r_cons_cmd_help (core->cons, help_msg_Cvr);
+		break;
+	case '?':
+		r_cons_printf (core->cons, "See Cvb?, Cvs? and Cvr?\n");
+	}
+}
+
+static RAnalVar *comment_var_find(RCore *core, RAnalFunction *fcn, int kind, const char *name) {
+	RAnalVar *var = r_anal_function_get_var_byname (fcn, name);
+	if (!var && R_STR_ISNOTEMPTY (name)) {
+		const char *err = NULL;
+		const st64 idx = (st64)r_num_get_err (core->num, name, &err);
+		// a name that is not a number must not resolve as offset 0, which is a real slot
+		if (!err) {
+			var = r_anal_function_get_var (fcn, kind,
+				(int)r_anal_var_raw_delta (core->anal, fcn, kind, idx));
+		}
+	}
+	return var;
+}
+
+static void cmd_Cv(RCore *core, const char *input) {
+	// TODO enable base64 and make it the default for C*
+	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->addr, 0);
+	char *oname = NULL, *name = NULL;
+
+	if (!input[0] || input[1] == '?' || (input[0] != 'b' && input[0] != 'r' && input[0] != 's')) {
+		comment_var_help (core, input[0]);
+		return;
+	}
+	if (!fcn) {
+		R_LOG_ERROR ("Can't find function here");
+		return;
+	}
+	oname = name = r_str_trim_dup (input + 1);
+	switch (input[1]) {
+	case '*': // "Cv*"
+	case '\0': { // "Cv"
+		RAnalVar **it;
+		char kind = input[0];
+		R_VEC_FOREACH (&fcn->vars, it) {
+			RAnalVar *var = *it;
+			if (var->kind != kind || !var->comment) {
+				continue;
+			}
+			if (input[1]) {
+				char *b64 = sdb_encode ((const ut8 *)var->comment, strlen (var->comment));
+				if (!b64) {
+					continue;
+				}
+				r_cons_printf (core->cons, "'@0x%08"PFMT64x"'Cv%c %s base64:%s\n", fcn->addr, kind, var->name, b64);
+				free (b64);
+			} else {
+				r_cons_printf (core->cons, "%s : %s\n", var->name, var->comment);
+			}
+		}
+		}
+		break;
+	case ' ': { // "Cv "
+		char *comment = strchr (name, ' ');
+		char *heap_comment = NULL;
+		if (comment) { // new comment given
+			if (*comment) {
+				*comment++ = 0;
+			}
+			if (!strncmp (comment, "base64:", 7)) {
+				heap_comment = (char *)sdb_decode (comment + 7, NULL);
+				comment = heap_comment;
+			}
+		}
+		RAnalVar *var = comment_var_find (core, fcn, input[0], name);
+		if (var) {
+			if (var->comment) {
+				if (R_STR_ISNOTEMPTY (comment)) {
+					char *text = r_str_newf ("%s\n%s", var->comment, comment);
+					free (var->comment);
+					var->comment = text;
+				} else {
+					r_cons_println (core->cons, var->comment);
+				}
+			} else if (R_STR_ISNOTEMPTY (comment)) {
+				var->comment = strdup (comment);
+			}
+		} else {
+			R_LOG_ERROR ("can't find variable at given offset");
+		}
+		free (heap_comment);
+		}
+		break;
+	case '-': { // "Cv-"
+		name++;
+		r_str_trim (name);
+		RAnalVar *var = comment_var_find (core, fcn, input[0], name);
+		if (!var) {
+			R_LOG_ERROR ("can't find variable at given offset");
+			break;
+		}
+		free (var->comment);
+		var->comment = NULL;
+		break;
+	}
+	case '!': { // "Cv!"
+		char *comment;
+		name++;
+		r_str_trim (name);
+		RAnalVar *var = r_anal_function_get_var_byname (fcn, name);
+		if (!var) {
+			R_LOG_ERROR ("can't find variable named `%s`", name);
+			break;
+		}
+		comment = r_core_editor (core, NULL, var->comment, NULL);
+		if (comment) {
+			free (var->comment);
+			var->comment = comment;
+		}
+		}
+		break;
+	}
+	free (oname);
+}
+
+static int cmd_meta(void *data, const char *input) {
+	RCore *core = (RCore*)data;
+	RAnalFunction *f;
+	RSpaces *ms;
+	int i;
+
+	switch (*input) {
+	case 'v': // "Cv"
+		cmd_Cv (core, input + 1);
+		break;
+	case '\0': // "C"
+		r_meta_print_list_all (core->anal, R_META_TYPE_ANY, 0, NULL, NULL);
+		break;
+	case ',': // "C,"
+		r_meta_print_list_all (core->anal, R_META_TYPE_ANY, *input, input + 1, NULL);
+		break;
+	case 'j': // "Cj"
+	case '*': { // "C*"
+		if (input[1] == '.') {
+			r_meta_print_list_at (core->anal, core->addr, *input, input + 2, NULL);
+		} else if (input[1]) {
+			r_meta_print_list_at (core->anal, core->addr, *input, input + 2, NULL);
+		} else {
+			r_meta_print_list_all (core->anal, R_META_TYPE_ANY, *input, input + 1, NULL);
+		}
+		break;
+	}
+	case '.': { // "C."
+		r_meta_print_list_at (core->anal, core->addr, 0, NULL, NULL);
+		break;
+	}
+	case 'L': // "CL"
+		cmd_meta_lineinfo (core, input + 1);
+		break;
+	case 'C': // "CC"
+		cmd_meta_comment (core, input);
+		break;
+	case 't': // "Ct" type analysis commnets
+		cmd_meta_vartype_comment (core, input);
+		break;
+	case 'b': // "Cb" bind addresses
+	case 'r': // "Cr" run command
+	case 'h': // "Ch" comment
+	case 's': // "Cs" string
+	case 'd': // "Cd" data
+	case 'm': // "Cm" magic
+	case 'f': // "Cf" formatted
+		cmd_meta_others (core, input);
+		break;
+	case '-': // "C-"
+		if (input[1] != '*') {
+			i = input[1] ? r_num_math (core->num, input + (input[1] == ' ' ? 2 : 1)) : 1;
+			r_meta_del (core->anal, R_META_TYPE_ANY, core->addr, i);
+		} else {
+			r_meta_del (core->anal, R_META_TYPE_ANY, 0, UT64_MAX);
+		}
+		break;
+	case '?': // "C?"
+		r_cons_cmd_help (core->cons, help_msg_C);
+		break;
+	case 'F': // "CF"
+		f = r_anal_get_fcn_in (core->anal, core->addr,
+			R_ANAL_FCN_TYPE_FCN|R_ANAL_FCN_TYPE_SYM);
+		if (f) {
+			r_anal_str_to_fcn (core->anal, f, input + 2);
+		} else {
+			R_LOG_ERROR ("Cannot find function here");
+		}
+		break;
+	case 'S': // "CS"
+		ms = &core->anal->meta_spaces;
+		/** copypasta from `fs`.. this must be refactorized to be shared */
+		switch (input[1]) {
+		case '?': // "CS?"
+			r_cons_cmd_help (core->cons, help_msg_CS);
+			break;
+		case '+': // "CS+"
+			r_spaces_push (ms, input + 2);
+			break;
+		case 'r': // "CSr"
+			if (input[2] == ' ') {
+				r_spaces_rename (ms, NULL, input + 2);
+			} else {
+				r_cons_cmd_help_match (core->cons, help_msg_CS, "CSr", 0, true);
+			}
+			break;
+		case '-': // "CS-"
+			if (input[2]) {
+				if (input[2] == '*') {
+					r_spaces_unset (ms, NULL);
+				} else {
+					r_spaces_unset (ms, input + 2);
+				}
+			} else {
+				r_spaces_pop (ms);
+			}
+			break;
+		case 'j': // "CSj"
+		case '\0': // "CS"
+		case '*': // "CS*"
+			spaces_list (core, ms, input[1]);
+			break;
+		case ' ': // "CS "
+			r_spaces_set (ms, input + 2);
+			break;
+		default:
+			spaces_list (core, ms, 0);
+			break;
+		}
+		break;
+	default:
+		r_core_return_invalid_command (core, "C", *input);
+		break;
+	}
+	return true;
+}
+#endif

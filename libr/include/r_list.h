@@ -2,8 +2,7 @@
 #define R2_LIST_H
 
 #include <r_types.h>
-#include <r_flist.h>
-#include <sdb.h>
+#include <sdb/sdb.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -32,13 +31,12 @@ typedef struct r_list_range_t {
 
 // RListComparator should return -1, 0, 1 to indicate "a<b", "a==b", "a>b".
 typedef int (*RListComparator)(const void *a, const void *b);
+typedef int (*RListComparatorWithUser)(const void *a, const void *b, void *user);
+typedef ut64 (*RListComparatorItem)(const void *a);
 
-#define ROFList_Parent RList
-typedef struct r_oflist_t {
-	ROFList_Parent super; // super class
-	RFList *array;	// statical readonly cache of linked list as a pointer array
-} ROFList;
 #endif
+
+#define R_LIST_FREE if (x) { r_list_free (x); (x) = NULL; }
 
 #ifdef R_API
 #define r_list_foreach(list, it, pos)\
@@ -85,9 +83,13 @@ R_API void *r_list_first(const RList *list);
 R_API void *r_list_last(const RList *list);
 R_API RListIter *r_list_add_sorted(RList *list, void *data, RListComparator cmp);
 R_API void r_list_sort(RList *list, RListComparator cmp);
+R_API void r_list_sort_with_user(RList *list, RListComparatorWithUser cmp, void *user);
 R_API void r_list_merge_sort(RList *list, RListComparator cmp);
+R_API void r_list_merge_sort_with_user(RList *list, RListComparatorWithUser cmp, void *user);
 R_API void r_list_insertion_sort(RList *list, RListComparator cmp);
-R_API RList *r_list_uniq(const RList *list, RListComparator cmp);
+R_API void r_list_insertion_sort_with_user(RList *list, RListComparatorWithUser cmp, void *user);
+R_API RList *r_list_uniq(const RList *list, RListComparatorItem cmp);
+R_API int r_list_uniq_inplace(RList *list, RListComparatorItem cmp);
 R_API void r_list_init(RList *list);
 R_API void r_list_delete(RList *list, RListIter *iter);
 R_API bool r_list_delete_data(RList *list, void *ptr);
@@ -99,14 +101,15 @@ R_API void r_list_split(RList *list, void *ptr);
 R_API void r_list_split_iter(RList *list, RListIter *iter);
 R_API int r_list_join(RList *list1, RList *list2);
 R_API void *r_list_get_n(const RList *list, int n);
+R_API RListIter *r_list_get_nth(const RList *list, int n);
 R_API int r_list_del_n(RList *list, int n);
-R_API void *r_list_get_top(const RList *list);
-R_API void *r_list_get_bottom(const RList *list);
 R_API void r_list_iter_to_top(RList *list, RListIter *iter);
 R_API void *r_list_pop(RList *list);
 R_API void *r_list_pop_head(RList *list);
 R_API void r_list_reverse(RList *list);
-R_API RList *r_list_clone(const RList *list);
+//R_API RList *r_list_clone(const RList *list, );
+typedef void *(*RListClone)(void *);
+R_API RList *r_list_clone(const RList *list, RListClone clone);
 R_API char *r_list_to_str(RList *list, char ch);
 
 /* hashlike api */

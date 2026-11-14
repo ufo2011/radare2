@@ -1,23 +1,19 @@
-/* radare - LGPL - Copyright 2011-2014 - pancake */
+/* radare - LGPL - Copyright 2011-2022 - pancake */
 
 #ifndef R2_MAGIC_H
 #define R2_MAGIC_H
 
 #include <r_types.h>
+#include <r_vec.h>
+#include <r_util/r_strbuf.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-R_LIB_VERSION_HEADER(r_magic);
+R_LIB_VERSION_HEADER (r_magic);
 
 #ifdef R_API
-
-#ifdef __EMX__
-#define PATHSEP	';'
-#else
-#define PATHSEP	':'
-#endif
 
 /* limits */
 #ifndef HOWMANY
@@ -25,7 +21,7 @@ R_LIB_VERSION_HEADER(r_magic);
 #endif
 #define MAXDESC     64
 #define MAXMAGIS    8192            /* max entries in any one magic file or directory */
-#define MAXstring   32              /* max leng of "string" types */
+#define MAXstring   128             /* max length of "string" and "regex" values */
 
 /* define this outside to fix build for g++ */
 union VALUETYPE {
@@ -43,8 +39,9 @@ union VALUETYPE {
 
 /* constants */
 #define MAGICNO         0xF11E041C
-#define VERSIONNO       5
-#define FILE_MAGICSIZE  (32 * 6)
+#define VERSIONNO       6
+#define R_MAGIC_VERSION VERSIONNO
+#define FILE_MAGICSIZE  (32 * 9)
 
 #define	FILE_LOAD       0
 #define FILE_CHECK      1
@@ -196,15 +193,29 @@ struct r_magic {
 #define STRING_IGNORE_CASE              (STRING_IGNORE_LOWERCASE|STRING_IGNORE_UPPERCASE)
 #define STRING_DEFAULT_RANGE            100
 
+/* top-level test and the continuations that follow it */
+struct r_magic_root {
+	ut32 start;		/* index of the top-level entry */
+	ut32 end;		/* index after its last continuation */
+	ut32 offset;		/* offset of the literal prefix */
+	ut8 prefix[8];		/* leading bytes of a plain string or numeric test */
+	ut8 prefix_len;		/* 0 when the test cannot be prefiltered */
+	ut8 bintest;		/* BINTEST or TEXTTEST */
+};
+
 /* list of magic entries */
 struct mlist {
 	struct r_magic *magic;		/* array of magic entries */
+	struct r_magic_root *roots;	/* top-level tests */
+	struct r_regex_t **rx;		/* compiled regex per entry, if any */
+	ut32 bucket[258];		/* roots[bucket[b]..bucket[b+1]] start with byte b at offset 0, bucket[256].. are unindexed */
 	ut32 nmagic;			/* number of entries in array */
-	int mapped;  /* allocation type: 0 => apprentice_file
-		      *                  1 => apprentice_map + malloc
-		      *                  2 => apprentice_map + mmap */
-	struct mlist *next, *prev;
+	ut32 nroots;			/* number of top-level tests */
+	ut32 bytes_max;		/* conservative max bytes needed */
+	ut8 mapped;  /* allocation type: 0 => apprentice_file
+		      *                  1 => apprentice_map + malloc */
 };
+R_VEC_TYPE (RVecMagicMList, struct mlist);
 
 #define R_MAGIC_NONE                0x000000 /* No flags */
 #define R_MAGIC_DEBUG               0x000001 /* Turn on debugging */
@@ -226,13 +237,14 @@ struct mlist {
 #define R_MAGIC_NO_CHECK_ELF        0x010000 /* Don't check for elf details */
 #define R_MAGIC_NO_CHECK_ASCII      0x020000 /* Don't check for ascii files */
 #define R_MAGIC_NO_CHECK_TOKENS     0x100000 /* Don't check ascii/tokens */
+#define R_MAGIC_CHECK_TEXT          0x200000 /* Check text magic entries */
 
 /* Defined for backwards compatibility; do nothing */
 #define MAGIC_NO_CHECK_FORTRAN      0x000000 /* Don't check ascii/fortran */
 #define MAGIC_NO_CHECK_TROFF        0x000000 /* Don't check ascii/troff */
 
 struct r_magic_set {
-	struct mlist *mlist;
+	RVecMagicMList mlist;
 	struct cont {
 		size_t len;
 		struct level_info {
@@ -243,7 +255,7 @@ struct r_magic_set {
 		} *li;
 	} c;
 	struct out {
-		char *buf;		/* Accumulation buffer */
+		RStrBuf sb;		/* Accumulation buffer */
 		char *pbuf;		/* Printable buffer */
 	} o;
 	ut32 offset;
@@ -264,6 +276,11 @@ struct r_magic_set {
 	/* FIXME: Make the string dynamically allocated so that e.g.
 	   strings matched in files can be longer than MAXstring */
 	union VALUETYPE ms_value;	/* either number or string */
+	int magic_file_formats[FILE_NAMES_SIZE];
+	const char *magic_file_names[FILE_NAMES_SIZE];
+	ut32 last_cont_level;
+	ut32 bytes_max;
+	size_t maxmagic;
 };
 
 #if USE_LIB_MAGIC
@@ -276,18 +293,24 @@ typedef struct r_magic_set RMagic;
 R_API RMagic* r_magic_new(int flags);
 R_API void r_magic_free(RMagic*);
 
+R_API const char *r_magic_buffer(RMagic*, const void *, size_t);
 R_API const char *r_magic_file(RMagic*, const char *);
 R_API const char *r_magic_descriptor(RMagic*, int);
-R_API const char *r_magic_buffer(RMagic*, const void *, size_t);
 
 R_API const char *r_magic_error(RMagic*);
+R_API int r_magic_getflags(RMagic*);
 R_API void r_magic_setflags(RMagic*, int);
+R_API void r_magic_from_ebcdic(const ut8 *, size_t, ut8 *);
+R_API char *r_magic_getpath(const char *magicfile, int action);
 
 R_API bool r_magic_load(RMagic*, const char *);
 R_API bool r_magic_load_buffer(RMagic*, const ut8 *, size_t);
+R_API bool r_magic_load_buffers(RMagic*, const void *const *, const size_t *, size_t);
 R_API bool r_magic_compile(RMagic*, const char *);
 R_API bool r_magic_check(RMagic*, const char *);
+R_API bool r_magic_list(RMagic*, const char *);
 R_API int r_magic_errno(RMagic*);
+R_API int r_magic_api_version(void);
 #endif
 
 

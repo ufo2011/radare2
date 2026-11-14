@@ -2,29 +2,23 @@ NAME=omb banks
 FILE=malloc://1024
 CMDS=<<EOF
 om
-omb+ map 1
+omb+ map
 omb+ nomap
-omb nomap
+omb=map
+ombg
+omb=nomap
 om
-omb map
+omb=map
 om
 omb-*
 omb -1
 EOF
 EXPECT=<<EOF
-* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx 
-* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx 
-* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx 
-Usage: omb[jq,+] [fd]  Operate on memory banks
-| omb          list all memory banks
-| omb [id]     switch to use a different bank
-| omb+[name]   create a new bank with given name
-| omba [id]    adds a map to the bank
-| ombd [id]    deletes a map from the bank
-| omb-*        delete all banks
-| omb-[mapid]  delete the bank with given id
-| ombg         associate all maps to the current bank
-| ombq         show current bankid
+* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx rwx
+* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx rwx
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot find bank by id -1
 EOF
 RUN
 
@@ -42,19 +36,78 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=omb name deletes them all (BUG)
-BROKEN=1
+NAME=omb rejects names as ids without changing banks
 FILE=malloc://1024
 CMDS=<<EOF
 omb+ one
-omb
+omb=one
+ombq
 omb one
+ombq
 omb
 EOF
 EXPECT=<<EOF
-1: one 
+1
+1
+- 0 default [ 1 ]
+* 1 one [ ]
+EOF
+EXPECT_ERR=<<EOF
+ERROR: omb expects a number, not a string
+EOF
+RUN
 
-1: one 
+NAME=omb subcommands help and missing args dont crash #26035
+FILE=malloc://1024
+CMDS=<<EOF
+omba?~omba
+ombd?~ombd
+ombg?~ombg
+om-*
+ombg
+omba
+ombd
+EOF
+EXPECT=<<EOF
+| omba [id]    adds a map to the bank
+| ombd [id]    delete a map from the bank
+| ombg         associate all maps to the current bank
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Expect a mapid number
+ERROR: Expect a mapid number
+EOF
+RUN
 
+NAME=omb+ ombg omba on a map the bank already holds keep a single mapref
+FILE=malloc://1024
+CMDS=<<EOF
+omb+ 1
+ombg
+omba 1
+om
+om-1
+om
+?e done
+EOF
+EXPECT=<<EOF
+* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx rwx
+done
+EOF
+RUN
+
+NAME=io map locate does not loop when maps reach the top of the address space
+FILE=--
+TIMEOUT=10
+CMDS=<<EOF
+o null://0xfffffffffffff000 0
+aeim
+?e ok
+EOF
+EXPECT=<<EOF
+ok
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Couldn't locate suitable address for aeim stack
 EOF
 RUN

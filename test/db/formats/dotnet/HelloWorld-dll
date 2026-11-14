@@ -1,0 +1,161 @@
+NAME=.NET HelloWorld.dll info
+FILE=bins/dotnet/HelloWorld.dll
+CMDS=<<EOF
+echo headers
+i
+echo versions
+iV
+echo libraries
+il
+EOF
+EXPECT=<<EOF
+headers
+fd       3
+file     bins/dotnet/HelloWorld.dll
+size     0x1800
+humansz  6K
+mode     r-x
+format   pe
+iorw     false
+block    0x100
+type     DLL (Dynamic Link Library)
+arch     cil
+baddr    0x10000000
+binsz    6144
+bintype  pe
+bits     32
+canary   true
+injprot  false
+retguard false
+class    PE32
+cmp.csum 0x000106a2
+compiled Thu Mar 22 18:46:23 2046
+crypto   false
+dbg_file /Users/pancake/prg/radare2/csharp/obj/Debug/net6.0/HelloWorld.pdb
+endian   little
+havecode true
+hdr.csum 0x00000000
+guid     48778A3B5ABE4E35A087B05A6A190FDA1
+laddr    0x0
+lang     cil
+linenum  false
+lsyms    false
+machine  i386
+nx       true
+os       windows
+overlay  false
+cc       cdecl
+pic      true
+relocs   false
+signed   false
+sanitize false
+static   false
+stripped false
+uncaps   false
+subsys   dotnet
+va       true
+versions
+=== VS_VERSIONINFO ===
+
+# VS_FIXEDFILEINFO
+
+  Signature: 0xfeef04bd
+  StrucVersion: 0x10000
+  FileVersion: 1.0.0.0
+  ProductVersion: 1.0.0.0
+  FileFlagsMask: 0x3f
+  FileFlags: 0x0
+  FileOS: 0x4
+  FileType: 0x2
+  FileSubType: 0x0
+
+# StringTable
+
+  CompanyName: HelloWorld
+  FileDescription: HelloWorld
+  FileVersion: 1.0.0.0
+  InternalName: HelloWorld.dll
+  LegalCopyright:  
+  OriginalFilename: HelloWorld.dll
+  ProductName: HelloWorld
+  ProductVersion: 1.0.0+86ae458b7bc26b754891429eb3dc3fa8b8c0b39e
+  Assembly Version: 1.0.0.0
+libraries
+mscoree.dll
+EOF
+RUN
+
+# merged: .NET HelloWorld.dll classes; .NET HelloWorld.dll csharp classdump; .NET HelloWorld.dll types
+NAME=.NET HelloWorld.dll symbols
+FILE=bins/dotnet/HelloWorld.dll
+CMDS=<<EOF
+is~GLOBAL
+?e --
+ic~class
+ic~method
+ic~field
+?e --
+icc csharp~BinaryParser
+icc csharp~filePath
+icc csharp~LoadData
+icc csharp~BinaryParser();
+?e --
+rabin2 -y bins/dotnet/HelloWorld.dll
+EOF
+EXPECT=<<EOF
+0   0x00000251 0x10002051 GLOBAL FUNC 34               BinaryParserLibrary.BinaryParser..ctor(this;string:path):void
+0   0x00000274 0x10002074 GLOBAL FUNC 14               BinaryParserLibrary.BinaryParser.LoadData(this;byte[]:inputData):void
+0   0x00000290 0x10002090 GLOBAL FUNC 42               BinaryParserLibrary.BinaryParser.ValidateArgs(this;string[]:args):bool
+0   0x000002c8 0x100020c8 GLOBAL FUNC 91               BinaryParserLibrary.BinaryParser.ParseHeader(this;):void
+0   0x00000330 0x10002130 GLOBAL FUNC 131              BinaryParserLibrary.BinaryParser.ProcessSections(this;):void
+0   0x000003c0 0x100021c0 GLOBAL FUNC 70               BinaryParserLibrary.BinaryParser.CalculateChecksum(this;):int
+0   0x00000424 0x10002224 GLOBAL FUNC 192              BinaryParserLibrary.BinaryParser.AnalyzeMetadata(this;):void
+0   0x00000500 0x10002300 GLOBAL FUNC 63               BinaryParserLibrary.BinaryParser.RunAnalysis(this;string[]:args):void
+--
+0x00000000 [0x00000000 - 0x00000000]      0 cil class 0 <Module>
+0x00000000 [0x10002051 - 0x1000233f]    750 cil class 1 BinaryParserLibrary.BinaryParser :: System.Object
+0x00000000 [0x00000000 - 0x00000000]      0 cil class 2 <PrivateImplementationDetails> :: System.Object
+0x10002051 cil   method   0 pC   .ctor
+0x10002074 cil   method   1 p    LoadData
+0x10002090 cil   method   2 p    ValidateArgs
+0x100020c8 cil   method   3 p    ParseHeader
+0x10002130 cil   method   4 p    ProcessSections
+0x100021c0 cil   method   5 p    CalculateChecksum
+0x10002224 cil   method   6 p    AnalyzeMetadata
+0x10002300 cil   method   7 p    RunAnalysis
+0x00000000 cil    field   0 P    filePath
+0x00000000 cil    field   1 P    data
+0x00000000 cil    field   2 P    offset
+0x00000000 cil    field   0 is   2E383FDDF78D1ACC795830F56B4EC6464E408C418E67ADD6FA4C017AFA618963
+--
+namespace BinaryParserLibrary {
+public class BinaryParser : System.Object {
+	public BinaryParser(); // 0x10002051
+	private string filePath;
+	public dynamic LoadData() {} // 0x10002074
+	public BinaryParser(); // 0x10002051
+--
+struct <Module> {
+};
+
+struct BinaryParserLibrary.BinaryParser {
+  string filePath;
+  System.Collections.Generic.List`1<byte> data;
+  int offset;
+};
+
+struct <PrivateImplementationDetails> {
+  long 2E383FDDF78D1ACC795830F56B4EC6464E408C418E67ADD6FA4C017AFA618963;
+};
+
+void BinaryParserLibrary.BinaryParser..ctor();
+void BinaryParserLibrary.BinaryParser.LoadData();
+bool BinaryParserLibrary.BinaryParser.ValidateArgs();
+void BinaryParserLibrary.BinaryParser.ParseHeader();
+void BinaryParserLibrary.BinaryParser.ProcessSections();
+int BinaryParserLibrary.BinaryParser.CalculateChecksum();
+void BinaryParserLibrary.BinaryParser.AnalyzeMetadata();
+void BinaryParserLibrary.BinaryParser.RunAnalysis();
+
+EOF
+RUN

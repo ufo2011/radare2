@@ -1,22 +1,34 @@
-FILES=6502 8051 m68k x86 arc arm avr LH5801 ppc z80 mips sparc sh malbolge xtensa
-FILES+=i8080 java i4004 dalvik msp430 lm32 s390 tms320 riscv propeller v810 v850
-FILES+=pic18c chip8 tricore
+FILES=6502 8051 m68k x86 arc arm avr bpf LH5801 ppc z80 mips sparc sh xtensa
+FILES+=i8080 java i4004 dalvik msp430 lm32 s1c88 s390 tms320 propeller v810 v850
+FILES+=nds32 pic18c chip8 tricore bf pickle riscv evm sm5xx gb stm8 cosmac vax sbpf e0c62
 F_SDB=$(addsuffix .sdb,${FILES})
-SDB=../../../shlr/sdb/sdb
+
+# sdb -r regenerates every database in this directory, so running one recipe
+# per target in parallel makes the processes overwrite each other's output.
+.NOTPARALLEL:
 
 CFLAGS+=-fvisibility=hidden
 LDFLAGS+=-fvisibility=hidden
 include ../../../config-user.mk
+include ../../../global.mk
 
+ifeq ($(USE_SDBTOOL),1)
+all:
+	$(SDBTOOL) $(shell pwd)
+else
 all: ${F_SDB}
 
-%.sdb:%.sdb.txt
+%.sdb: %.sdb.txt
+	$(SDB) -r .
+
+old_%.sdb:%.sdb.txt
 	${SDB} $@ = < $<
 	test -f $@
 	${SDB} -t -C $@
+endif
 
 clean:
-	rm -f *.sdb *.c *.h *.gperf a.out
+	rm -f *.sdb *.c *.h *.gperf a.out *.o *.d
 
 .PHONY: all clean install install-symlink symstall uninstall
 

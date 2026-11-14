@@ -5,3 +5,316 @@ CMDS=aae
 EXPECT=<<EOF
 EOF
 RUN
+
+NAME=anal.gpseed seeds a base register during aae emulation
+FILE=malloc://0x1000
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+e anal.gpseed=r30
+e anal.gp=0x800
+wa lwz r3, 0(r30) @ 0
+wa lwz r4, 4(r30) @ 4
+aae 8 0 @ 0
+axq
+EOF
+EXPECT=<<EOF
+0x00000000 -> 0x00000800  DATA:r--
+0x00000004 -> 0x00000804  DATA:r--
+EOF
+RUN
+
+NAME=anal.gpseed unset leaves base register at zero
+FILE=malloc://0x1000
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wa lwz r3, 0(r30) @ 0
+wa lwz r4, 4(r30) @ 4
+aae 8 0 @ 0
+axq
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=aae silences log hints and restores log.hints
+FILE=bins/elf/ls
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+e log.hints=false
+aae
+e log.hints
+e log.hints=true
+aae
+e log.hints
+EOF
+EXPECT=<<EOF
+false
+true
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=aae clears call-clobbered regs before xref inference
+FILE=malloc://0x400
+ARGS=-w -a x86 -b 64
+CMDS=<<EOF
+s 0x100
+wx 48c7c080010000e814000000488d18c3
+s 0x120
+wx c3
+s 0x100
+e anal.cc=amd64
+e anal.vars.clobber=false
+aae 0x10
+axq~0x00000180
+?e --
+ax-*
+s 0x100
+e anal.vars.clobber=true
+aae 0x10
+axq~0x00000180
+?e --
+e anal.vars.clobber
+e asm.cmt.reguse
+EOF
+EXPECT=<<EOF
+0x0000010c -> 0x00000180  STRN:r--
+--
+--
+true
+false
+EOF
+RUN
+
+NAME=asm.cmt.reguse compares call-clobbered register comments
+FILE=malloc://0x400
+ARGS=-w -a x86 -b 64
+CMDS=<<EOF
+wx e81b000000488d18488d0ac3 @ 0x100;wx c3 @ 0x120
+e anal.cc=amd64;e anal.vars.clobber=true
+aae 0x10 @ 0x100
+ah*~rdx is call-clobbered?
+pd 4 @ 0x100~reguse?
+e asm.cmt.reguse=true;pd 4 @ 0x100~reguse?
+EOF
+EXPECT=<<EOF
+1
+0
+1
+EOF
+RUN
+
+NAME=aae keeps write xrefs to constant addresses after calls
+FILE=malloc://0x400
+ARGS=-w -a x86 -b 64
+CMDS=<<EOF
+s 0x100
+wx e80b00000089042500020000c3
+s 0x110
+wx c3
+s 0x100
+e anal.cc=amd64
+e anal.vars.clobber=true
+aae 0x10
+axq~0x00000200
+EOF
+EXPECT=<<EOF
+0x00000105 -> 0x00000200  DATA:-w-
+EOF
+RUN
+
+NAME=aae zeroing idioms clear the clobber taint
+FILE=malloc://0x400
+ARGS=-w -a x86 -b 64
+CMDS=<<EOF
+s 0x100
+wx 48c7c080010000e81400000031c0488d9880010000c3
+s 0x120
+wx c3
+s 0x100
+e anal.cc=amd64
+e anal.vars.clobber=true
+aae 0x20
+axq~0x00000180
+?e --
+ax-*
+s 0x100
+wx 48c7c080010000e8140000004889c3488d9b80010000c3
+aae 0x20
+axq~STRN
+?e --
+EOF
+EXPECT=<<EOF
+0x0000010e -> 0x00000180  STRN:r--
+--
+--
+EOF
+RUN
+
+NAME=aae clears arm64 x taint on w writes
+FILE=malloc://0x400
+ARGS=-w -a arm -b 64
+CMDS=<<EOF
+wx 08000094e00f40b9080b008b083d40b9c0035fd6 @ 0x100
+wx c0035fd6 @ 0x120
+e anal.cc=arm64
+e anal.vars.clobber=true
+aae 0x14 @ 0x100
+ah*~call-clobbered?
+EOF
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=aae takes no arm64 fp sum as an address
+FILE=malloc://0x400
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 000080d20000679e0100401f2228601e01000891c0035fd6
+af
+aae
+axq
+EOF
+EXPECT=<<EOF
+0x00000010 -> 0x00000200  DATA:r--
+EOF
+RUN
+
+NAME=aae honors call clobbers with emu.lazy
+FILE=malloc://0x400
+ARGS=-w -a x86 -b 64
+CMDS=<<EOF
+s 0x100
+wx 48c7c080010000e814000000488d18c3
+s 0x120
+wx c3
+s 0x100
+e anal.cc=amd64
+e emu.lazy=true
+e anal.vars.clobber=false
+aae 0x10
+axq~0x00000180
+?e --
+ax-*
+s 0x100
+e anal.vars.clobber=true
+aae 0x10
+axq~0x00000180
+?e --
+EOF
+EXPECT=<<EOF
+0x0000010c -> 0x00000180  STRN:r--
+--
+--
+EOF
+RUN
+
+NAME=aae clears call-clobbered taint on ret
+FILE=malloc://0x400
+ARGS=-w -a x86 -b 64
+CMDS=<<EOF
+s 0x100
+wx 48c7c080010000e814000000c3
+s 0x10d
+wx 90909090909090909090909090909090909090
+s 0x120
+wx c3
+s 0x121
+wx 909090909090909090909090909090
+s 0x130
+wx 488d18c3
+s 0x100
+e anal.cc=amd64
+e anal.vars.clobber=true
+aae 0x34
+axq~0x00000130
+EOF
+EXPECT=<<EOF
+0x00000130 -> 0x00000180  STRN:r--
+EOF
+RUN
+
+NAME=aae names real stack vars storing call-clobbered regs
+FILE=bins/elf/truechin.so
+ARGS=-NN -A
+CMDS=<<EOF
+e asm.bytes=0
+e asm.lines=0
+e asm.cmt.col=50
+e emu.str=true
+e scr.strconv=raw
+e anal.cc=arm64
+e anal.vars.clobber=true
+af
+s 0x000017f4
+pdui ret~var_clob_80h
+?e --
+pdui ret~var_clob_78h
+EOF
+EXPECT=<<EOF
+0x00001804      str x0, [var_clob_80h]
+0x00001808      ldr x1, [var_clob_80h]
+--
+0x00001820      str x0, [var_clob_78h]
+0x00001830      ldr x1, [var_clob_78h]            ;  ...
+0x00001844      ldr x0, [var_clob_78h]            ; int64_t arg1
+EOF
+RUN
+
+NAME=aaef names call-clobbered locals with signed displacements
+FILE=bins/mach0/markdown-test
+ARGS=-NN -e bin.relocs.apply=true
+CMDS=<<EOF
+s 0x100001e1c
+af
+afv~var_4h
+aaef
+afv~var_clob_
+aaef
+afv~var_clob_
+afvn result var_clob_4h
+aaef
+afv~result
+EOF
+EXPECT=<<EOF
+var int32_t var_4h @ x29-0x4
+var int64_t var_clob_10h @ sp+0x10
+var int32_t var_clob_4h @ x29-0x4
+var int64_t var_clob_10h @ sp+0x10
+var int32_t var_clob_4h @ x29-0x4
+var int32_t result @ x29-0x4
+EOF
+RUN
+
+NAME=aaef avoids call-clobbered local name collisions
+FILE=bins/mach0/markdown-test
+ARGS=-NN -e bin.relocs.apply=true
+CMDS=<<EOF
+s 0x100001e1c
+af
+afvn var_clob_4h var_10h
+aaef
+afv~var_clob_
+EOF
+EXPECT=<<EOF
+var int64_t var_clob_10h @ sp+0x10
+var int32_t var_clob_4h_2 @ x29-0x4
+var int64_t var_clob_4h @ x29-0x10
+EOF
+RUN
+
+NAME=aae keeps Thumb syscall addresses aligned after invalid and null instructions
+FILE=malloc://0x200
+ARGS=-a arm -b 16 -e asm.os=s110
+CMDS=<<EOF
+wx ffff00bf7cdf @ 0x100
+aae 6 @ 0x100
+f~syscall
+pi 1 @@ syscall.*
+EOF
+EXPECT=<<EOF
+0x00000104 1 syscall.sd_ble_gap_device_name_set
+svc 0x7c
+EOF
+RUN

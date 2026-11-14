@@ -1,6 +1,13 @@
+# merged: mach0 entrypoint; mach0 entry0 data
 NAME=mach0 headers
 FILE=bins/mach0/hello-osx-i386
-CMDS=iH
+CMDS=<<EOF
+iH
+?e --
+ie=~addr
+?e --
+p8 10 @ entry0
+EOF
 EXPECT=<<EOF
 pf.mach0_header @ 0x00001000
 0x00001000  Magic       0xfeedface
@@ -60,6 +67,28 @@ pf.mach0_dylib_command @ 0x0000147c
 0x0000148c  current     125.2.10
 0x00001490  compat      1.0.0
 0x00001494  load_dylib  /usr/lib/libSystem.B.dylib
+--
+paddr=0x00000f14 vaddr=0x00001f14 haddr=0x00000464 vhaddr=0x00001464 type=program
+--
+6a0089e583e4f083ec10
+EOF
+RUN
+
+NAME=mach0 chained fixup xrefs config
+ARGS=-e bin.relocs.xrefs=false
+FILE=bins/mach0/hello-macos-arm64-chained
+CMDS=axlc
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=mach0 chained fixup relocs ignore bin.unnamed
+ARGS=-e bin.relocs.apply=true -e bin.unnamed=false
+FILE=bins/mach0/hello-macos-arm64-chained
+CMDS=ir~0x100008158~?
+EXPECT=<<EOF
+1
 EOF
 RUN
 
@@ -221,50 +250,45 @@ pf.mach0_data_in_code_command @ 0x00004478
 EOF
 RUN
 
-NAME=mach0 entrypoint
-FILE=bins/mach0/hello-osx-i386
-CMDS=ie~addr
-EXPECT=<<EOF
-vaddr=0x00001f14 paddr=0x00000f14 haddr=0x00000464 type=program
-EOF
-RUN
-
-NAME=mach0 entry0 data
-FILE=bins/mach0/hello-osx-i386
-CMDS=p8 10 @ entry0
-EXPECT=<<EOF
-6a0089e583e4f083ec10
-EOF
-RUN
-
 NAME=mach0 entrypoint i386 LC_MAIN
 FILE=bins/mach0/mach0-i386
-CMDS=ie~addr
+CMDS=ie=~addr
 EXPECT=<<EOF
-vaddr=0x00001f80 paddr=0x00000f80 haddr=0x00000240 type=program
+paddr=0x00000f80 vaddr=0x00001f80 haddr=0x00000240 vhaddr=0x00001240 type=program
 EOF
 RUN
 
 NAME=mach0 entrypoint x86_64 LC_MAIN
 FILE=bins/mach0/mach0_2-x86_64
-CMDS=ie~addr
+CMDS=ie=~addr
 EXPECT=<<EOF
-vaddr=0x100000f70 paddr=0x00000f70 haddr=0x000002e0 type=program
+paddr=0x00000f70 vaddr=0x100000f70 haddr=0x000002e0 vhaddr=0x1000002e0 type=program
+EOF
+RUN
+
+# merged: osx mach0 ik
+NAME=mach0 LC_MAIN vhaddr addresses the entryoff field
+FILE=bins/mach0/hello-ios-arm64
+CMDS=<<EOF
+ie=
+pv8 @ 0x100000468
+EOF
+EXPECT=<<EOF
+paddr=0x00007f34 vaddr=0x100007f34 haddr=0x00000468 vhaddr=0x100000468 type=program
+0x0000000000007f34
 EOF
 RUN
 
 NAME=osx mach0 entrypoint
 FILE=bins/mach0/ls-osx-x86_64
-CMDS=ie~addr
-EXPECT=<<EOF
-vaddr=0x1000013d8 paddr=0x000013d8 haddr=0x00000648 type=program
+CMDS=<<EOF
+ie=~addr
+?e --
+ik ***~uuid
 EOF
-RUN
-
-NAME=osx mach0 ik
-FILE=bins/mach0/ls-osx-x86_64
-CMDS=ik ***~uuid
 EXPECT=<<EOF
+paddr=0x000013d8 vaddr=0x1000013d8 haddr=0x00000648 vhaddr=0x100000648 type=program
+--
 info/mach0_uuid_command.format=[4]Ed[16]b (mach0_load_command_type)cmd cmdsize uuid
 info/mach0_cmd_8.format=mach0_uuid_command
 info/uuid.0=ff4d6c2e1dc0369d98d0d3040a8049e8
@@ -276,7 +300,7 @@ NAME=mach0 exports trie
 FILE=bins/mach0/Alamofire-stripped
 CMDS=<<EOF
 iE~_AlamofireVersionString?
-psz@sym._AlamofireVersionString
+psz@obj._AlamofireVersionString
 EOF
 EXPECT=<<EOF
 1
@@ -301,13 +325,205 @@ NAME=mach0 symbols
 FILE=bins/mach0/longIdentifiers.dylib
 CMDS=is
 EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type size lib name
----------------------------------------------------
+nth paddr      vaddr      bind   type size lib name                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              demangled
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 0   0x00007fa8 0x00007fa8 GLOBAL FUNC 0        _abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghij
 1   0x00007fb0 0x00007fb0 GLOBAL FUNC 0        _abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrst
 2   0x00007fa8 0x00007fa8 LOCAL  FUNC 0        func.00007fa8
 3   0x00007fb0 0x00007fb0 LOCAL  FUNC 0        func.00007fb0
+EOF
+RUN
+
+NAME=mach0 symbols skip unnamed
+ARGS=-e bin.unnamed=false
+FILE=bins/mach0/longIdentifiers.dylib
+CMDS=<<EOF
+is~func.00007fa8~?
+is~func.00007fb0~?
+is~_abcdefghijklmnopqrstuvwxyz~?
+EOF
+EXPECT=<<EOF
+0
+0
+7
+EOF
+RUN
+
+NAME=mach0 aot
+FILE=bins/mach0/libswiftCoreImage.dylib.aot
+CMDS=iH
+EXPECT_ERR=<<EOF
+INFO: AOT: Image path offset: 0x00000970
+INFO: AOT: Image path length: 0x00000089
+INFO: AOT: X64- code section: 0x00005a70
+EOF
+EXPECT=<<EOF
+pf.mach0_header @ 0x00000000
+0x00000000  Magic       0xfeedfacf
+0x00000004  CpuType     0x100000c
+0x00000008  CpuSubType  0x0
+0x0000000c  FileType    0x2
+0x00000010  nCmds       6
+0x00000014  sizeOfCmds  504
+0x00000018  Flags       0x200001
+pf.mach0_segment64 @ 0x00000020
+0x00000020  cmd       0 0x19 LC_SEGMENT_64
+0x00000024  cmdsize     152
+0x00000028  name        __TEXT
+pf.mach0_section64 @ 0x00000068
+pf.mach0_segment64 @ 0x000000b8
+0x000000b8  cmd       1 0x19 LC_SEGMENT_64
+0x000000bc  cmdsize     72
+0x000000c0  name        __RUNTIME
+pf.mach0_segment64 @ 0x00000100
+0x00000100  cmd       2 0x19 LC_SEGMENT_64
+0x00000104  cmdsize     152
+0x00000108  name        __DATA
+pf.mach0_section64 @ 0x00000148
+pf.mach0_segment64 @ 0x00000198
+0x00000198  cmd       3 0x19 LC_SEGMENT_64
+0x0000019c  cmdsize     72
+0x000001a0  name        __LINKEDIT
+pf.mach0_aot_metadata @ 0x000001e0
+0x000001e0  cmd       4 0xcacaca01 LC_AOT_METADATA
+0x000001e4  cmdsize     32
+pf.mach0_symtab_command @ 0x00000200
+0x00000200  cmd       5 0x2 LC_SYMTAB
+0x00000204  cmdsize     24
+EOF
+RUN
+
+NAME=mach0 canary
+FILE=bins/mach0/ls-m1
+CMDS=i~canary
+EXPECT=<<EOF
+canary   true
+EOF
+RUN
+
+NAME=mach0 signing platform-binary
+FILE=bins/mach0/ls-m1
+CMDS=ik info/mach0.signing
+EXPECT=<<EOF
+platform-binary
+EOF
+RUN
+
+NAME=mach0 signing linker-signed
+FILE=bins/mach0/hello-macos-arm64-chained
+CMDS=ik info/mach0.signing
+EXPECT=<<EOF
+linker-signed
+EOF
+RUN
+
+NAME=mach0 signing unsigned
+FILE=bins/mach0/a.out
+CMDS=ik info/mach0.signing
+EXPECT=<<EOF
+unsigned
+EOF
+RUN
+
+NAME=mach0 section header flags: type and attribute bits
+FILE=bins/mach0/ls-m1
+ARGS=-a arm -b64
+CMDS=iS~__text,auth_stubs,__cstring,__bss
+EXPECT=<<EOF
+0   0x0001b830  0x3c10 0x100003830  0x3c10 -r-x 0x80000400 REGULAR          0.__TEXT.__text
+1   0x0001f440   0x520 0x100007440   0x520 -r-x 0x80000408 SYMBOL_STUBS     1.__TEXT.__auth_stubs
+3   0x0001fa3c   0x4e9 0x100007a3c   0x4e9 -r-x 0x2        CSTRINGS         3.__TEXT.__cstring
+10  0x00018000     0x0 0x10000c0d0   0x150 -rw- 0x1        ZEROFILL         10.__DATA.__bss
+EOF
+RUN
+
+NAME=mach0 chained fixup reload keeps the file buffer alive
+FILE=bins/mach0/hello-macos-arm64-chained
+CMDS=<<EOF
+ooi
+e bin.limit=0
+izz~?
+EOF
+EXPECT=<<EOF
+135
+EOF
+RUN
+
+
+NAME=mach0 headers filter controls and quote script output
+FILE=malloc://16384
+CMDS=<<EOF
+wff bins/mach0/hello-objc-osx
+wx 780a3b3f652070776e3b603f652070776e6027220d091b00 @ 0x8d0
+oba 0
+iH~pwn
+iH*~header.header
+.iH*
+?v header.header
+EOF
+EXPECT=<<EOF
+0x1000008d0  load_dylib  x.;?e pwn;`?e pwn`'"...
+'f header.header 1 0x00000000
+0x0
+EOF
+RUN
+
+NAME=mach0 dysymtab indirect symbol table range wraps in 32 bits
+FILE=bins/mach0/dysymtab-indirect-range-wrap
+CMDS=i~^format
+EXPECT=<<EOF
+format   mach064
+EOF
+EXPECT_ERR=<<EOF
+ERROR: parsing dysymtab
+WARN: Cannot initialize items
+EOF
+RUN
+
+NAME=mach0 dysymtab indirect symbol table ending at eof
+FILE=bins/mach0/dysymtab-indirect-end-at-eof
+CMDS=i~^format
+EXPECT=<<EOF
+format   mach064
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=mach0 overlapping stub sections resolve imports in one pass
+FILE=bins/mach0/overlapping-stub-sections
+TIMEOUT=10
+CMDS=<<EOF
+i~^format
+is~?
+EOF
+EXPECT=<<EOF
+format   mach064
+2
+EOF
+RUN
+
+
+NAME=mach0 export trie with shared nodes
+FILE=malloc://192
+CMDS=<<EOF
+wx cffaedfe0700000103000000020000000200000058000000000000000000000019000000480000005f5f544558540000000000000000000000000000010000000010000000000000000000000000000000100000000000000700000005000000000000000000000033000080100000007800000044000000000261000862000800026100106200100002610018620018000261002062002000026100286200280002610030620030000261003862003800026100406200400200100000000000
+oba 0
+is,paddr/cols/vaddr/type/name,:csv
+EOF
+EXPECT=<<EOF
+paddr,vaddr,type,name
+0x00000010,0x00000010,NOTYPE,aaaaaaaa
+EOF
+RUN
+
+NAME=mach0 tls symbol is an address and follows the load bias under -B
+FILE=bins/mach0/macho-trie-bad-export-info-malformed-uleb128
+ARGS=-B 0x10000000
+CMDS=<<EOF
+is~TLS
+EOF
+EXPECT=<<EOF
+4   0x00001020 0x10001020 GLOBAL TLS  0        _t
+6   0x00001038 0x10001038 LOCAL  TLS  0        _t$tlv$init
 EOF
 RUN

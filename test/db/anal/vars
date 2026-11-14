@@ -1,3 +1,252 @@
+NAME=afvt args
+FILE=bins/elf/ls
+CMDS=<<EOF
+s main
+af
+afvt argc
+afvt argv
+afvt argc int64_t
+afvt argc
+EOF
+EXPECT=<<EOF
+int
+char **
+int64_t
+EOF
+RUN
+
+NAME=afvt strips wrapping quotes from the type
+FILE=bins/elf/ls
+CMDS=<<EOF
+s main
+af
+afvt argv "char *"
+afvt argv
+afvt argv 'int **'
+afvt argv
+EOF
+EXPECT=<<EOF
+char *
+int **
+EOF
+RUN
+
+NAME=pdf
+FILE=bins/elf/ls
+CMDS=<<EOF
+s main
+af
+afv
+afvj~{}
+EOF
+EXPECT=<<EOF
+arg int argc @ rdi
+arg char ** argv @ rsi
+var int8_t var_8h @ rsp+0x18
+var int8_t var_17h @ rsp+0x27
+var int64_t var_18h @ rsp+0x28
+var int64_t var_28h @ rsp+0x38
+var int64_t var_30h @ rsp+0x40
+var int16_t var_32h @ rsp+0x42
+var int64_t var_38h @ rsp+0x48
+var int16_t var_45h @ rsp+0x55
+var int8_t var_46h @ rsp+0x56
+var int8_t var_47h @ rsp+0x57
+var int64_t var_48h @ rsp+0x58
+{
+  "reg": [
+    {
+      "name": "argc",
+      "kind": "reg",
+      "type": "int",
+      "ref": "rdi"
+    },
+    {
+      "name": "argv",
+      "kind": "reg",
+      "type": "char **",
+      "ref": "rsi"
+    }
+  ],
+  "sp": [
+    {
+      "name": "var_8h",
+      "kind": "var",
+      "type": "int8_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 24
+      }
+    },
+    {
+      "name": "var_17h",
+      "kind": "var",
+      "type": "int8_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 39
+      }
+    },
+    {
+      "name": "var_18h",
+      "kind": "var",
+      "type": "int64_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 40
+      }
+    },
+    {
+      "name": "var_28h",
+      "kind": "var",
+      "type": "int64_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 56
+      }
+    },
+    {
+      "name": "var_30h",
+      "kind": "var",
+      "type": "int64_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 64
+      }
+    },
+    {
+      "name": "var_32h",
+      "kind": "var",
+      "type": "int16_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 66
+      }
+    },
+    {
+      "name": "var_38h",
+      "kind": "var",
+      "type": "int64_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 72
+      }
+    },
+    {
+      "name": "var_45h",
+      "kind": "var",
+      "type": "int16_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 85
+      }
+    },
+    {
+      "name": "var_46h",
+      "kind": "var",
+      "type": "int8_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 86
+      }
+    },
+    {
+      "name": "var_47h",
+      "kind": "var",
+      "type": "int8_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 87
+      }
+    },
+    {
+      "name": "var_48h",
+      "kind": "var",
+      "type": "int64_t",
+      "ref": {
+        "base": "rsp",
+        "offset": 88
+      }
+    }
+  ],
+  "bp": [
+    
+  ]
+}
+EOF
+RUN
+
+NAME=pdf
+FILE=bins/elf/test_o
+CMDS=<<EOF
+e asm.var.summary=0
+af
+pdf
+afv
+afvj~{}
+EOF
+EXPECT=<<EOF
+            ;-- section..text:
+/ 22: sym.sub (int64_t arg1, int64_t arg2);
+|           ; arg int64_t arg1 @ rdi
+|           ; arg int64_t arg2 @ rsi
+|           ; var int32_t var_4h @ rbp-0x4
+|           ; var int32_t var_8h @ rbp-0x8
+|           0x08000040      f30f1efa       endbr64                     ; [01] -r-x section size 22 named .text
+|           0x08000044      55             push rbp
+|           0x08000045      4889e5         mov rbp, rsp
+|           0x08000048      897dfc         mov dword [var_4h], edi     ; arg1
+|           0x0800004b      8975f8         mov dword [var_8h], esi     ; arg2
+|           0x0800004e      8b45fc         mov eax, dword [var_4h]
+|           0x08000051      2b45f8         sub eax, dword [var_8h]
+|           0x08000054      5d             pop rbp
+\           0x08000055      c3             ret
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+var int32_t var_4h @ rbp-0x4
+var int32_t var_8h @ rbp-0x8
+{
+  "reg": [
+    {
+      "name": "arg1",
+      "kind": "reg",
+      "type": "int64_t",
+      "ref": "rdi"
+    },
+    {
+      "name": "arg2",
+      "kind": "reg",
+      "type": "int64_t",
+      "ref": "rsi"
+    }
+  ],
+  "sp": [
+    
+  ],
+  "bp": [
+    {
+      "name": "var_4h",
+      "kind": "var",
+      "type": "int32_t",
+      "ref": {
+        "base": "rbp",
+        "offset": -4
+      }
+    },
+    {
+      "name": "var_8h",
+      "kind": "var",
+      "type": "int32_t",
+      "ref": {
+        "base": "rbp",
+        "offset": -8
+      }
+    }
+  ]
+}
+EOF
+RUN
+
 NAME=afvx
 FILE=bins/elf/ls.odd
 CMDS=<<EOF
@@ -7,10 +256,10 @@ afv=
 EOF
 EXPECT=<<EOF
 afvR
-      arg3  0x5312
+      arg1  0x5312
 afvW
-      arg3
-* arg3
+      arg1
+* arg1
 R 0x5312  mov r9, rdx
 EOF
 RUN
@@ -24,8 +273,8 @@ afv=
 EOF
 EXPECT=<<EOF
 afvR
-      argv  0x10000106c
       argc  0x10000106f
+      argv  0x10000106c
   var_640h  0x100001072
   var_648h  0x100001617,0x100001691
   var_654h  0x100001784
@@ -40,8 +289,8 @@ afvR
    var_30h  0x1000010d6
    var_2eh  0x1000010f0
 afvW
-      argv
       argc
+      argv
   var_640h
   var_648h  0x100001079
   var_654h  0x100001137,0x100001315
@@ -55,10 +304,10 @@ afvW
   var_440h
    var_30h
    var_2eh
-* argv
-R 0x10000106c  mov rbx, rsi
 * argc
 R 0x10000106f  mov r14d, edi
+* argv
+R 0x10000106c  mov rbx, rsi
 * var_640h
 R 0x100001072  lea rax, [var_640h]
 * var_648h
@@ -117,9 +366,7 @@ pd 13
 EOF
 EXPECT=<<EOF
 / 22: fcn.00000000 (int64_t arg1, int64_t arg2, int64_t arg3);
-|           ; arg int64_t arg1 @ rcx
-|           ; arg int64_t arg2 @ rdx
-|           ; arg int64_t arg3 @ r8
+| `- args(rcx, rdx, r8)
 |           0x00000000      4053           push rbx
 |           0x00000002      4883ec20       sub rsp, 0x20
 |           0x00000006      418bd8         mov ebx, r8d                ; arg3
@@ -130,10 +377,9 @@ EXPECT=<<EOF
 \           0x00000015      c3             ret
             0x00000016      cc             int3
             0x00000017      cc             int3
-            ; CALL XREF from fcn.00000000 @ 0x9
+            ; CALL XREF from fcn.00000000 @ 0x9(x)
 / 5: fcn.00000018 (int64_t arg1, int64_t arg2);
-|           ; arg int64_t arg1 @ rcx
-|           ; arg int64_t arg2 @ rdx
+| `- args(rcx, rdx)
 |           0x00000018      2bca           sub ecx, edx                ; arg2
 |           0x0000001a      8bc1           mov eax, ecx                ; arg1
 \           0x0000001c      c3             ret
@@ -150,9 +396,9 @@ af
 afv
 EOF
 EXPECT=<<EOF
-arg int64_t arg3 @ r8
 arg const char * s @ rcx
 arg int64_t arg2 @ rdx
+arg int64_t arg3 @ r8
 EOF
 RUN
 
@@ -165,13 +411,13 @@ afv
 EOF
 EXPECT=<<EOF
 var int64_t var_20h @ rsp+0x48
-var int64_t var_10h @ rbp+0x10
-var int64_t var_18h @ rbp+0x18
 var int64_t var_bp_20h @ rbp+0x20
+var int64_t var_18h @ rbp+0x18
+var int64_t var_10h @ rbp+0x10
 EOF
 RUN
 
-NAME=Variable access with misc registers (x86)
+NAME=Variable access with misc registers (x86) R2_590 - calling conventions ignored for now
 FILE=-
 ARGS=-a x86 -b 64
 CMDS=<<EOF
@@ -225,6 +471,7 @@ afvW
 |           0x00000038      415f           pop r15
 \           0x0000003a      c3             ret
 EOF
+BROKEN=1
 RUN
 
 
@@ -232,9 +479,11 @@ NAME=Variable access with misc registers (ARM)
 FILE=-
 ARGS=-a arm -b 16
 CMDS=<<EOF
+e asm.var.summary=0
 e asm.flags=false
 e asm.comments=false
 e anal.vars.stackname = true
+aeim
 wx 80b483b000af78600b467b8013467b707b78002b03d07a887b689a6103e07b881a047b689a6100bf0c37bd465df8047b7047
 af
 aaef
@@ -246,7 +495,7 @@ afvR
       arg1  0x6
       arg2  0x8
       arg3  0xc
-   var_10h  0x4,0x2c
+   var_10h  0x4
     var_ch  0x18,0x22
     var_eh  0x16,0x1e
     var_fh  0x10
@@ -260,18 +509,18 @@ afvW
     var_eh  0xa
     var_fh  0xe
     var_4h
-/ 50: fcn.00000000 (int16_t arg1, int16_t arg2, int16_t arg3);
-|           ; var int16_t var_10h @ sp+0x0
+/ 50: fcn.00000000 (int32_t arg1, int32_t arg2, int32_t arg3);
+|           ; arg int32_t arg1 @ r0
+|           ; arg int32_t arg2 @ r1
+|           ; arg int32_t arg3 @ r2
+|           ; var int32_t var_10h @ sp+0x0
 |           ; var int8_t var_fh @ sp+0x1
 |           ; var int16_t var_eh @ sp+0x2
 |           ; var int32_t var_ch @ sp+0x4
 |           ; var int16_t var_4h @ sp+0xc
-|           ; arg int16_t arg1 @ r0
-|           ; arg int16_t arg2 @ r1
-|           ; arg int16_t arg3 @ r2
 |           0x00000000      80b4           push {r7}
 |           0x00000002      83b0           sub sp, 0xc
-|           0x00000004      00af           add r7, var_10h
+|           0x00000004      00af           add r7, sp, 0
 |           0x00000006      7860           str r0, [var_ch]
 |           0x00000008      0b46           mov r3, r1
 |           0x0000000a      7b80           strh r3, [var_eh]
@@ -310,10 +559,10 @@ EOF
 EXPECT=<<EOF
 afvR
 afvW
-var int32_t var_4h_2 @ ebp-0x4
-var int32_t var_4h @ ebp+0x0
 arg int32_t arg_8h @ ebp+0x8
 arg int32_t arg_ch @ ebp+0xc
+var int32_t var_4h @ ebp+0x0
+var int32_t var_4h_2 @ ebp-0x4
 afvR
     arg_8h  0x16
     arg_ch  0x19
@@ -324,5 +573,860 @@ afvW
     arg_ch
   var_4h_2  0x1c
     var_4h  0x27
+EOF
+RUN
+
+
+NAME=Stack Variables
+FILE=-
+ARGS=-a arm -b 16
+CMDS=<<EOF
+e asm.var.summary=0
+e anal.vars.newstack=true
+wx 2de9f04fadf54e4da5b088460df1900a0021aaf18007802281463846fff7e0ee4bf2640400214ff448420df5d260fff7d8eec0f2000400214ff48062a4a8fff7
+af
+afv-var_690h
+afvs -51240 config char *
+pd 1
+?e ...
+pd 1 @..2a
+EOF
+EXPECT=<<EOF
+/ 66: fcn.00000000 (int32_t arg1, int32_t arg2);
+|           ; arg int32_t arg1 @ r0
+|           ; arg int32_t arg2 @ r1
+|           ; var int32_t var_90h @ sp+0x90
+|           ; var int32_t var_290h @ sp+0x290
+|           ; var char *config @ sp+0x690
+|           0x00000000      2de9f04f       push.w {r4, r5, r6, r7, r8, sb, sl, fp, lr}
+...
+|           0x0000002a      0df5d260       add.w r0, sp, 0x690
+EOF
+RUN
+
+NAME=arm64 stack variables
+FILE=bins/mach0/arm_snippet_1
+CMDS=<<EOF
+e asm.var.summary=0
+e asm.sub.var=true
+af
+pdf
+e asm.sub.var=false
+pdf
+EOF
+EXPECT=<<EOF
+            ;-- section.0.__TEXT.__text:
+            ;-- entry0:
+            ;-- func.100003f64:
+/ 68: int main (int argc, char **argv, char **envp);
+|           ; arg int argc @ x0
+|           ; arg char **argv @ x1
+|           ; var int64_t var_0h @ sp+0x0
+|           ; var int32_t var_8h @ sp+0x8
+|           ; var int32_t var_ch @ sp+0xc
+|           0x100003f64      ff4300d1       sub sp, sp, 0x10           ; [00] -r-x section size 68 named 0.__TEXT.__text
+|           0x100003f68      ff0f00b9       str wzr, [var_ch]          ; argc
+|           0x100003f6c      e00b00b9       str w0, [var_8h]           ; argc
+|           0x100003f70      e10300f9       str x1, [sp]               ; argv
+|           0x100003f74      e80b40b9       ldr w8, [var_8h]
+|           0x100003f78      08090071       subs w8, w8, 2
+|           0x100003f7c      e8179f1a       cset w8, eq
+|       ,=< 0x100003f80      a8000037       tbnz w8, 0, 0x100003f94
+|      ,==< 0x100003f84      01000014       b 0x100003f88
+|      ||   ; CODE XREF from main @ 0x100003f84(x)
+|      `--> 0x100003f88      28008052       mov w8, 1
+|       |   0x100003f8c      e80f00b9       str w8, [var_ch]
+|      ,==< 0x100003f90      03000014       b 0x100003f9c
+|      |`-> 0x100003f94      ff0f00b9       str wzr, [var_ch]          ; argc
+|      |,=< 0x100003f98      01000014       b 0x100003f9c
+|      ||   ; CODE XREFS from main @ 0x100003f90(x), 0x100003f98(x)
+|      ``-> 0x100003f9c      e00f40b9       ldr w0, [var_ch]
+|           0x100003fa0      ff430091       add sp, sp, 0x10
+\           0x100003fa4      c0035fd6       ret
+            ;-- section.0.__TEXT.__text:
+            ;-- entry0:
+            ;-- func.100003f64:
+/ 68: int main (int argc, char **argv, char **envp);
+|           ; arg int argc @ x0
+|           ; arg char **argv @ x1
+|           ; var int64_t var_0h @ sp+0x0
+|           ; var int32_t var_8h @ sp+0x8
+|           ; var int32_t var_ch @ sp+0xc
+|           0x100003f64      ff4300d1       sub sp, sp, 0x10           ; [00] -r-x section size 68 named 0.__TEXT.__text
+|           0x100003f68      ff0f00b9       str wzr, [sp, 0xc]         ; argc
+|           0x100003f6c      e00b00b9       str w0, [sp, 8]            ; argc
+|           0x100003f70      e10300f9       str x1, [sp]               ; argv
+|           0x100003f74      e80b40b9       ldr w8, [sp, 8]
+|           0x100003f78      08090071       subs w8, w8, 2
+|           0x100003f7c      e8179f1a       cset w8, eq
+|       ,=< 0x100003f80      a8000037       tbnz w8, 0, 0x100003f94
+|      ,==< 0x100003f84      01000014       b 0x100003f88
+|      ||   ; CODE XREF from main @ 0x100003f84(x)
+|      `--> 0x100003f88      28008052       mov w8, 1
+|       |   0x100003f8c      e80f00b9       str w8, [sp, 0xc]
+|      ,==< 0x100003f90      03000014       b 0x100003f9c
+|      |`-> 0x100003f94      ff0f00b9       str wzr, [sp, 0xc]         ; argc
+|      |,=< 0x100003f98      01000014       b 0x100003f9c
+|      ||   ; CODE XREFS from main @ 0x100003f90(x), 0x100003f98(x)
+|      ``-> 0x100003f9c      e00f40b9       ldr w0, [sp, 0xc]
+|           0x100003fa0      ff430091       add sp, sp, 0x10
+\           0x100003fa4      c0035fd6       ret
+EOF
+RUN
+
+NAME=afv* sanitized names
+FILE=bins/elf/ls
+CMDS=<<EOF
+s main
+af
+afv*
+EOF
+EXPECT=<<EOF
+'afvr rdi argc int
+'afvr rsi argv char **
+'afvs 88 var_48h int64_t
+'afvs 64 var_30h int64_t
+'afvs 39 var_17h int8_t
+'afvs 24 var_8h int8_t
+'afvs 56 var_28h int64_t
+'afvs 72 var_38h int64_t
+'afvs 85 var_45h int16_t
+'afvs 87 var_47h int8_t
+'afvs 86 var_46h int8_t
+'afvs 40 var_18h int64_t
+'afvs 66 var_32h int16_t
+EOF
+RUN
+
+NAME=a direct tail jump forwards the callee args to the function it leaves
+FILE=bins/elf/ppc64v1-libz.so
+CMDS=<<EOF
+aa
+afs @ sym.gzopen
+afvr @ sym.gzwrite
+EOF
+EXPECT=<<EOF
+void sym.gzopen (int64_t arg1, int64_t arg2);
+arg int64_t arg1 @ r3
+arg int64_t arg2 @ r4
+arg int64_t arg3 @ r5
+EOF
+RUN
+
+NAME=x86_64 conditional and unconditional tail jumps forward args, own writes do not
+FILE=bins/elf/pltrel/x86_64-thunks.so
+CMDS=<<EOF
+aa
+afvr @ sym.forkwrap
+afvr @ sym.top_fork
+afs @ sym.setwrap
+afs @ sym.top_set
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+arg int64_t arg1 @ rdi
+void sym.setwrap ();
+void sym.top_set ();
+EOF
+RUN
+
+NAME=the signature and the variable list agree no matter which one is read first
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4889f84889f04889d0c3
+af+ 0 myfcn
+afb+ 0 0 10
+afvr rdx arg0 int64_t
+afsq
+afvr
+afsq
+EOF
+EXPECT=<<EOF
+void myfcn (int64_t arg0);
+arg int64_t arg0 @ rdx
+void myfcn (int64_t arg0);
+EOF
+RUN
+
+NAME=float register arguments keep the same order in the signature and in the variable list
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4889f84889f04889d0c3
+af+ 0 myfcn
+afb+ 0 0 10
+afvr xmm1 f2 double
+afvr xmm0 f1 double
+afvr rdi i1 int64_t
+afsq
+afvr
+EOF
+EXPECT=<<EOF
+void myfcn (int64_t i1, double f1, double f2);
+arg int64_t i1 @ rdi
+arg double f1 @ xmm0
+arg double f2 @ xmm1
+EOF
+RUN
+
+NAME=a declared struct takes over the recovered var inside it
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"td struct pair {short lo; short hi;};"
+wx 8845ed897decc3
+af
+afvb
+afvt var_14h pair
+afvb
+afvx
+EOF
+EXPECT=<<EOF
+var int8_t var_13h @ rbp-0x13
+var int32_t var_14h @ rbp-0x14
+var pair var_14h @ rbp-0x14
+afvR
+      arg1  0x3
+   var_14h
+afvW
+      arg1
+   var_14h  0x3
+EOF
+RUN
+
+NAME=a struct spelled with its keyword takes over the recovered var inside it
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"td struct pair {short lo; short hi;};"
+wx 8845ed897decc3
+af
+afvt var_14h "struct pair"
+afvb
+EOF
+EXPECT=<<EOF
+var struct pair var_14h @ rbp-0x14
+EOF
+RUN
+
+NAME=a typedef of a struct takes over the recovered var inside it
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"td struct pair {short lo; short hi;};"
+"td typedef struct pair pair_t;"
+wx 8845ed897decc3
+af
+afvt var_14h pair_t
+afvb
+EOF
+EXPECT=<<EOF
+var pair_t var_14h @ rbp-0x14
+EOF
+RUN
+
+NAME=a qualified struct spelling takes over the recovered var inside it
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"td struct pair {short lo; short hi;};"
+wx 8845ed897decc3
+af
+afvt var_14h "const struct pair"
+afvb
+EOF
+EXPECT=<<EOF
+var const struct pair var_14h @ rbp-0x14
+EOF
+RUN
+
+NAME=a qualified typedef of a struct takes over the recovered var inside it
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"td struct pair {short lo; short hi;};"
+"td typedef struct pair pair_t;"
+wx 8845ed897decc3
+af
+afvt var_14h "const pair_t"
+afvb
+EOF
+EXPECT=<<EOF
+var const pair_t var_14h @ rbp-0x14
+EOF
+RUN
+
+NAME=a pointer to a struct does not take over the recovered var beside it
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"td struct pair {short lo; short hi;};"
+wx 8845ed897decc3
+af
+afvt var_14h "struct pair *"
+afvb
+EOF
+EXPECT=<<EOF
+var int8_t var_13h @ rbp-0x13
+var struct pair * var_14h @ rbp-0x14
+EOF
+RUN
+
+NAME=a declared scalar leaves its neighbours alone
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 897dec8975e8c3
+af
+afvt var_14h int32_t
+afvb
+EOF
+EXPECT=<<EOF
+var int32_t var_14h @ rbp-0x14
+var int32_t var_18h @ rbp-0x18
+EOF
+RUN
+
+NAME=aft preserves BP-relative indices for an explicit array
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e54883ec2048b8414141414141414148ba4242424242424200488945e0488955e8488d45e04889c7e850000000c9c3
+af @ 0
+afvn s var_20h
+afvt s "char [16]"
+aft
+pd 1 @ 0x1c
+pd 1 @ 0x20
+aft
+pd 1 @ 0x1c
+pd 1 @ 0x20
+EOF
+EXPECT=<<EOF
+|           0x0000001c      488945e0       mov qword [s], rax
+|           0x00000020      488955e8       mov qword [s[8]], rdx
+|           0x0000001c      488945e0       mov qword [s], rax
+|           0x00000020      488955e8       mov qword [s[8]], rdx
+EOF
+RUN
+
+NAME=aft preserves explicit SP-relative array indices across stack adjustments
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4883ec3048b8414141414141414148ba424242424242420048894424084883ec104889542420488d7c2418e8d00000004883c440c3
+af @ 0
+afvn s var_8h
+afvt s "char [16]"
+aft
+pd 1 @ 0x18
+pd 1 @ 0x21
+aft
+pd 1 @ 0x18
+pd 1 @ 0x21
+EOF
+EXPECT=<<EOF
+|           0x00000018      4889442408     mov qword [s], rax
+|           0x00000021      4889542420     mov qword [s[8]], rdx
+|           0x00000018      4889442408     mov qword [s], rax
+|           0x00000021      4889542420     mov qword [s[8]], rdx
+EOF
+RUN
+
+NAME=split blocks keep the stack depth
+FILE=-
+ARGS=-a arm -b 64 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx ff8300d1400000b4020000141f2003d5e10b40f9ff830091c0035fd6
+wx ff8300d11f2003d51f2003d5e10b40f9c0ffffb4ff830091c0035fd6 @ 0x100
+af
+afva
+afv
+af @ 0x100
+afva @ 0x100
+afv @ 0x100
+EOF
+EXPECT=<<EOF
+var int64_t var_10h @ sp+0x10
+var int64_t var_10h @ sp+0x10
+EOF
+RUN
+
+NAME=jump table cases keep the stack depth
+FILE=bins/mach0/rust/rust_nonnull_arm64
+CMDS=<<EOF
+af @ 0x100032ba0
+afva @ 0x100032ba0
+afv @ 0x100032ba0~arg
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ x0
+arg int64_t arg2 @ x1
+arg int64_t arg3 @ x2
+arg int64_t arg4 @ x3
+EOF
+RUN
+
+NAME=jump table resumes at the dispatch depth
+FILE=bins/elf/libc-2.23.so
+CMDS=<<EOF
+af @ 0x9e930
+afva @ 0x9e930
+afv @ 0x9e930~sp+
+EOF
+EXPECT=<<EOF
+arg int32_t arg_8h @ rsp+0x8
+arg int32_t arg_10h @ rsp+0x10
+arg int32_t arg_18h @ rsp+0x18
+arg int32_t arg_20h @ rsp+0x20
+EOF
+RUN
+
+NAME=sp restored from the frame pointer keeps the stack depth
+FILE=-
+ARGS=-a arm -b 64 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx fd7bbea9fd030091ff0304d11f010091bf030091e00f40f9fd7bc2a8c0035fd6
+wx fd7bbda9fd430091ff0304d11f010091bf4300d1e01740f9fd7bc3a8c0035fd6 @ 0x40
+wx fd7bbea9fd030091ff0304d11f010091bf030091400000b4e00f40f9fd7bc2a8c0035fd6 @ 0x80
+wx fd7bbda9fd430091ff0304d11f010091bf430091e00740f9fd7bc3a8c0035fd6 @ 0xc0
+af
+afva
+afv~var_8h
+af @ 0x40
+afva @ 0x40
+afv @ 0x40~var_8h
+af @ 0x80
+afva @ 0x80
+afv @ 0x80~var_8h
+af @ 0xc0
+afva @ 0xc0
+afv @ 0xc0~var_8h
+EOF
+EXPECT=<<EOF
+var int64_t var_8h @ sp+0x118
+var int64_t var_8h @ sp+0x128
+var int64_t var_8h @ sp+0x118
+var int64_t var_8h @ sp+0x128
+EOF
+RUN
+
+NAME=storing the frame pointer does not restore sp
+FILE=bins/elf/go-cdetect
+CMDS=<<EOF
+af @ 0x434e80
+afva @ 0x434e80
+afv @ 0x434e80
+EOF
+EXPECT=<<EOF
+var int64_t var_10h @ rsp+0x10
+EOF
+RUN
+
+NAME=loading sp through the frame pointer does not restore it
+FILE=-
+ARGS=-a x86 -b 64 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx 554889e54881ec00010000488b65f8488b442418c9c3
+af
+afva
+afv
+EOF
+EXPECT=<<EOF
+var int64_t var_f0h @ rsp+0x18
+var int64_t var_10h @ rbp-0x8
+EOF
+RUN
+
+NAME=adding a register to the frame pointer does not restore sp
+FILE=-
+ARGS=-a x86 -b 64 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx 554889e54881ec000100004801ec488b442418c9c3
+af
+afva
+afv
+EOF
+EXPECT=<<EOF
+var int64_t var_f0h @ rsp+0x18
+EOF
+RUN
+
+NAME=a repurposed frame pointer does not restore sp
+FILE=-
+ARGS=-a x86 -b 64 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx 554889e54881ec000100004889fd4889ec488b442418c9c3
+af
+afva
+afv~rsp
+EOF
+EXPECT=<<EOF
+var int64_t var_f0h @ rsp+0x18
+EOF
+RUN
+
+NAME=a conditional restore from the frame pointer is ignored
+FILE=-
+ARGS=-a arm -b 32 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx 00482de904b08de201dc4de2000050e304d04b1208109de50088bde8
+af
+afva
+afv~sp+
+EOF
+EXPECT=<<EOF
+var int32_t var_100h @ sp+0x8
+EOF
+RUN
+
+NAME=lea rsp from the frame pointer restores the stack depth
+FILE=-
+ARGS=-a x86 -b 64 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx 554889e5534881ec00010000488d65f8488b4424185b5dc3
+wx 554889e5534881ec00010000488d640500488b4424185b5dc3 @ 0x40
+wx 554889e5488da510000080488b4424085dc3 @ 0x80
+af
+afva
+afv~rsp
+af @ 0x40
+afva @ 0x40
+afv @ 0x40~rsp
+af @ 0x80
+afva @ 0x80
+afv @ 0x80~rsp
+afi @ 0x80~stackframe
+EOF
+EXPECT=<<EOF
+arg int64_t arg_8h @ rsp+0x118
+var int64_t var_f8h @ rsp+0x18
+arg int64_t arg_0h @ rsp+0x8
+stackframe: 8
+EOF
+RUN
+
+NAME=arm32 add sp, fp, 0 restores the depth and sp writeback moves it
+FILE=-
+ARGS=-a arm -b 32 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx 04b02de500b08de201dc4de200d08be208109de504b09de41eff2fe1
+wx 00482de900b08de201dc4de201d08be008109de50048bde81eff2fe1 @ 0x40
+wx 04b02de500009de504b09de41eff2fe1 @ 0x80
+wx f8a06de10c009de5d8a0cde01eff2fe1 @ 0xc0
+wx 01002de704009de51eff2fe1 @ 0x100
+af
+afva
+afv~sp
+afi~stackframe
+af @ 0x40
+afva @ 0x40
+afv @ 0x40~sp
+af @ 0x80
+afv @ 0x80~sp
+afi @ 0x80~stackframe
+af @ 0xc0
+afv @ 0xc0~sp
+afi @ 0xc0~stackframe
+af @ 0x100
+afv @ 0x100~sp
+afi @ 0x100~stackframe
+EOF
+EXPECT=<<EOF
+arg int32_t arg_4h @ sp+0x108
+stackframe: 260
+var int32_t var_100h @ sp+0x8
+var int32_t var_4h @ sp+0x0
+stackframe: 4
+arg int32_t arg_4h @ sp+0xc
+stackframe: 8
+arg int32_t arg_0h @ sp+0x0
+arg int32_t arg_4h @ sp+0x4
+stackframe: 0
+EOF
+RUN
+
+NAME=a restore deeper than the frame grows the frame
+FILE=-
+ARGS=-a arm -b 64 -e anal.vars.stackname=true
+CMDS=<<EOF
+wx fd7bbfa9fd030091bf0308d1e00740f9bf030091fd7bc1a8c0035fd6
+wx fd7bbfa9fd030091ff0308d1bf2300d1e00740f9bf030091fd7bc1a8c0035fd6 @ 0x40
+af
+afva
+afv~sp
+afi~stackframe
+af @ 0x40
+afva @ 0x40
+afv @ 0x40~sp
+afi @ 0x40~stackframe
+EOF
+EXPECT=<<EOF
+var int64_t var_208h @ sp+0x8
+stackframe: 528
+var int64_t var_10h @ sp+0x200
+stackframe: 528
+EOF
+RUN
+
+NAME=register arguments survive an IPA-RA leaf call and repeated recovery
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b0000008d047f01f0c3
+wx 83051000000001c3 @ 0x40
+af leaf @ 0x40
+af caller @ 0
+afv @ 0
+afva @ 0
+afv @ 0
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+EOF
+RUN
+
+NAME=IPA-RA recovery tracks partial and conditional callee writes
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b0000008d047f01f0c3
+wx 31ff9090909090c3 @ 0x40
+af leaf @ 0x40
+af caller @ 0
+afv @ 0
+wx 40b70190909090c3 @ 0x40
+afva @ 0x40
+afv- @ 0
+afva @ 0
+afv @ 0
+wx 85c0740231ff90c3 @ 0x40
+af- @ 0x40
+af leaf @ 0x40
+afv- @ 0
+afva @ 0
+afv @ 0
+wx 85c0740231c090c3 @ 0x40
+afva @ 0x40
+afv- @ 0
+afva @ 0
+afv @ 0
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rsi
+arg int64_t arg1 @ rsi
+arg int64_t arg1 @ rsi
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+EOF
+RUN
+
+NAME=IPA-RA recovery follows nested local calls and tail calls
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b0000008d047f01f0c3
+wx e83b000000c3 @ 0x40
+wx 83051000000001c3 @ 0x80
+af leaf @ 0x80
+af middle @ 0x40
+af caller @ 0
+afv @ 0
+wx e93b000000 @ 0x40
+af- @ 0x40
+af middle @ 0x40
+afv- @ 0
+afva @ 0
+afv @ 0
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+EOF
+RUN
+
+NAME=IPA-RA recovery keeps ABI fallback for unknown indirect and recursive callees
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b0000008d047f01f0c3
+wx ffd0c3 @ 0x40
+af leaf @ 0x40
+af caller @ 0
+afvj @ 0
+wx e8fbffffffc3 @ 0x40
+af- @ 0x40
+af leaf @ 0x40
+afv- @ 0
+afva @ 0
+afvj @ 0
+wx e8fb000000c3 @ 0x40
+af- @ 0x40
+af leaf @ 0x40
+afv- @ 0
+afva @ 0
+afvj @ 0
+EOF
+EXPECT=<<EOF
+{"reg":[],"sp":[],"bp":[]}
+{"reg":[],"sp":[],"bp":[]}
+{"reg":[],"sp":[],"bp":[]}
+EOF
+RUN
+
+NAME=IPA-RA recovery includes implicit register writes
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b00000089d0c3
+wx f7e3c3 @ 0x40
+af leaf @ 0x40
+afv- @ 0x40
+af caller @ 0
+afvj @ 0
+EOF
+EXPECT=<<EOF
+{"reg":[],"sp":[],"bp":[]}
+EOF
+RUN
+
+NAME=IPA-RA recovery handles floating point arguments
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b000000f20f58c1c3
+wx 83051000000001c3 @ 0x40
+af leaf @ 0x40
+af caller @ 0
+afv @ 0
+wx 0f57c090909090c3 @ 0x40
+af- @ 0x40
+af leaf @ 0x40
+afv- @ 0
+afva @ 0
+afv @ 0
+EOF
+EXPECT=<<EOF
+arg double arg1 @ xmm0
+arg double arg2 @ xmm1
+arg double arg1 @ xmm1
+EOF
+RUN
+
+NAME=IPA-RA discards stale callee summaries after a code patch
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b0000008d047f01f0c3
+wx b801000000c3 @ 0x40
+af leaf @ 0x40
+af caller @ 0
+wx bf01000000c3 @ 0x40
+afv- @ 0
+afva @ 0
+afvj @ 0
+afva @ 0x40
+afva @ 0
+afv @ 0
+EOF
+EXPECT=<<EOF
+{"reg":[],"sp":[],"bp":[]}
+arg int64_t arg1 @ rsi
+EOF
+RUN
+
+NAME=IPA-RA discards summaries when the register profile changes
+FILE=malloc://256
+ARGS=-a x86 -b64
+CMDS=<<EOF
+wx e83b0000008d047f01f0c3
+wx 83051000000001c3 @ 0x40
+af leaf @ 0x40
+af caller @ 0
+e asm.bits=32
+afva @ 0x40
+e asm.bits=64
+afv- @ 0
+afva @ 0
+afvj @ 0
+afva @ 0x40
+afva @ 0
+afv @ 0
+EOF
+EXPECT=<<EOF
+{"reg":[],"sp":[],"bp":[]}
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+EOF
+RUN
+
+NAME=GCC IPA-RA ELF recovers arguments used after a local call
+FILE=bins/elf/gcc-fipara/ipara_on
+CMDS=<<EOF
+aaa
+afv @ sym.use_after_call
+afva @ sym.use_after_call
+afv @ sym.use_after_call
+afvj @ sym.func1
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+{"reg":[],"sp":[],"bp":[]}
+EOF
+RUN
+
+NAME=GCC without IPA-RA keeps saved register arguments
+FILE=bins/elf/gcc-fipara/ipara_off
+CMDS=<<EOF
+aaa
+afv @ sym.use_after_call
+afva @ sym.use_after_call
+afv @ sym.use_after_call
+afvj @ sym.func1
+EOF
+EXPECT=<<EOF
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+arg int64_t arg1 @ rdi
+arg int64_t arg2 @ rsi
+{"reg":[],"sp":[],"bp":[]}
+EOF
+RUN
+
+NAME=a callee with more register vars than the convention has argument slots
+FILE=malloc://512
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx e8fb000000c3
+wx 4889f8c3 @ 0x100
+af @ 0x100
+af @ 0
+afvr rdi a1 int @ 0x100
+afvr rsi a2 int @ 0x100
+afvr rdx a3 int @ 0x100
+afvr rcx a4 int @ 0x100
+afvr r8 a5 int @ 0x100
+afvr r9 a6 int @ 0x100
+afvr rax a7 int @ 0x100
+afvr rbx a8 int @ 0x100
+afva @ 0
+afv @ 0
+EOF
+EXPECT=<<EOF
+arg int a1 @ rdi
+arg int a2 @ rsi
+arg int a3 @ rdx
+arg int a4 @ rcx
+arg int a5 @ r8
+arg int a6 @ r9
 EOF
 RUN

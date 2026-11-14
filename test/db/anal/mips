@@ -1,12 +1,18 @@
+# merged: gp-based ref
 NAME=mips hello ref anal
 FILE=bins/elf/analysis/mips-hello
 CMDS=<<EOF
 s sym.main
 aac
 afl~?
+?e --
+aae @entry0
+axt str.Hello_World
 EOF
 EXPECT=<<EOF
 1
+--
+(nofunc); str.Hello_World 0x805c4 [DATA:r--] addiu a0, v0, str.Hello_World
 EOF
 RUN
 
@@ -46,7 +52,7 @@ axt str.busybox
 EOF
 EXPECT=<<EOF
             0x00406228      fcc38424       addiu a0, a0, -0x3c04       ; 0x44c3fc ; "busybox" ; str.busybox
-(nofunc); str.busybox 0x406228 [DATA] addiu a0, a0, -str.busybox
+(nofunc); str.busybox 0x406228 [DATA:r--] addiu a0, a0, -str.busybox
 EOF
 RUN
 
@@ -76,21 +82,55 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=gp-based ref
-FILE=bins/elf/analysis/mips-hello
+NAME=mips dlmalloc parameter detection
+FILE=bins/elf/ld-uClibc-0.9.33.2.so
 CMDS=<<EOF
-aae @entry0
-axt str.Hello_World
+s sym._dl_malloc
+af
+afva
+afcf
+s sym._dl_calloc
+af
+afva
+afcf
 EOF
 EXPECT=<<EOF
-(nofunc); str.Hello_World 0x805c4 [DATA] addiu a0, v0, str.Hello_World
+sym._dl_malloc (int32_t arg1);
+sym._dl_calloc (int32_t arg1, int32_t arg2);
+EOF
+RUN
+
+NAME=mips gp jmptbl uses gp base
+FILE=malloc://0x2000
+ARGS=-m 0x10000000
+CMDS=<<EOF
+e scr.interactive=false
+e io.va=true
+e anal.gp=0x10001000
+e asm.arch=mips
+e asm.bits=32
+s 0x10000000
+wx e0ff838f80101000211043000000428c08004000000000000800e00300000000
+wx 00ffffff80ffffffc0ffffffffffffffff @ 0x10000060
+wx 60000010 @ 0x10000fe0
+wx 0800e00300000000 @ 0x10000f00
+wx 0800e00300000000 @ 0x10000f80
+wx 0800e00300000000 @ 0x10000fc0
+aae
+af @ 0x10000000
+pd 1 @ 0x10000010~switch table
+axt 0x10000f00~switch table
+EOF
+EXPECT=<<EOF
+|           0x10000010      08004000       jr v0                       ; switch table (3 cases) at 0x10000060
+fcn.10000000; switch table (3 cases) at 0x10000060 0x10000010 [CODE:--x] jr v0
 EOF
 RUN
 
 NAME=assembler
 FILE=-
 CMDS=<<EOF
-e asm.arch=mips.gnu
+e asm.arch=mips
 e asm.bits=32
 e cfg.bigendian=0
 pa lui t9, 0x41
@@ -112,7 +152,7 @@ RUN
 NAME=with-spaces
 FILE=-
 CMDS=<<EOF
-e asm.arch=mips.gnu
+e asm.arch=mips
 e asm.bits=32
 e cfg.bigendian=0
 pa addiu v0, v1, 33
@@ -144,6 +184,7 @@ EOF
 RUN
 
 NAME=mips pseudo sw + 0
+REQUIRE=cs5
 FILE=malloc://32
 ARGS=-a mips -m 0x80100000
 CMDS=<<EOF
@@ -159,6 +200,23 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=mips pseudo sw + 0 (cs6)
+REQUIRE=cs6
+FILE=malloc://32
+ARGS=-a mips -m 0x80100000
+CMDS=<<EOF
+e io.va=true
+wx 0000beaf
+pd 1
+e asm.pseudo=true
+pd 1
+EOF
+EXPECT=<<EOF
+            0x80100000      0000beaf       sw fp, 0(sp)
+            0x80100000      0000beaf       [sp + 0] = fp
+EOF
+RUN
+
 NAME=mips LE anal
 FILE=malloc://32
 CMDS=<<EOF
@@ -170,6 +228,72 @@ ao 1~type:[1]
 EOF
 EXPECT=<<EOF
 call
+EOF
+RUN
+
+NAME=mips bne no likely skip
+FILE=malloc://16
+CMDS=<<EOF
+e asm.arch=mips
+e asm.bits=32
+wx 01000915
+aoe 1~?pc,4,+,pc,:=
+EOF
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=mips bnel likely skips next
+FILE=malloc://16
+CMDS=<<EOF
+e asm.arch=mips
+e asm.bits=32
+wx 01000955
+aoe 1~?pc,4,+,pc,:=
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=mips64 dneg dnegu esil
+FILE=malloc://16
+CMDS=<<EOF
+e asm.arch=mips
+e asm.bits=64
+wx 2e1003002f100300
+aoe 2
+EOF
+EXPECT=<<EOF
+0x00000000 v1,zero,-,v0,=
+0x00000004 v1,zero,-,v0,=
+EOF
+RUN
+
+NAME=mips bgtz no likely skip
+FILE=malloc://16
+CMDS=<<EOF
+e asm.arch=mips
+e asm.bits=32
+wx 0100001d
+aoe 1~?pc,4,+,pc,:=
+EOF
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=mips bgtzl likely skips next
+FILE=malloc://16
+CMDS=<<EOF
+e asm.arch=mips
+e asm.bits=32
+wx 0100005d
+aoe 1~?pc,4,+,pc,:=
+EOF
+EXPECT=<<EOF
+1
 EOF
 RUN
 
@@ -198,7 +322,7 @@ RUN
 NAME=mips LE correct relative jump reference if not mapped from command line.
 FILE=malloc://40
 CMDS=<<EOF
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
 e asm.arch=mips
 e anal.nopskip=false
@@ -230,7 +354,7 @@ FILE=malloc://40
 ARGS=-m 0x80100000
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
 e asm.arch=mips
 e asm.lines.bb=false
@@ -252,12 +376,12 @@ EXPECT=<<EOF
 0x80100014      00000000   nop
 0x80100018      40040408   j 0x80101100
 0x8010001c      00000000   nop
-  ; CALL XREF from fcn.80100000 @ 0x80100000
+  ; CALL XREF from fcn.80100000 @ 0x80100000(x)
 (fcn) fcn.80100020 8
 0x80100020      0800e003   jr ra
 0x80100024      00000000   nop
-0x80100000    1 32           fcn.80100000
-0x80100020    1 8            fcn.80100020
+0x80100000    1     32 fcn.80100000
+0x80100020    1      8 fcn.80100020
 EOF
 RUN
 
@@ -266,7 +390,7 @@ FILE=malloc://20
 ARGS=-m 0x80100000
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
 e asm.arch=mips
 e asm.nbytes=4
@@ -288,7 +412,7 @@ RUN
 NAME=mips branch delay function sizing.
 FILE=malloc://20
 CMDS=<<EOF
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
 e asm.arch=mips
 e asm.nbytes=4
@@ -309,7 +433,7 @@ FILE=malloc://40
 ARGS=-m 0x80100000
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
 e asm.arch=mips
 e asm.comments=false
@@ -340,7 +464,7 @@ FILE=malloc://40
 ARGS=-m 0x80100000
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
 e asm.arch=mips
 e asm.comments=false
@@ -372,7 +496,7 @@ FILE=malloc://40
 ARGS=-m 0x80100000
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.arch=mips
 e asm.bits=32
 e asm.comments=false
@@ -403,7 +527,7 @@ FILE=malloc://56
 ARGS=-m 0x80100000
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.arch=mips
 e asm.bits=32
 e asm.comments=false
@@ -433,11 +557,12 @@ EOF
 RUN
 
 NAME=mips branch delay function detection #1.
+REQUIRE=cs5
 FILE=malloc://160
 ARGS=-m 0x8060b4f8
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
 e asm.arch=mips
 e asm.comments=0
@@ -456,8 +581,8 @@ EXPECT=<<EOF
 0x8060b4f8      00000000   nop
 0x8060b4fc      00000000   nop
 (fcn) fcn.8060b500 80
-; arg int32_t arg1 @ a0
-; arg int32_t arg2 @ a1
+// void fcn.8060b500 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b500      002e0500   sll a1, a1, 0x18
 0x8060b504      032e0500   sra a1, a1, 0x18
 0x8060b508      0f008010   beqz a0, 0x8060b548
@@ -479,8 +604,8 @@ EXPECT=<<EOF
 0x8060b548      0800e003   jr ra
 0x8060b54c      00000000   nop
 (fcn) fcn.8060b550 36
-; arg int32_t arg1 @ a0
-; arg int32_t arg2 @ a1
+// void fcn.8060b550 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b550      0000a290   lbu v0, (a1)
 0x8060b554      05004010   beqz v0, 0x8060b56c
 0x8060b558      0100a524   addiu a1, a1, 1
@@ -492,6 +617,8 @@ EXPECT=<<EOF
 0x8060b570      000080a0   sb zero, (a0)
 0x8060b574      00000000   nop
 (fcn) fcn.8060b578 20
+// void fcn.8060b578 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b578      e0ffbd27   addiu sp, sp, -0x20
 0x8060b57c      542d180c   jal fcn.8060b550
 0x8060b580      00000000   nop
@@ -501,14 +628,15 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=GNU mips branch delay function detection #1.
+NAME=mips branch delay function detection #1. (cs6)
+REQUIRE=cs6
 FILE=malloc://160
 ARGS=-m 0x8060b4f8
-BROKEN=1
 CMDS=<<EOF
 e io.va=true
+e asm.cmt.calls=false
 e asm.bits=32
-e asm.arch=mips.gnu
+e asm.arch=mips
 e asm.comments=0
 e anal.hasnext=1
 e anal.nopskip=1
@@ -525,6 +653,8 @@ EXPECT=<<EOF
 0x8060b4f8      00000000   nop
 0x8060b4fc      00000000   nop
 (fcn) fcn.8060b500 80
+// void fcn.8060b500 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b500      002e0500   sll a1, a1, 0x18
 0x8060b504      032e0500   sra a1, a1, 0x18
 0x8060b508      0f008010   beqz a0, 0x8060b548
@@ -546,6 +676,8 @@ EXPECT=<<EOF
 0x8060b548      0800e003   jr ra
 0x8060b54c      00000000   nop
 (fcn) fcn.8060b550 36
+// void fcn.8060b550 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b550      0000a290   lbu v0, 0(a1)
 0x8060b554      05004010   beqz v0, 0x8060b56c
 0x8060b558      0100a524   addiu a1, a1, 1
@@ -554,9 +686,75 @@ EXPECT=<<EOF
 0x8060b564      552d1808   j 0x8060b554
 0x8060b568      01008424   addiu a0, a0, 1
 0x8060b56c      0800e003   jr ra
-0x8060b570      000080a0   sb zero, (a0)
+0x8060b570      000080a0   sb zero, 0(a0)
 0x8060b574      00000000   nop
 (fcn) fcn.8060b578 20
+// void fcn.8060b578 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
+0x8060b578      e0ffbd27   addiu sp, sp, -0x20
+0x8060b57c      542d180c   jal fcn.8060b550
+0x8060b580      00000000   nop
+0x8060b584      0800e003   jr ra
+0x8060b588      2000bd27   addiu sp, sp, 0x20
+0x8060b58c      00000000   nop
+EOF
+RUN
+
+NAME=GNU mips branch delay function detection #1.
+FILE=malloc://160
+ARGS=-m 0x8060b4f8
+CMDS=<<EOF
+e io.va=true
+e asm.bits=32
+e asm.arch=mips.gnu
+e asm.comments=0
+e anal.hasnext=1
+e anal.nopskip=1
+e asm.nbytes=4
+e asm.lines.bb=false
+e asm.lines.jmp=false
+e asm.lines.fcn=false
+s 0x8060b4f8
+wx 0000000000000000002e0500032e05000f00801021100000492d1808000082900800e003211080000000829007004010000000000016020003160200f8ff451000000000482d180801008424211000000800e003000000000000a290050040100100a524000082a00000a290552d1808010084240800e003000080a000000000e0ffbd27542d180c000000000800e0032000bd270000000000000000
+aa 2> /dev/null
+pd 38
+EOF
+EXPECT=<<EOF
+0x8060b4f8      00000000   nop
+0x8060b4fc      00000000   nop
+80: fcn.8060b500 ();
+0x8060b500      002e0500   sll a1, a1, 0x18
+0x8060b504      032e0500   sra a1, a1, 0x18
+0x8060b508      0f008010   beqz a0, 0x8060b548
+0x8060b50c      21100000   move v0, zero
+0x8060b510      492d1808   j 0x8060b524
+0x8060b514      00008290   lbu v0, 0(a0)
+0x8060b518      0800e003   jr ra
+0x8060b51c      21108000   move v0, a0
+0x8060b520      00008290   lbu v0, 0(a0)
+0x8060b524      07004010   beqz v0, 0x8060b544
+0x8060b528      00000000   nop
+0x8060b52c      00160200   sll v0, v0, 0x18
+0x8060b530      03160200   sra v0, v0, 0x18
+0x8060b534      f8ff4510   beq v0, a1, 0x8060b518
+0x8060b538      00000000   nop
+0x8060b53c      482d1808   j 0x8060b520
+0x8060b540      01008424   addiu a0, a0, 1
+0x8060b544      21100000   move v0, zero
+0x8060b548      0800e003   jr ra
+0x8060b54c      00000000   nop
+36: fcn.8060b550 ();
+0x8060b550      0000a290   lbu v0, 0(a1)
+0x8060b554      05004010   beqz v0, 0x8060b56c
+0x8060b558      0100a524   addiu a1, a1, 1
+0x8060b55c      000082a0   sb v0, 0(a0)
+0x8060b560      0000a290   lbu v0, 0(a1)
+0x8060b564      552d1808   j 0x8060b554
+0x8060b568      01008424   addiu a0, a0, 1
+0x8060b56c      0800e003   jr ra
+0x8060b570      000080a0   sb zero, 0(a0)
+0x8060b574      00000000   nop
+20: fcn.8060b578 ();
 0x8060b578      e0ffbd27   addiu sp, sp, -32
 0x8060b57c      542d180c   jal fcn.8060b550
 0x8060b580      00000000   nop
@@ -567,14 +765,15 @@ EOF
 RUN
 
 NAME=capstone: mips branch delay function detection #1.
+REQUIRE=cs5
 FILE=malloc://160
 ARGS=-m 0x8060b4f8
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
+e anal.in=io.maps
 e asm.bits=32
 e asm.arch=mips
-e anal.noncode=1
 e asm.comments=0
 e anal.hasnext=1
 e anal.nopskip=1
@@ -591,8 +790,8 @@ EXPECT=<<EOF
 0x8060b4f8      00000000   nop
 0x8060b4fc      00000000   nop
 (fcn) fcn.8060b500 80
-; arg int32_t arg1 @ a0
-; arg int32_t arg2 @ a1
+// void fcn.8060b500 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b500      002e0500   sll a1, a1, 0x18
 0x8060b504      032e0500   sra a1, a1, 0x18
 0x8060b508      0f008010   beqz a0, 0x8060b548
@@ -614,8 +813,8 @@ EXPECT=<<EOF
 0x8060b548      0800e003   jr ra
 0x8060b54c      00000000   nop
 (fcn) fcn.8060b550 36
-; arg int32_t arg1 @ a0
-; arg int32_t arg2 @ a1
+// void fcn.8060b550 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b550      0000a290   lbu v0, (a1)
 0x8060b554      05004010   beqz v0, 0x8060b56c
 0x8060b558      0100a524   addiu a1, a1, 1
@@ -627,6 +826,81 @@ EXPECT=<<EOF
 0x8060b570      000080a0   sb zero, (a0)
 0x8060b574      00000000   nop
 (fcn) fcn.8060b578 20
+// void fcn.8060b578 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
+0x8060b578      e0ffbd27   addiu sp, sp, -0x20
+0x8060b57c      542d180c   jal fcn.8060b550
+0x8060b580      00000000   nop
+0x8060b584      0800e003   jr ra
+0x8060b588      2000bd27   addiu sp, sp, 0x20
+0x8060b58c      00000000   nop
+EOF
+RUN
+
+NAME=capstone: mips branch delay function detection #1. (cs6)
+REQUIRE=cs6
+FILE=malloc://160
+ARGS=-m 0x8060b4f8
+CMDS=<<EOF
+e io.va=true
+e asm.cmt.calls=false
+e anal.in=io.maps
+e asm.bits=32
+e asm.arch=mips
+e asm.comments=0
+e anal.hasnext=1
+e anal.nopskip=1
+e asm.nbytes=4
+e asm.lines.bb=false
+e asm.lines.jmp=false
+e asm.lines.fcn=false
+s 0x8060b4f8
+wx 0000000000000000002e0500032e05000f00801021100000492d1808000082900800e003211080000000829007004010000000000016020003160200f8ff451000000000482d180801008424211000000800e003000000000000a290050040100100a524000082a00000a290552d1808010084240800e003000080a000000000e0ffbd27542d180c000000000800e0032000bd270000000000000000
+aa 2> /dev/null
+pd 38
+EOF
+EXPECT=<<EOF
+0x8060b4f8      00000000   nop
+0x8060b4fc      00000000   nop
+(fcn) fcn.8060b500 80
+// void fcn.8060b500 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
+0x8060b500      002e0500   sll a1, a1, 0x18
+0x8060b504      032e0500   sra a1, a1, 0x18
+0x8060b508      0f008010   beqz a0, 0x8060b548
+0x8060b50c      21100000   move v0, zero
+0x8060b510      492d1808   j 0x8060b524
+0x8060b514      00008290   lbu v0, 0(a0)
+0x8060b518      0800e003   jr ra
+0x8060b51c      21108000   move v0, a0
+0x8060b520      00008290   lbu v0, 0(a0)
+0x8060b524      07004010   beqz v0, 0x8060b544
+0x8060b528      00000000   nop
+0x8060b52c      00160200   sll v0, v0, 0x18
+0x8060b530      03160200   sra v0, v0, 0x18
+0x8060b534      f8ff4510   beq v0, a1, 0x8060b518
+0x8060b538      00000000   nop
+0x8060b53c      482d1808   j 0x8060b520
+0x8060b540      01008424   addiu a0, a0, 1
+0x8060b544      21100000   move v0, zero
+0x8060b548      0800e003   jr ra
+0x8060b54c      00000000   nop
+(fcn) fcn.8060b550 36
+// void fcn.8060b550 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
+0x8060b550      0000a290   lbu v0, 0(a1)
+0x8060b554      05004010   beqz v0, 0x8060b56c
+0x8060b558      0100a524   addiu a1, a1, 1
+0x8060b55c      000082a0   sb v0, 0(a0)
+0x8060b560      0000a290   lbu v0, 0(a1)
+0x8060b564      552d1808   j 0x8060b554
+0x8060b568      01008424   addiu a0, a0, 1
+0x8060b56c      0800e003   jr ra
+0x8060b570      000080a0   sb zero, 0(a0)
+0x8060b574      00000000   nop
+(fcn) fcn.8060b578 20
+// void fcn.8060b578 (int32_t arg1, int32_t arg2);
+`- args(a0, a1)
 0x8060b578      e0ffbd27   addiu sp, sp, -0x20
 0x8060b57c      542d180c   jal fcn.8060b550
 0x8060b580      00000000   nop
@@ -637,14 +911,15 @@ EOF
 RUN
 
 NAME=capstone: mips branch delay function detection #2.
+REQUIRE=cs5
 FILE=malloc://160
 ARGS=-m 0x8060b4f8
 CMDS=<<EOF
 e io.va=true
-e asm.calls=false
+e asm.cmt.calls=false
 e asm.bits=32
+e anal.in=io.maps
 e asm.arch=mips
-e anal.noncode=1
 e asm.comments=0
 e anal.hasnext=1
 e anal.nopskip=1
@@ -661,8 +936,8 @@ EXPECT=<<EOF
   0x8060b4f8      00000000   nop
   0x8060b4fc      00000000   nop
 / (fcn) fcn.8060b500 80
-| ; arg int32_t arg1 @ a0
-| ; arg int32_t arg2 @ a1
+// void fcn.8060b500 (int32_t arg1, int32_t arg2);
+| `- args(a0, a1)
 | 0x8060b500      002e0500   sll a1, a1, 0x18
 | 0x8060b504      032e0500   sra a1, a1, 0x18
 | 0x8060b508      0f008010   beqz a0, 0x8060b548
@@ -684,8 +959,8 @@ EXPECT=<<EOF
 | 0x8060b548      0800e003   jr ra
 \ 0x8060b54c      00000000   nop
 / (fcn) fcn.8060b550 36
-| ; arg int32_t arg1 @ a0
-| ; arg int32_t arg2 @ a1
+// void fcn.8060b550 (int32_t arg1, int32_t arg2);
+| `- args(a0, a1)
 | 0x8060b550      0000a290   lbu v0, (a1)
 | 0x8060b554      05004010   beqz v0, 0x8060b56c
 | 0x8060b558      0100a524   addiu a1, a1, 1
@@ -697,6 +972,81 @@ EXPECT=<<EOF
 \ 0x8060b570      000080a0   sb zero, (a0)
   0x8060b574      00000000   nop
 / (fcn) fcn.8060b578 20
+// void fcn.8060b578 (int32_t arg1, int32_t arg2);
+| `- args(a0, a1)
+| 0x8060b578      e0ffbd27   addiu sp, sp, -0x20
+| 0x8060b57c      542d180c   jal fcn.8060b550
+| 0x8060b580      00000000   nop
+| 0x8060b584      0800e003   jr ra
+\ 0x8060b588      2000bd27   addiu sp, sp, 0x20
+  0x8060b58c      00000000   nop
+EOF
+RUN
+
+NAME=capstone: mips branch delay function detection #2. (cs6)
+REQUIRE=cs6
+FILE=malloc://160
+ARGS=-m 0x8060b4f8
+CMDS=<<EOF
+e io.va=true
+e asm.cmt.calls=false
+e asm.bits=32
+e anal.in=io.maps
+e asm.arch=mips
+e asm.comments=0
+e anal.hasnext=1
+e anal.nopskip=1
+e asm.nbytes=4
+e asm.lines.bb=false
+e asm.lines.jmp=false
+e asm.lines.fcn=true
+s 0x8060b4f8
+wx 0000000000000000002e0500032e05000f00801021100000492d1808000082900800e003211080000000829007004010000000000016020003160200f8ff451000000000482d180801008424211000000800e003000000000000a290050040100100a524000082a00000a290552d1808010084240800e003000080a000000000e0ffbd27542d180c000000000800e0032000bd270000000000000000
+aa 2> /dev/null
+pd 38
+EOF
+EXPECT=<<EOF
+  0x8060b4f8      00000000   nop
+  0x8060b4fc      00000000   nop
+/ (fcn) fcn.8060b500 80
+// void fcn.8060b500 (int32_t arg1, int32_t arg2);
+| `- args(a0, a1)
+| 0x8060b500      002e0500   sll a1, a1, 0x18
+| 0x8060b504      032e0500   sra a1, a1, 0x18
+| 0x8060b508      0f008010   beqz a0, 0x8060b548
+| 0x8060b50c      21100000   move v0, zero
+| 0x8060b510      492d1808   j 0x8060b524
+| 0x8060b514      00008290   lbu v0, 0(a0)
+| 0x8060b518      0800e003   jr ra
+| 0x8060b51c      21108000   move v0, a0
+| 0x8060b520      00008290   lbu v0, 0(a0)
+| 0x8060b524      07004010   beqz v0, 0x8060b544
+| 0x8060b528      00000000   nop
+| 0x8060b52c      00160200   sll v0, v0, 0x18
+| 0x8060b530      03160200   sra v0, v0, 0x18
+| 0x8060b534      f8ff4510   beq v0, a1, 0x8060b518
+| 0x8060b538      00000000   nop
+| 0x8060b53c      482d1808   j 0x8060b520
+| 0x8060b540      01008424   addiu a0, a0, 1
+| 0x8060b544      21100000   move v0, zero
+| 0x8060b548      0800e003   jr ra
+\ 0x8060b54c      00000000   nop
+/ (fcn) fcn.8060b550 36
+// void fcn.8060b550 (int32_t arg1, int32_t arg2);
+| `- args(a0, a1)
+| 0x8060b550      0000a290   lbu v0, 0(a1)
+| 0x8060b554      05004010   beqz v0, 0x8060b56c
+| 0x8060b558      0100a524   addiu a1, a1, 1
+| 0x8060b55c      000082a0   sb v0, 0(a0)
+| 0x8060b560      0000a290   lbu v0, 0(a1)
+| 0x8060b564      552d1808   j 0x8060b554
+| 0x8060b568      01008424   addiu a0, a0, 1
+| 0x8060b56c      0800e003   jr ra
+\ 0x8060b570      000080a0   sb zero, 0(a0)
+  0x8060b574      00000000   nop
+/ (fcn) fcn.8060b578 20
+// void fcn.8060b578 (int32_t arg1, int32_t arg2);
+| `- args(a0, a1)
 | 0x8060b578      e0ffbd27   addiu sp, sp, -0x20
 | 0x8060b57c      542d180c   jal fcn.8060b550
 | 0x8060b580      00000000   nop
@@ -707,21 +1057,874 @@ EOF
 RUN
 
 NAME=mips big endian strings, calls, etc. analysis
+REQUIRE=cs5
 FILE=bins/elf/analysis/mipsbe-ip
 CMDS=<<EOF
 s 0x00402088
 pd 10
 EOF
 EXPECT=<<EOF
-            0x00402088      8f84814c       lw a0, -main(gp)            ; [0x43522c:4]=0x402558 sym.main
+            0x00402088      8f84814c       lw a0, -main(gp)            ; [reloc.main:4]=0x402558 sym.main
             0x0040208c      8fa50000       lw a1, (sp)
             0x00402090      27a60004       addiu a2, sp, 4
             0x00402094      2401fff8       addiu at, zero, -8
             0x00402098      03a1e824       and sp, sp, at
             0x0040209c      27bdffe0       addiu sp, sp, -0x20
-            0x004020a0      8f878230       lw a3, -sym._init(gp)       ; [0x435310:4]=0x401ff4 sym._init
-            0x004020a4      8f888114       lw t0, -sym._fini(gp)       ; [0x4351f4:4]=0x41eca0 sym._fini
+            0x004020a0      8f878230       lw a3, -sym._init(gp)       ; [reloc._init:4]=0x401ff4 sym._init
+            0x004020a4      8f888114       lw t0, -sym._fini(gp)       ; [reloc._fini:4]=0x41eca0 sym._fini
             0x004020a8      afa80010       sw t0, 0x10(sp)
             0x004020ac      afa20014       sw v0, 0x14(sp)
+EOF
+RUN
+
+NAME=mips big endian strings, calls, etc. analysis (cs6)
+REQUIRE=cs6
+FILE=bins/elf/analysis/mipsbe-ip
+CMDS=<<EOF
+s 0x00402088
+pd 10
+EOF
+EXPECT=<<EOF
+            0x00402088      8f84814c       lw a0, -main(gp)            ; [reloc.main:4]=0x402558 sym.main
+            0x0040208c      8fa50000       lw a1, 0(sp)
+            0x00402090      27a60004       addiu a2, sp, 4
+            0x00402094      2401fff8       addiu at, zero, -8
+            0x00402098      03a1e824       and sp, sp, at
+            0x0040209c      27bdffe0       addiu sp, sp, -0x20
+            0x004020a0      8f878230       lw a3, -sym._init(gp)       ; [reloc._init:4]=0x401ff4 sym._init
+            0x004020a4      8f888114       lw t0, -sym._fini(gp)       ; [reloc._fini:4]=0x41eca0 sym._fini
+            0x004020a8      afa80010       sw t0, 0x10(sp)
+            0x004020ac      afa20014       sw v0, 0x14(sp)
+EOF
+RUN
+
+# merged: aav without vinfun
+NAME=aac on mips be
+FILE=bins/elf/analysis/mipsbe-busybox
+CMDS=<<EOF
+aac
+afl~?
+?e --
+af @ 0x0040dea4
+e anal.vinfun=false
+aav
+pd 1 @ 0x0040decc~?andi
+EOF
+EXPECT=<<EOF
+1273
+--
+1
+EOF
+RUN
+
+NAME=raw aac with maps (less because of wrong map address)
+FILE=bins/elf/analysis/mipsbe-busybox
+ARGS=-n -m 0x80000 -a mips -b32 -e cfg.bigendian=true
+CMDS=<<EOF
+aac
+afl~?
+EOF
+EXPECT=<<EOF
+7
+EOF
+RUN
+
+NAME=aav with vinfun
+FILE=bins/elf/analysis/mipsbe-busybox
+CMDS=<<EOF
+af @ 0x0040ddb0
+e anal.vinfun=true
+aav
+pd 1 @ 0x00463508~?dword
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=jmptbl
+FILE=bins/elf/mips-ncc
+CMDS=<<EOF
+s 0x004ee1a4
+af
+s 0x004ee230
+pdsf~case
+abj~{[0].switch_op.cases}
+EOF
+EXPECT=<<EOF
+0x004ee230 switch table (5 cases) at 0x5a74b4
+[{"addr":5169860,"jump":5169860,"value":0},{"addr":5169720,"jump":5169720,"value":1},{"addr":5169860,"jump":5169860,"value":2},{"addr":5170872,"jump":5170872,"value":3},{"addr":5170928,"jump":5170928,"value":4},{"addr":5169720,"jump":5169720,"value":18446744073709551615}]
+EOF
+RUN
+
+NAME=mips o32 cc clobber and preserve register sets
+FILE=malloc://16
+ARGS=-e anal.arch=mips -e asm.bits=32
+CMDS=<<EOF
+k anal/cc/cc.o32.clobber
+k anal/cc/cc.o32.preserve
+EOF
+EXPECT=<<EOF
+at,v0,v1,a0,a1,a2,a3,t0,t1,t2,t3,t4,t5,t6,t7,t8,t9,gp,ra,f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f14,f15,f16,f17,f18,f19
+s0,s1,s2,s3,s4,s5,s6,s7,sp,fp,f20,f21,f22,f23,f24,f25,f26,f27,f28,f29,f30,f31
+EOF
+RUN
+
+NAME=mips n32 cc clobber and preserve register sets
+FILE=malloc://16
+ARGS=-e anal.arch=mips -e asm.bits=32
+CMDS=<<EOF
+k anal/cc/cc.n32.clobber
+k anal/cc/cc.n32.preserve
+EOF
+EXPECT=<<EOF
+at,v0,v1,a0,a1,a2,a3,a4,a5,a6,a7,t4,t5,t6,t7,t8,t9,ra,f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f14,f15,f16,f17,f18,f19,f20,f21,f22,f23
+s0,s1,s2,s3,s4,s5,s6,s7,gp,sp,fp,f24,f25,f26,f27,f28,f29,f30,f31
+EOF
+RUN
+
+NAME=mips jalr t9 resolves through the gp-relative got load
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010000000000320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+jump: 0x00401000
+EOF
+RUN
+
+NAME=mips write into t9 after the gp load drops the pending jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f9900103c1900050320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips three-register addu into t9 does not fabricate a jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f9900100322c8210320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips addiu with a non-t9 source drops the pending jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010261900200320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips addiu lo-adjust applies exactly once to the pending jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010273900200320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+jump: 0x00401020
+EOF
+RUN
+
+NAME=mips addiu on an unknown t9 does not fabricate a jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 273900200320f809
+ao 2~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips conditional move into t9 drops the pending jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f9900100085c80b0320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips rotate into t9 drops the pending jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f9900100039c9020320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips.gnu jalr t9 keeps no cross-instruction decoder state
+FILE=malloc://64
+ARGS=-e anal.arch=mips.gnu -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010000000000320f809
+ao 3~type,jump
+EOF
+EXPECT=<<EOF
+type: load
+type: nop
+type: rcall
+EOF
+RUN
+
+NAME=mips untyped sltu write into t9 drops the pending jalr target
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f9900100085c82b0320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips pending t9 target does not leak into a later decode window
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010000000000320f809
+ao 2 > /dev/null
+ao 1 @ 8 ~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips anal.stateful=false disables t9 tracking
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20 -e anal.stateful=false
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010000000000320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=mips jalr t9 resolution is deterministic across repeated windows
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010000000000320f809
+ao 3~jump:
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+jump: 0x00401000
+jump: 0x00401000
+EOF
+RUN
+
+NAME=mips t9 tracking survives the nested anal.mask sweep
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20 -e anal.mask=true
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010000000000320f809
+ao 3~jump:
+EOF
+EXPECT=<<EOF
+jump: 0x00401000
+EOF
+RUN
+
+NAME=mips t9 tracking survives the aoj mask lookahead
+FILE=malloc://64
+ARGS=-e anal.arch=mips -e asm.bits=32 -e cfg.bigendian=true -e anal.gp=0x20
+CMDS=<<EOF
+wx 00401000 @ 0x30
+wx 8f990010000000000320f809
+aoj 3~{2.jump}
+EOF
+EXPECT=<<EOF
+4198400
+EOF
+RUN
+
+NAME=mips.gnu esil step applies delayed jump over nop delay slot
+FILE=malloc://32
+ARGS=-a mips.gnu -e asm.bits=32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 0320000800000000
+aei
+aeim
+aer t9=0x2000
+aes
+aer pc
+aoj 1 @ 4~{[0].esil}
+EOF
+EXPECT=<<EOF
+0x00002000
+,
+EOF
+RUN
+
+NAME=mips.gnu esil step applies delayed jump over esil-less delay slot op
+FILE=malloc://32
+ARGS=-a mips.gnu -e asm.bits=32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 0320000800a6200b
+aei
+aeim
+aer t9=0x2000
+aes
+aer pc
+EOF
+EXPECT=<<EOF
+0x00002000
+EOF
+RUN
+
+NAME=mips.gnu esil step falls through not-taken branch with nop delay slot
+FILE=malloc://32
+ARGS=-a mips.gnu -e asm.bits=32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 1085000300000000
+aei
+aeim
+aer a0=1
+aer a1=2
+aes
+aes
+aer pc
+EOF
+EXPECT=<<EOF
+0x00000008
+EOF
+RUN
+
+NAME=mips.gnu esil step takes conditional branch over nop delay slot
+FILE=malloc://32
+ARGS=-a mips.gnu -e asm.bits=32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 1085000300000000
+aei
+aeim
+aer a0=1
+aer a1=1
+aes
+aer pc
+EOF
+EXPECT=<<EOF
+0x00000010
+EOF
+RUN
+
+NAME=mips bgezal branch-and-link target is the pc-relative offset not the register
+FILE=malloc://64
+ARGS=-a mips -e asm.bits=32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 04910010
+ao 1~jump:
+ao 1~type:
+EOF
+EXPECT=<<EOF
+jump: 0x00000044
+type: call
+EOF
+RUN
+
+NAME=mips bltzal branch-and-link target is the pc-relative offset
+FILE=malloc://64
+ARGS=-a mips -e asm.bits=32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 04900010
+ao 1~jump:
+EOF
+EXPECT=<<EOF
+jump: 0x00000044
+EOF
+RUN
+
+NAME=mips bgezall likely branch-and-link target is the pc-relative offset
+FILE=malloc://64
+ARGS=-a mips -e asm.bits=32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 04930010
+ao 1~jump:
+EOF
+EXPECT=<<EOF
+jump: 0x00000044
+EOF
+RUN
+
+NAME=mips: /r resolves a t9-mediated register call in the forward scan
+FILE=bins/elf/boa-mips
+CMDS=<<EXPECT_END
+e search.in=io.maps.x
+e anal.stateful=false
+/r 0x49a660
+e anal.stateful=true
+/r 0x49a660
+EXPECT_END
+EXPECT=<<EXPECT_END
+(nofunc) 0x407454 [CALL] jalr t9
+EXPECT_END
+RUN
+
+NAME=callargs reads a mips o32 stack argument above the home area
+FILE=malloc://256
+ARGS=-a mips -b 32 -e cfg.bigendian=true -e anal.cc=o32
+CMDS=<<EOF
+wx 2404005024050054240600582407005c24080060afa800100c0000100000000003e0000800000000
+wx 03e0000800000000 @ 0x40
+w AA @ 0x50
+w BB @ 0x54
+w CC @ 0x58
+w DD @ 0x5c
+w EE @ 0x60
+af @ 0x40
+afn five @ 0x40
+'td int five(const char *a, const char *b, const char *c, const char *d, const char *e);
+tk func.five.cc=o32
+af @ 0
+a:callargs-q 0x18
+EOF
+EXPECT=<<EOF
+int five("AA", "BB", "CC", "DD", "EE")
+EOF
+RUN
+
+# Instruction sequences from libminiupnpd.so in issue #8245; gp is above the map.
+NAME=mips BE gp-relative string xrefs in call delay slots
+FILE=malloc://0x18c68
+ARGS=-a mips -b 32 -e cfg.bigendian=true -e anal.gp=0x20a40
+CMDS=<<EOF
+wx 8f858028240400038f9980c40320f80924a575d0 @ 0x22e8
+wx 8f8580288f9980c40320f80924a57618 @ 0x2350
+wx 8f858028240400038f9980c40320f80924a57604 @ 0x23d4
+wx 00007430 @ 0x18b04
+wx 03e0000800000000 @ 0x7430
+wz Failed to open socket for receiving SSDP. EXITING @ 0x75d0
+wz socket(http): %m @ 0x7604
+wz setsockopt(http, SO_REUSEADDR): %m @ 0x7618
+aae 20 @ 0x22e8
+aae 16 @ 0x2350
+aae 20 @ 0x23d4
+axtq 0x75d0
+axtq 0x7604
+axtq 0x7618
+ax-*
+wx 00010000 @ 0x18a68
+wz relocated string @ 0x175d0
+aae 20 @ 0x22e8
+axtq 0x75d0~?
+axtq 0x175d0
+EOF
+EXPECT=<<EOF
+0x22f8
+0x23e4
+0x235c
+0
+0x22f8
+EOF
+RUN
+
+# Instruction sequence from goahead in issue #8245.
+NAME=mips LE gp-relative string xref with a nonzero GOT base
+FILE=malloc://0x94000
+ARGS=-a mips -b 32 -m 0x400000 -e anal.gp=0x49a520
+CMDS=<<EOF
+wx 2480868fe483998f987ac624 @ 0x404c34
+wx 00004400 @ 0x492544
+wz Cant read %s @ 0x447a98
+aae 12 @ 0x404c34
+axtq 0x447a98
+EOF
+EXPECT=<<EOF
+0x404c3c
+EOF
+RUN
+
+NAME=mips stack adjustments come only from sp-to-sp add immediates
+FILE=-
+ARGS=-a mips -b 32 -e asm.bytes=false -e asm.stackptr=true
+CMDS=<<EOF
+wx e0ffbd2700c0dd2721e8a803e0ffbd27e0ffa4270800e003
+pd 6
+e asm.cpu=micro
+wx f14fb04f504c114cae4f000c
+pd 6
+EOF
+EXPECT=<<EOF
+            0x00000000     0      addiu sp, sp, -0x20
+            0x00000004    32+     addiu sp, fp, -0x4000
+            0x00000008    32      addu sp, sp, t0
+            0x0000000c    32      addiu sp, sp, -0x20
+            0x00000010    64+     addiu a0, sp, -0x20
+            0x00000014    64      jr ra
+            0x00000000     0      addiusp -0x20
+            0x00000002    32+     addius5 sp, -8
+            0x00000004    40+     addius5 v0, -8
+            0x00000006    40      addiusp 0x20
+            0x00000008     8-     addius5 sp, 7
+            0x0000000a     1-     nop
+EOF
+RUN
+
+# Only a capstone v6 build tells IS_SP from == MIPS_REG_SP (it emits SP_64).
+NAME=mips 64-bit daddiu and daddi on sp adjust the stack
+FILE=-
+ARGS=-a mips -b 64 -e asm.bytes=false -e asm.stackptr=true
+CMDS=<<EOF
+wx e0ffbd67e0ffbd630800e003
+pd 3
+EOF
+EXPECT=<<EOF
+            0x00000000     0      daddiu sp, sp, -0x20
+            0x00000004    32+     daddi sp, sp, -0x20
+            0x00000008    64+     jr ra
+EOF
+RUN
+
+NAME=mips and marks a stack alignment only from sp and a mask register
+FILE=-
+ARGS=-a mips -b 32 -e asm.bytes=false -e asm.stackptr=true
+CMDS=<<EOF
+wx e0ffbd2724e8a10324e81d01f0ffbd3324e8a00324e8bd0324e8090124e81d002440a1030800e003
+pd 10
+wx 24e8bd030800e0030000000024e809010800e0030000000024e8a0030800e00300000000
+/gj and sp, sp, sp~{0.classes}
+/gj and sp, t0, t1~{0.classes}
+/gj and sp, sp, zero~{0.classes}
+EOF
+EXPECT=<<EOF
+            0x00000000     0      addiu sp, sp, -0x20
+            0x00000004    32=     and sp, sp, at
+            0x00000008    32=     and sp, t0, sp
+            0x0000000c    32      andi sp, sp, 0xfff0
+            0x00000010    32      and sp, sp, zero
+            0x00000014    32      and sp, sp, sp
+            0x00000018    32      and sp, t0, t1
+            0x0000001c    32      and sp, zero, sp
+            0x00000020    32      and t0, sp, at
+            0x00000024    32      jr ra
+["logic","nop"]
+["pivot","logic","nop"]
+["pivot","logic","nop"]
+EOF
+RUN
+
+NAME=mips.gnu 64-bit stack adjustments come only from sp-to-sp add immediates
+FILE=-
+ARGS=-a mips.gnu -b 64 -e asm.bytes=false -e asm.stackptr=true
+CMDS=<<EOF
+wx e0ffbd2700c0dd2700c0dd2300c0dd6700c0dd63e0ffbd23e0ffbd67e0ffbd630800e003
+pd 9
+EOF
+EXPECT=<<EOF
+            0x00000000     0      addiu sp, sp, -32
+            0x00000004    32+     addiu sp, s8, -16384
+            0x00000008    32      addi sp, s8, -16384
+            0x0000000c    32      daddiu sp, s8, -16384
+            0x00000010    32      daddi sp, s8, -16384
+            0x00000014    32      addi sp, sp, -32
+            0x00000018    64+     daddiu sp, sp, -32
+            0x0000001c    96+     daddi sp, sp, -32
+            0x00000020   128+     jr ra
+EOF
+RUN
+
+NAME=mips32 function analysis stops at invalid instructions (le)
+FILE=malloc://32
+ARGS=-a mips -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+wx 01000824295c8f3c020009240800e00300000000
+af
+afij~{0.size}
+EOF
+EXPECT=<<EOF
+8
+EOF
+RUN
+
+NAME=mips32 function analysis stops at invalid instructions (be)
+FILE=malloc://32
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 240800013c8f5c292409000203e0000800000000
+af
+afij~{0.size}
+EOF
+EXPECT=<<EOF
+8
+EOF
+RUN
+
+NAME=mips64 function analysis stops at invalid instructions (le)
+FILE=malloc://32
+ARGS=-a mips -b 64 -e cfg.bigendian=false
+CMDS=<<EOF
+wx 01000824295c8f3c020009240800e00300000000
+af
+afij~{0.size}
+EOF
+EXPECT=<<EOF
+8
+EOF
+RUN
+
+NAME=mips64 function analysis stops at invalid instructions (be)
+FILE=malloc://32
+ARGS=-a mips -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 240800013c8f5c292409000203e0000800000000
+af
+afij~{0.size}
+EOF
+EXPECT=<<EOF
+8
+EOF
+RUN
+
+NAME=mips.gnu r5900 quadword instructions (le)
+FILE=malloc://32
+ARGS=-a mips.gnu -b 64 -e asm.cpu=r5900 -e cfg.bigendian=false
+CMDS=<<EOF
+wx 3000b37f2000b27f3000b37b2000b27b01000224
+pi 5
+EOF
+EXPECT=<<EOF
+sq s3, 48(sp)
+sq s2, 32(sp)
+lq s3, 48(sp)
+lq s2, 32(sp)
+li v0, 1
+EOF
+RUN
+
+NAME=mips.gnu r5900 quadword instructions (be)
+FILE=malloc://32
+ARGS=-a mips.gnu -b 64 -e asm.cpu=r5900 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 7fb300307fb200207bb300307bb2002024020001
+pi 5
+EOF
+EXPECT=<<EOF
+sq s3, 48(sp)
+sq s2, 32(sp)
+lq s3, 48(sp)
+lq s2, 32(sp)
+li v0, 1
+EOF
+RUN
+
+NAME=mips.gnu r5900 CPU selection does not leak into mips3
+FILE=malloc://32
+ARGS=-a mips.gnu -b 64 -e asm.cpu=mips3 -e cfg.bigendian=false
+CMDS=<<EOF
+wx 3000b37f
+e asm.cpu=mips3
+pi 1
+e asm.cpu=R5900
+pi 1
+e asm.cpu=mips3
+pi 1
+EOF
+EXPECT=<<EOF
+0x7fb30030
+sq s3, 48(sp)
+0x7fb30030
+EOF
+RUN
+
+NAME=mips j delay slot write hides forwarded arg
+FILE=malloc://512
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 0800004000002025@0
+wx 2482000103e0000800000000@0x100
+af@0x100
+af@0
+afva@0x100
+afva@0
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+WRAP
+EOF
+RUN
+
+NAME=mips j delay slot nop keeps forwarded arg
+FILE=malloc://512
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 0800004000000000@0
+wx 2482000103e0000800000000@0x100
+af@0x100
+af@0
+afva@0x100
+afva@0
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+WRAP
+arg int32_t arg1 @ a0
+EOF
+RUN
+
+NAME=mips jal delay slot write hides forwarded arg
+FILE=malloc://512
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 0c0000400000202503e0000800000000@0
+wx 2482000103e0000800000000@0x100
+af@0x100
+af@0
+afva@0x100
+afva@0
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+WRAP
+EOF
+RUN
+
+NAME=mips j delay slot arg move forwards only the source arg
+FILE=malloc://512
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 0800004000802825@0
+wx 0085102103e0000800000000@0x100
+af@0x100
+af@0
+afva@0x100
+afva@0
+afv@0x100
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+arg int32_t arg1 @ a0
+arg int32_t arg2 @ a1
+WRAP
+arg int32_t arg1 @ a0
+EOF
+RUN
+
+NAME=mips j uncounted delay slot write in a jump block hides forwarded arg
+FILE=malloc://512
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 14a00002000000000800004000002025@0
+wx 2482000103e0000800000000@0x100
+af@0x100
+af@0
+afva@0x100
+afva@0
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+WRAP
+EOF
+RUN
+
+NAME=mips j truncated delay slot keeps forwarded arg
+FILE=malloc://512
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 14a00002000000000800004000002025@0
+wx 2482000103e0000800000000@0x100
+af@0x100
+afva@0x100
+af@0
+afu 0xe@0
+afb- 0xc@0
+afbj@0~{}~size
+afva@0
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+    "size": 8,
+    "size": 6,
+WRAP
+arg int32_t arg1 @ a0
+EOF
+RUN
+
+NAME=mips j slot write after the block in the same map is not walked
+FILE=malloc://512
+ARGS=-a mips -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 14a00002000000000800004000002025@0
+wx 2482000103e0000800000000@0x100
+af@0x100
+afva@0x100
+af@0
+afu 0xc@0
+afbj@0~{}~size
+afva@0
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+    "size": 8,
+    "size": 4,
+WRAP
+arg int32_t arg1 @ a0
+EOF
+RUN
+
+NAME=mips j slot write in a separate map after the block is not walked
+FILE=malloc://12
+ARGS=-a mips -b 32
+CMDS=<<EOF
+o malloc://4 0xc rwx
+o malloc://16 0x100 rwx
+e cfg.bigendian=true
+wx 14a000020000000008000040@0
+wx 00002025@0xc
+wx 2482000103e0000800000000@0x100
+af@0x100
+afva@0x100
+af@0
+afu 0xc@0
+afbj@0~{}~size
+afva@0
+?e WRAP
+afv@0
+EOF
+EXPECT=<<EOF
+    "size": 8,
+    "size": 4,
+WRAP
+arg int32_t arg1 @ a0
 EOF
 RUN

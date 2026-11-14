@@ -1,8 +1,8 @@
 BIN=radare2
-BINDEPS=r_core r_parse r_search r_cons r_config
+BINDEPS=r_core r_search r_cons r_config
 BINDEPS+=r_bin r_debug r_anal r_reg r_bp r_io r_fs
-BINDEPS+=r_lang r_asm r_syscall r_hash r_main
-BINDEPS+=r_magic r_socket r_flag r_egg r_crypto r_util
+BINDEPS+=r_lang r_asm r_syscall r_main r_util r_esil
+BINDEPS+=r_magic r_socket r_flag r_egg r_muta
 
 include ../../config-user.mk
 
@@ -12,10 +12,9 @@ BUNDLE=org.radare.radare2
 MACSDK=macosx10.10
 ENTITL=radare2.xcent
 #ENTITL=radare2_ios.xml
-#CFLAGS+=-flto
-#LDFLAGS+=-flto
 
-CFLAGS_INCLUDES+=-I$(SHLR)/sdb/src
+include ../../shlr/sdb.mk
+CFLAGS_INCLUDES+=$(SDB_CFLAGS)
 CFLAGS_INCLUDES+=-I$(LIBR)/include
 
 ifeq (${COMPILER},emscripten)
@@ -83,20 +82,7 @@ macos-sign-libs:
 
 ifeq ($(OSTYPE),android)
 LDFLAGS+=${DL_LIBS} -lm
-LDFLAGS+=../../shlr/capstone/libcapstone.a
+LDFLAGS+=$(CS_LDFLAGS)
 endif
 
-include ../../libr/socket/deps.mk
-include ../../libr/magic/deps.mk
-include ../../libr/main/deps.mk
-include ../../shlr/zip/deps.mk
-include ../../shlr/gdb/deps.mk
-include ../../shlr/java/deps.mk
-include ../../shlr/bochs/deps.mk
-include ../../shlr/grub/deps.mk
-include ../../shlr/qnx/deps.mk
-include ../../shlr/ar/deps.mk
-include ../../shlr/yxml/deps.mk
-include ../../shlr/sdb.mk
-
-LDFLAGS+=$(LINK)
+include ../shlr.mk

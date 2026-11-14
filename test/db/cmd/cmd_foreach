@@ -1,6 +1,20 @@
+# merged: foreach section and segment; foreach iterator on imports
 NAME=foreach iterator
 FILE=bins/elf/ls
-CMDS=aa ; fd @@@F
+CMDS=<<EOF
+aa ; fd @@@F
+?e --
+?vi $$ @@@S
+?e ---
+?vi $$ @@@SS
+?e --
+?e hello
+?e=1@@@i~?
+?e=1@@@i~?
+ir~?
+?e=1@@@R~?
+?e world
+EOF
 EXPECT=<<EOF
 entry0
 sym._obstack_begin
@@ -13,6 +27,52 @@ main
 entry.init0
 entry.fini0
 fcn.00005b10
+--
+0
+680
+708
+740
+776
+976
+4120
+5602
+5864
+5976
+16384
+16416
+92036
+94208
+114956
+117200
+135248
+135256
+135264
+137880
+138328
+139264
+139904
+0
+0
+---
+64
+680
+0
+16384
+94208
+135248
+137880
+708
+114956
+0
+135248
+0
+--
+hello
+0
+0
+313
+311
+world
 EOF
 RUN
 
@@ -27,41 +87,22 @@ ii~?
 EOF
 EXPECT=<<EOF
 hello
-87
+86
 73
 73
-world
-EOF
-RUN
-
-NAME=foreach iterator on imports
-FILE=bins/elf/ls
-CMDS=<<EOF
-?e hello
-?e=1@@@i~?
-?e=1@@@i~?
-ir~?
-?e=1@@@R~?
-?e world
-EOF
-EXPECT=<<EOF
-hello
-0
-0
-315
-311
 world
 EOF
 RUN
 
 NAME=foreach iterator for other stuff
 FILE=bins/mach0/mac-ls
+ARGS=-e bin.types=true
 CMDS=<<EOF
 ?e hello
 ?e=1@@@s~?
 ?e=1@@@s~?
 ?e=1@@@S~?
-?e=1@@@S~?
+?e=1@@@SS~?
 ?e=1@@@f~?
 ?e=1@@@f~?
 ?e=1@@@m~?
@@ -72,16 +113,16 @@ CMDS=<<EOF
 EOF
 EXPECT=<<EOF
 hello
-116
-116
-16
-16
+115
+115
+13
+3
 342
 342
 3
 3
-116
-116
+115
+115
 world
 EOF
 RUN

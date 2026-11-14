@@ -1,13 +1,19 @@
 include $(SHLR)/sdb.mk
 include $(SHLR)/zip/deps.mk
-# include $(SHLR)/../config-user.mk
 
+ifneq (${BUILD_OS},darwin)
 LDFLAGS+=-lm
+endif
 
 # NetBSD 7.0 ships with backtrace(3) in -lexecinfo
-ifeq (${BUILD_OS},netbsd)
+ifeq (${HOST_OS},netbsd)
+ifneq (${BUILD_OS},netbsd)
+# cross build: assume a netbsd target newer than 7.0
+LDFLAGS+=-lexecinfo
+else
 ifneq ($(shell expr "`uname -r`" : '[0-6]\.'), 2)
-  LDFLAGS+=-lexecinfo
+LDFLAGS+=-lexecinfo
+endif
 endif
 endif
 
@@ -42,3 +48,6 @@ LINK+=-lm
 endif
 endif
 
+ifeq (${OSTYPE},aix)
+LINK+=-pthread
+endif

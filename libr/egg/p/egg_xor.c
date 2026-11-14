@@ -1,60 +1,59 @@
-/* radare - LGPL - Copyright 2011-2016 - pancake */
+/* radare - LGPL - Copyright 2011-2025 - pancake */
 
-/* based on @santitox patch */
 #include <r_egg.h>
 
 #define DEFAULT_XOR_KEY "0xFF"
 
-static RBuffer *build (REgg *egg) {
-	RBuffer *buf, *sc;
-	ut8 aux[32], nkey;
+/* based on @santitox patch */
+static RBuffer *build(REgg *egg) {
+	ut8 aux[32];
 	const char *default_key = DEFAULT_XOR_KEY;
 	char *key = r_egg_option_get (egg, "key");
 	int i;
 
-	if (!key || !*key) {
+	if (R_STR_ISEMPTY (key)) {
 		free (key);
 		key = strdup (default_key);
-		eprintf ("XOR key not provided. Using (%s) as the key\n", key);
+		R_LOG_WARN ("XOR key not provided. Using (%s) as the key", key);
 	}
-	nkey = r_num_math (NULL, key);
+	ut8 nkey = (ut8)r_num_math (NULL, key);
 	if (nkey == 0) {
-		eprintf ("Invalid key (%s)\n", key);
+		R_LOG_ERROR ("Invalid key (%s)", key);
 		free (key);
 		return false;
 	}
 	if (nkey != (nkey & 0xff)) {
 		nkey &= 0xff;
-		eprintf ("xor key wrapped to (%d)\n", nkey);
+		R_LOG_INFO ("xor key wrapped to (%d)", nkey);
 	}
 	if (r_buf_size (egg->bin) > 240) { // XXX
-		eprintf ("shellcode is too long :(\n");
+		R_LOG_ERROR ("shellcode is too long :(");
 		free (key);
 		return NULL;
 	}
-	sc = egg->bin; // hack
+	RBuffer *sc = egg->bin; // hack
 	if (!r_buf_size (sc)) {
-		eprintf ("No shellcode found!\n");
+		R_LOG_ERROR ("No shellcode found!");
 		free (key);
 		return NULL;
 	}
 
-	for (i = 0; i<r_buf_size (sc); i++) {
+	for (i = 0; i < r_buf_size (sc); i++) {
 		// eprintf ("%02x -> %02x\n", sc->buf[i], sc->buf[i] ^nkey);
-		if ((r_buf_read8_at (sc, i) ^ nkey)==0) {
-			eprintf ("This xor key generates null bytes. Try again.\n");
+		if ((r_buf_read8_at (sc, i) ^ nkey) == 0) {
+			R_LOG_INFO ("This xor key generates null bytes. Try again");
 			free (key);
 			return NULL;
 		}
 	}
-	buf = r_buf_new ();
+	RBuffer *buf = r_buf_new ();
 	sc = r_buf_new ();
 
-	// TODO: alphanumeric? :D
+	// TODO: alphanumeric?: D
 	// This is the x86-32/64 xor encoder
 	r_buf_append_buf (sc, egg->bin);
 	if (egg->arch == R_SYS_ARCH_X86) {
-		#define STUBLEN 18
+#define STUBLEN 18
 		ut8 stub[STUBLEN] =
 			"\xe8\xff\xff\xff\xff" // call $$+4
 			"\xc1" // ffc1 = inc ecx
@@ -76,22 +75,30 @@ static RBuffer *build (REgg *egg) {
 
 		r_buf_append_bytes (buf, stub, STUBLEN);
 
-		for (i = 0; i<r_buf_size (sc); i++) {
+		for (i = 0; i < r_buf_size (sc); i++) {
 			ut8 v = r_buf_read8_at (sc, i) ^ nkey;
 			r_buf_write_at (sc, i, &v, sizeof (v));
 		}
 		r_buf_append_buf (buf, sc);
+	} else {
+		R_LOG_ERROR ("Invalid arch for egg.xor which is x86-only for now");
+		r_unref (buf);
+		buf = NULL;
 	}
-	r_buf_free (sc);
+	r_unref (sc);
 	free (key);
 	return buf;
 }
 
-//TODO: rename plugin to run
+// TODO: rename plugin to run
 REggPlugin r_egg_plugin_xor = {
-	.name = "xor",
+	.meta = {
+		.name = "xor",
+		.desc = "xor encoder for shellcode",
+		.author = "pancake,santitox",
+		.license = "MIT",
+	},
 	.type = R_EGG_PLUGIN_ENCODER,
-	.desc = "xor encoder for shellcode",
 	.build = (void *)build
 };
 

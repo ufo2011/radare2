@@ -1,3 +1,4 @@
+ecd
 ec comment green
 ec usrcmt yellow
 ec fname yellow
@@ -8,7 +9,7 @@ ec flow green
 ec flow2 yellow
 ec floc green
 ec prompt green
-ec offset yellow
+ec addr yellow
 ec input green
 ec other green
 ec b0x00 yellow
@@ -45,21 +46,23 @@ ec graph.box yellow
 ec graph.box2 green
 ec graph.box3 red
 ec graph.box4 red
+ec diff.match red
 ec graph.true green
 ec graph.false red
 ec graph.trufae green
 ec graph.current green
 ec graph.traced yellow
 
-ec func_var green
-ec func_var_type red
-ec func_var_addr yellow
+ec var green
+ec var.type red
+ec var.addr yellow
+ec var.name green
 
 ec ai.read green
 ec ai.write green
 ec ai.exec yellow
 ec ai.seq red
-ec ai.ascii red
+ec str red
 
-ec widget_bg yellow black
-ec widget_sel black green
+ec widget.bg yellow black
+ec widget.sel black green

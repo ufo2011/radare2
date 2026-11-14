@@ -1,0 +1,128 @@
+NAME=wasm crash test
+FILE=bins/wasm/nullderef.wasm
+CMDS=<<EOF
+pd 10
+EOF
+EXPECT=<<EOF
+            ;-- entry0:
+            ;-- main:
+            0x000000be      4185feff77     i32.const -16777467
+            0x000000c3      fd0f           i8x16.splat
+            0x000000c5      fda001         incorrect
+            0x000000c8      fd64           incorrect
+            0x000000ca      0b             end
+            0x000000cb      ff             trap
+            0x000000cc      ff             trap
+            0x000000cd      ff             trap
+            0x000000ce      ff             trap
+            0x000000cf      ff             trap
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=wasm gc recursive types and initializer immediates
+FILE=hex://0061736d010000000110024e025e770160016300005f0164010003020101060c027f00410b0b630000d0000b070501016600000a040102000b
+CMDS=<<EOF
+iI~bintype
+is~global
+EOF
+EXPECT=<<EOF
+bintype  wasm
+0   0x00000021 0x00000021 NONE   i32  4        global.0
+1   0x00000026 0x00000026 NONE   REF  0        global.1
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=wasm fuzzed leb128 virtual register profile crash
+FILE=bins/fuzzed/r2_hbo_read_u32_leb128
+CMDS=<<EOF
+arp~l
+dr l15
+dr l15=0
+dr l15
+arpi~l15~?
+EOF
+EXPECT=<<EOF
+gpr	l[1024]	.32	$	0
+0x00000000
+0x00000000
+1
+EOF
+EXPECT_ERR=<<EOF
+ERROR: beach sections
+EOF
+RUN
+
+NAME=wasm fuzzed init expr virtual register profile crash
+FILE=bins/fuzzed/r2_hoobr_consume_init_expr
+CMDS=<<EOF
+arp~l
+dr l15
+dr l15=0
+dr l15
+arpi~l15~?
+EOF
+EXPECT=<<EOF
+gpr	l[1024]	.32	$	0
+0x00000000
+0x00000000
+1
+EOF
+EXPECT_ERR=<<EOF
+ERROR: unknown section id: 48
+ERROR: unknown section id: 48
+ERROR: unknown section id: 48
+ERROR: unknown section id: 48
+INFO: Artificially reducing size of section data by 0x2f bytes so it fits in the file
+ERROR: Failed to parse entry 0/48 of vec at 0xb0
+EOF
+RUN
+
+NAME=wasm br without a target scope is an illegal op
+FILE=hex://0061736d01000000010401600000030201000a080106000c010c010b
+CMDS=ao 2 @ entry0~^type
+EXPECT=<<EOF
+type: ill
+type: ill
+EOF
+EXPECT_ERR=<<EOF
+WARN: ignoring br at 0x17, references non-existent address
+WARN: ignoring br at 0x19, references non-existent address
+EOF
+RUN
+
+NAME=wasm br after v128.const is resolved and the function is walked once
+FILE=hex://0061736d01000000010401600000030201000a1b0119000240fd0c0101010101010101010101010101010c0c000b0b
+CMDS=<<EOF
+af
+pdf
+ao @ 0x2b~type,jump
+EOF
+EXPECT=<<EOF
+            ;-- fcn.0:
+/ 24: entry0 ();
+|           0x00000017      0240           block
+|           0x00000019      fd0c010101..   v128.const 01 01 01 01 01 01 01 01 01 01 01 01 01 01 01 0c
+|       ,=< 0x0000002b      0c00           br 0
+|       |   ; CODE XREF from entry0 @ 0x2b(x)
+|       `-> 0x0000002d      0b             end
+\           0x0000002e      0b             end
+type: jmp
+jump: 0x0000002d
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=wasm br_if in loop keeps its targets
+FILE=bins/wasm/brif-loop.wasm
+CMDS=<<EOF
+af
+ao @ 0x42~type,jump,fail
+EOF
+EXPECT=<<EOF
+type: cjmp
+jump: 0x00000036
+fail: 0x00000044
+EOF
+RUN

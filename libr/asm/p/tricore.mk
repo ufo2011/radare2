@@ -1,14 +1,15 @@
-OBJ_TRICORE=asm_tricore.o
-OBJ_TRICORE+=../arch/tricore/gnu/tricore-dis.o
-OBJ_TRICORE+=../arch/tricore/gnu/tricore-opc.o
-OBJ_TRICORE+=../arch/tricore/gnu/cpu-tricore.o
+OBJ_TRICOREPSEUDO+=$(LIBR)/arch/p/tricore/pseudo.o
 
-STATIC_OBJ+=${OBJ_TRICORE}
-TARGET_TRICORE=asm_tricore.${EXT_SO}
+TARGET_TRICOREPSEUDO=parse_tricore_pseudo.${EXT_SO}
+STATIC_OBJ+=${OBJ_TRICOREPSEUDO}
+LIBDEPS=-L../../util -lr_util
+LIBDEPS+=-L../../flag -lr_flag
+LDFLAGS+=-L../../reg -lr_reg
+LDFLAGS+=-L../../cons -lr_cons
 
 ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_TRICORE}
-
-${TARGET_TRICORE}: ${OBJ_TRICORE}
-	${CC} $(call libname,asm_tricore) ${LDFLAGS} ${CFLAGS} -o asm_tricore.${EXT_SO} ${OBJ_TRICORE}
+ALL_TARGETS+=${TARGET_TRICOREPSEUDO}
+${TARGET_TRICOREPSEUDO}: ${OBJ_TRICOREPSEUDO}
+	${CC} $(call libname,parse_tricore_pseudo) ${LIBDEPS} $(LDFLAGS) \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_TRICOREPSEUDO} ${OBJ_TRICOREPSEUDO}
 endif

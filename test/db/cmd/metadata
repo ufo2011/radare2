@@ -1,3 +1,4 @@
+# merged: CCf-*
 NAME=CC-*
 FILE=bins/mach0/FileDP
 CMDS=<<EOF
@@ -6,18 +7,7 @@ CC~?
 CC-*
 CC~?
 C*~?
-EOF
-EXPECT=<<EOF
-39
-13
-0
-26
-EOF
-RUN
-
-NAME=CCf-*
-FILE=bins/mach0/FileDP
-CMDS=<<EOF
+?e --
 af
 CCf-*~?
 CC hello
@@ -27,13 +17,336 @@ CCf-*
 CCf~?
 EOF
 EXPECT=<<EOF
+39
+13
+0
+26
+--
 0
 2
 0
 EOF
 RUN
 
-NAME=Cs
+NAME=Cr 10 px
+FILE=-
+ARGS=-a x86 -b32
+CMDS=<<EOF
+wx 90909090c3c3
+Cr 2 px 2 @ 2
+b 32
+pd 5
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+            0x00000002 ; (Cr 2 px 2)
+- offset -   2 3  4 5  6 7  8 9  A B  C D  E F 1011  23456789ABCDEF01
+0x00000002  9090                                     ..
+            0x00000004      c3             ret
+            0x00000005      c3             ret
+EOF
+RUN
+
+NAME=Cr 10 px2
+FILE=-
+ARGS=-a x86 -b32
+CMDS=<<EOF
+wx 90909090c3c3
+Cr 2 px 2 @ 2
+pd 5
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+            0x00000002 ; (Cr 2 px 2)
+- offset -   2 3  4 5  6 7  8 9  A B  C D  E F 1011  23456789ABCDEF01
+0x00000002  9090                                     ..
+            0x00000004      c3             ret
+            0x00000005      c3             ret
+EOF
+RUN
+
+NAME=Cr 10 pd
+FILE=-
+ARGS=-a x86 -b32
+CMDS=<<EOF
+wx 90909090c3c3
+Cr 2 pd 1 @ 2
+pd 5
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+            0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+0x00000002 ; (Cr 2 pd 1)
+            0x00000004      c3             ret
+            0x00000005      c3             ret
+EOF
+RUN
+
+NAME=Cr px with asm.meta=false
+FILE=-
+ARGS=-a x86 -b32
+CMDS=<<EOF
+wx 90909090c3c3
+e asm.meta=false
+Cr 2 px 2 @ 2
+pd 5
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+; (Cr 2 px 2)
+- offset -   2 3  4 5  6 7  8 9  A B  C D  E F 1011  23456789ABCDEF01
+0x00000002  9090                                     ..            0x00000002      9090           .word 0x9090
+            0x00000004      c3             ret
+            0x00000005      c3             ret
+EOF
+RUN
+
+NAME=Cr deleting itself
+FILE=-
+ARGS=-a x86 -b32
+CMDS=<<EOF
+wx 90909090c3c3
+Cr 2 C-* @ 2
+pd 4
+e asm.meta=false
+Cr 2 C-* @ 2
+pd 4
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+            0x00000002 ; (Cr 2 C-*)
+
+            0x00000004      c3             ret
+            0x00000000      90             nop
+            0x00000001      90             nop
+; (Cr 2 C-*)
+            0x00000002      9090           .word 0x9090
+            0x00000004      c3             ret
+EOF
+RUN
+
+NAME=Cr deleting the function being disassembled
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e5c3
+af
+Cr 1 af-* @ 1
+pd 4
+afl
+EOF
+EXPECT=<<EOF
+/ 5: fcn.00000000 ();
+|           0x00000000      55             push rbp
+|           0x00000001 ; (Cr 1 af-*)
+
+            0x00000002      89e5           mov ebp, esp
+            0x00000004      c3             ret
+EOF
+RUN
+
+NAME=Cr is not run under sandbox without exec
+FILE=-
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 90909090c3c3
+e cfg.sandbox.grain=none
+e cfg.sandbox=true
+Cr 2 ?e hi @ 2
+pd 3
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+            0x00000002 ; (Cr 2 ?e hi)
+
+EOF
+RUN
+
+NAME=Cr restores seek and block size across repeated callbacks
+FILE=-
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 90909090c3c3
+Cr 1 s 0x40 @ 1
+Cr 1 b 32 @ 2
+Cr 1 b 4096 @ 3
+pd 6;s;b;?v $b;p8 6
+e asm.meta=false
+pd 6;s;b;?v $b;p8 6
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001 ; (Cr 1 s 0x40)
+
+            0x00000002 ; (Cr 1 b 32)
+
+            0x00000003 ; (Cr 1 b 4096)
+
+            0x00000004      c3             ret
+            0x00000005      c3             ret
+0x0
+0x100
+0x100
+90909090c3c3
+            0x00000000      90             nop
+; (Cr 1 s 0x40)
+            0x00000001      90             .hex 90
+; (Cr 1 b 32)
+            0x00000002      90             .hex 90
+; (Cr 1 b 4096)
+            0x00000003      90             .hex 90
+            0x00000004      c3             ret
+            0x00000005      c3             ret
+0x0
+0x100
+0x100
+90909090c3c3
+EOF
+RUN
+
+NAME=Cr refreshes borrowed configuration strings
+FILE=-
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 90909090c3c3
+Cr 1 e asm.cmt.token=CHANGED @ 2
+Cr 1 ?e alive @ 3
+pd 5
+e asm.meta=false
+pd 5
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+            0x00000002 ; (Cr 1 e asm.cmt.token=CHANGED)
+
+            0x00000003 CHANGED (Cr 1 ?e alive)
+alive
+            0x00000004      c3             ret
+            0x00000000      90             nop
+            0x00000001      90             nop
+CHANGED (Cr 1 e asm.cmt.token=CHANGED)
+            0x00000002      90             .hex 90
+CHANGED (Cr 1 ?e alive)
+alive            0x00000003      90             .hex 90
+            0x00000004      c3             ret
+EOF
+RUN
+
+NAME=Cr deleting the cached symbol name
+FILE=-
+ARGS=-a x86 -b 64 -e asm.symbol=true
+CMDS=<<EOF
+wx 554889e5c3
+af
+Cr 1 af-* @ 1
+pd 4
+EOF
+EXPECT=<<EOF
+/ 5: fcn.00000000 ();
+|  fcn.00000000 + 0              0x00000000      55             push rbp
+|  fcn.00000000 + 1              0x00000001 ; (Cr 1 af-*)
+
+    + 0              0x00000002      89e5           mov ebp, esp
+    + 0              0x00000004      c3             ret
+EOF
+RUN
+
+NAME=Cr deleting the function stops pdf
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e5c3
+af
+Cr 1 af-* @ 1
+pdf
+afl
+p8 5
+af
+e asm.meta=false
+Cr 1 af-* @ 1
+pdf
+afl
+p8 5
+EOF
+EXPECT=<<EOF
+/ 5: fcn.00000000 ();
+|           0x00000000      55             push rbp
+|           0x00000001 ; (Cr 1 af-*)
+
+554889e5c3
+/ 5: fcn.00000000 ();
+|           0x00000000      55             push rbp
+; (Cr 1 af-*)
+            0x00000001      48             .hex 48
+554889e5c3
+EOF
+RUN
+
+NAME=Cr short reads with padding disabled
+FILE=malloc://6
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+b 32
+wx 90909090c3c3
+e io.ff=false
+Cr 1 p8 8 @ 0
+Cr 1 p8 8 @ 4
+pd 6;s;b;p8 8
+EOF
+EXPECT=<<EOF
+            0x00000000 ; (Cr 1 p8 8)
+90909090c3c3ffff
+            0x00000001      90             nop
+            0x00000002      90             nop
+            0x00000003      90             nop
+            0x00000004 ; (Cr 1 p8 8)
+c3c3ffffffffffff
+            0x00000005      c3             ret
+0x0
+0x20
+90909090c3c3ffff
+EOF
+RUN
+
+NAME=CCb
+FILE=malloc://64
+CMDS=<<EOF
+af+ 0 fcn
+afb+ 0 0 4
+afb+ 0 8 4
+CC first @ 0
+CC mid @ 2
+CC next @ 8
+s 1
+CCb
+?e --
+s 9
+CCb
+EOF
+EXPECT=<<EOF
+0x00000000 CCu "first"
+0x00000002 CCu "mid"
+--
+0x00000008 CCu "next"
+EOF
+RUN
+
+NAME=Cs @ $$
 FILE=malloc://1024
 CMDS=<<EOF
 w hello world
@@ -42,6 +355,45 @@ C*~[1]
 EOF
 EXPECT=<<EOF
 12
+EOF
+RUN
+
+NAME=Cs rejects extra argument
+FILE=malloc://1024
+CMDS=<<EOF
+w hello world
+Cs 5 0x6
+Csa 5 0x6
+Cs
+Cs 5 @ 6
+Cs
+EOF
+EXPECT=<<EOF
+0x00000006 ascii[5] "world"
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Unexpected argument '0x6'. Usage: Cs [size] @addr
+ERROR: Unexpected argument '0x6'. Usage: Cs [size] @addr
+EOF
+RUN
+
+NAME=Cs rejected argument keeps existing string
+FILE=malloc://1024
+CMDS=<<EOF
+w hello world
+Cs 5 @ 6
+Cs 3 0x6 @ 6
+Cs 4 junk @ 6
+Cs
+Cs.. @ 6
+EOF
+EXPECT=<<EOF
+0x00000006 ascii[5] "world"
+ascii[5] "world"
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Unexpected argument '0x6'. Usage: Cs [size] @addr
+ERROR: Unexpected argument 'junk'. Usage: Cs [size] @addr
 EOF
 RUN
 
@@ -57,15 +409,27 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=Cz
+NAME=Csz
 FILE=malloc://1024
 CMDS=<<EOF
 w hello world
-Cz
+Csz
 C*~[1]
 EOF
 EXPECT=<<EOF
 12
+EOF
+RUN
+
+NAME=Csz info
+FILE=malloc://1024
+CMDS=<<EOF
+w hello world
+Csz
+Cs..
+EOF
+EXPECT=<<EOF
+ascii[12] "hello world"
 EOF
 RUN
 
@@ -79,16 +443,13 @@ Cd 3
 pd 2
 EOF
 EXPECT=<<EOF
-            0x00000000      hex size=3 delta=0
-0x00000000  3930 39                                  909
-
+            0x00000000  3930 39                                  909 ; +0 
             0x00000003      3039           xor byte [ecx], bh
 EOF
 RUN
 
 NAME=Cd : data + align
 FILE=malloc://1024
-BROKEN=1
 CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=32
@@ -98,9 +459,7 @@ s 1
 pd 2
 EOF
 EXPECT=<<EOF
-            0x00000001 hex length=3 delta=1
-0x00000001  30 39                                    09
-
+            0x00000001  3039                                     09 ; +1  (2)
             0x00000003      3039           xor byte [ecx], bh
 EOF
 RUN
@@ -218,8 +577,8 @@ Cd 4[3]
 pd 3
 EOF
 EXPECT=<<EOF
-            0x0000db98      .dword 0x00085038 ; obj.main_arena
-            0x0000db9c      .dword 0x000844ac ; obj.check_action
+            0x0000db98      .dword 0x00085038 ; obj.main_arena ; global.main_arena
+            0x0000db9c      .dword 0x000844ac ; obj.check_action ; global.check_action
             0x0000dba0      .dword 0x000663c4 ; str.free__:_invalid_pointer
 EOF
 RUN
@@ -233,8 +592,8 @@ ahi 1
 pd 3
 EOF
 EXPECT=<<EOF
-            0x0000db98      .int32 00111000010100000000100000000000b ; obj.main_arena
-            0x0000db9c      .dword 0x000844ac ; obj.check_action
+            0x0000db98      .int32 00000000000010000101000000111000b ; obj.main_arena ; global.main_arena
+            0x0000db9c      .dword 0x000844ac ; obj.check_action ; global.check_action
             0x0000dba0      .dword 0x000663c4 ; str.free__:_invalid_pointer
 EOF
 RUN
@@ -248,8 +607,8 @@ ahi 8
 pd 3
 EOF
 EXPECT=<<EOF
-            0x0000db98      .int32 2050070o ; obj.main_arena
-            0x0000db9c      .dword 0x000844ac ; obj.check_action
+            0x0000db98      .int32 2050070o ; obj.main_arena ; global.main_arena
+            0x0000db9c      .dword 0x000844ac ; obj.check_action ; global.check_action
             0x0000dba0      .dword 0x000663c4 ; str.free__:_invalid_pointer
 EOF
 RUN
@@ -263,12 +622,13 @@ ahi 10
 pd 3
 EOF
 EXPECT=<<EOF
-            0x0000db98      .int32 544824 ; obj.main_arena
-            0x0000db9c      .dword 0x000844ac ; obj.check_action
+            0x0000db98      .int32 544824 ; obj.main_arena ; global.main_arena
+            0x0000db9c      .dword 0x000844ac ; obj.check_action ; global.check_action
             0x0000dba0      .dword 0x000663c4 ; str.free__:_invalid_pointer
 EOF
 RUN
 
+# merged: C.
 NAME=arm1.bin dword pointers with Cd and ahi 16
 FILE=bins/elf/arm1.bin
 CMDS=<<EOF
@@ -276,11 +636,20 @@ s 0xdb98
 Cd 4[3]
 ahi 16
 pd 3
+?e --
+s 0x0007a23c
+C.
+s 0x00083fc4 
+C.
 EOF
 EXPECT=<<EOF
-            0x0000db98      .dword 0x00085038 ; obj.main_arena
-            0x0000db9c      .dword 0x000844ac ; obj.check_action
+            0x0000db98      .dword 0x00085038 ; obj.main_arena ; global.main_arena
+            0x0000db9c      .dword 0x000844ac ; obj.check_action ; global.check_action
             0x0000dba0      .dword 0x000663c4 ; str.free__:_invalid_pointer
+--
+0x0007a23c ascii[13] "match_symbol"
+0x00083fc4 data Cd 4
+0x00083fc4 CCu "[14] -rw- section size 4 named .init_array"
 EOF
 RUN
 
@@ -380,24 +749,24 @@ EXPECT=<<EOF
 0x00000300 format 4 x
 0x00000380 magic 8 wwww
 ----
-Cs 12 @ 0x00000000 # hello world
+'@0x00000000'Cs 12
 ----
 Cd 3 @ 0x00000100
 ----
 Ch 2 @ 0x00000200
 ----
-Cf 4 x @ 0x00000300
+'@0x00000300'Cf 4 x
 ----
 CCu base64:SGVsbG8h @ 0x00000000
 ----
-Cm 8 wwww @ 0x00000380
+'@0x00000380'Cm 8 wwww
 ----
-Cs 12 @ 0x00000000 # hello world
+'@0x00000000'Cs 12
 CCu base64:SGVsbG8h @ 0x00000000
 Cd 3 @ 0x00000100
 Ch 2 @ 0x00000200
-Cf 4 x @ 0x00000300
-Cm 8 wwww @ 0x00000380
+'@0x00000300'Cf 4 x
+'@0x00000380'Cm 8 wwww
 ----
 [{"offset":0,"type":"Cs","name":"aGVsbG8gd29ybGQ=","enc":"latin1","ascii":true}]
 ----
@@ -415,36 +784,14 @@ Cm 8 wwww @ 0x00000380
 EOF
 RUN
 
+# merged: Csg, Csa, Cs. and Cs..
 NAME=Cs ascii/latin1
 FILE=bins/pe/testapp-msvc64.exe
 CMDS=<<EOF
 Csa @ 0x1400160a0
 Cs~gate
 Cs~ANSI
-EOF
-EXPECT=<<EOF
-0x1400160a0 latin1[18] "latin1 gate: \xce\xbb\xab\xce"
-0x1400160b8 ascii[50] "  -- in ConEmu, run `chcp 28591` to see the gate."
-0x140016000 ascii[19] "\tANSI\\esc: \e[33m\r\n"
-EOF
-RUN
-
-NAME=Csj ascii/latin1
-FILE=bins/pe/testapp-msvc64.exe
-ARGS=-z
-CMDS=<<EOF
-Csa @ 0x1400160a0
-Csg @ 0x1400160b8
-Csj
-EOF
-EXPECT=<<EOF
-[{"offset":5368799392,"type":"Cs","name":"bGF0aW4xIGdhdGU6IM67q84=","enc":"latin1","ascii":false},{"offset":5368799416,"type":"Cs","name":"ICAtLSBpbiBDb25FbXUsIHJ1biBgY2hjcCAyODU5MWAgdG8gc2VlIHRoZSBnYXRlLg==","enc":"latin1","ascii":true}]
-EOF
-RUN
-
-NAME=Csg, Csa, Cs. and Cs..
-FILE=bins/pe/testapp-msvc64.exe
-CMDS=<<EOF
+?e --
 e str.escbslash=true
 s 0x140016018
 Csa
@@ -465,18 +812,35 @@ Cs..
 Cs.. @ 0x14001601c  # should print nothing
 EOF
 EXPECT=<<EOF
-Csa 2 @ 0x140016018 # \t
+0x1400160a0 latin1[18] "latin1 gate: \xce\xbb\xab\xce"
+0x1400160b8 ascii[50] "  -- in ConEmu, run `chcp 28591` to see the gate."
+0x140016000 ascii[19] "\tANSI\\esc: \e[33m\r\n"
+--
+'@0x140016018'Csa 2
 "\t"
 ascii[2] "\t"
             ;-- str._twideesc:_e_0m:
             0x140016018     .string "\t" ; len=2
-Cs 19 @ 0x140016018 # \twide\\esc: \x1b[0m\xa1\r\n
+'@0x140016018'Cs 19
 "\twide\\esc: \x1b[0m\xa1\r\n"
 latin1[19] "\twide\\esc: \x1b[0m\xa1\r\n"
             ;-- str._twideesc:_e_0m:
             0x140016018     .string "\twide\\esc: \x1b[0m\xa1\r\n" ; len=19
 ascii[4] "\t"
 ascii[4] "\twid"
+EOF
+RUN
+
+NAME=Csj ascii/latin1
+FILE=bins/pe/testapp-msvc64.exe
+ARGS=-z
+CMDS=<<EOF
+Csa @ 0x1400160a0
+Csg @ 0x1400160b8
+Csj
+EOF
+EXPECT=<<EOF
+[{"offset":5368799392,"type":"Cs","name":"bGF0aW4xIGdhdGU6IM67q84=","enc":"latin1","ascii":false},{"offset":5368799416,"type":"Cs","name":"ICAtLSBpbiBDb25FbXUsIHJ1biBgY2hjcCAyODU5MWAgdG8gc2VlIHRoZSBnYXRlLg==","enc":"latin1","ascii":true}]
 EOF
 RUN
 
@@ -514,12 +878,12 @@ Cs..
 pd 1
 EOF
 EXPECT=<<EOF
-Cs 61 @ 0x004021ff # utf8> \\u00a2\\u20ac\\U00010348 in yellow:\e[33m \xc2\xa2\xe2\x82\xac\xf0\x90\x8d\x88 \e[0m\n
+'@0x004021ff'Cs 61
 "utf8> \\u00a2\\u20ac\\U00010348 in yellow:\e[33m \xc2\xa2\xe2\x82\xac\xf0\x90\x8d\x88 \e[0m\n"
 latin1[61] "utf8> \\u00a2\\u20ac\\U00010348 in yellow:\e[33m \xc2\xa2\xe2\x82\xac\xf0\x90\x8d\x88 \e[0m\n"
             ;-- str.utf8__u00a2u20acU00010348_in_yellow:e_33m__e_0m_n:
             0x004021ff     .string "utf8> \\u00a2\\u20ac\\U00010348 in yellow:\e[33m \xc2\xa2\xe2\x82\xac\xf0\x90\x8d\x88 \e[0m\n" ; len=61
-Cs8 61 @ 0x004021ff # utf8> \\u00a2\\u20ac\\U00010348 in yellow:\x1b[33m \u00a2\u20ac\U00010348 \x1b[0m\n
+'@0x004021ff'Cs8 61
 "utf8> \\u00a2\\u20ac\\U00010348 in yellow:\x1b[33m \u00a2\u20ac\U00010348 \x1b[0m\n"
 utf8[61] "utf8> \\u00a2\\u20ac\\U00010348 in yellow:\x1b[33m \u00a2\u20ac\U00010348 \x1b[0m\n"
             ;-- str.utf8__u00a2u20acU00010348_in_yellow:e_33m__e_0m_n:
@@ -537,8 +901,8 @@ Cs8
 Csj
 EOF
 EXPECT=<<EOF
-[{"offset":4203007,"type":"Cs","name":"dXRmOD4gXFx1MDBhMlxcdTIwYWNcXFUwMDAxMDM0OCBpbiB5ZWxsb3c6XGVbMzNtIMKi4oKs8JCNiCBcZVswbVxu","enc":"iz","ascii":false}]
-[{"offset":4203007,"type":"Cs","name":"dXRmOD4gXHUwMGEyXHUyMGFjXFUwMDAxMDM0OCBpbiB5ZWxsb3c6G1szM20gwqLigqzwkI2IIBtbMG0K","enc":"utf8","ascii":false}]
+[{"offset":4196209,"type":"Cs","name":"bGlic3RkYysrLnNvLjY=","enc":"iz","ascii":true},{"offset":4196224,"type":"Cs","name":"X19nbW9uX3N0YXJ0X18=","enc":"iz","ascii":true},{"offset":4196239,"type":"Cs","name":"X1pOU3Q4aW9zX2Jhc2U0SW5pdEQxRXY=","enc":"iz","ascii":true},{"offset":4196263,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTZkb19vdXRFUjExX19tYnN0YXRlX3RQS0RzUzRfUlM0X1BjUzZfUlM2Xw==","enc":"iz","ascii":true},{"offset":4196343,"type":"Cs","name":"X1pTdDV3Y291dA==","enc":"iz","ascii":true},{"offset":4196354,"type":"Cs","name":"X19neHhfcGVyc29uYWxpdHlfdjA=","enc":"iz","ascii":true},{"offset":4196375,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTE2ZG9fYWx3YXlzX25vY29udkV2","enc":"iz","ascii":true},{"offset":4196433,"type":"Cs","name":"X1pUVk4xMF9fY3h4YWJpdjEyMF9fc2lfY2xhc3NfdHlwZV9pbmZvRQ==","enc":"iz","ascii":true},{"offset":4196474,"type":"Cs","name":"X1pOU3Q3Y29kZWN2dElEaWMxMV9fbWJzdGF0ZV90RUQyRXY=","enc":"iz","ascii":true},{"offset":4196510,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTEzZG9fbWF4X2xlbmd0aEV2","enc":"iz","ascii":true},{"offset":4196565,"type":"Cs","name":"X1pkbFB2","enc":"iz","ascii":true},{"offset":4196572,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxM2RvX21heF9sZW5ndGhFdg==","enc":"iz","ascii":true},{"offset":4196622,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxMWRvX2VuY29kaW5nRXY=","enc":"iz","ascii":true},{"offset":4196670,"type":"Cs","name":"X1pTdGxzSXdTdDExY2hhcl90cmFpdHNJd0VFUlN0MTNiYXNpY19vc3RyZWFtSVRfVDBfRVM2X1BLYw==","enc":"iz","ascii":true},{"offset":4196729,"type":"Cs","name":"X1pkbFB2bQ==","enc":"iz","ascii":true},{"offset":4196737,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU2ZG9fb3V0RVJTMF9QS0RpUzRfUlM0X1BjUzZfUlM2Xw==","enc":"iz","ascii":true},{"offset":4196802,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUVDMUVSS1M0Xw==","enc":"iz","ascii":true},{"offset":4196864,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxMGRvX3Vuc2hpZnRFUlMwX1BjUzNfUlMzXw==","enc":"iz","ascii":true},{"offset":4196923,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTEwZG9fdW5zaGlmdEVSMTFfX21ic3RhdGVfdFBjUzNfUlMzXw==","enc":"iz","ascii":true},{"offset":4196997,"type":"Cs","name":"X1pTdDE3X190aHJvd19iYWRfYWxsb2N2","enc":"iz","ascii":true},{"offset":4197022,"type":"Cs","name":"X1pOU3Q4aW9zX2Jhc2U0SW5pdEMxRXY=","enc":"iz","ascii":true},{"offset":4197046,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU1ZG9faW5FUlMwX1BLY1M0X1JTNF9QRGlTNl9SUzZf","enc":"iz","ascii":true},{"offset":4197110,"type":"Cs","name":"X1pUSVN0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU=","enc":"iz","ascii":true},{"offset":4197143,"type":"Cs","name":"X1pTdGxzSXdTdDExY2hhcl90cmFpdHNJd0VFUlN0MTNiYXNpY19vc3RyZWFtSVRfVDBfRVM2X1BLUzNf","enc":"iz","ascii":true},{"offset":4197204,"type":"Cs","name":"X1pTdDE5X190aHJvd19yYW5nZV9lcnJvclBLYw==","enc":"iz","ascii":true},{"offset":4197233,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUVDMUVPUzRf","enc":"iz","ascii":true},{"offset":4197294,"type":"Cs","name":"X1pUSVN0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRQ==","enc":"iz","ascii":true},{"offset":4197332,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUUxMF9NX3JlcGxhY2VFbW1QS2Nt","enc":"iz","ascii":true},{"offset":4197405,"type":"Cs","name":"X1pud20=","enc":"iz","ascii":true},{"offset":4197411,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTExZG9fZW5jb2RpbmdFdg==","enc":"iz","ascii":true},{"offset":4197464,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUU2cmVzaXplRW0=","enc":"iz","ascii":true},{"offset":4197527,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxNmRvX2Fsd2F5c19ub2NvbnZFdg==","enc":"iz","ascii":true},{"offset":4197580,"type":"Cs","name":"X1pTdDE5X190aHJvd19sb2dpY19lcnJvclBLYw==","enc":"iz","ascii":true},{"offset":4197609,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTlkb19sZW5ndGhFUjExX19tYnN0YXRlX3RQS2NTNF9t","enc":"iz","ascii":true},{"offset":4197679,"type":"Cs","name":"X1pOU3QyNV9fY29kZWN2dF91dGY4X3V0ZjE2X2Jhc2VJRHNFRDJFdg==","enc":"iz","ascii":true},{"offset":4197720,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUU5X01fY3JlYXRlRVJtbQ==","enc":"iz","ascii":true},{"offset":4197788,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUUxMF9NX2Rpc3Bvc2VFdg==","enc":"iz","ascii":true},{"offset":4197856,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU5ZG9fbGVuZ3RoRVJTMF9QS2NTNF9t","enc":"iz","ascii":true},{"offset":4197911,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTVkb19pbkVSMTFfX21ic3RhdGVfdFBLY1M0X1JTNF9QRHNTNl9SUzZf","enc":"iz","ascii":true},{"offset":4197990,"type":"Cs","name":"bGlibS5zby42","enc":"iz","ascii":true},{"offset":4198000,"type":"Cs","name":"bGliZ2NjX3Muc28uMQ==","enc":"iz","ascii":true},{"offset":4198014,"type":"Cs","name":"X1Vud2luZF9SZXN1bWU=","enc":"iz","ascii":true},{"offset":4198029,"type":"Cs","name":"bGliYy5zby42","enc":"iz","ascii":true},{"offset":4198039,"type":"Cs","name":"c2V0bG9jYWxl","enc":"iz","ascii":true},{"offset":4198049,"type":"Cs","name":"bWJzcnRvd2Nz","enc":"iz","ascii":true},{"offset":4198059,"type":"Cs","name":"X19jeGFfYXRleGl0","enc":"iz","ascii":true},{"offset":4198072,"type":"Cs","name":"X19saWJjX3N0YXJ0X21haW4=","enc":"iz","ascii":true},{"offset":4198090,"type":"Cs","name":"R0NDXzMuMA==","enc":"iz","ascii":true},{"offset":4198098,"type":"Cs","name":"R0xJQkNfMi4yLjU=","enc":"iz","ascii":true},{"offset":4198110,"type":"Cs","name":"Q1hYQUJJXzEuMw==","enc":"iz","ascii":true},{"offset":4198121,"type":"Cs","name":"Q1hYQUJJXzEuMy45","enc":"iz","ascii":true},{"offset":4198134,"type":"Cs","name":"R0xJQkNYWF8zLjQ=","enc":"iz","ascii":true},{"offset":4198146,"type":"Cs","name":"R0xJQkNYWF8zLjQuMjE=","enc":"iz","ascii":true},{"offset":4203007,"type":"Cs","name":"dXRmOD4gXFx1MDBhMlxcdTIwYWNcXFUwMDAxMDM0OCBpbiB5ZWxsb3c6XGVbMzNtIMKi4oKs8JCNiCBcZVswbVxu","enc":"iz","ascii":false}]
+[{"offset":4196209,"type":"Cs","name":"bGlic3RkYysrLnNvLjY=","enc":"iz","ascii":true},{"offset":4196224,"type":"Cs","name":"X19nbW9uX3N0YXJ0X18=","enc":"iz","ascii":true},{"offset":4196239,"type":"Cs","name":"X1pOU3Q4aW9zX2Jhc2U0SW5pdEQxRXY=","enc":"iz","ascii":true},{"offset":4196263,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTZkb19vdXRFUjExX19tYnN0YXRlX3RQS0RzUzRfUlM0X1BjUzZfUlM2Xw==","enc":"iz","ascii":true},{"offset":4196343,"type":"Cs","name":"X1pTdDV3Y291dA==","enc":"iz","ascii":true},{"offset":4196354,"type":"Cs","name":"X19neHhfcGVyc29uYWxpdHlfdjA=","enc":"iz","ascii":true},{"offset":4196375,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTE2ZG9fYWx3YXlzX25vY29udkV2","enc":"iz","ascii":true},{"offset":4196433,"type":"Cs","name":"X1pUVk4xMF9fY3h4YWJpdjEyMF9fc2lfY2xhc3NfdHlwZV9pbmZvRQ==","enc":"iz","ascii":true},{"offset":4196474,"type":"Cs","name":"X1pOU3Q3Y29kZWN2dElEaWMxMV9fbWJzdGF0ZV90RUQyRXY=","enc":"iz","ascii":true},{"offset":4196510,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTEzZG9fbWF4X2xlbmd0aEV2","enc":"iz","ascii":true},{"offset":4196565,"type":"Cs","name":"X1pkbFB2","enc":"iz","ascii":true},{"offset":4196572,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxM2RvX21heF9sZW5ndGhFdg==","enc":"iz","ascii":true},{"offset":4196622,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxMWRvX2VuY29kaW5nRXY=","enc":"iz","ascii":true},{"offset":4196670,"type":"Cs","name":"X1pTdGxzSXdTdDExY2hhcl90cmFpdHNJd0VFUlN0MTNiYXNpY19vc3RyZWFtSVRfVDBfRVM2X1BLYw==","enc":"iz","ascii":true},{"offset":4196729,"type":"Cs","name":"X1pkbFB2bQ==","enc":"iz","ascii":true},{"offset":4196737,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU2ZG9fb3V0RVJTMF9QS0RpUzRfUlM0X1BjUzZfUlM2Xw==","enc":"iz","ascii":true},{"offset":4196802,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUVDMUVSS1M0Xw==","enc":"iz","ascii":true},{"offset":4196864,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxMGRvX3Vuc2hpZnRFUlMwX1BjUzNfUlMzXw==","enc":"iz","ascii":true},{"offset":4196923,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTEwZG9fdW5zaGlmdEVSMTFfX21ic3RhdGVfdFBjUzNfUlMzXw==","enc":"iz","ascii":true},{"offset":4196997,"type":"Cs","name":"X1pTdDE3X190aHJvd19iYWRfYWxsb2N2","enc":"iz","ascii":true},{"offset":4197022,"type":"Cs","name":"X1pOU3Q4aW9zX2Jhc2U0SW5pdEMxRXY=","enc":"iz","ascii":true},{"offset":4197046,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU1ZG9faW5FUlMwX1BLY1M0X1JTNF9QRGlTNl9SUzZf","enc":"iz","ascii":true},{"offset":4197110,"type":"Cs","name":"X1pUSVN0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU=","enc":"iz","ascii":true},{"offset":4197143,"type":"Cs","name":"X1pTdGxzSXdTdDExY2hhcl90cmFpdHNJd0VFUlN0MTNiYXNpY19vc3RyZWFtSVRfVDBfRVM2X1BLUzNf","enc":"iz","ascii":true},{"offset":4197204,"type":"Cs","name":"X1pTdDE5X190aHJvd19yYW5nZV9lcnJvclBLYw==","enc":"iz","ascii":true},{"offset":4197233,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUVDMUVPUzRf","enc":"iz","ascii":true},{"offset":4197294,"type":"Cs","name":"X1pUSVN0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRQ==","enc":"iz","ascii":true},{"offset":4197332,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUUxMF9NX3JlcGxhY2VFbW1QS2Nt","enc":"iz","ascii":true},{"offset":4197405,"type":"Cs","name":"X1pud20=","enc":"iz","ascii":true},{"offset":4197411,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTExZG9fZW5jb2RpbmdFdg==","enc":"iz","ascii":true},{"offset":4197464,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUU2cmVzaXplRW0=","enc":"iz","ascii":true},{"offset":4197527,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEUxNmRvX2Fsd2F5c19ub2NvbnZFdg==","enc":"iz","ascii":true},{"offset":4197580,"type":"Cs","name":"X1pTdDE5X190aHJvd19sb2dpY19lcnJvclBLYw==","enc":"iz","ascii":true},{"offset":4197609,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTlkb19sZW5ndGhFUjExX19tYnN0YXRlX3RQS2NTNF9t","enc":"iz","ascii":true},{"offset":4197679,"type":"Cs","name":"X1pOU3QyNV9fY29kZWN2dF91dGY4X3V0ZjE2X2Jhc2VJRHNFRDJFdg==","enc":"iz","ascii":true},{"offset":4197720,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUU5X01fY3JlYXRlRVJtbQ==","enc":"iz","ascii":true},{"offset":4197788,"type":"Cs","name":"X1pOU3Q3X19jeHgxMTEyYmFzaWNfc3RyaW5nSWNTdDExY2hhcl90cmFpdHNJY0VTYUljRUUxMF9NX2Rpc3Bvc2VFdg==","enc":"iz","ascii":true},{"offset":4197856,"type":"Cs","name":"X1pOS1N0N2NvZGVjdnRJRGljMTFfX21ic3RhdGVfdEU5ZG9fbGVuZ3RoRVJTMF9QS2NTNF9t","enc":"iz","ascii":true},{"offset":4197911,"type":"Cs","name":"X1pOS1N0MjVfX2NvZGVjdnRfdXRmOF91dGYxNl9iYXNlSURzRTVkb19pbkVSMTFfX21ic3RhdGVfdFBLY1M0X1JTNF9QRHNTNl9SUzZf","enc":"iz","ascii":true},{"offset":4197990,"type":"Cs","name":"bGlibS5zby42","enc":"iz","ascii":true},{"offset":4198000,"type":"Cs","name":"bGliZ2NjX3Muc28uMQ==","enc":"iz","ascii":true},{"offset":4198014,"type":"Cs","name":"X1Vud2luZF9SZXN1bWU=","enc":"iz","ascii":true},{"offset":4198029,"type":"Cs","name":"bGliYy5zby42","enc":"iz","ascii":true},{"offset":4198039,"type":"Cs","name":"c2V0bG9jYWxl","enc":"iz","ascii":true},{"offset":4198049,"type":"Cs","name":"bWJzcnRvd2Nz","enc":"iz","ascii":true},{"offset":4198059,"type":"Cs","name":"X19jeGFfYXRleGl0","enc":"iz","ascii":true},{"offset":4198072,"type":"Cs","name":"X19saWJjX3N0YXJ0X21haW4=","enc":"iz","ascii":true},{"offset":4198090,"type":"Cs","name":"R0NDXzMuMA==","enc":"iz","ascii":true},{"offset":4198098,"type":"Cs","name":"R0xJQkNfMi4yLjU=","enc":"iz","ascii":true},{"offset":4198110,"type":"Cs","name":"Q1hYQUJJXzEuMw==","enc":"iz","ascii":true},{"offset":4198121,"type":"Cs","name":"Q1hYQUJJXzEuMy45","enc":"iz","ascii":true},{"offset":4198134,"type":"Cs","name":"R0xJQkNYWF8zLjQ=","enc":"iz","ascii":true},{"offset":4198146,"type":"Cs","name":"R0xJQkNYWF8zLjQuMjE=","enc":"iz","ascii":true},{"offset":4203007,"type":"Cs","name":"dXRmOD4gXHUwMGEyXHUyMGFjXFUwMDAxMDM0OCBpbiB5ZWxsb3c6G1szM20gwqLigqzwkI2IIBtbMG0K","enc":"utf8","ascii":false}]
 EOF
 RUN
 
@@ -690,24 +1054,11 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=C.
-FILE=bins/elf/arm1.bin
-CMDS=<<EOF
-s 0x0007a23c
-C.
-s 0x00083fc4 
-C.
-EOF
-EXPECT=<<EOF
-0x0007a23c ascii[13] "match_symbol"
-0x00083fc4 data Cd 4
-0x00083fc4 CCu "[14] -rw- section size 4 named .init_array"
-EOF
-RUN
-
 NAME=Cd4
 FILE=-
 CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
 s+4
 pd+1
 Cd4
@@ -719,5 +1070,130 @@ EXPECT=<<EOF
             0x00000004      0000           add byte [rax], al
             0x00000004      .dword 0x00000000
             0x00000004      00000000       .dword 0x00000000
+EOF
+RUN
+
+NAME=Cb test
+FILE=bins/mach0/ls-m1
+ARGS=-a arm -b 64
+CMDS=<<EOF
+s main
+Cb 0x100003aa0
+pd 6
+EOF
+EXPECT=<<EOF
+            ;-- main:
+            ;-- entry0:
+            ;-- func.100003a90:
+        ,=< 0x100003a90 [1]     7f2303d5       pacibsp
+        !   0x100003a94      fc6fbaa9       stp x28, x27, [sp, -0x60]!
+        !   0x100003a98      fa6701a9       stp x26, x25, [sp, 0x10]
+        !   0x100003a9c      f85f02a9       stp x24, x23, [sp, 0x20]
+        `-> 0x100003aa0      f65703a9       stp x22, x21, [sp, 0x30]
+            0x100003aa4      f44f04a9       stp x20, x19, [sp, 0x40]
+EOF
+RUN
+
+NAME=Cd with a binary immbase shows all 64 bits of a qword
+FILE=malloc://64
+CMDS=<<EOF
+wx 0102030405060708
+Cd 8
+ahi 1
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      .int64 0000100000000111000001100000010100000100000000110000001000000001b
+EOF
+RUN
+
+NAME=Cd larger than a qword with a binary immbase falls back to hex
+FILE=malloc://64
+CMDS=<<EOF
+wx 0102030405060708
+Cd 31
+ahi 1
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000  0102 0304 0506 0708 0000 0000 0000 0000  ................ ; +0 
+EOF
+RUN
+
+NAME=Cd 3 and Cd 31 show hex with the htons and smi immbases
+FILE=malloc://64
+CMDS=<<EOF
+wx 0102030405060708
+Cd 3
+ahi 3
+pd 1
+Cd-
+Cd 31
+ahi 31
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000  0102 03                                  ... ; +0 
+            0x00000000  0102 0304 0506 0708 0000 0000 0000 0000  ................ ; +0 
+EOF
+RUN
+
+NAME=Cd with a binary immbase follows the endianness like hex does
+FILE=malloc://16
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 03000000
+Cd 4
+ahi 1
+pd 1
+e cfg.bigendian=true
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      .int32 00000000000000000000000000000011b
+            0x00000000      .int32 00000011000000000000000000000000b
+EOF
+RUN
+
+NAME=Cd takes ahi b and ahi 2 as binary like instructions do, and ahi 1 still shows binary
+FILE=malloc://16
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 03000000
+Cd 4
+ahi b
+pd 1
+pdj 1~{[0].opcode}
+ahi 2
+pd 1
+ahi 1
+pd 1
+ahi s
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      .int32 00000000000000000000000000000011b
+.int32 00000000000000000000000000000011b
+            0x00000000      .int32 00000000000000000000000000000011b
+            0x00000000      .int32 00000000000000000000000000000011b
+            0x00000000      .int32 00000000000000000000000000000011b
+EOF
+RUN
+
+NAME=Cf with floating point formats prints nothing
+FILE=malloc://64
+CMDS=<<EOF
+wx 000000000000f87f
+Cf 8 F
+Cf 4 f @ 8
+Cf 16 Q @ 16
+?e --
+C*
+EOF
+EXPECT=<<EOF
+--
+'@0x00000000'Cf 8 F
+'@0x00000008'Cf 4 f
+'@0x00000010'Cf 16 Q
 EOF
 RUN

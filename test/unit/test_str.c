@@ -1,14 +1,439 @@
 #include <r_util.h>
 #include "minunit.h"
 
-//TODO test r_str_chop_path
+#if R2__UNIX__
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
+static int count_substr(const char *s, const char *needle) {
+	const size_t nlen = strlen (needle);
+	int n = 0;
+	while (s && (s = strstr (s, needle))) {
+		n++;
+		s += nlen;
+	}
+	return n;
+}
+
+bool test_r_file(void) {
+	char *s = r_file_new ("/foo", "bar", NULL);
+	mu_assert_streq (s, "/foo/bar", "error, invalid path");
+	free (s);
+	s = r_file_new ("/foo/", "bar", NULL);
+	mu_assert_streq (s, "/foo/bar", "error, invalid path");
+	free (s);
+	char *root = r_str_newf ("foo%s%s", R_SYS_DIR, R_SYS_DIR);
+	char *expected = r_str_newf ("foo%sbar", R_SYS_DIR);
+	s = r_file_root (root, "///bar");
+	mu_assert_streq (s, expected, "error, invalid rooted path");
+	free (s);
+	free (expected);
+	free (root);
+	mu_end;
+}
+
+//TODO test r_str_chop_path
 bool test_r_str_wrap(void) {
 	char *s = r_str_wrap ("hello world\nhow are you\n", 5);
-	char *res = strdup ("hello \nworld\nhow ar\ne you\n");
+	char *res = strdup ("hello\nworld\nhow\nare\nyou\n");
 	mu_assert_streq (s, res, "error, invalid string wrapping");
 	free (s);
 	free (res);
+	s = r_str_wrap ("☑️xy⬜z👩‍💻x🟠", 3);
+	mu_assert_streq (s, "☑️x\ny⬜\nz👩‍💻\nx🟠", "wrap preserves emoji clusters and counts their display cells");
+	free (s);
+	s = r_str_wrap ("a☑\x1b[31m️\x1b[0mb", 2);
+	mu_assert_streq (s, "a\n☑\x1b[31m️\x1b[0m\nb", "wrap preserves selectors across ANSI colors");
+	free (s);
+	mu_end;
+}
+
+bool test_r_str_startswith_any(void) {
+	mu_assert ("first prefix", R_STR_STARTSWITH_ANY ("asan_report", "asan_", "hwasan_", "ubsan_"));
+	mu_assert ("middle prefix", R_STR_STARTSWITH_ANY ("hwasan_report", "asan_", "hwasan_", "ubsan_"));
+	mu_assert ("last prefix", R_STR_STARTSWITH_ANY ("ubsan_report", "asan_", "hwasan_", "ubsan_"));
+	mu_assert ("longer candidate before match", R_STR_STARTSWITH_ANY ("asan_report", "asan_report_extra", "asan_"));
+	mu_assert ("one prefix", R_STR_STARTSWITH_ANY ("asan_report", "asan_"));
+	mu_assert ("eighth prefix", R_STR_STARTSWITH_ANY ("z_last", "a", "b", "c", "d", "e", "f", "g", "z_"));
+	mu_assert ("short string", !R_STR_STARTSWITH_ANY ("asan", "asan_", "hwasan_", "ubsan_"));
+	mu_assert ("nonmatching prefix", !R_STR_STARTSWITH_ANY ("msan_report", "asan_", "hwasan_", "ubsan_"));
+	mu_assert ("empty string", !R_STR_STARTSWITH_ANY ("", "asan_", "hwasan_", "ubsan_"));
+	mu_assert ("null string", !R_STR_STARTSWITH_ANY (NULL, "asan_", "hwasan_"));
+	mu_assert ("empty list", !R_STR_STARTSWITH_ANY ("asan_report", ""));
+	mu_assert ("empty entries", R_STR_STARTSWITH_ANY ("asan_report", "", "", "asan_", "", ""));
+	mu_assert ("entry boundary required", !R_STR_STARTSWITH_ANY ("asan_report", "hwasan_"));
+	mu_assert ("exact prefix", R_STR_STARTSWITH_ANY ("asan_", "asan_"));
+	mu_assert ("word boundary", R_STR_STARTSWITH_ANY ("hwasan_report", "abcdef", "hwasan_"));
+	mu_assert ("one byte prefix", R_STR_STARTSWITH_ANY ("hello", "abcdef", "h"));
+	mu_end;
+}
+
+bool test_r_str_cmp_any(void) {
+	mu_assert ("first item", R_STR_CMP_ANY ("asan", "asan", "hwasan", "ubsan"));
+	mu_assert ("middle item", R_STR_CMP_ANY ("hwasan", "asan", "hwasan", "ubsan"));
+	mu_assert ("last item", R_STR_CMP_ANY ("ubsan", "asan", "hwasan", "ubsan"));
+	mu_assert ("suffix inside item", !R_STR_CMP_ANY ("asan", "hwasan"));
+	mu_assert ("interior match before whole item", R_STR_CMP_ANY ("asan", "hwasan", "asan"));
+	mu_assert ("prefix is not a full match", !R_STR_CMP_ANY ("asan_report", "asan", "hwasan", "ubsan"));
+	mu_assert ("short string", !R_STR_CMP_ANY ("asa", "asan", "hwasan", "ubsan"));
+	mu_assert ("nonmatching item", !R_STR_CMP_ANY ("msan", "asan", "hwasan", "ubsan"));
+	mu_assert ("empty string", !R_STR_CMP_ANY ("", "asan", "hwasan", "ubsan"));
+	mu_assert ("empty item list", !R_STR_CMP_ANY ("asan", ""));
+	mu_assert ("null string", !R_STR_CMP_ANY (NULL, "asan", "hwasan"));
+	mu_assert ("empty entries", R_STR_CMP_ANY ("asan", "", "", "asan", "", ""));
+	mu_assert ("word boundary", R_STR_CMP_ANY ("hwasan", "abcdef", "hwasan"));
+	mu_assert ("last single byte", R_STR_CMP_ANY ("h", "abcdef", "h"));
+	const char *next[] = { "asan", "hwasan" };
+	const char **key = next;
+	mu_assert ("evaluate key once", R_STR_CMP_ANY (*key++, "asan", "hwasan") && key == next + 1);
+	key = next;
+	mu_assert ("evaluate prefix once", R_STR_STARTSWITH_ANY (*key++, "asan", "hwasan") && key == next + 1);
+	mu_end;
+}
+
+bool test_r_str_endswith_any(void) {
+	mu_assert ("first entry suffix", R_STR_ENDSWITH_ANY ("bar", "foobar", "quux", "last"));
+	mu_assert ("middle entry suffix", R_STR_ENDSWITH_ANY ("uux", "foobar", "quux", "last"));
+	mu_assert ("last implicit terminator", R_STR_ENDSWITH_ANY ("ast", "foobar", "quux", "last"));
+	mu_assert ("whole entry", R_STR_ENDSWITH_ANY ("quux", "foobar", "quux", "last"));
+	mu_assert ("interior is not a suffix", !R_STR_ENDSWITH_ANY ("oba", "foobar", "quux"));
+	mu_assert ("prefix is not a suffix", !R_STR_ENDSWITH_ANY ("foo", "foobar", "quux"));
+	mu_assert ("do not join entries", !R_STR_ENDSWITH_ANY ("barquux", "foobar", "quux"));
+	mu_assert ("key is searched in entries", !R_STR_ENDSWITH_ANY ("foobar", "bar"));
+	mu_assert ("empty key", !R_STR_ENDSWITH_ANY ("", "foobar", "quux"));
+	mu_assert ("empty list", !R_STR_ENDSWITH_ANY ("bar", ""));
+	const char *null_key = NULL;
+	mu_assert ("null key", !R_STR_ENDSWITH_ANY (null_key, "foobar"));
+	mu_end;
+}
+
+bool test_r_str_strstr_any(void) {
+	mu_assert ("first entry substring", R_STR_STRSTR_ANY ("oba", "foobar", "quux", "last"));
+	mu_assert ("middle entry substring", R_STR_STRSTR_ANY ("uu", "foobar", "quux", "last"));
+	mu_assert ("last entry substring", R_STR_STRSTR_ANY ("as", "foobar", "quux", "last"));
+	mu_assert ("whole entry", R_STR_STRSTR_ANY ("quux", "foobar", "quux", "last"));
+	mu_assert ("entry prefix", R_STR_STRSTR_ANY ("foo", "foobar", "quux"));
+	mu_assert ("entry suffix", R_STR_STRSTR_ANY ("bar", "foobar", "quux"));
+	mu_assert ("do not join entries", !R_STR_STRSTR_ANY ("barquux", "foobar", "quux"));
+	mu_assert ("key is searched in entries", !R_STR_STRSTR_ANY ("foobar", "oba"));
+	mu_assert ("empty key", !R_STR_STRSTR_ANY ("", "foobar", "quux"));
+	mu_assert ("empty list", !R_STR_STRSTR_ANY ("bar", ""));
+	const char *null_key = NULL;
+	mu_assert ("null key", !R_STR_STRSTR_ANY (null_key, "foobar"));
+	mu_end;
+}
+
+bool test_r_str_any(void) {
+	mu_assert ("first exact entry", R_STR_CMP_ANY ("asan", "asan", "hwasan", "ubsan"));
+	mu_assert ("last exact entry", R_STR_CMP_ANY ("ubsan", "asan", "hwasan", "ubsan"));
+	mu_assert ("exact entry boundary", !R_STR_CMP_ANY ("asan", "hwasan"));
+	mu_assert ("exact terminator", !R_STR_CMP_ANY ("asan_report", "asan", "hwasan"));
+	mu_assert ("exact empty entry", R_STR_CMP_ANY ("asan", "", "asan", ""));
+	mu_assert ("prefix", R_STR_STARTSWITH_ANY ("asan_report", "asan_", "hwasan_"));
+	mu_assert ("exact prefix", R_STR_STARTSWITH_ANY ("asan_", "asan_"));
+	mu_assert ("short prefix", !R_STR_STARTSWITH_ANY ("asan", "asan_", "hwasan_"));
+	mu_assert ("later prefix", R_STR_STARTSWITH_ANY ("asan_report", "asan_report_extra", "asan_"));
+	mu_assert ("prefix boundary", !R_STR_STARTSWITH_ANY ("asan_report", "hwasan_"));
+	mu_assert ("one byte prefix", R_STR_STARTSWITH_ANY ("hello", "a", "h"));
+	mu_assert ("suffix", R_STR_ENDSWITH_ANY ("bar", "foobar", "quux"));
+	mu_assert ("last suffix", R_STR_ENDSWITH_ANY ("uux", "foobar", "quux"));
+	mu_assert ("exact suffix", R_STR_ENDSWITH_ANY ("quux", "foobar", "quux"));
+	mu_assert ("interior is not suffix", !R_STR_ENDSWITH_ANY ("oba", "foobar", "quux"));
+	mu_assert ("prefix is not suffix", !R_STR_ENDSWITH_ANY ("foo", "foobar", "quux"));
+	mu_assert ("suffix search direction", !R_STR_ENDSWITH_ANY ("foobar", "bar"));
+	mu_assert ("substring", R_STR_STRSTR_ANY ("oba", "foobar", "quux"));
+	mu_assert ("last substring", R_STR_STRSTR_ANY ("uu", "foobar", "quux"));
+	mu_assert ("exact substring", R_STR_STRSTR_ANY ("quux", "foobar", "quux"));
+	mu_assert ("substring search direction", !R_STR_STRSTR_ANY ("foobar", "oba"));
+	mu_assert ("do not join entries", !R_STR_STRSTR_ANY ("barquux", "foobar", "quux"));
+	mu_assert ("null exact", !R_STR_CMP_ANY (NULL, "foo"));
+	mu_assert ("null prefix", !R_STR_STARTSWITH_ANY (NULL, "foo"));
+	mu_assert ("null suffix", !R_STR_ENDSWITH_ANY (NULL, "foo"));
+	mu_assert ("null substring", !R_STR_STRSTR_ANY (NULL, "foo"));
+	mu_assert ("empty exact", !R_STR_CMP_ANY ("", ""));
+	mu_assert ("empty prefix", !R_STR_STARTSWITH_ANY ("", ""));
+	mu_assert ("empty suffix", !R_STR_ENDSWITH_ANY ("", ""));
+	mu_assert ("empty substring", !R_STR_STRSTR_ANY ("", ""));
+	mu_assert ("empty exact list", !R_STR_CMP_ANY ("x", ""));
+	mu_assert ("empty prefix list", !R_STR_STARTSWITH_ANY ("x", ""));
+	mu_assert ("empty suffix list", !R_STR_ENDSWITH_ANY ("x", ""));
+	mu_assert ("empty substring list", !R_STR_STRSTR_ANY ("x", ""));
+	const char *keys[] = { "foo", "foo", "foo", "foo" };
+	const char **key = keys;
+	mu_assert ("exact evaluates key once", R_STR_CMP_ANY (*key++, "foo", "bar") && key == keys + 1);
+	mu_assert ("prefix evaluates key once", R_STR_STARTSWITH_ANY (*key++, "foo", "bar") && key == keys + 2);
+	mu_assert ("suffix evaluates key once", R_STR_ENDSWITH_ANY (*key++, "foo", "bar") && key == keys + 3);
+	mu_assert ("substring evaluates key once", R_STR_STRSTR_ANY (*key++, "foo", "bar") && key == keys + 4);
+#define STR_ANY_32 "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", \
+	"16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31"
+	mu_assert ("32 exact entries", R_STR_CMP_ANY ("31", STR_ANY_32));
+	mu_assert ("32 prefixes", R_STR_STARTSWITH_ANY ("31_report", STR_ANY_32));
+	mu_assert ("32 suffixes", R_STR_ENDSWITH_ANY ("31", STR_ANY_32));
+	mu_assert ("32 substrings", R_STR_STRSTR_ANY ("31", STR_ANY_32));
+	mu_assert ("32 entries miss", !R_STR_CMP_ANY ("32", STR_ANY_32));
+#undef STR_ANY_32
+	mu_end;
+}
+
+bool test_r_str_any_against_loops(void) {
+#define ANY_TEST_ITEMS "", "a", "bb", "aba", "ababa", "", "bab", "\x01", "\x01" "b", "\x80" "a", "\xff", "\xff\x80", ""
+	const char *items[] = {
+		"a", "bb", "aba", "ababa", "bab", "\x01", "\x01" "b", "\x80" "a", "\xff", "\xff\x80"
+	};
+	const char alphabet[] = { 'a', 'b', '\x01', '\x80', '\xff' };
+	size_t length, count = 1;
+	for (length = 0; length <= 5; length++) {
+		size_t number;
+		for (number = 0; number < count; number++) {
+			char *key = malloc (length + 1);
+			mu_assert_notnull (key, "allocate exact key size");
+			size_t i, value = number;
+			for (i = 0; i < length; i++) {
+				key[i] = alphabet[value % sizeof (alphabet)];
+				value /= sizeof (alphabet);
+			}
+			key[length] = 0;
+			bool exact = false, prefix = false, suffix = false, substring = false;
+			for (i = 0; length && i < R_ARRAY_SIZE (items); i++) {
+				exact |= !strcmp (key, items[i]);
+				prefix |= r_str_startswith (key, items[i]);
+				suffix |= r_str_endswith (items[i], key);
+				substring |= strstr (items[i], key) != NULL;
+			}
+			const bool same = R_STR_CMP_ANY (key, ANY_TEST_ITEMS) == exact
+				&& R_STR_STARTSWITH_ANY (key, ANY_TEST_ITEMS) == prefix
+				&& R_STR_ENDSWITH_ANY (key, ANY_TEST_ITEMS) == suffix
+				&& R_STR_STRSTR_ANY (key, ANY_TEST_ITEMS) == substring;
+			free (key);
+			mu_assert ("literal macros agree with individual comparisons", same);
+		}
+		count *= sizeof (alphabet);
+	}
+#undef ANY_TEST_ITEMS
+	size_t padding;
+	for (padding = 0; padding < 288; padding++) {
+		char *key = malloc (padding + 2);
+		mu_assert_notnull (key, "allocate exact key size");
+		memset (key, 'a', padding);
+		key[padding] = 'b';
+		key[padding + 1] = 0;
+		const bool same = R_STR_CMP_ANY (key, "b") == (padding == 0)
+			&& R_STR_STARTSWITH_ANY (key, "a", "b")
+			&& R_STR_ENDSWITH_ANY (key, "b") == (padding == 0)
+			&& R_STR_STRSTR_ANY (key, "b") == (padding == 0);
+		free (key);
+		mu_assert ("bounded reads for different key lengths", same);
+	}
+	mu_end;
+}
+
+bool test_r_mem_mem(void) {
+	const ut8 haystack[] = { 'a', 0, 'b', 'c', 'b' };
+	const ut8 needle[] = { 0, 'b' };
+	const ut8 *(*public_mem_mem)(const ut8 *, int, const ut8 *, int) = r_mem_mem;
+	mu_assert ("find binary needle", r_mem_mem (haystack, sizeof (haystack), needle, sizeof (needle)) == haystack + 1);
+	mu_assert ("public API symbol", public_mem_mem (haystack, sizeof (haystack), needle, sizeof (needle)) == haystack + 1);
+	mu_assert ("reject empty needle", !r_mem_mem (haystack, sizeof (haystack), needle, 0));
+	mu_assert ("reject long needle", !r_mem_mem (haystack, 1, needle, sizeof (needle)));
+	mu_assert ("reject negative size", !r_mem_mem (haystack, -1, needle, sizeof (needle)));
+	mu_end;
+}
+
+bool test_r_str_md2txt_rendering(void) {
+	RMarkdownOptions options = {
+		.utf8 = true,
+	};
+	char *line = r_str_repeat ("\xe2\x80\x95", 37);
+	char *expected = r_str_newf ("# T\n%*s%s\n", 19, "", line);
+	char *s = r_str_md2txt ("# T\n---\n", &options);
+	mu_assert_streq (s, expected, "markdown title and hr rendering");
+	free (s);
+	free (expected);
+	free (line);
+
+	RMarkdownOptions color_options = {
+		.color = true,
+	};
+	s = r_str_md2txt ("```\n\nx\n```\n", &color_options);
+	mu_assert_eq (count_substr (s, "\x1b[48;5;234m"), 2, "markdown codeblock background rows");
+	mu_assert_eq (count_substr (s, "\x1b[48;5;236m"), 0, "markdown codeblock old background color");
+	free (s);
+
+	s = r_str_md2txt ("Use `foo` here\n", &color_options);
+	mu_assert_eq (count_substr (s, "`foo`"), 0, "markdown inline code marker is not raw text");
+	mu_assert_eq (count_substr (s, "\x1b[48;5;234m" Color_WHITE "foo" Color_RESET_BG Color_RESET), 1, "markdown inline code rendering");
+	free (s);
+
+	s = r_str_md2txt ("| attr | plain |\n| --- | --- |\n| **cell** | ~~gone~~ |\n", &color_options);
+	mu_assert_eq (count_substr (s, "**cell**"), 0, "markdown table bold marker is not raw text");
+	mu_assert_eq (count_substr (s, "~~gone~~"), 0, "markdown table strike marker is not raw text");
+	mu_assert_eq (count_substr (s, Color_BOLD "cell" Color_BOLD_RESET), 1, "markdown table bold cell rendering");
+	mu_assert_eq (count_substr (s, Color_STRIKE "gone" Color_STRIKE_RESET), 1, "markdown table strike cell rendering");
+	free (s);
+
+	RMarkdownOptions table_code_options = {
+		.color = true,
+		.utf8 = true,
+	};
+	s = r_str_md2txt ("| attr |\n| --- |\n| `code` |\n", &table_code_options);
+	mu_assert_eq (count_substr (s, "`code`"), 0, "markdown table inline code marker is not raw text");
+	mu_assert_eq (count_substr (s, "\x1b[48;5;234m" Color_WHITE "code" Color_RESET_BG Color_RESET), 1, "markdown table inline code rendering");
+	free (s);
+	mu_end;
+}
+
+bool test_r_str_md2txt_tables_and_titles(void) {
+	char *s = r_str_md2txt_width (
+		"| left | center | right |\n| :--- | :---: | ---: |\n"
+		"| a\\|b | c | d |\n| x |\n| p | q | r | extra |\n", NULL, 40);
+	mu_assert_streq (s,
+		".--------------------------.\n"
+		"| left  | center  |  right |\n"
+		")--------------------------(\n"
+		"| a|b   |    c    |      d |\n"
+		"| x     |         |        |\n"
+		"| p     |    q    |      r |\n"
+		"`--------------------------'\n", "table alignment, escaped pipes and uneven rows");
+	free (s);
+
+	const RMarkdownOptions options = { .slide_titles = true };
+	s = r_str_md2txt_width ("## Title\n", &options, 20);
+	mu_assert_streq (s, "  Title\n", "slide title fits the available width");
+	free (s);
+	s = r_str_md2txt_width ("## Title\n", &options, 5);
+	mu_assert_streq (s, "##\nTitle\n", "oversized slide title falls back to wrapped text");
+	free (s);
+
+	s = r_str_md2txt_width ("  \t--- \t\n--\n---text\n", NULL, 12);
+	mu_assert_streq (s, "   ------\n  --\n  ---text\n", "horizontal rules allow whitespace but reject short runs and text");
+	free (s);
+	mu_end;
+}
+
+bool test_r_str_md2txt_emoji_table(void) {
+	const RMarkdownOptions options = { .utf8 = true };
+	char *s = r_str_md2txt_width (
+		"| s | x |\n| --- | --- |\n"
+		"| ☑️xy | ⬜z |\n| 👩‍💻x | 🟠 |\n| ♠ | Ａ |\n", &options, 13);
+	mu_assert_streq (s,
+		"┌───────────┐\n"
+		"│ s   │ x   │\n"
+		"│───────────│\n"
+		"│ ☑️x │ ⬜z │\n"
+		"│ y   │     │\n"
+		"│ 👩‍💻x │ 🟠  │\n"
+		"│ ♠   │ Ａ  │\n"
+		"└───────────┘\n", "markdown table wraps and pads Unicode cells to fixed columns");
+	free (s);
+	mu_end;
+}
+
+bool test_r_str_md2txt_codeblocks(void) {
+	const RMarkdownOptions options = {
+		.color = true,
+		.utf8 = true,
+	};
+	const char *start = "  \x1b[48;5;234m" Color_WHITE " ";
+	const char *end = Color_RESET_BG Color_RESET "\n";
+	char *expected = r_str_newf ("%s       %s%sx      %s%s123456 %s", start, end, start, end, start, end);
+	char *s = r_str_md2txt_width ("```\n\nx\n123456\n```\n", &options, 80);
+	mu_assert_streq (s, expected, "code backgrounds fit the longest line, including blank and shorter rows");
+	free (s);
+	free (expected);
+
+	expected = r_str_newf ("%sé界é  X %s%sz       %s", start, end, start, end);
+	s = r_str_md2txt_width ("    é界é\tX\r\n    z\n", &options, 80);
+	mu_assert_streq (s, expected, "indented code width accounts for Unicode, tabs and carriage returns");
+	free (s);
+	free (expected);
+
+	expected = r_str_newf ("%sx %s%sabc %s", start, end, start, end);
+	s = r_str_md2txt_ex ("```c\nx\n```\n```text\nabc\n```\n", &options, 80, true);
+	mu_assert_streq (s, expected, "highlighted blocks keep their margins and use independent widths");
+	free (s);
+	free (expected);
+
+	expected = r_str_newf ("%s12345678 %s%s9        %s%s         %s%sx        %s  after" Color_RESET "\n",
+		start, end, start, end, start, end, start, end);
+	s = r_str_md2txt_width ("```c\n123456789\n\nx\n```\nafter\n", &options, 12);
+	mu_assert_streq (s, expected, "wrapped rows have equal backgrounds and reset before prose");
+	free (s);
+	free (expected);
+
+	expected = r_str_newf ("%s12345678 %s", start, end);
+	s = r_str_md2txt_width ("```\n12345678\n```", &options, 12);
+	mu_assert_streq (s, expected, "exact width ends the row without an extra blank row");
+	free (s);
+	s = r_str_md2txt_width ("```\n12345678", &options, 12);
+	mu_assert_streq (s, expected, "unterminated final row is padded and reset");
+	free (s);
+	free (expected);
+
+	expected = r_str_newf ("%s1234 %s%s5678 %s%s9    %s", start, end, start, end, start, end);
+	s = r_str_md2txt_width ("\t123456789\n", &options, 8);
+	mu_assert_streq (s, expected, "indented code keeps its background across wrapped rows");
+	free (s);
+	free (expected);
+
+	expected = r_str_newf ("%s1234567  %s%s X       %s", start, end, start, end);
+	s = r_str_md2txt_width ("```\n1234567\tX\n```\n", &options, 12);
+	mu_assert_streq (s, expected, "tab expansion counts toward the row width");
+	free (s);
+	free (expected);
+
+	expected = r_str_newf ("%sé界é %s%s界   %s", start, end, start, end);
+	s = r_str_md2txt_width ("```\né界é界\n```\n", &options, 8);
+	mu_assert_streq (s, expected, "wrap by display columns without splitting UTF-8 or combining marks");
+	free (s);
+	free (expected);
+
+	s = r_str_md2txt_width ("```\n  123456  78```x\n```\n", NULL, 12);
+	mu_assert_streq (s, "     123456\n     78```x\n", "preserve spaces and literal backticks across plain code rows");
+	free (s);
+
+	expected = r_str_newf ("%s12345678 %s%s```x     %s", start, end, start, end);
+	s = r_str_md2txt_width ("```\n12345678```x\n```\n", &options, 12);
+	mu_assert_streq (s, expected, "wrapping does not interpret code as a closing fence");
+	free (s);
+	free (expected);
+
+	s = r_str_md2txt_width ("```\nabc\n```", NULL, 1);
+	mu_assert_streq (s, "a\nb\nc\n", "one-column screen drops margins and makes progress");
+	free (s);
+	s = r_str_md2txt_width ("```\n界x\n```", NULL, 2);
+	mu_assert_streq (s, "界\nx\n", "two-column screen fits wide characters");
+	free (s);
+	s = r_str_md2txt_width ("```\n界x\n```", NULL, 1);
+	mu_assert_streq (s, "?\nx\n", "wide character fallback stays within a one-column screen");
+	free (s);
+	expected = r_str_md2txt ("```\nx\n```", &options);
+	s = r_str_md2txt_width ("```\nx\n```", &options, 0);
+	mu_assert_streq (s, expected, "unspecified width keeps the default layout");
+	free (s);
+	free (expected);
+
+	const int widths[] = { 1, 2, 3, 4, 5, 8, 12, 40, 75, 120 };
+	char *code = r_str_repeat ("x", 300);
+	char *md = r_str_newf ("```\n%s\n\nshort\n```\n", code);
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (widths); i++) {
+		s = r_str_md2txt_width (md, &options, widths[i]);
+		mu_assert_notnull (s, "render code at each width");
+		mu_assert_eq (count_substr (s, "x"), 300, "wrapping preserves every code character");
+		char *row = s;
+		char *eol;
+		while ((eol = strchr (row, '\n'))) {
+			*eol = 0;
+			mu_assert_eq (r_str_len_utf8_ansi (row), widths[i], "every background row fits the requested width");
+			mu_assert ("every row resets its background", r_str_endswith (row, Color_RESET_BG Color_RESET));
+			row = eol + 1;
+		}
+		mu_assert_streq (row, "", "all code rows end in a newline");
+		free (s);
+	}
+	free (md);
+	free (code);
 	mu_end;
 }
 
@@ -44,6 +469,10 @@ bool test_r_str_replace(void) {
 	str = r_str_replace (strdup ("hello horld"), "h", "hello", 0);
 	mu_assert_streq (str, "helloello horld", "error, replace char multi failed");
 	free (str);
+
+	str = r_str_replace (strdup ("Hello horld"), "h", "hello", 'i');
+	mu_assert_streq (str, "Helloello helloorld", "error, replace char icase failed");
+	free (str);
 	mu_end;
 }
 
@@ -52,6 +481,39 @@ bool test_r_str_replace_char(void) {
 	(void) r_str_replace_char (str, 'l', 'x');
 	mu_assert_streq (str, "hexxo worxd", "error, replace char multi failed");
 	free (str);
+	mu_end;
+}
+
+bool test_r_str_normalize_newlines(void) {
+	const char *inputs[] = {
+		"one\ntwo\n", "one\rtwo\r", "one\r\ntwo\r\n", "one\n\rtwo\n\r", NULL
+	};
+	const char *names[] = { "unix", "classic", "dos", "lfcr" };
+	int i;
+	for (i = 0; inputs[i]; i++) {
+		char *str = strdup (inputs[i]);
+		r_str_normalize_newlines (str);
+		mu_assert_streq_free (str, "one\ntwo\n", names[i]);
+	}
+	char repeated[] = "one\n\ntwo\r\rthree\r\n\rfour\n\r\n";
+	r_str_normalize_newlines (repeated);
+	mu_assert_streq (repeated, "one\n\ntwo\n\nthree\n\nfour\n\n", "preserve repeated newlines");
+	mu_end;
+}
+
+bool test_r_str_filter_file(void) {
+	char file[32] = "theme.zip";
+	mu_assert ("single dot is valid", !r_str_filter_file (file));
+	mu_assert_streq (file, "theme.zip", "single dot changed");
+	r_str_ncpy (file, "..", sizeof (file));
+	mu_assert ("parent directory was not filtered", r_str_filter_file (file));
+	mu_assert_streq (file, "._", "parent directory filter");
+	r_str_ncpy (file, "theme..zip", sizeof (file));
+	mu_assert ("double dot was not filtered", r_str_filter_file (file));
+	mu_assert_streq (file, "theme._zip", "double dot filter");
+	r_str_ncpy (file, "dir/theme\\file", sizeof (file));
+	mu_assert ("path separators were not filtered", r_str_filter_file (file));
+	mu_assert_streq (file, "dir_theme_file", "path separator filter");
 	mu_end;
 }
 
@@ -75,6 +537,7 @@ bool test_r_str_rwx(void) {
 	int rw =  r_str_rwx ("rw-");
 	int rx = r_str_rwx ("rx");
 	int none = r_str_rwx ("---");
+	int invalid = r_str_rwx ("invalid");
 	int number = r_str_rwx ("999");
 	int rx_number = r_str_rwx ("5");
 	int rwx_number = r_str_rwx ("7");
@@ -82,13 +545,12 @@ bool test_r_str_rwx(void) {
 	mu_assert_eq (rw, 6, "rw");
 	mu_assert_eq (rx, 5, "rx");
 	mu_assert_eq (none, 0, "no permissions");
-	mu_assert_eq (number, 0, "large input number string");
+	mu_assert_eq (invalid, -1, "invalid permissions string");
+	mu_assert_eq (number, -1, "large input number string");
 	mu_assert_eq (rx_number, 5, "rx number");
 	mu_assert_eq (rwx_number, 7, "rwx number");
 	mu_end;
 }
-
-//TODO test r_str_binstr2bin
 
 bool test_r_str_rwx_i(void) {
 	const char* rwx = r_str_rwx_i (7);
@@ -116,15 +578,21 @@ bool test_r_str_trim(void) {
 	//  2
 	mu_assert_streq (two, "hello", "three");
 	free (two);
+	// 3 - vertical tab and form feed are whitespace too
+	const char *four = r_str_trim_head_ro ("\v\f hello");
+	mu_assert_streq (four, "hello", "four");
+	char *five = strdup ("\t\r\n\v\fhello\v\f\r\n\t ");
+	r_str_trim (five);
+	mu_assert_streq (five, "hello", "five");
+	free (five);
 	mu_end;
 }
-//TODO find a way to test r_str_home.
 
 bool test_r_str_bool(void) {
-	const char* one = r_str_bool(1);
-	const char* zero = r_str_bool(0);
-	const char* fifty = r_str_bool(50);
-	const char* negative = r_str_bool(-1);
+	const char* one = r_str_bool (1);
+	const char* zero = r_str_bool (0);
+	const char* fifty = r_str_bool (50);
+	const char* negative = r_str_bool (-1);
 	mu_assert_streq (one, "true", "one");
 	mu_assert_streq (zero, "false", "zero");
 	mu_assert_streq (fifty, "true", "large positive value");
@@ -152,7 +620,87 @@ bool test_r_str_case(void) {
 	mu_end;
 }
 
-//TODO test r_str_hash64, r_str_hash
+bool test_r_str_hash(void) {
+	const struct {
+		size_t len;
+		ut64 unseeded;
+		ut64 seeded;
+	} vectors[] = {
+		{ 0, 0x0000000000000000ULL, 0x53664f3506f0828cULL },
+		{ 1, 0x7c3cfe8d96c011c9ULL, 0xf92718aa1736f3e4ULL },
+		{ 2, 0x73ccba549b859c0bULL, 0xb0627860b1b88acaULL },
+		{ 3, 0xb9c8ec872fff68cbULL, 0x977de89f4d523973ULL },
+		{ 4, 0x230d09ec9e4cbda1ULL, 0xe0ef0b6ddfca38cbULL },
+		{ 5, 0xa0c9339eb6acd71bULL, 0x87a4b86a90382583ULL },
+		{ 6, 0x4e79ab0f92015180ULL, 0x6e86853833f33365ULL },
+		{ 7, 0xfe3ab750003637f7ULL, 0x7c58236b8827855bULL },
+		{ 8, 0x89ec650c9e2ce0c8ULL, 0x782e4396ce7fff2dULL },
+		{ 9, 0x044cd6e7db8e5a0bULL, 0xbeb3957529d87740ULL },
+		{ 15, 0x0d2e409194b7eb98ULL, 0x225a06e8a0a61604ULL },
+		{ 16, 0x5e8d1ebe5cc7f089ULL, 0xa7ba092204ae5c1eULL },
+		{ 17, 0xb78790269c20c5bfULL, 0x2babc558818d49baULL },
+		{ 31, 0x8626783cd091c57fULL, 0x27112c62bab55944ULL },
+		{ 32, 0xa685685dd856ea38ULL, 0x8c99efdc8e8aa020ULL },
+		{ 33, 0x983e10ed2bbdbef5ULL, 0xf17c942f27a57ec2ULL },
+		{ 63, 0x80770024cd01bfc4ULL, 0x96729c7cb6cc40d9ULL },
+		{ 64, 0x7d0aad0cf0dbdb83ULL, 0x9bae0d2cb530c523ULL },
+		{ 65, 0x5dd1cb7f5543c5ecULL, 0xe4a03247930e5cb1ULL },
+		{ 255, 0x2fc5fc2c82f8422dULL, 0xd8d2255270c171c2ULL },
+		{ 256, 0x28a81c228389ef61ULL, 0xe9df122d0ee1f8f4ULL },
+		{ 257, 0xc58936fcc8317d68ULL, 0xd458bcc92840fde7ULL },
+	};
+	ut8 data[273];
+	size_t offset, i;
+	for (offset = 0; offset < 16; offset++) {
+		for (i = 0; i < 257; i++) {
+			data[offset + i] = (ut8)(i * 37 + 11);
+		}
+		for (i = 0; i < R_ARRAY_SIZE (vectors); i++) {
+			const char *s = (const char *)data + offset;
+			mu_assert_eq (r_str_hash64_seed (s, vectors[i].len, 0), vectors[i].unseeded, "unseeded binary hash");
+			mu_assert_eq (r_str_hash64_seed (s, vectors[i].len, 0xfedcba9876543210ULL), vectors[i].seeded, "seeded binary hash");
+		}
+	}
+	mu_assert_eq (r_str_hash (NULL), 0, "null hash");
+	mu_assert_eq (r_str_hash64 (NULL), 0, "null hash64");
+	mu_assert_eq (r_str_hash64_seed (NULL, 0, 0), 0, "empty null slice");
+	const char *strings[] = { "", "a", "abc", "abcdefg", "abcdefgh", "abcdefghi", "123456789", "\xc3\xa9\xff" };
+	for (i = 0; i < R_ARRAY_SIZE (strings); i++) {
+		ut64 h = r_str_hash64_seed (strings[i], strlen (strings[i]), 0);
+		mu_assert_eq (r_str_hash64 (strings[i]), h, "string and byte hashes agree");
+		mu_assert_eq (r_str_hash (strings[i]), (ut32)h, "32-bit truncation");
+	}
+	mu_assert_eq (r_str_hash ("123456789"), 0xe047eeab, "strhash regression value");
+	mu_assert_neq (r_str_hash64 ("reloc.fixup.hs"), r_str_hash64 ("reloc.fixup.iR"), "distinct flag names");
+	mu_end;
+}
+
+bool test_r_str_hash_bounds(void) {
+#if R2__UNIX__
+	long page_size = sysconf (_SC_PAGESIZE);
+	mu_assert_true (page_size >= 128, "page size");
+	char *map = mmap (NULL, page_size * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+	mu_assert_true (map != MAP_FAILED, "map guard pages");
+	char *end = map + page_size;
+	mu_assert_eq (mprotect (end, page_size, PROT_NONE), 0, "protect next page");
+	char expected[66];
+	memset (expected, 'a', sizeof (expected));
+	size_t len;
+	for (len = 0; len <= 65; len++) {
+		memset (end - len, 'a', len);
+		ut64 h = r_str_hash64_seed (expected, len, 0);
+		mu_assert_eq (r_str_hash64_seed (end - len, len, 0), h, "binary slice at page boundary");
+		char *s = end - len - 1;
+		memset (s, 'a', len);
+		s[len] = 0;
+		mu_assert_eq (r_str_hash64 (s), h, "string at page boundary");
+		mu_assert_eq (r_str_hash (s), (ut32)h, "hash32 at page boundary");
+	}
+	mu_assert_eq (munmap (map, page_size * 2), 0, "unmap guard pages");
+#endif
+	mu_end;
+}
+
 //TODO test r_str_delta (WTF!)
 
 bool test_r_str_split(void) {
@@ -164,6 +712,72 @@ bool test_r_str_split(void) {
 	mu_assert_streq (hello, "hello", "first string in split");
 	mu_assert_streq (world, "world", "second string in split");
 	free (hi);
+	mu_end;
+}
+
+bool test_r_str_split_list(void) {
+#if 0
+> "".split("\n")
+[ '' ]
+> "\n".split("\n")
+[ '', '' ]
+>
+#endif
+	{
+		char* hi = strdup ("");
+		RList *r = r_str_split_list (hi, "\n", 0);
+		mu_assert_eq (r_list_length (r), 1, "split empty");
+		r_list_free (r);
+		free (hi);
+	}
+	{
+		char* hi = strdup ("\n");
+		RList *r = r_str_split_list (hi, "\n", 0);
+		mu_assert_eq (r_list_length (r), 2, "split newline");
+		r_list_free (r);
+		free (hi);
+	}
+	{
+		char* hi = strdup ("hello,world,comma,world");
+		RList *r = r_str_split_list (hi, ",", 3);
+		mu_assert_eq (r_list_length (r), 3, "split commas");
+		mu_assert_streq (r_list_get_n (r, 2), "comma,world", "split commas");
+		r_list_free (r);
+		free (hi);
+	}
+	{
+		char* hi = strdup ("a::b:c::d");
+		RList *r = r_str_split_list (hi, "::", 0);
+		mu_assert_eq (r_list_length (r), 3, "split on a two-char separator");
+		mu_assert_streq (r_list_get_n (r, 0), "a", "two-char separator first field");
+		mu_assert_streq (r_list_get_n (r, 1), "b:c", "keep a lone colon");
+		mu_assert_streq (r_list_get_n (r, 2), "d", "two-char separator last field");
+		r_list_free (r);
+		free (hi);
+	}
+	mu_end;
+}
+
+bool test_r_str_split_duplist(void) {
+	const char *separators[] = { ",", "::" };
+	const char *inputs[] = { ", first ,, last,", ":: first :::: last::" };
+	const char *expected[] = { "", "first", "", "last", "" };
+	size_t i, j;
+	for (i = 0; i < R_ARRAY_SIZE (separators); i++) {
+		RList *list = r_str_split_duplist (inputs[i], separators[i], true);
+		mu_assert_eq (r_list_length (list), R_ARRAY_SIZE (expected), "keep empty split fields");
+		for (j = 0; j < R_ARRAY_SIZE (expected); j++) {
+			mu_assert_streq (r_list_get_n (list, j), expected[j], "split and trim fields");
+		}
+		r_list_free (list);
+		list = r_str_split_duplist (" a ", separators[i], false);
+		mu_assert_streq (r_list_get_n (list, 0), " a ", "preserve spaces without trimming");
+		r_list_free (list);
+		list = r_str_split_duplist ("", separators[i], false);
+		mu_assert_eq (r_list_length (list), 1, "empty input gives one empty field");
+		mu_assert_streq (r_list_get_n (list, 0), "", "empty input field");
+		r_list_free (list);
+	}
 	mu_end;
 }
 
@@ -193,8 +807,8 @@ bool test_r_str_word_count(void) {
 }
 
 bool test_r_str_ichr(void) {
-	char* test = "rrrrrradare2";
-	char* out = r_str_ichr (test, 'r');
+	const char* test = "rrrrrradare2";
+	const char* out = r_str_ichr (test, 'r');
 	mu_assert_streq (out, "adare2",
 			"string after the first non-r character in rrrrrradare2");
 	mu_end;
@@ -240,6 +854,44 @@ bool test_r_str_rchr(void) {
 	mu_end;
 }
 
+bool test_r_str_ansi_crop(void) {
+	const struct {
+		const char *input, *expected;
+		ut32 x, y, x2, y2;
+	} cases[] = {
+		{ NULL, "", 0, 0, 10, 1 },
+		{ "", "", 0, 0, 10, 1 },
+		{ "abc", "", 2, 0, 2, 1 },
+		{ "abc", "", 0, 1, 3, 1 },
+		{ "abcdef", "bcd", 1, 0, 4, 1 },
+		{ "abc", "", 9, 0, 12, 1 },
+		{ "abc\ndef", "", 0, 2, 3, 3 },
+		{ "ab\ncd\nef", "ab\x1b[0m", 0, 0, 2, 1 },
+		{ "ab\n", "ab\x1b[0m\n", 0, 0, 2, 1 },
+		{ "ab\ncd", "cd", 0, 1, 2, 2 },
+		{ "\n\n", "\x1b[0m", 0, 0, 2, 1 },
+		{ "a\nb\nc", "a\x1b[0m\nb\x1b[0m\nc", 0, 0, UT32_MAX, UT32_MAX },
+		{ "\x1b[31mabc\x1b[0mDEF", "\x1b[31mbc\x1b[0m", 1, 0, 3, 1 },
+		{ "ab\x1b[31mcd", "ab\x1b[31m", 0, 0, 2, 1 },
+		{ "\x1b[31mabc\nDEF", "DEF", 0, 1, 3, 2 },
+		{ "aé€𝄞z", "é€𝄞", 1, 0, 4, 1 },
+		{ "a世界z", " 界z", 2, 0, 6, 1 },
+		{ "a世界z", "a", 0, 0, 2, 1 },
+		{ "a\x1b[123", "a\x1b[123", 0, 0, 20, 1 },
+		{ "a\x1b[123\nb", "a\x1b[123\nb", 0, 0, 20, 1 },
+		{ "ab\x1b", "ab\x1b", 0, 0, 3, 1 },
+		{ "a\xf0\x9f", "a\xf0\x9f", 0, 0, 2, 1 },
+		{ "abc\n", "", 0, UT32_MAX - 1, 3, UT32_MAX },
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (cases); i++) {
+		char *cropped = r_str_ansi_crop (cases[i].input, cases[i].x, cases[i].y, cases[i].x2, cases[i].y2);
+		mu_assert_streq (cropped, cases[i].expected, "ANSI crop preserves bytes and display boundaries");
+		free (cropped);
+	}
+	mu_end;
+}
+
 bool test_r_str_ansi_len(void) {
 	int len;
 
@@ -259,13 +911,25 @@ bool test_r_str_ansi_len(void) {
 	mu_assert_eq (len, 7, "len(ascii + ansi ending with H)");
 
 	len = r_str_ansi_len ("r\xc3\xa4""dare2");
-	mu_assert_eq (len, 8, "len(ascii + 2 byte utf-8 counted as 2 chars)");
+	mu_assert_eq (len, 7, "len(ascii + 2 byte utf-8 counted as 1 char)");
 
 	len = r_str_ansi_len ("radar\xe2\x82\xac""2");
-	mu_assert_eq (len, 9, "len(ascii + 3 byte utf-8 counted as 3 chars)");
+	mu_assert_eq (len, 7, "len(ascii + 3 byte utf-8 counted as 1 char)");
 
 	len = r_str_ansi_len ("radar\xf0\x9d\x84\x9e""2");
-	mu_assert_eq (len, 10, "len(ascii + 4 byte utf-8 counted as 4 chars)");
+	mu_assert_eq (len, 7, "len(ascii + 4 byte utf-8 counted as 1 char)");
+
+	len = r_str_ansi_len ("x\xe2\x9c\x85""y");
+	mu_assert_eq (len, 4, "len(ascii + emoji check mark counted as 2 cells)");
+
+	len = r_str_ansi_len ("x\xe2\x9a\xa0\xef\xb8\x8f""y");
+	mu_assert_eq (len, 4, "len(ascii + emoji variation selector counted as 2 cells)");
+
+	len = r_str_ansi_len ("x\xf0\x9f\x93\x8a""y");
+	mu_assert_eq (len, 4, "len(ascii + 4 byte emoji counted as 2 cells)");
+
+	len = r_utf8_display_width ((const ut8 *)"\xe2\x9c\x85");
+	mu_assert_eq (len, 2, "utf8 display width counts emoji check mark as 2 cells");
 
 	mu_end;
 }
@@ -294,6 +958,117 @@ bool test_r_str_len_utf8_ansi(void) {
 	len = r_str_len_utf8_ansi ("radar\xf0\x9d\x84\x9e""2");
 	mu_assert_eq (len, 7, "len(ascii + 4 byte utf-8 counted as 1 char)");
 
+	mu_end;
+}
+
+bool test_r_str_len_utf8_ansi_truncated_utf8_tail(void) {
+	char s1[] = { 'a', 'b', 'c', (char)0xe2, 0 };
+	char s2[] = { (char)0xf0, (char)0x9f, (char)0x92, 0 };
+	int len = r_str_len_utf8_ansi (s1);
+	mu_assert_eq (len, 4, "len(ascii + truncated utf8 tail)");
+	len = r_str_len_utf8_ansi (s2);
+	mu_assert_eq (len, 1, "len(truncated 4-byte utf8 tail)");
+	mu_assert_eq (r_utf8_decode ((const ut8 *)s1 + 3, -1, NULL), 0, "decode rejects truncated utf8 tail");
+	mu_assert_eq (r_utf8_decode ((const ut8 *)s2, -1, NULL), 0, "decode rejects truncated 4-byte utf8 tail");
+	mu_end;
+}
+
+bool test_r_str_unicode_width(void) {
+	const struct {
+		const char *text;
+		int width;
+	} cases[] = {
+		{ "☑️ uncommitted", 14 },
+		{ "⬜", 2 },
+		{ "🟠", 2 },
+		{ "🟡", 2 },
+		{ "✅", 2 },
+		{ "☑", 1 },
+		{ "☀", 1 },
+		{ "☀️", 2 },
+		{ "❤", 1 },
+		{ "❤️", 2 },
+		{ "☀︎", 1 },
+		{ "♠♣♥♦✓", 5 },
+		{ "ＡＢＣ", 6 },
+		{ "𰀀", 2 },
+		{ "é", 1 },
+		{ "a\xe1\xaa\xb0", 1 },
+		{ "שָ", 1 },
+		{ "\xe2\x80\x8b", 0 },
+		{ "👩‍💻", 2 },
+		{ "👨‍👩‍👧‍👦", 2 },
+		{ "👩‍☀️", 2 },
+		{ "👩‍☀︎", 3 },
+		{ "👍🏽", 2 },
+		{ "1️⃣", 2 },
+		{ "1⃣", 2 },
+		{ "a‍b", 2 },
+		{ "a️", 1 },
+		{ "👩‍💻x⬜", 5 },
+		{ "\x1b[31m☑️\x1b[0m", 2 },
+		{ "☑\x1b[31m️\x1b[0m", 2 },
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (cases); i++) {
+		mu_assert_eq (r_str_len_utf8_ansi (cases[i].text), cases[i].width, cases[i].text);
+		mu_assert_eq (r_str_ansi_len (cases[i].text), cases[i].width, cases[i].text);
+		mu_assert_eq (r_str_display_width (cases[i].text), cases[i].width, cases[i].text);
+		if (!strchr (cases[i].text, '\x1b')) {
+			mu_assert_eq (r_str_len_utf8 (cases[i].text), cases[i].width, cases[i].text);
+			mu_assert_eq (r_utf8_display_width ((const ut8 *)cases[i].text), cases[i].width, cases[i].text);
+		}
+	}
+	mu_assert_eq (r_str_ansi_nlen ("☑️", 3), 1, "bounded width excludes the selector");
+	mu_assert_eq (r_str_ansi_nlen ("☑️", 6), 2, "bounded width includes the selector");
+	char bounded[] = { (char)0xe2, (char)0x98, (char)0x91 };
+	mu_assert_eq (r_str_ansi_nlen (bounded, sizeof (bounded)), 1, "bounded input needs no terminator");
+	char bounded_ansi[] = { '\x1b', '[', '3', '1', 'm', 'a' };
+	mu_assert_eq (r_str_ansi_nlen (bounded_ansi, sizeof (bounded_ansi)), 1, "bounded ANSI input needs no terminator");
+	mu_assert_eq (r_str_ansi_nlen ("abc", 128), 3, "bounded width stops at the terminator");
+	mu_assert_eq (r_str_ansi_nlen ("a\xe2", 128), 2, "truncated UTF-8 stops at the terminator");
+	mu_end;
+}
+
+bool test_r_str_utf16_to_utf8(void) {
+	ut8 le[] = { 'r', 0, '2', 0 };
+	ut8 be[] = { 0, 'r', 0, '2' };
+	char out[8];
+
+	memset (out, 0xff, sizeof (out));
+	int len = r_str_utf16_to_utf8 ((ut8 *)out, sizeof (out), le, sizeof (le), false);
+	mu_assert_eq (len, 2, "utf16le byte length");
+	mu_assert_streq (out, "r2", "utf16le string");
+	mu_assert_eq ((ut8)out[2], 0, "utf16le string terminator");
+
+	memset (out, 0xff, sizeof (out));
+	len = r_str_utf16_to_utf8 ((ut8 *)out, sizeof (out), be, sizeof (be), true);
+	mu_assert_eq (len, 2, "utf16be byte length");
+	mu_assert_streq (out, "r2", "utf16be string");
+	mu_assert_eq ((ut8)out[2], 0, "utf16be string terminator");
+
+	mu_end;
+}
+
+bool test_r_str_uri_decode(void) {
+	char uri[] = "a%20b%00c";
+	const ut8 expected[] = { 'a', ' ', 'b', 0, 'c' };
+	int len = r_str_uri_decode (uri);
+	mu_assert_eq (len, sizeof (expected), "URI-decoded byte length");
+	mu_assert_memeq ((const ut8 *)uri, expected, sizeof (expected), "URI-decoded binary data");
+
+	char invalid[] = "%xy";
+	mu_assert_eq (r_str_uri_decode (invalid), -1, "Invalid URI escape");
+	mu_end;
+}
+
+bool test_r_str_uri_encode(void) {
+	char *s = r_str_uri_encode ("user32.pdb");
+	mu_assert_streq (s, "user32.pdb", "unreserved characters are kept");
+	free (s);
+	s = r_str_uri_encode ("a_-~[1-2]\r\n{x}/ ");
+	mu_assert_streq (s, "a_-~%5b1-2%5d%0d%0a%7bx%7d%2f%20", "reserved and control characters are encoded");
+	free (s);
 	mu_end;
 }
 
@@ -345,6 +1120,53 @@ bool test_r_str_sanitize_sdb_key(void) {
 	char *s = r_str_sanitize_sdb_key("rada.re2<is>::Cool");
 	mu_assert_streq (s, "rada_re2_is_::Cool", "sanitize");
 	free (s);
+	s = r_str_sanitize_sdb_key ("🦀.👩‍💻:café");
+	mu_assert_streq (s, "🦀_👩‍💻:café", "preserve UTF-8 in SDB keys");
+	free (s);
+	s = r_str_sanitize_sdb_key ("a\xc0\xaf\xc2\x85\xe2\x80\xa8");
+	mu_assert_streq (s, "a_______", "replace malformed UTF-8 and line controls");
+	free (s);
+	mu_end;
+}
+
+bool test_r_name_utf8(void) {
+	const char *valid_names[] = { "Foo", "_foo", ":foo", "foo.bar::baz", "🦀", "👩‍💻", "café", "e\xcc\x81", "名字" };
+	const char *invalid_names[] = {
+		"", "1foo", "foo-bar", "foo;bar", "foo bar", "foo\nbar", "foo\x7f", "foo\xc2\x85",
+		"foo\xe2\x80\xa8", "foo\xe2\x80\xa9", "foo\x80", "foo\xc0\xaf", "foo\xed\xa0\x80",
+		"foo\xf4\x90\x80\x80", "foo\xf0\x9f\xa6", "\xf0", "\xe2\x80", "\xc2"
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (valid_names); i++) {
+		mu_assert_true (r_name_check_utf8 (valid_names[i], true), "accept UTF-8 name");
+		char *name = strdup (valid_names[i]);
+		mu_assert_true (r_name_filter_utf8 (name, -1, true), "UTF-8 name needs no filtering");
+		mu_assert_streq (name, valid_names[i], "preserve UTF-8 bytes");
+		free (name);
+	}
+	for (i = 0; i < R_ARRAY_SIZE (invalid_names); i++) {
+		mu_assert_false (r_name_check_utf8 (invalid_names[i], true), "reject invalid name");
+		char *name = strdup (invalid_names[i]);
+		mu_assert_false (r_name_filter_utf8 (name, -1, true), "filter invalid name");
+		mu_assert ("filtered name is valid or empty", !*name || r_name_check_utf8 (name, true));
+		free (name);
+	}
+	char name[] = "🦀\\🚀;x";
+	mu_assert_false (r_name_filter_utf8 (name, -1, true), "filter punctuation next to UTF-8");
+	mu_assert_streq (name, "🦀🚀_x", "do not split the preceding UTF-8 sequence");
+	char compact[] = "a+🦀=b\\c\\n";
+	mu_assert_false (r_name_filter_utf8 (compact, -1, true), "compact punctuation in place");
+	mu_assert_streq (compact, "a🦀bc_n", "preserve UTF-8 and escaped control spelling");
+	char bounded[] = "a+🦀🚀z";
+	mu_assert_false (r_name_filter_utf8 (bounded, 1, true), "limit after removed punctuation");
+	mu_assert_streq (bounded, "a🦀", "truncate at a UTF-8 boundary");
+	mu_assert_false (r_name_check ("名字"), "generic names remain ASCII by default");
+	char ascii[] = "sym.名字";
+	mu_assert_false (r_name_filter (ascii, -1), "generic filter defaults to ASCII");
+	mu_assert_streq (ascii, "sym.", "strip UTF-8 without opt-in");
+	char spaces[] = "   ";
+	mu_assert_false (r_name_filter (spaces, -1), "filter whitespace-only name");
+	mu_assert_streq (spaces, "", "empty after trimming");
 	mu_end;
 }
 
@@ -353,14 +1175,17 @@ bool test_r_str_escape_sh(void) {
 	mu_assert_streq (escaped, "Hello, \\\"World\\\"", "escaped \"double quotes\"");
 	free (escaped);
 	escaped = r_str_escape_sh ("Hello, \\World\\");
-	mu_assert_streq (escaped, "Hello, \\\\World\\\\", "escaped backspace");
+	mu_assert_streq (escaped, "Hello, \\\\World\\\\", "escaped backslash");
 	free (escaped);
-#if __UNIX__
+#if R2__UNIX__
 	escaped = r_str_escape_sh ("Hello, $(World)");
 	mu_assert_streq (escaped, "Hello, \\$(World)", "escaped $(command)");
 	free (escaped);
 	escaped = r_str_escape_sh ("Hello, `World`");
 	mu_assert_streq (escaped, "Hello, \\`World\\`", "escaped `command`");
+	free (escaped);
+	escaped = r_str_escape_sh ("Hello, !World!");
+	mu_assert_streq (escaped, "Hello, !World!", "! is not escaped");
 	free (escaped);
 #endif
 	mu_end;
@@ -478,7 +1303,7 @@ bool test_r_str_str_xy(void) {
 	mu_assert_eq (x, 0, "x of fourth occurrence");
 	mu_assert_eq (y, 2, "y of fourth occurrence");
 	next = r_str_str_xy (canvas, "World", next, &x, &y);
-	mu_assert_null (next, "no more occurences");
+	mu_assert_null (next, "no more occurrences");
 	mu_end;
 }
 
@@ -503,17 +1328,329 @@ bool test_r_str_encoded_json(void) {
 	free ((void *)stripped);
 
 	const char *none = r_str_encoded_json (invalidJsonString, len, PJ_ENCODING_STR_DEFAULT);
-	mu_assert_streq (none, "This is my \\xe2 sample © string\\n", "default encoding");
+	mu_assert_streq (none, "This is my \\u00e2 sample © string\\n", "default encoding");
 	free ((void *)none);
 
 	mu_end;
 }
 
-bool all_tests () {
+bool test_r_str_tok_r (void) {
+	{
+		char str[] = "";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ",", &rest);
+		mu_assert_null (token, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "This is hello world";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, " ", &rest);
+		mu_assert_streq(token, "This", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_streq(token, "is", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_streq(token, "hello", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_streq(token, "world", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, " ", &rest);
+		mu_assert_null (token, "token unexpectedly is not NULL");
+	}
+	
+	{
+		char str[] = "111,222,333";
+		char *rest = NULL;
+		char *token = NULL;
+		
+		token = r_str_tok_r(str, ",", &rest);
+		mu_assert_streq(token, "111", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ",", &rest);
+		mu_assert_streq(token, "222", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ",", &rest);
+		mu_assert_streq(token, "333", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ",", &rest);
+		mu_assert_null (token, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "111, 222, 333";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ", ", &rest);
+		mu_assert_streq(token, "111", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ", ", &rest);
+		mu_assert_streq(token, "222", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ", ", &rest);
+		mu_assert_streq(token, "333", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ", ", &rest);
+		mu_assert_null (token, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "This is hello world";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ";", &rest);
+		mu_assert_streq(token, "This is hello world", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_null (token, "token unexpectedly is not NULL");
+	}
+
+	{
+		char str[] = "This,is;hello-world";
+		char *rest = NULL;
+		char *token = NULL;
+
+		token = r_str_tok_r(str, ",", &rest);
+		mu_assert_streq(token, "This", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_streq(token, "is", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, "-", &rest);
+		mu_assert_streq(token, "hello", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_streq(token, "world", "obtained incorrect token");
+
+		token = r_str_tok_r(NULL, ";", &rest);
+		mu_assert_null (token, "token unexpectedly is not NULL");
+	}
+
+	mu_end;
+}
+
+bool test_r_mem_from_binstring(void) {
+	int rc;
+	ut8 res[256];
+	const char *one = (const char*)res;
+
+	rc = r_mem_from_binstring ("0100100001100101011011000110110001101111001000000111010001101000011001010111001001100101", res, sizeof (res));
+	mu_assert_eq (rc, 11, "rc one");
+	mu_assert_streq (one, "Hello there", "one");
+
+	rc = r_mem_from_binstring ("011100110111010101110000011001010111001000100000011000110110111101101111011011000010000001101101011001010111001101110011011000010110011101100101", res, sizeof (res));
+	mu_assert_streq (one, "super cool message", "two");
+
+	rc = r_mem_from_binstring ("          00100000001000000010000000100000001000000111001101110100011000010111001001110100011100110010000001110111011010010111010001101000001000000111001101110000011000010110001101100101", res, sizeof (res));
+	mu_assert_streq (one, "     starts with space", "three");
+	rc = r_mem_from_binstring ("           00100000001000000010000000100000001000000111001101110100011000010111001001110100011100110010000001110111011010010111010001101000001000000111001101110000011000010110001101100101", res, sizeof (res));
+	mu_assert_streq (one, "     starts with space", "three");
+
+	rc = r_mem_from_binstring ("01100110011010010110111001100100011100110010000001101110011011110111010000100000011000100110100101101110abcdef", res, sizeof (res));
+	mu_assert_streq (one, "finds not bin", "four");
+	mu_end;
+	return true;
+}
+
+bool test_r_mem_to_binstring(void) {
+	char *one = r_mem_to_binstring ((const ut8*)"Hello there", -1);
+	char *two = r_mem_to_binstring ((const ut8*)"super cool message", -1);
+	char *three = r_mem_to_binstring ((const ut8*)"     starts with space", -1);
+	char *four = r_mem_to_binstring ((const ut8*)"super secret!?", -1);
+	mu_assert_streq (one, "0100100001100101011011000110110001101111001000000111010001101000011001010111001001100101", "one");
+	mu_assert_streq (two, "011100110111010101110000011001010111001000100000011000110110111101101111011011000010000001101101011001010111001101110011011000010110011101100101", "two");
+	mu_assert_streq (three, "00100000001000000010000000100000001000000111001101110100011000010111001001110100011100110010000001110111011010010111010001101000001000000111001101110000011000010110001101100101", "three");
+	mu_assert_streq (four, "0111001101110101011100000110010101110010001000000111001101100101011000110111001001100101011101000010000100111111", "four");
+	free (one);
+	free (two);
+	free (three);
+	free (four);
+	mu_end;
+}
+
+bool test_r_str_ndup_zero_len (void) {
+	char str[] = "deadbeef";
+
+	mu_assert_null (R_STR_NDUP (str, 0), "uppercase yields NULL");
+	char *dup = r_str_ndup (str, 0);
+	mu_assert_streq (dup, "", "lowercase yields empty string");
+	free (dup);
+
+	mu_end;
+}
+
+bool test_r_str_word_get0set(void) {
+	char stra[32];
+	memcpy (stra, "one\0two\0", 8);
+	stra[8] = '\0';
+	int newlen = 0;
+	char *res = r_str_word_get0set (stra, 9, 0, "three", &newlen);
+	mu_assert_streq (res, "three", "first word matches");
+	mu_assert_streq (res + 6, "two", "second word matches");
+	mu_assert_eq (newlen, 11, "new length matches");
+	free (res);
+	mu_end;
+}
+
+bool test_r_str_font(void) {
+	char *res = r_str_font ("A", NULL);
+	mu_assert_streq (res, "A", "plain font");
+	free (res);
+
+	res = r_str_font ("<bold>A</bold>", NULL);
+	mu_assert_streq (res, "\xF0\x9D\x90\x80", "bold tag");
+	free (res);
+
+	res = r_str_font ("A", "bold");
+	mu_assert_streq (res, "\xF0\x9D\x90\x80", "default bold font");
+	free (res);
+
+	res = r_str_font ("A", "bold,ansiitalic,invert");
+	mu_assert_streq (res, "\x1b[3m\x1b[7m\xF0\x9D\x90\x80\x1b[27m\x1b[23m", "combined font attributes");
+	free (res);
+
+	res = r_str_font ("A <italic>A</italic>", "bold");
+	mu_assert_streq (res, "\xF0\x9D\x90\x80 \xF0\x9D\x90\x80", "default font ignores inline tags");
+	free (res);
+
+	res = r_str_font ("<ansistrike>A</ansistrike>", NULL);
+	mu_assert_streq (res, "\x1b[9mA\x1b[29m", "inline ansi attribute");
+	free (res);
+
+	res = r_str_font ("A", "unknown");
+	mu_assert_streq (res, "A", "unknown default font");
+	free (res);
+	mu_end;
+}
+
+bool test_r_str_printfmt_types(void) {
+	mu_assert_streq_free (r_str_printfmt ("%s %d %f %x\n", 0, 0),
+		"char *,int,double,unsigned int", "printf conversions to C types");
+	mu_assert_streq_free (r_str_printfmt ("%ld %lld %zu", 0, 0),
+		"long,long long,unsigned long", "length modifiers");
+	mu_assert_streq_free (r_str_printfmt ("%c %p %Lf", 0, 0),
+		"int,void *,long double", "char/pointer/long double");
+	mu_assert_streq_free (r_str_printfmt ("%*d", 0, 0),
+		"int,int", "star width consumes an int arg");
+	mu_assert_streq_free (r_str_printfmt ("100%% done", 0, 0),
+		"", "literal percent takes no arg");
+	mu_assert_null (r_str_printfmt ("%1$s", 0, 0), "positional args unsupported");
+	mu_assert_null (r_str_printfmt ("%y", 0, 0), "unknown conversion rejected");
+	mu_end;
+}
+
+bool test_r_str_printfmt_pf(void) {
+	mu_assert_streq_free (r_str_printfmt ("%s %d %f %x\n", 64, '*'),
+		"SiFx", "printf conversions to pf (64-bit)");
+	mu_assert_streq_free (r_str_printfmt ("%ld %p", 64, '*'),
+		"qp", "long is qword on 64-bit");
+	mu_assert_streq_free (r_str_printfmt ("%ld %s", 32, '*'),
+		"is", "long is dword-signed and string ptr is 32-bit on 32-bit");
+	mu_assert_null (r_str_printfmt ("%y", 64, '*'), "unknown conversion rejected");
+	mu_end;
+}
+
+bool test_r_str_but_escape(void) {
+	const char *s = "a | \"b|c\" d \\| e | 'f|g'";
+	mu_assert_ptreq (r_str_firstbut_escape (s, '|', "\"'"), s + 2,
+		"first delimiter outside quoted spans");
+	mu_assert_ptreq (r_str_lastbut (s, '|', "\"'"), strstr (s, "| 'f"),
+		"last delimiter outside multiple quoted spans and escapes");
+	s = "a \"b\\\"|c\" | d";
+	mu_assert_ptreq (r_str_firstbut (s, '|', "\"'"), r_str_lchr (s, '|'),
+		"first delimiter after escaped quote");
+	mu_assert_ptreq (r_str_firstbut_escape (s, '|', "\"'"), r_str_lchr (s, '|'),
+		"escaped quote keeps delimiter inside quoted span");
+	s = "a \\| b";
+	mu_assert_ptreq (r_str_firstbut (s, '|', "\"'"), s + 3, "first escaped delimiter");
+	mu_assert_null (r_str_firstbut_escape (s, '|', "\"'"), "escaped delimiter skipped");
+	mu_assert_ptreq (r_str_lastbut (s, '|', "\"'"), s + 3, "last escaped delimiter");
+	s = "a \\\\| b";
+	mu_assert_ptreq (r_str_firstbut_escape (s, '|', "\"'"), r_str_lchr (s, '|'),
+		"even backslashes do not escape delimiter");
+	s = "a \\\\\\| b";
+	mu_assert_null (r_str_firstbut_escape (s, '|', "\"'"),
+		"odd backslashes escape delimiter");
+	mu_end;
+}
+
+bool test_r_str_unquote(void) {
+	const char *cases[][2] = {
+		{"", ""}, {"'", "'"}, {"\"", "\""}, {"''", ""}, {"\"\"", ""},
+		{"\"hook.js\"", "hook.js"}, {"'hook.js'", "hook.js"},
+		{"\"C:\\Program Files\\hook.js\"", "C:\\Program Files\\hook.js"},
+		{"'\\\\server\\share\\hook.js'", "\\\\server\\share\\hook.js"},
+		{"\"C:\\#tmp\\hook.js\"", "C:\\#tmp\\hook.js"},
+		{"\"C:\\tmp\\\"", "C:\\tmp\\"}, {"\" hook.js \"", " hook.js "},
+		{"\"\"hook.js\"\"", "\"hook.js\""}, {"my 'hook'.js", "my 'hook'.js"},
+		{"'hook.js\"", "'hook.js\""}, {"\"hook.js", "\"hook.js"}
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (cases); i++) {
+		char *s = strdup (cases[i][0]);
+		r_str_unquote (s);
+		mu_assert_streq_free (s, cases[i][1], cases[i][0]);
+	}
+	mu_end;
+}
+
+bool test_r_str_arg_escape(void) {
+	mu_assert_streq_free (r_str_arg_escape ("a b\"c'd\\e"), "a\\ b\\\"c\\'d\\\\e", "quotes, spaces and backslashes");
+	mu_assert_streq_free (r_str_arg_escape ("x\n?e pwn\r\n"), "x_?e\\ pwn__", "line breaks cannot start a new command");
+	mu_end;
+}
+
+bool test_r_str_trim_args_quote_parity(void) {
+	char odd_single[] = "'pa\\'tata'";
+	r_str_trim_args (odd_single);
+	mu_assert_streq (odd_single, "pa'tata", "odd backslash escapes single quote");
+	char even_single[] = "'pa\\\\'tata'";
+	r_str_trim_args (even_single);
+	mu_assert_streq (even_single, "pa\\\\tata'", "even backslashes close single quote");
+	char odd_double[] = "\"pa\\\"tata\"";
+	r_str_trim_args (odd_double);
+	mu_assert_streq (odd_double, "pa\"tata", "odd backslash escapes double quote");
+	char even_double[] = "\"pa\\\\\"tata\"";
+	r_str_trim_args (even_double);
+	mu_assert_streq (even_double, "pa\\\\tata\"", "even backslashes close double quote");
+	char escaped_text[] = "'pa\\\\tata'";
+	r_str_trim_args (escaped_text);
+	mu_assert_streq (escaped_text, "pa\\\\tata", "backslash pair is preserved for unescape");
+	r_str_unescape (escaped_text);
+	mu_assert_streq (escaped_text, "pa\\tata", "backslash pair keeps the following t literal");
+	char escaped_syntax[] = "\\# \\@ \\~ \\! \\& \\* \\( \\) \\< \\> \\$";
+	r_str_trim_args (escaped_syntax);
+	mu_assert_streq (escaped_syntax, "# @ ~ ! & * ( ) < > $", "shell syntax escapes are removed");
+	mu_end;
+}
+
+bool all_tests(void) {
+	mu_run_test (test_r_file);
 	mu_run_test (test_r_str_wrap);
+	mu_run_test (test_r_str_startswith_any);
+	mu_run_test (test_r_str_cmp_any);
+	mu_run_test (test_r_str_endswith_any);
+	mu_run_test (test_r_str_strstr_any);
+	mu_run_test (test_r_str_any);
+	mu_run_test (test_r_str_any_against_loops);
+	mu_run_test (test_r_mem_mem);
+	mu_run_test (test_r_str_md2txt_rendering);
+	mu_run_test (test_r_str_md2txt_tables_and_titles);
+	mu_run_test (test_r_str_md2txt_emoji_table);
+	mu_run_test (test_r_str_md2txt_codeblocks);
 	mu_run_test (test_r_str_newf);
 	mu_run_test (test_r_str_replace_char_once);
 	mu_run_test (test_r_str_replace_char);
+	mu_run_test (test_r_str_normalize_newlines);
+	mu_run_test (test_r_str_filter_file);
 	mu_run_test (test_r_str_replace);
 	mu_run_test (test_r_str_bits64);
 	mu_run_test (test_r_str_rwx);
@@ -521,7 +1658,11 @@ bool all_tests () {
 	mu_run_test (test_r_str_bool);
 	mu_run_test (test_r_str_trim);
 	mu_run_test (test_r_str_case);
+	mu_run_test (test_r_str_hash);
+	mu_run_test (test_r_str_hash_bounds);
 	mu_run_test (test_r_str_split);
+	mu_run_test (test_r_str_split_list);
+	mu_run_test (test_r_str_split_duplist);
 	mu_run_test (test_r_str_tokenize);
 	mu_run_test (test_r_str_char_count);
 	mu_run_test (test_r_str_word_count);
@@ -530,17 +1671,36 @@ bool all_tests () {
 	mu_run_test (test_r_sub_str_lchr);
 	mu_run_test (test_r_sub_str_rchr);
 	mu_run_test (test_r_str_rchr);
+	mu_run_test (test_r_str_ansi_crop);
 	mu_run_test (test_r_str_ansi_len);
 	mu_run_test (test_r_str_len_utf8_ansi);
+	mu_run_test (test_r_str_len_utf8_ansi_truncated_utf8_tail);
+	mu_run_test (test_r_str_unicode_width);
+	mu_run_test (test_r_str_utf16_to_utf8);
+	mu_run_test (test_r_str_uri_decode);
+	mu_run_test (test_r_str_uri_encode);
 	mu_run_test (test_r_str_utf8_charsize);
 	mu_run_test (test_r_str_utf8_charsize_prev);
 	mu_run_test (test_r_str_sanitize_sdb_key);
+	mu_run_test (test_r_name_utf8);
 	mu_run_test (test_r_str_escape_sh);
 	mu_run_test (test_r_str_unescape);
 	mu_run_test (test_r_str_constpool);
 	mu_run_test (test_r_str_format_msvc_argv);
 	mu_run_test (test_r_str_str_xy);
 	mu_run_test (test_r_str_encoded_json);
+	mu_run_test (test_r_str_tok_r);
+	mu_run_test (test_r_mem_from_binstring);
+	mu_run_test (test_r_mem_to_binstring);
+	mu_run_test (test_r_str_ndup_zero_len);
+	mu_run_test (test_r_str_word_get0set);
+	mu_run_test (test_r_str_font);
+	mu_run_test (test_r_str_printfmt_types);
+	mu_run_test (test_r_str_printfmt_pf);
+	mu_run_test (test_r_str_but_escape);
+	mu_run_test (test_r_str_trim_args_quote_parity);
+	mu_run_test (test_r_str_unquote);
+	mu_run_test (test_r_str_arg_escape);
 	return tests_passed != tests_run;
 }
 

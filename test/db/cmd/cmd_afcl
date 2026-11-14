@@ -9,7 +9,11 @@ EOF
 EXPECT=<<EOF
 amd64
 amd64syscall
+dlang
+golang
+golang_abi0
 ms
+p9
 reg
 swift
 EOF
@@ -18,17 +22,22 @@ RUN
 NAME=afcl: x86-64-override
 FILE=bins/elf/true32
 ARGS=-a x86 -b 64
-BROKEN=1
 CMDS=afcl
 EXPECT=<<EOF
 amd64
+amd64syscall
+dlang
+golang
+golang_abi0
 ms
+p9
+reg
+swift
 EOF
 RUN
 
 NAME=afcl: x86-32
 FILE=--
-BROKEN=1
 CMDS=<<EOF
 e asm.bits = 64
 e asm.arch = x86
@@ -36,29 +45,40 @@ e asm.bits = 32
 afcl
 EOF
 EXPECT=<<EOF
-pascal
-optlink
-stdcall
-cdecl
-fastcall
 borland
+cdecl
+cdecl-fastcall-ms
+dlang
+fastcall
+golang
+optlink
+pascal
+reg
+stdcall
+thiscall
 watcom
+x86syscall
 EOF
 RUN
 
 NAME=afcl: x86-32-override
 FILE=bins/elf/bomb
 ARGS=-a x86 -b 32
-BROKEN=1
 CMDS=afcl
 EXPECT=<<EOF
-pascal
-optlink
-stdcall
-cdecl
-fastcall
 borland
+cdecl
+cdecl-fastcall-ms
+dlang
+fastcall
+golang
+optlink
+pascal
+reg
+stdcall
+thiscall
 watcom
+x86syscall
 EOF
 RUN
 
@@ -73,6 +93,10 @@ afcl
 EOF
 EXPECT=<<EOF
 arm64
+arm64syscall
+dlang
+golang
+p9
 reg
 swift
 EOF
@@ -81,16 +105,20 @@ RUN
 NAME=afcl: arm-64-override
 FILE=bins/elf/libmagic.so
 ARGS=-a arm -b 64
-BROKEN=1
 CMDS=afcl
 EXPECT=<<EOF
 arm64
+arm64syscall
+dlang
+golang
+p9
+reg
+swift
 EOF
 RUN
 
 NAME=afcl: arm-32
 FILE=--
-BROKEN=1
 CMDS=<<EOF
 e asm.bits = 64
 e asm.arch = arm
@@ -98,23 +126,29 @@ e asm.bits = 32
 afcl
 EOF
 EXPECT=<<EOF
+arm16
 arm32
+armsyscall
+reg
+swift
 EOF
 RUN
 
 NAME=afcl: arm-32-override
 FILE=bins/elf/libc.so.6
 ARGS=-a arm -b 32
-BROKEN=1
 CMDS=afcl
 EXPECT=<<EOF
+arm16
 arm32
+armsyscall
+reg
+swift
 EOF
 RUN
 
 NAME=afcl: arm-16
 FILE=--
-BROKEN=1
 CMDS=<<EOF
 e asm.bits = 64
 e asm.arch = arm
@@ -122,17 +156,22 @@ e asm.bits = 16
 afcl
 EOF
 EXPECT=<<EOF
+arm16
 arm32
+reg
+swift
 EOF
 RUN
 
 NAME=afcl: arm-16-override
 FILE=bins/elf/libmagic.so
 ARGS=-a arm -b 16
-BROKEN=1
 CMDS=afcl
 EXPECT=<<EOF
+arm16
 arm32
+reg
+swift
 EOF
 RUN
 
@@ -147,6 +186,7 @@ EOF
 EXPECT=<<EOF
 n32
 o32
+o32syscall
 reg
 EOF
 RUN
@@ -159,5 +199,81 @@ EXPECT=<<EOF
 n32
 o32
 reg
+EOF
+RUN
+
+NAME=Go x86-64 register arguments and ABI0 selection
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e anal.cc=golang
+wx 4801d84801c84c01d8c3
+af
+afc
+afv
+tcc golang
+k anal/cc/cc.golang.fparg0
+k anal/cc/cc.golang.fparg14
+k anal/cc/cc.golang.fpret0
+afc golang_abi0
+afc
+tcc golang_abi0
+EOF
+EXPECT=<<EOF
+golang
+arg int64_t arg1 @ rax
+arg int64_t arg2 @ rbx
+arg int64_t arg3 @ rcx
+arg int64_t arg4 @ r11
+rax:rbx:rcx:rdi:rsi:r8:r9:r10:r11 golang (rax, rbx, rcx, rdi, rsi, r8, r9, r10, r11, stack);
+xmm0
+xmm14
+xmm0
+golang_abi0
+stack golang_abi0 (stack);
+EOF
+RUN
+
+NAME=Go ARM64 register arguments and multiple returns
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e anal.cc=golang
+wx 00000f8bc0035fd6
+af
+afc
+afv
+tcc golang
+k anal/cc/cc.golang.fparg0
+k anal/cc/cc.golang.fparg15
+k anal/cc/cc.golang.fpret0
+EOF
+EXPECT=<<EOF
+golang
+arg int64_t arg1 @ x0
+arg int64_t arg2 @ x15
+x0:x1:x2:x3:x4:x5:x6:x7:x8:x9:x10:x11:x12:x13:x14:x15 golang (x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, stack);
+{d0,s0,v0,q0}
+{d15,s15,v15,q15}
+{d0,s0,v0,q0}
+EOF
+RUN
+
+NAME=Go x86-32 stack arguments and results
+FILE=malloc://64
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+e anal.cc=golang
+wx 8b44240403442408c3
+af
+afc
+afv
+tcc golang
+EOF
+EXPECT=<<EOF
+golang
+arg int32_t arg_4h @ esp+0x4
+arg int32_t arg_8h @ esp+0x8
+stack golang (stack);
 EOF
 RUN

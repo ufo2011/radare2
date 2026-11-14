@@ -6,15 +6,16 @@ BTOP=$(shell pwd)
 
 .PHONY: all clean install install-symlink deinstall uninstall mrproper preload
 
-BINS=r2r ravc2 rax2 rasm2 rabin2 rahash2 radiff2 radare2 rafind2 rarun2 ragg2 r2agent rasign2
+BINS=r2r r2pm ravc2 rax2 rasm2 rabin2 rahash2 radiff2 rapatch2 radare2 rafind2 rarun2 ragg2 r2agent rasign2 rafs2
 
 LIBR2=$(call libname-version,libr2.$(EXT_SO),${LIBVERSION})
 
 all: preload
 	@for BINARY in $(BINS) ; do $(MAKE) -C $${BINARY} all || exit 1; done
-ifeq ($(COMPILER),ios-sdk)
+ifneq (,$(findstring ios-sdk,$(COMPILER)))
 	$(MAKE) ios-sign
 endif
+
 
 preload:
 ifeq ($(WITHPIC),1)
@@ -27,7 +28,6 @@ install:
 		rm -f "${DESTDIR}${BINDIR}/$$BINARY" ; \
 		${INSTALL_PROGRAM} "$$BINARY/$$BINARY$(EXT_EXE)" "${DESTDIR}${BINDIR}/$$BINARY$(EXT_EXE)" ; \
 	done
-	${INSTALL_SCRIPT} "$(BTOP)/r2pm/r2pm" "${DESTDIR}${BINDIR}/r2pm"
 	rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/r2pm"
 	-cd "${DESTDIR}${BINDIR}" && rm -f r2 ; ln -fs radare2 r2 ; ln -fs radare2 r2p
 ifeq ($(WITHPIC),1)
@@ -38,9 +38,10 @@ ifeq ($(WITHPIC),1)
 endif
 
 ios_sign ios-sign ios-sdk-sign:
-	-for a in $(BINS) ; do xcrun --sdk iphoneos codesign -s- --entitlements radare2/radare2_ios.xml $$a ; done
-	-for a in ../libr/*/*.${EXT_SO} ; do xcrun --sdk iphoneos codesign -s- --entitlements radare2/radare2_ios.xml $$a ; done
-	-for a in ../libr/*/p/*.${EXT_SO} ; do xcrun --sdk iphoneos codesign -s- --entitlements radare2/radare2_ios.xml $$a ; done
+	for a in $(BINS) ; do xcrun --sdk iphoneos codesign -f -s- --entitlements radare2/radare2_ios.xml "$$a/$$a" || exit 1 ; done
+	for a in ../libr/libr.${EXT_SO} ../libr/*/*.${EXT_SO} ../libr/*/p/*.${EXT_SO} ; do \
+		[ ! -f "$$a" ] || xcrun --sdk iphoneos codesign -f -s- --entitlements radare2/radare2_ios.xml "$$a" || exit 1 ; \
+	done
 
 symstall install-symlink:
 	cd .. && \
@@ -49,8 +50,8 @@ symstall install-symlink:
 	cd .. && ln -fs "${BTOP}/r2pm/r2pm" "${DESTDIR}${BINDIR}/r2pm"
 	cd .. && rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/r2pm"
 	cd .. && mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/"
-	#ln -fs "$(BTOP)/r2pm/d" "${DESTDIR}${DATADIR}/radare2/${VERSION}/r2pm"
-	-cd .. && ln -fs "${DESTDIR}${BINDIR}/radare2" "${DESTDIR}${BINDIR}/r2"
+	rm -f "${DESTDIR}${BINDIR}/r2"
+	-cd .. && ln -fs "${BTOP}/radare2/radare2" "${DESTDIR}${BINDIR}/r2"
 	-cd .. && ln -fs "${DESTDIR}${BINDIR}/radare2" "${DESTDIR}${BINDIR}/r2p"
 	-cd .. && ln -fs "${BTOP}/preload/libr2.$(EXT_SO)" "${DESTDIR}${LIBDIR}/libr2.$(EXT_SO)"
 	-cd .. && cd "${DESTDIR}${LIBDIR}" && \
@@ -58,9 +59,9 @@ symstall install-symlink:
 		ln -fs $(LIBR2) libr2.$(EXT_SO)
 
 deinstall uninstall:
-	-cd .. ; \
-	for BINARY in ${BINS} ; do rm -f "${DESTDIR}${BINDIR}/$$BINARY" ; done ; \
-	rm -f "${DESTDIR}${BINDIR}/r2pm" ; \
+	-cd .. ; for BINARY in ${BINS} ; do rm -f "${DESTDIR}${BINDIR}/$$BINARY" ; done
+	rm -f "${DESTDIR}${BINDIR}/r2pm.sh"
+	rm -f "${DESTDIR}${BINDIR}/r2pm"
 	rm -f "${DESTDIR}${BINDIR}/r2p"
 	rm -f "${DESTDIR}${BINDIR}/r2"
 

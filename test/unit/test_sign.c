@@ -1,7 +1,25 @@
+#include <r_core.h>
 #include <r_anal.h>
 #include <r_sign.h>
 
 #include "minunit.h"
+
+static bool check_var_n(RList *vars, int n, RAnalVarProt *ans) {
+	RAnalVarProt *test = r_list_get_n (vars, n);
+	if (strcmp (test->name, ans->name)) {
+		return false;
+	}
+	if (strcmp (test->type, ans->type)) {
+		return false;
+	}
+	if (test->isarg != ans->isarg) {
+		return false;
+	}
+	if (test->kind != ans->kind) {
+		return false;
+	}
+	return true;
+}
 
 static bool test_anal_sign_get_set(void) {
 	RAnal *anal = r_anal_new ();
@@ -33,10 +51,7 @@ static bool test_anal_sign_get_set(void) {
 	r_list_append (item->xrefs, strdup ("king"));
 	r_list_append (item->xrefs, strdup ("ganon"));
 
-	item->vars = r_list_newf (free);
-	r_list_append (item->vars, strdup ("r16"));
-	r_list_append (item->vars, strdup ("s42"));
-	r_list_append (item->vars, strdup ("b13"));
+	item->vars = r_anal_var_deserialize ("tr16:arg16:int *,ts42:arg42:int64_t, fb13:var_13:char **");
 
 	item->types = strdup ("char * sym.mahboi (int arg0, uint32_t die)");
 
@@ -50,7 +65,6 @@ static bool test_anal_sign_get_set(void) {
 	r_sign_add_comment (anal, "sym.boring", "gee it sure is boring around here");
 
 	// --
-	
 	r_spaces_set (&anal->zign_spaces, NULL);
 	item = r_sign_get_item (anal, "sym.mahboi");
 	mu_assert_notnull (item, "get item");
@@ -77,16 +91,22 @@ static bool test_anal_sign_get_set(void) {
 	mu_assert_eq (r_list_length (item->xrefs), 2, "xrefs count");
 	mu_assert_streq (r_list_get_n (item->xrefs, 0), "king", "xref");
 	mu_assert_streq (r_list_get_n (item->xrefs, 1), "ganon", "xref");
+
+	// vars
+	RAnalVarProt v;
 	mu_assert_notnull (item->vars, "vars");
 	mu_assert_eq (r_list_length (item->vars), 3, "vars count");
-	mu_assert_streq (r_list_get_n (item->vars, 0), "r16", "var");
-	mu_assert_streq (r_list_get_n (item->vars, 1), "s42", "var");
-	mu_assert_streq (r_list_get_n (item->vars, 2), "b13", "var");
+	v = (RAnalVarProt){ .isarg = true, .kind = 'r', .name = "arg16", .type = "int *" };
+	mu_assert ("var[0]", check_var_n (item->vars, 0, &v));
+	v = (RAnalVarProt){ .isarg = true, .kind = 's', .name = "arg42", .type = "int64_t" };
+	mu_assert ("var[1]", check_var_n (item->vars, 1, &v));
+	v = (RAnalVarProt){ .isarg = false, .kind = 'b', .name = "var_13", .type = "char **" };
+	mu_assert ("var[2]", check_var_n (item->vars, 2, &v));
+
 	mu_assert_streq (item->types, "char * sym.mahboi (int arg0, uint32_t die)", "types");
 	mu_assert_notnull (item->hash, "hash");
 	mu_assert_streq (item->hash->bbhash, "7bfa1358c427e26bc03c2384f41de7be6ebc01958a57e9a6deda5bdba9768851", "hash val");
 	r_sign_item_free (item);
-	
 	r_spaces_set (&anal->zign_spaces, "koridai");
 	item = r_sign_get_item (anal, "sym.boring");
 	mu_assert_notnull (item, "get item in space");
@@ -97,8 +117,62 @@ static bool test_anal_sign_get_set(void) {
 	mu_end;
 }
 
+bool test_anal_sign_avoid_dup_functions(void) {
+	RCore *core = r_core_new ();
+
+	RAnalFunction *fcn1 = r_anal_create_function (core->anal, "fcn1", 0x2137, 0, NULL);
+	RAnalBlock *first_block = r_anal_create_block (core->anal, 0x2137, 13);
+	r_anal_function_add_block (fcn1, first_block);
+
+	RAnalFunction *fcn2 = r_anal_create_function (core->anal, "fcn2", 0xdeadbeef, 0, NULL);
+	RAnalBlock *second_block = r_anal_create_block (core->anal, 0xdeadbeef, 31);
+	r_anal_function_add_block (fcn2, second_block);
+
+	r_core_cmd0 (core, "aF"); // find functions
+
+	int count = r_sign_all_functions (core->anal, false); // "zg"
+	mu_assert_eq (count, 2, "Should create 2 new zignatures for the unseen functions");
+
+	count = r_sign_all_functions (core->anal, false);
+	mu_assert_eq (count, 0, "Should not create new zignatures for the same functions");
+
+	r_core_free (core);
+	mu_end;
+}
+
+static bool test_anal_sign_collisions(void) {
+	RAnal *anal = r_anal_new ();
+	const char *names[] = { "z", "a", "a", "m" };
+	RSignGraph graph = { .cc = 1, .nbbs = 2, .edges = 3, .ebbs = 4, .bbsum = 5 };
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (names); i++) {
+		r_spaces_set (&anal->zign_spaces, i < 2? "first": "second");
+		mu_assert_true (r_sign_add_bytes (anal, names[i], "9090"), "add colliding bytes");
+		mu_assert_true (r_sign_add_graph (anal, names[i], graph), "add colliding graph");
+	}
+	const char *expected = "b:a,b:m,b:z,g:a,g:m,g:z";
+	int pass;
+	for (pass = 0; pass < 2; pass++) {
+		r_spaces_set (&anal->zign_spaces, NULL);
+		mu_assert_true (r_sign_resolve_collisions (anal), "resolve collisions repeatedly");
+		r_spaces_set (&anal->zign_spaces, "first");
+		RSignItem *item = r_sign_get_item (anal, "a");
+		mu_assert_notnull (item, "reload serialized collision names");
+		mu_assert_streq (item->collisions, expected, "sorted byte and graph collisions");
+		r_sign_item_free (item);
+		item = r_sign_get_item (anal, "z");
+		mu_assert_notnull (item, "reload the cross-space item");
+		mu_assert_streq (item->collisions, "b:a,b:m,g:a,g:m", "deduplicate names from different spaces");
+		r_sign_item_free (item);
+	}
+	r_anal_free (anal);
+	mu_end;
+}
+
 int all_tests(void) {
 	mu_run_test (test_anal_sign_get_set);
+	mu_run_test (test_anal_sign_avoid_dup_functions);
+	mu_run_test (test_anal_sign_collisions);
 	return tests_passed != tests_run;
 }
 

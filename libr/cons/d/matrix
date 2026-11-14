@@ -1,3 +1,4 @@
+ecd
 ec b0x00 rgb:030
 ec b0x7f rgb:0f0
 ec b0xff rgb:050
@@ -24,7 +25,7 @@ ec invalid rgb:060
 ec mov rgb:383
 ec nop rgb:030
 ec num rgb:3f3
-ec offset rgb:383
+ec addr rgb:383
 ec pop rgb:040
 ec prompt rgb:080
 ec push rgb:060
@@ -41,21 +42,23 @@ ec graph.box green
 ec graph.box2 rgb:060
 ec graph.box3 rgb:ff0000
 ec graph.box4 rgb:0000ff
+ec diff.match rgb:0000ff
 ec graph.true green
 ec graph.false rgb:050
 ec graph.trufae green
 ec graph.current green
 ec graph.traced rgb:060
 
-ec func_var rgb:060
-ec func_var_type rgb:383
-ec func_var_addr rgb:060
+ec var rgb:060
+ec var.type rgb:383
+ec var.addr rgb:060
+ec var.name rgb:060
 
 ec ai.read rgb:0a1
 ec ai.write rgb:1a1
 ec ai.exec rgb:383
 ec ai.seq rgb:3f3
-ec ai.ascii rgb:3f3
+ec str rgb:3f3
 
-ec widget_bg rgb:0b0 rgb:000
-ec widget_sel black rgb:0c0
+ec widget.bg rgb:0b0 rgb:000
+ec widget.sel black rgb:0c0

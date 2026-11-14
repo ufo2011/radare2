@@ -1,3 +1,63 @@
+NAME=load word and zero ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 8041fff8)
+EOF
+EXPECT=<<EOF
+lwz r2, -8(r1)
+0x00000000 -8,r1,+,[4],r2,=
+EOF
+RUN
+
+NAME=load byte and zero ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 8841fff8)
+EOF
+EXPECT=<<EOF
+lbz r2, -8(r1)
+0x00000000 -8,r1,+,[1],r2,=
+EOF
+RUN
+
+NAME=load word and zero with update ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 8441fff8)
+EOF
+EXPECT=<<EOF
+lwzu r2, -8(r1)
+0x00000000 -8,r1,+,[4],r2,=,-8,r1,+=
+EOF
+RUN
+
+NAME=load byte and zero with update ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 8c41fff8)
+EOF
+EXPECT=<<EOF
+lbzu r2, -8(r1)
+0x00000000 -8,r1,+,[1],r2,=,-8,r1,+=
+EOF
+RUN
+
 NAME=load with update ppc-32
 FILE=-
 CMDS=<<EOF
@@ -29,6 +89,7 @@ EOF
 RUN
 
 NAME=long ESIL ppc-32
+REQUIRE=cs5
 FILE=-
 CMDS=<<EOF
 e asm.arch=ppc
@@ -40,5 +101,1118 @@ EOF
 EXPECT=<<EOF
 bdnz 0xfffffffffffffff0
 0x00000000 1,ctr,-=,$z,!,?{,0xfffffffffffffff0,pc,=,}
+EOF
+RUN
+
+NAME=long ESIL ppc-32 (cs6)
+REQUIRE=cs6
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 4200fff0)
+EOF
+EXPECT=<<EOF
+bc 0x10, lt, 0xfffffff0
+0x00000000 1,ctr,-=,$z,!,?{,0xfffffff0,pc,=,}
+EOF
+RUN
+
+NAME=addis with positive number ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 3c4c0002)
+EOF
+EXPECT=<<EOF
+addis r2, r12, 2
+0x00000000 16,0x2,<<,r12,+,r2,=
+EOF
+RUN
+
+NAME=addis with negative number ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 3c4cfffd)
+EOF
+EXPECT=<<EOF
+addis r2, r12, -3
+0x00000000 16,0xfffffffffffffffd,<<,r12,+,r2,=
+EOF
+RUN
+
+NAME=load word byte-reverse indexed ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c00642c)
+EOF
+EXPECT=<<EOF
+lwbrx r0, 0, r12
+0x00000000 r12,[1],8,1,r12,+,[1],<<,|,16,2,r12,+,[1],<<,|,24,3,r12,+,[1],<<,|,r0,=
+EOF
+RUN
+
+NAME=load word byte-reverse indexed with base reg ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c642c2c)
+EOF
+EXPECT=<<EOF
+lwbrx r3, r4, r5
+0x00000000 r4,r5,+,[1],8,1,r4,r5,+,+,[1],<<,|,16,2,r4,r5,+,+,[1],<<,|,24,3,r4,r5,+,+,[1],<<,|,r3,=
+EOF
+RUN
+
+NAME=load halfword byte-reverse indexed ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c00662c)
+EOF
+EXPECT=<<EOF
+lhbrx r0, 0, r12
+0x00000000 r12,[1],8,1,r12,+,[1],<<,|,r0,=
+EOF
+RUN
+
+NAME=store word byte-reverse indexed ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c00652c)
+EOF
+EXPECT=<<EOF
+stwbrx r0, 0, r12
+0x00000000 0xff,r0,&,r12,=[1],8,r0,>>,0xff,&,1,r12,+,=[1],16,r0,>>,0xff,&,2,r12,+,=[1],24,r0,>>,0xff,&,3,r12,+,=[1]
+EOF
+RUN
+
+NAME=store halfword byte-reverse indexed ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c00672c)
+EOF
+EXPECT=<<EOF
+sthbrx r0, 0, r12
+0x00000000 0xff,r0,&,r12,=[1],8,r0,>>,0xff,&,1,r12,+,=[1]
+EOF
+RUN
+
+NAME=lwbrx byte-reverse emulation ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx deadbeef @ 0x100
+wx 7c00642c @ 0
+aei
+aeim
+ar r12=0x100
+aes
+ar r0
+EOF
+EXPECT=<<EOF
+0xefbeadde
+EOF
+RUN
+
+NAME=lwbrx indexed rA+rB byte-reverse emulation ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx deadbeef @ 0x100
+wx 7c642c2c @ 0
+aei
+aeim
+ar r4=0x40
+ar r5=0xc0
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0xefbeadde
+EOF
+RUN
+
+NAME=stwbrx byte-reverse store emulation ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c00652c @ 0
+aei
+aeim
+ar r0=0xdeadbeef
+ar r12=0x100
+aes
+p8 4 @ 0x100
+EOF
+EXPECT=<<EOF
+efbeadde
+EOF
+RUN
+
+NAME=isel selects rA when eq condition bit set ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c64289e @ 0
+aei
+aeim
+ar r4=0x11
+ar r5=0x22
+ar cr0=0
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0x00000011
+EOF
+RUN
+
+NAME=isel selects rB when eq condition bit clear ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c64289e @ 0
+aei
+aeim
+ar r4=0x11
+ar r5=0x22
+ar cr0=0x40
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0x00000022
+EOF
+RUN
+
+NAME=isel uses literal zero for rA field r0 ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c604f9e @ 0
+aei
+aeim
+ar r9=0x99
+ar cr7=0
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0x00000000
+EOF
+RUN
+
+NAME=negate ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c6400d0)
+EOF
+EXPECT=<<EOF
+neg r3, r4
+0x00000000 r4,0,-,r3,=
+EOF
+RUN
+
+NAME=subtract from carrying ppc-32
+REQUIRE=cs5
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c642810)
+EOF
+EXPECT=<<EOF
+subfc r3, r4, r5
+0x00000000 0x8000000000000000,r4,0xffffffff,^,^,0x8000000000000000,r4,r5,-,0xffffffff,&,^,<,1,r4,0xffffffff,^,r4,r5,-,0xffffffff,&,-,!,&,|,r4,r5,-,r3,=,ca,=
+EOF
+RUN
+
+NAME=subtract from carrying ppc-32 (cs6)
+REQUIRE=cs6
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c642810)
+EOF
+EXPECT=<<EOF
+subc r3, r5, r4
+0x00000000 0x8000000000000000,r4,0xffffffff,^,^,0x8000000000000000,r4,r5,-,0xffffffff,&,^,<,1,r4,0xffffffff,^,r4,r5,-,0xffffffff,&,-,!,&,|,r4,r5,-,r3,=,ca,=
+EOF
+RUN
+
+NAME=and with complement ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c832878)
+EOF
+EXPECT=<<EOF
+andc r3, r4, r5
+0x00000000 0xffffffffffffffff,r5,^,r4,&,r3,=
+EOF
+RUN
+
+NAME=or with complement ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c832b38)
+EOF
+EXPECT=<<EOF
+orc r3, r4, r5
+0x00000000 0xffffffffffffffff,r5,^,r4,|,r3,=
+EOF
+RUN
+
+NAME=equivalence ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c832a38)
+EOF
+EXPECT=<<EOF
+eqv r3, r4, r5
+0x00000000 r5,r4,^,0xffffffffffffffff,^,r3,=
+EOF
+RUN
+
+NAME=nor bitwise complement ppc-32
+REQUIRE=cs5
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c8320f8)
+EOF
+EXPECT=<<EOF
+nor r3, r4, r4
+0x00000000 r4,r4,|,0xffffffffffffffff,^,r3,=
+EOF
+RUN
+
+NAME=nor bitwise complement ppc-32 (cs6)
+REQUIRE=cs6
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c8320f8)
+EOF
+EXPECT=<<EOF
+not r3, r4
+0x00000000 r4,r4,|,0xffffffffffffffff,^,r3,=
+EOF
+RUN
+
+NAME=nand bitwise complement ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c8323b8)
+EOF
+EXPECT=<<EOF
+nand r3, r4, r4
+0x00000000 r4,r4,&,0xffffffffffffffff,^,r3,=
+EOF
+RUN
+
+NAME=rotate left word ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 5c83283e)
+EOF
+EXPECT=<<EOF
+rotlw r3, r4, r5
+0x00000000 r5,0x1f,&,r4,<<,r5,0x1f,&,32,-,r4,0xffffffff,&,>>,|,0xffffffff,&,0xffffffff,&,r3,=
+EOF
+RUN
+
+NAME=rotate left word then mask ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 5c832c3c)
+EOF
+EXPECT=<<EOF
+rlwnm r3, r4, r5, 0x10, 0x1e
+0x00000000 r5,0x1f,&,r4,<<,r5,0x1f,&,32,-,r4,0xffffffff,&,>>,|,0xffffffff,&,0xfffe,&,r3,=
+EOF
+RUN
+
+NAME=signed modulo word ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 7c641e16)
+EOF
+EXPECT=<<EOF
+modsw r3, r4, r3
+0x00000000 r3,r4,~%,r3,=
+EOF
+RUN
+
+NAME=return from interrupt restores pc ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi 4c000064)
+EOF
+EXPECT=<<EOF
+rfi
+0x00000000 srr0,pc,=
+EOF
+RUN
+
+NAME=subtract from zero extended carrying ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c640190
+pi 1
+pdj 1~{0.esil}
+EOF
+EXPECT=<<EOF
+subfze r3, r4
+0x8000000000000000,r4,0xffffffff,^,^,0x8000000000000000,r4,0xffffffff,^,ca,+,0xffffffff,&,^,<,ca,r4,0xffffffff,^,r4,0xffffffff,^,ca,+,0xffffffff,&,-,!,&,|,r4,0xffffffff,^,ca,+,r3,=,ca,=
+EOF
+RUN
+
+NAME=negate emulates ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c6400d0 @ 0
+aei
+aeim
+ar r4=5
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0xfffffffb
+EOF
+RUN
+
+NAME=subtract from carrying emulates ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c642810 @ 0
+aei
+aeim
+ar r4=3
+ar r5=10
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0x00000007
+EOF
+RUN
+
+NAME=and with complement emulates ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c832878 @ 0
+aei
+aeim
+ar r4=0xff
+ar r5=0x0f
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0x000000f0
+EOF
+RUN
+
+NAME=nor bitwise complement emulates ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c8320f8 @ 0
+aei
+aeim
+ar r4=0x0f
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0xfffffff0
+EOF
+RUN
+
+NAME=nand bitwise complement emulates ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c8323b8 @ 0
+aei
+aeim
+ar r4=0x0f
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0xfffffff0
+EOF
+RUN
+
+NAME=return from interrupt restores pc emulates ppc-32
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 4c000064 @ 0
+aei
+aeim
+ar srr0=0x40
+aes
+ar pc
+EOF
+EXPECT=<<EOF
+0x00000040
+EOF
+RUN
+
+NAME=fadd esil string ppc-32
+FILE=-
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+(pi bytes;wx $0;pi 1;pie 1)
+.(pi fc22182a)
+EOF
+EXPECT=<<EOF
+fadd f1, f2, f3
+0x00000000 f3,f2,F+,f1,=
+EOF
+RUN
+
+NAME=fmul emulation ppc-32
+FILE=malloc://0x40
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx fc2200f2 @ 0
+aei
+ar f2=0x3ff8000000000000
+ar f3=0x4000000000000000
+aepc 0
+aes
+ar f1
+EOF
+EXPECT=<<EOF
+0x4008000000000000
+EOF
+RUN
+
+NAME=lfs single widened to double emulation ppc-32
+FILE=malloc://0x40
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 40400000 @ 0x20
+wx c0230020 @ 0
+aei
+aeim
+ar r3=0
+aepc 0
+aes
+ar f1
+EOF
+EXPECT=<<EOF
+0x4008000000000000
+EOF
+RUN
+
+NAME=addc carry-out ppc-32
+ARGS=-a ppc -e asm.bits=32 -e cfg.bigendian=true
+FILE=malloc://0x100
+CMDS=<<EOF
+wx 7c853014 @ 0
+aei
+aeim
+ar r5=0xffffffff
+ar r6=2
+aes
+ar r4
+ar ca
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=subfc-subfe subtract borrow chain ppc-32
+ARGS=-a ppc -e asm.bits=32 -e cfg.bigendian=true
+FILE=malloc://0x100
+CMDS=<<EOF
+wx 7d253010 @ 0
+wx 7c874110 @ 4
+aei
+aeim
+ar r5=1
+ar r6=5
+ar r7=0x10
+ar r8=0x40
+aes
+aes
+ar r4
+ar ca
+EOF
+EXPECT=<<EOF
+0x00000030
+0x00000001
+EOF
+RUN
+
+NAME=cmpw vs cmplw sign boundary emulation ppc-32
+FILE=malloc://0x40
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c0320007c032040 @ 0
+aei
+ar r3=0x80000000
+ar r4=1
+aepc 0
+aes
+ar cr0
+ar r3=0x80000000
+ar r4=1
+aepc 4
+aes
+ar cr0
+EOF
+EXPECT=<<EOF
+0x00000080
+0x00000001
+EOF
+RUN
+
+NAME=cmpw no false equality when operands differ by 0x100 ppc-32
+FILE=malloc://0x40
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c032000 @ 0
+aei
+ar r3=0x100
+ar r4=0
+aepc 0
+aes
+ar cr0
+EOF
+EXPECT=<<EOF
+0x00000001
+EOF
+RUN
+
+NAME=extsb sign-extends and always writes the destination ppc-32
+FILE=malloc://0x40
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+e cfg.bigendian=true
+wx 7c830774 @ 0
+aei
+ar r4=0x40
+ar r3=0xdeadbeef
+aepc 0
+aes
+ar r3
+ar r4=0x123456f8
+aepc 0
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0x00000040
+0xfffffff8
+EOF
+RUN
+
+NAME=sraw takes the low count bits ppc-32
+FILE=malloc://0x100
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 7c832e30
+aei
+aeim
+ar r4=0x80000005
+ar r5=64
+aepc 0
+aes
+ar r3
+ar ca
+ar r4=0x80000005
+ar r5=32
+aepc 0
+aes
+ar r3
+ar ca
+EOF
+EXPECT=<<EOF
+0x80000005
+0x00000000
+0xffffffff
+0x00000001
+EOF
+RUN
+
+NAME=cntlzw and popcntb
+FILE=malloc://32
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+aei
+wx 7c830034
+aer r4=0x00001000
+aer pc=0
+s 0
+aes
+aer r3
+wx 7c8300f4
+aer r4=0xf0f0ff01
+aer pc=0
+s 0
+aes
+aer r3
+EOF
+EXPECT=<<EOF
+0x00000013
+0x04040801
+EOF
+RUN
+
+NAME=ppc32 big endian XER flags share register state
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 7c6102a67c6103a6
+aei
+ar xer=0xe0000042
+aes
+ar r3
+ar ca
+ar ov
+ar so
+ar r3=0x20000055
+aes
+ar xer
+ar ca
+ar ov
+ar so
+ar r3=0x4000002a
+ar pc=4
+aes
+ar xer
+ar ca
+ar ov
+ar so
+ar r3=0x8000000f
+ar pc=4
+aes
+ar xer
+ar ca
+ar ov
+ar so
+ara+
+ar xer=0x42
+ar ca
+ar ov
+ar so
+ara-
+ar xer
+ar so
+ar ca=1
+ar ov=1
+ar so=0
+ar xer
+ar pc=0
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0xe0000042
+0x00000001
+0x00000001
+0x00000001
+0x20000055
+0x00000001
+0x00000000
+0x00000000
+0x4000002a
+0x00000000
+0x00000001
+0x00000000
+0x8000000f
+0x00000000
+0x00000000
+0x00000001
+0x00000000
+0x00000000
+0x00000000
+0x8000000f
+0x00000001
+0x6000000f
+0x6000000f
+EOF
+RUN
+
+NAME=ppc32 little endian XER flags share register state
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+wx a602617ca603617c
+aei
+ar xer=0xe0000042
+aes
+ar r3
+ar ca
+ar ov
+ar so
+ar r3=0x20000055
+aes
+ar xer
+ar ca
+ar ov
+ar so
+ar r3=0x4000002a
+ar pc=4
+aes
+ar xer
+ar ca
+ar ov
+ar so
+ar r3=0x8000000f
+ar pc=4
+aes
+ar xer
+ar ca
+ar ov
+ar so
+ara+
+ar xer=0x42
+ar ca
+ar ov
+ar so
+ara-
+ar xer
+ar so
+ar ca=1
+ar ov=1
+ar so=0
+ar xer
+ar pc=0
+aes
+ar r3
+EOF
+EXPECT=<<EOF
+0xe0000042
+0x00000001
+0x00000001
+0x00000001
+0x20000055
+0x00000001
+0x00000000
+0x00000000
+0x4000002a
+0x00000000
+0x00000001
+0x00000000
+0x8000000f
+0x00000000
+0x00000000
+0x00000001
+0x00000000
+0x00000000
+0x00000000
+0x8000000f
+0x00000001
+0x6000000f
+0x6000000f
+EOF
+RUN
+
+NAME=ppc32 XER aliases follow cfg.bigendian changes
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+aei
+ar r4=0x11223344
+ara+
+ar r4=0x10203040
+e anal.roregs=r4
+e cfg.bigendian=true
+ar r4
+e cfg.bigendian=true
+ar r4
+wx 388000017c6102a6
+ar pc=0
+ar xer=0
+ar ca=1
+aes 2
+ar r3
+ar r4
+ar xer=0xe0000042
+ar ca
+ar ov
+ar so
+ar ca=0
+ar ov=0
+ar so=0
+ar xer
+e cfg.bigendian=false
+ar r4
+e cfg.bigendian=false
+ar r4
+wx 01008038a602617c
+ar pc=0
+ar xer=0
+ar ca=1
+aes 2
+ar r3
+ar r4
+ar xer=0xe0000042
+ar ca
+ar ov
+ar so
+ar ca=0
+ar ov=0
+ar so=0
+ar xer
+e anal.roregs=
+ara-
+ar r4
+ara-
+ar r4=0x11223344
+e cfg.bigendian=true
+ar r4
+e cfg.bigendian=false
+ar r4
+EOF
+EXPECT=<<EOF
+0x40302010
+0x40302010
+0x20000000
+0x40302010
+0x00000001
+0x00000001
+0x00000001
+0x00000042
+0x10203040
+0x10203040
+0x20000000
+0x10203040
+0x00000001
+0x00000001
+0x00000001
+0x00000042
+0x11223344
+0x44332211
+0x11223344
+EOF
+RUN
+
+NAME=ppc32 XER aliases follow arch.endian changes
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+aei
+ar r4=0x11223344
+ara+
+ar r4=0x10203040
+e anal.roregs=r4
+e arch.endian=big
+ar r4
+e arch.endian=big
+ar r4
+wx 388000017c6102a6
+ar pc=0
+ar xer=0
+ar ca=1
+aes 2
+ar r3
+ar r4
+ar xer=0xe0000042
+ar ca
+ar ov
+ar so
+ar ca=0
+ar ov=0
+ar so=0
+ar xer
+e arch.endian=little
+ar r4
+e arch.endian=little
+ar r4
+wx 01008038a602617c
+ar pc=0
+ar xer=0
+ar ca=1
+aes 2
+ar r3
+ar r4
+ar xer=0xe0000042
+ar ca
+ar ov
+ar so
+ar ca=0
+ar ov=0
+ar so=0
+ar xer
+e anal.roregs=
+ara-
+ar r4
+ara-
+ar r4=0x11223344
+e arch.endian=big
+ar r4
+e arch.endian=little
+ar r4
+EOF
+EXPECT=<<EOF
+0x40302010
+0x40302010
+0x20000000
+0x40302010
+0x00000001
+0x00000001
+0x00000001
+0x00000042
+0x10203040
+0x10203040
+0x20000000
+0x10203040
+0x00000001
+0x00000001
+0x00000001
+0x00000042
+0x11223344
+0x44332211
+0x11223344
+EOF
+RUN
+
+NAME=AltiVec exponent preserves in-place lanes ppc-32 little endian
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+wx 8af9e013
+aei
+ar v31w0=0
+ar v31w1=0x3f800000
+ar v31w2=0xbf800000
+ar v31w3=0x40400000
+aes
+ar v31w0
+ar v31w1
+ar v31w2
+ar v31w3
+EOF
+EXPECT=<<EOF
+0x3f800000
+0x40000000
+0x3f000000
+0x41000000
 EOF
 RUN

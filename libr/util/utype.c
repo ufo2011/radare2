@@ -1,155 +1,466 @@
-/* radare - LGPL - Copyright 2013-2020 - pancake, oddcoder, sivaramaaa */
+/* radare - LGPL - Copyright 2013-2026 - pancake, oddcoder, sivaramaaa */
+
+// R2R db/cmd/types
 
 #include <r_util.h>
+#include <sdb/ht_su.h>
 
-R_API int r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
-	const char *kind;
-	char var[128];
-	sprintf (var, "link.%08"PFMT64x, at);
-	kind = sdb_const_get (TDB, var, NULL);
+R_API bool r_type_set(Sdb *TDB, ut64 at, const char *field, ut64 val) {
+	const char *kind = sdb_const_getf (TDB, NULL, "link.%08" PFMT64x, at);
 	if (kind) {
 		const char *p = sdb_const_get (TDB, kind, NULL);
 		if (p) {
-			snprintf (var, sizeof (var), "%s.%s.%s", p, kind, field);
-			int off = sdb_array_get_num (TDB, var, 1, NULL);
-			//int siz = sdb_array_get_num (DB, var, 2, NULL);
-			eprintf ("wv 0x%08"PFMT64x" @ 0x%08"PFMT64x, val, at + off);
+			char *v = r_str_newf ("%s.%s.%s", p, kind, field);
+			ut64 off = 0;
+			char *mtype = r_type_get_member (TDB, v, &off, NULL);
+			free (mtype);
+			free (v);
+			eprintf ("wv 0x%08" PFMT64x " @ 0x%08" PFMT64x "\n", val, at + off);
 			return true;
 		}
-		eprintf ("Invalid kind of type\n");
+		R_LOG_ERROR ("Invalid kind of type");
 	}
 	return false;
 }
 
-R_API int r_type_kind(Sdb *TDB, const char *name) {
-	if (!name) {
-		return -1;
-	}
-	const char *type = sdb_const_get (TDB, name, 0);
-	if (!type) {
-		return -1;
-	}
-	if (!strcmp (type, "enum")) {
-		return R_TYPE_ENUM;
-	}
-	if (!strcmp (type, "struct")) {
-		return R_TYPE_STRUCT;
-	}
-	if (!strcmp (type, "union")) {
-		return R_TYPE_UNION;
-	}
-	if (!strcmp (type, "type")) {
-		return R_TYPE_BASIC;
-	}
-	if (!strcmp (type, "typedef")) {
-		return R_TYPE_TYPEDEF;
-	}
-	return -1;
+static const char *const type_qualifiers[] = {
+	"const", "volatile", "restrict", "atomic", "_Atomic", NULL
+};
+
+static const char *type_skip_qualifiers(const char *R_NONNULL type) {
+	int i;
+	do {
+		type = r_str_trim_head_ro (type);
+		for (i = 0; type_qualifiers[i]; i++) {
+			size_t qlen = strlen (type_qualifiers[i]);
+			if (r_str_startswith (type, type_qualifiers[i]) && (!type[qlen] || IS_WHITESPACE (type[qlen]))) {
+				type += qlen;
+				break;
+			}
+		}
+	} while (type_qualifiers[i]);
+	return type;
 }
 
-R_API RList* r_type_get_enum (Sdb *TDB, const char *name) {
+static void type_trim_qualifiers(char *type) {
+	r_str_trim (type);
+	size_t len = strlen (type);
+	int i;
+	do {
+		for (i = 0; type_qualifiers[i]; i++) {
+			size_t qlen = strlen (type_qualifiers[i]);
+			if (len > qlen && IS_WHITESPACE (type[len - qlen - 1])
+					&& !strcmp (type + len - qlen, type_qualifiers[i])) {
+				type[len - qlen] = 0;
+				r_str_trim_tail (type);
+				len = strlen (type);
+				break;
+			}
+		}
+	} while (type_qualifiers[i]);
+}
+
+static bool type_format_is_pointer(const char *type) {
+	int depth = 0;
+	for (; *type; type++) {
+		if (*type == '<') {
+			depth++;
+		} else if (*type == '>' && depth > 0) {
+			depth--;
+		} else if (!depth && (*type == '*' || *type == '&')) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static const char *type_aggregate_prefixed(const char *R_NONNULL type, const char **R_NONNULL name) {
+	const char *kind = r_str_startswith (type, "struct")? "struct": r_str_startswith (type, "union")? "union": NULL;
+	if (kind) {
+		size_t klen = strlen (kind);
+		if (IS_WHITESPACE (type[klen])) {
+			*name = r_str_trim_head_ro (type + klen);
+			return R_STR_ISNOTEMPTY (*name)? kind: NULL;
+		}
+	}
+	return NULL;
+}
+
+R_API RTypeKind r_type_kind(Sdb *TDB, const char *name) {
+	R_RETURN_VAL_IF_FAIL (TDB && R_STR_ISNOTEMPTY (name), -1);
+	// a type may be spelled with qualifiers and its aggregate keyword; the sdb keys it bare
+	const char *bare = type_skip_qualifiers (name);
+	const char *inner = NULL;
+	if (type_aggregate_prefixed (bare, &inner)) {
+		bare = inner;
+	}
+	if (R_STR_ISEMPTY (bare)) {
+		return R_TYPE_INVALID;
+	}
+	const char *type = sdb_const_get (TDB, bare, 0);
+	if (type) {
+		if (!strcmp (type, "enum")) {
+			return R_TYPE_ENUM;
+		}
+		if (!strcmp (type, "struct")) {
+			return R_TYPE_STRUCT;
+		}
+		if (!strcmp (type, "union")) {
+			return R_TYPE_UNION;
+		}
+		if (!strcmp (type, "func")) {
+			return R_TYPE_FUNCTION;
+		}
+		if (!strcmp (type, "type")) {
+			return R_TYPE_BASIC;
+		}
+		if (!strcmp (type, "typedef")) {
+			return R_TYPE_TYPEDEF;
+		}
+	}
+	return R_TYPE_INVALID;
+}
+
+// key is "struct.name.member" holding "type,offset,count"; split from the end since the type may itself contain commas
+R_API R_OWNED char *r_type_get_member(Sdb *TDB, const char *key, ut64 *offset, int *count) {
+	R_RETURN_VAL_IF_FAIL (TDB && key, NULL);
+	if (offset) {
+		*offset = 0;
+	}
+	if (count) {
+		*count = 0;
+	}
+	char *val = sdb_get (TDB, key, NULL);
+	if (R_STR_ISEMPTY (val)) {
+		free (val);
+		return NULL;
+	}
+	char *last = (char *)r_str_rchr (val, NULL, ',');
+	if (!last) {
+		return val;
+	}
+	*last = 0;
+	char *mid = (char *)r_str_rchr (val, last - 1, ',');
+	const char *offstr = last + 1;
+	if (mid) {
+		*mid = 0;
+		offstr = mid + 1;
+		if (count) {
+			*count = (int)sdb_atoi (last + 1);
+		}
+	}
+	if (offset) {
+		*offset = sdb_atoi (offstr);
+	}
+	return val;
+}
+
+R_API RList *r_type_get_enum(Sdb *TDB, const char *name) {
+	R_RETURN_VAL_IF_FAIL (TDB && name, NULL);
 	char *p, var[130];
 	int n;
 
 	if (r_type_kind (TDB, name) != R_TYPE_ENUM) {
 		return NULL;
 	}
-	RList *res = r_list_new ();
+	RList *res = r_list_newf ( (RListFree)r_type_enum_free);
 	snprintf (var, sizeof (var), "enum.%s", name);
 	for (n = 0; (p = sdb_array_get (TDB, var, n, NULL)); n++) {
 		RTypeEnum *member = R_NEW0 (RTypeEnum);
-		if (member) {
-			char *var2 = r_str_newf ("%s.%s", var, p);
-			if (var2) {
-				char *val = sdb_array_get (TDB, var2, 0, NULL);
-				if (val) {
-					member->name = p;
-					member->val = val;
-					r_list_append (res, member);
-				} else {
-					free (member);
-					free (var2);
-				}
+		char *var2 = r_str_newf ("%s.%s", var, p);
+		if (var2) {
+			char *val = sdb_array_get (TDB, var2, 0, NULL);
+			if (val) {
+				member->name = p;
+				member->val = val;
+				r_list_append (res, member);
 			} else {
 				free (member);
 			}
+			free (var2);
+		} else {
+			free (member);
 		}
 	}
 	return res;
 }
 
+R_API void r_type_enum_free(RTypeEnum *member) {
+	if (member) {
+		free (member->name);
+		free (member->val);
+		free (member);
+	}
+}
+
 R_API char *r_type_enum_member(Sdb *TDB, const char *name, const char *member, ut64 val) {
+	R_RETURN_VAL_IF_FAIL (TDB && name, NULL);
 	if (r_type_kind (TDB, name) != R_TYPE_ENUM) {
 		return NULL;
 	}
-	const char *q = member
-		? sdb_fmt ("enum.%s.%s", name, member)
-		: sdb_fmt ("enum.%s.0x%"PFMT64x, name, val);
-	return sdb_get (TDB, q, 0);
+	const char *res = member
+		? sdb_const_getf (TDB, NULL, "enum.%s.%s", name, member)
+		: sdb_const_getf (TDB, NULL, "enum.%s.0x%" PFMT64x, name, val);
+	if (!res) {
+		res = sdb_const_getf (TDB, NULL, "enum.%s.%" PFMT64d, name, val);
+	}
+	return res? strdup (res): NULL;
 }
 
 R_API char *r_type_enum_getbitfield(Sdb *TDB, const char *name, ut64 val) {
-	char *q, *ret = NULL;
-	const char *res;
-	int i;
-
+	R_RETURN_VAL_IF_FAIL (TDB && name, NULL);
 	if (r_type_kind (TDB, name) != R_TYPE_ENUM) {
 		return NULL;
 	}
 	bool isFirst = true;
-	ret = r_str_appendf (ret, "0x%08"PFMT64x" : ", val);
+	RStrBuf *sb = r_strbuf_newf ("0x%08" PFMT64x " : ", val);
+	int i;
 	for (i = 0; i < 32; i++) {
 		ut32 n = 1ULL << i;
-		if (!(val & n)) {
+		if (! (val & n)) {
 			continue;
 		}
-		q = sdb_fmt ("enum.%s.0x%x", name, n);
-		res = sdb_const_get (TDB, q, 0);
+		const char *res = sdb_const_getf (TDB, NULL, "enum.%s.0x%x", name, n);
 		if (isFirst) {
 			isFirst = false;
 		} else {
-			ret = r_str_append (ret, " | ");
+			r_strbuf_append (sb, " | ");
 		}
 		if (res) {
-			ret = r_str_append (ret, res);
+			r_strbuf_append (sb, res);
 		} else {
-			ret = r_str_appendf (ret, "0x%x", n);
+			r_strbuf_appendf (sb, "0x%x", n);
 		}
 	}
+	return r_strbuf_drain (sb);
+}
+
+
+static bool type_ident_char(char c) {
+	return c == '_' || isalnum ((ut8)c);
+}
+
+// word-boundary match, so "long unsigned int" is unsigned but a "myunsigned_t" typedef is not
+static bool type_has_word(const char *R_NONNULL type, const char *R_NONNULL word) {
+	const size_t wlen = strlen (word);
+	const char *p = type;
+	while ((p = strstr (p, word))) {
+		if ((p == type || !type_ident_char (p[-1])) && !type_ident_char (p[wlen])) {
+			return true;
+		}
+		p += wlen;
+	}
+	return false;
+}
+
+static bool type_has_any_word(const char *R_NONNULL type, const char *const *R_NONNULL words) {
+	int i;
+	for (i = 0; words[i]; i++) {
+		if (type_has_word (type, words[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Bound on the typedef links one resolution follows. It is a work budget, not
+// the cycle test: a chain longer than this without a cycle is refused too.
+#define TYPEDEF_MAX_CHAIN 4096
+
+static inline const char *typedef_target(Sdb *R_NONNULL TDB, const char *R_NONNULL name) {
+	return sdb_const_getf (TDB, NULL, "typedef.%s", name);
+}
+
+// Follow typedef.<name> to the first name that is not a typedef. The links form
+// a functional graph, so Brent's algorithm finds a cycle exactly in O(chain)
+// lookups and O(1) memory; a cycle has no end, and resolves to NULL.
+R_API R_OWNED char *r_type_resolve_typedef(Sdb *R_NONNULL TDB, const char *R_NONNULL type) {
+	R_RETURN_VAL_IF_FAIL (TDB && type, NULL);
+	// a typedef may be spelled with qualifiers; the sdb keys it bare
+	const char *tortoise = type_skip_qualifiers (type);
+	const char *hare = typedef_target (TDB, tortoise);
+	int power = 1, lam = 1, links;
+	for (links = 1; hare && links <= TYPEDEF_MAX_CHAIN; links++) {
+		if (!strcmp (tortoise, hare)) {
+			R_LOG_DEBUG ("typedef %s is cyclic", type);
+			return NULL;
+		}
+		const char *next = typedef_target (TDB, hare);
+		if (!next) {
+			return strdup (hare);
+		}
+		if (power == lam) {
+			tortoise = hare;
+			power *= 2;
+			lam = 0;
+		}
+		hare = next;
+		lam++;
+	}
+	if (hare) {
+		R_LOG_DEBUG ("typedef %s is longer than %d links", type, TYPEDEF_MAX_CHAIN);
+	}
+	return NULL;
+}
+
+// floats are listed here because this answers "may i sign-extend a raw slot", not "may it be negative"
+static const char *const unsigned_type_words[] = {
+	"unsigned", "float", "double", NULL
+};
+
+static const char *const signed_type_words[] = {
+	"signed", "short", "int", "long", // bare char signedness is per-ABI, so it stays unsigned here
+	"ssize_t", "ptrdiff_t", "off_t", "pid_t", "time_t", NULL
+};
+
+static bool type_name_is_signed(const char *R_NONNULL t) {
+	if (type_has_any_word (t, unsigned_type_words)) {
+		return false;
+	}
+	// intN_t and friends; their unsigned twins start with "u", so no word matches them
+	return type_has_any_word (t, signed_type_words)
+		|| (r_str_startswith (t, "int") && r_str_endswith (t, "_t"));
+}
+
+R_API bool r_type_is_signed(Sdb *R_NONNULL TDB, const char *R_NONNULL type) {
+	R_RETURN_VAL_IF_FAIL (TDB && type, false);
+	const char *base = type_skip_qualifiers (type);
+	char *resolved = r_type_resolve_typedef (TDB, base);
+	const char *t = type_skip_qualifiers (resolved? resolved: base);
+	const bool ret = !strchr (t, '*') && type_name_is_signed (t);
+	free (resolved);
 	return ret;
 }
 
-R_API ut64 r_type_get_bitsize(Sdb *TDB, const char *type) {
-	char *query;
-	/* Filter out the structure keyword if type looks like "struct mystruc" */
-	const char *tmptype;
-	if (!strncmp (type, "struct ", 7)) {
-		tmptype = type + 7;
-	} else if (!strncmp (type, "union ", 6)) {
-		tmptype = type + 6;
-	} else {
-		tmptype = type;
+static bool type_kind_is_aggregate(const char *R_NONNULL kind) {
+	return !strcmp (kind, "struct") || !strcmp (kind, "union");
+}
+
+// the per-target type dbs carry the pointer width as the size of "char *"
+static ut64 type_ptr_bitsize(Sdb *R_NONNULL TDB) {
+	const ut64 bits = sdb_num_get (TDB, "type.char *.size", NULL);
+	return bits? bits: 32;
+}
+
+// how many nested structs, unions or typedefs a measurement follows before giving up
+#define TYPE_CHAIN_MAX 32
+
+static bool type_array_parse(char *type, ut64 *elements) {
+	*elements = 1;
+	char *array = strchr (type, '[');
+	if (!array) {
+		return true;
 	}
-	if ((strstr (type, "*(") || strstr (type, " *")) && strncmp (type, "char *", 7)) {
-		return 32;
+	const bool pointee = memchr (type, ')', array - type) && memchr (type, '*', array - type);
+	const char *extent = array;
+	while (*extent == '[') {
+		const char *number = r_str_trim_head_ro (extent + 1);
+		if (!isdigit ((ut8)*number)) {
+			return false;
+		}
+		char *end;
+		errno = 0;
+		ut64 count = strtoull (number, &end, 0);
+		extent = r_str_trim_head_ro (end);
+		if (errno == ERANGE || !count || *extent != ']'
+			|| (!pointee && r_mul_overflow (*elements, count, elements))) {
+			return false;
+		}
+		extent = r_str_trim_head_ro (extent + 1);
 	}
+	if (*extent && !(*extent == ')' && memchr (type, '(', array - type) && memchr (type, '*', array - type))) {
+		return false;
+	}
+	*array = 0;
+	r_str_trim (type);
+	return true;
+}
+
+// UT64_MAX means an aggregate reached itself; r_type_get_bitsize turns that into 0
+// sizes caches the aggregates measured in this walk so shared member types are measured once
+static ut64 type_bitsize(Sdb *TDB, const char *type, const char **chain, int depth, HtSU *sizes) {
+	if (depth >= TYPE_CHAIN_MAX) {
+		return UT64_MAX;
+	}
+	if (strchr (type, '[')) {
+		char *base = strdup (type);
+		if (!base) {
+			return 0;
+		}
+		ut64 elements, bits = 0;
+		if (type_array_parse (base, &elements)) {
+			type_trim_qualifiers (base);
+			bits = type_bitsize (TDB, base, chain, depth, sizes);
+			if (bits == UT64_MAX || r_mul_overflow (bits, elements, &bits)) {
+				bits = UT64_MAX;
+			}
+		}
+		free (base);
+		return bits;
+	}
+	const char *type_view = type_skip_qualifiers (type);
+	if (strchr (type_view, '*')) {
+		return type_ptr_bitsize (TDB);
+	}
+	// a type may be spelled with its aggregate keyword, as in "struct mystruct"
+	const char *name = NULL;
+	const char *tmptype = type_aggregate_prefixed (type_view, &name)? name: type_view;
 	const char *t = sdb_const_get (TDB, tmptype, 0);
 	if (!t) {
-		if (!strncmp (tmptype, "enum ", 5)) {
+		if (r_str_startswith (tmptype, "enum ")) {
 			//XXX: Need a proper way to determine size of enum
 			return 32;
 		}
 		return 0;
 	}
-	if (!strcmp (t, "type")){
-		query = r_str_newf ("type.%s.size", tmptype);
-		ut64 r = sdb_num_get (TDB, query, 0); // returns size in bits
-		free (query);
-		return r;
+	if (!strcmp (t, "type")) {
+		return sdb_num_getf (TDB, NULL, "type.%s.size", tmptype); // returns size in bits
+	}
+	if (!strcmp (t, "func")) {
+		// Canonical function-pointer members carry the same marker under type.*.
+		const char *mt = sdb_const_getf (TDB, NULL, "type.%s", tmptype);
+		return mt && !strcmp (mt, "func")? type_ptr_bitsize (TDB): 0;
+	}
+	if (!strcmp (t, "enum")) {
+		const ut64 size = sdb_num_getf (TDB, NULL, "type.%s.size", tmptype);
+		return size? size: 32;
+	}
+	if (!strcmp (t, "typedef")) {
+		// a typedef is as wide as the type it names: recorded width first, else the alias
+		ut64 size = sdb_num_getf (TDB, NULL, "type.%s.size", tmptype);
+		if (size) {
+			return size; // returns size in bits
+		}
+		char *resolved = r_type_resolve_typedef (TDB, tmptype);
+		if (resolved) {
+			chain[depth] = tmptype;
+			size = type_bitsize (TDB, resolved, chain, depth + 1, sizes);
+			free (resolved);
+		}
+		return size;
 	}
 	if (!strcmp (t, "struct") || !strcmp (t, "union")) {
-		query = r_str_newf ("%s.%s", t, tmptype);
-		char *members = sdb_get (TDB, query, 0);
+		const ut64 recorded = sdb_num_getf (TDB, NULL, "type.%s.size", tmptype);
+		if (recorded) {
+			return recorded;
+		}
+		bool measured = false;
+		const ut64 known = ht_su_find (sizes, tmptype, &measured);
+		if (measured) {
+			return known;
+		}
+		int i;
+		for (i = 0; i < depth; i++) {
+			if (!strcmp (chain[i], tmptype)) {
+				return UT64_MAX;
+			}
+		}
+		if (depth >= TYPE_CHAIN_MAX) {
+			return UT64_MAX;
+		}
+		chain[depth] = tmptype;
+		const char *value = sdb_const_getf (TDB, NULL, "%s.%s", t, tmptype);
+		char *members = value? strdup (value): NULL;
 		char *next, *ptr = members;
 		ut64 ret = 0;
 		if (members) {
@@ -158,63 +469,100 @@ R_API ut64 r_type_get_bitsize(Sdb *TDB, const char *type) {
 				if (!name) {
 					break;
 				}
+				char *query = r_str_newf ("%s.%s.%s", t, tmptype, name);
+				int elements = 0;
+				ut64 offset = 0;
+				char *subtype = r_type_get_member (TDB, query, &offset, &elements);
 				free (query);
-				query = r_str_newf ("%s.%s.%s", t, tmptype, name);
-				char *subtype = sdb_get (TDB, query, 0);
-				R_FREE (query);
 				if (!subtype) {
 					break;
 				}
-				char *tmp = strchr (subtype, ',');
-				if (tmp) {
-					*tmp++ = 0;
-					tmp = strchr (tmp, ',');
-					if (tmp) {
-						*tmp++ = 0;
-					}
-					int elements = r_num_math (NULL, tmp);
-					if (elements == 0) {
-						elements = 1;
-					}
-					if (!strcmp (t, "struct")) {
-						ret += r_type_get_bitsize (TDB, subtype) * elements;
-					} else {
-						ut64 sz = r_type_get_bitsize (TDB, subtype) * elements;
-						ret = sz > ret ? sz : ret;
-					}
+				if (elements == 0) {
+					elements = 1;
 				}
+				const ut64 member = type_bitsize (TDB, subtype, chain, depth + 1, sizes);
 				free (subtype);
+				if (member == UT64_MAX) {
+					ret = UT64_MAX;
+					break;
+				}
+				ut64 end;
+				if (r_mul_overflow (member, (ut64)elements, &end)
+						|| r_mul_overflow (offset, (ut64)8, &offset)
+						|| r_add_overflow (offset, end, &end)) {
+					ret = UT64_MAX;
+					break;
+				}
+				ret = R_MAX (ret, end);
 				ptr = next;
 			} while (next);
 			free (members);
 		}
-		free (query);
+		if (ret != UT64_MAX) {
+			ht_su_insert (sizes, tmptype, ret);
+		}
 		return ret;
 	}
 	return 0;
 }
 
-R_API char *r_type_get_struct_memb(Sdb *TDB, const char *type, int offset) {
-	int i, cur_offset, next_offset = 0;
-	char *res = NULL;
+R_API ut64 r_type_get_bitsize(Sdb *R_NONNULL TDB, const char *R_NONNULL type) {
+	R_RETURN_VAL_IF_FAIL (TDB && type, 0);
+	char *normalized = strdup (type_skip_qualifiers (type));
+	if (!normalized) {
+		return 0;
+	}
+	type_trim_qualifiers (normalized);
+	const char *chain[TYPE_CHAIN_MAX];
+	HtSU *sizes = ht_su_new0 ();
+	const ut64 bits = type_bitsize (TDB, normalized, chain, 0, sizes);
+	ht_su_free (sizes);
+	free (normalized);
+	return bits == UT64_MAX? 0: bits;
+}
 
-	if (offset < 0) {
+static const char *type_aggregate_kind(Sdb *R_NONNULL TDB, const char *R_NONNULL type, const char **R_NONNULL name) {
+	const char *type_view = type_skip_qualifiers (type);
+	if (strchr (type_view, '*')) {
 		return NULL;
 	}
-	char* query = sdb_fmt ("struct.%s", type);
-	char *members = sdb_get (TDB, query, 0);
+	const char *kind = type_aggregate_prefixed (type_view, name);
+	if (kind) {
+		return kind;
+	}
+	const char *type_kind = sdb_const_get (TDB, type_view, NULL);
+	if (type_kind && type_kind_is_aggregate (type_kind)) {
+		*name = type_view;
+		return type_kind;
+	}
+	return NULL;
+}
+
+// seen holds the (kind, type, offset) already searched, overlapping union members share them
+static char *type_get_memb_at(Sdb *R_NONNULL TDB, const char *R_NONNULL kind, const char *R_NONNULL type, int offset, const char *R_NONNULL path, HtSU *seen, int depth) {
+	int i, next_offset = 0;
+
+	if (offset < 0 || depth >= TYPE_CHAIN_MAX) {
+		return NULL;
+	}
+	char *key = r_str_newf ("%s.%s.%d", kind, type, offset);
+	const bool fresh = ht_su_insert (seen, key, 1);
+	free (key);
+	if (!fresh) {
+		return NULL;
+	}
+	const char *value = sdb_const_getf (TDB, NULL, "%s.%s", kind, type);
+	char *members = value? strdup (value): NULL;
 	if (!members) {
-		//eprintf ("%s is not a struct\n", type);
 		return NULL;
 	}
+	char *res = NULL;
+	bool is_struct = !strcmp (kind, "struct");
 	int nargs = r_str_split (members, ',');
-	for (i = 0; i < nargs ; i++) {
+	for (i = 0; i < nargs; i++) {
 		const char *name = r_str_word_get0 (members, i);
-		if (!name) {
-			break;
-		}
-		query = sdb_fmt ("struct.%s.%s", type, name);
-		char *subtype = sdb_get (TDB, query, 0);
+		const char *value = sdb_const_getf (TDB, NULL, "%s.%s.%s", kind, type, name);
+		char *subtype = value? strdup (value): NULL;
 		if (!subtype) {
 			break;
 		}
@@ -223,16 +571,18 @@ R_API char *r_type_get_struct_memb(Sdb *TDB, const char *type, int offset) {
 			free (subtype);
 			break;
 		}
-		cur_offset = r_num_math (NULL, r_str_word_get0 (subtype, len - 2));
-		if (cur_offset > 0 && cur_offset < next_offset) {
-			free (subtype);
-			break;
-		}
-		if (!cur_offset) {
-			cur_offset = next_offset;
+		int cur_offset = r_num_math (NULL, r_str_word_get0 (subtype, len - 2));
+		if (is_struct) {
+			if (cur_offset > 0 && cur_offset < next_offset) {
+				free (subtype);
+				break;
+			}
+			if (!cur_offset) {
+				cur_offset = next_offset;
+			}
 		}
 		if (cur_offset == offset) {
-			res = r_str_newf ("%s.%s", type, name);
+			res = r_str_newf ("%s.%s", path, name);
 			free (subtype);
 			break;
 		}
@@ -240,24 +590,26 @@ R_API char *r_type_get_struct_memb(Sdb *TDB, const char *type, int offset) {
 		int fsize = (r_type_get_bitsize (TDB, subtype) * (arrsz ? arrsz : 1)) / 8;
 		if (!fsize) {
 			free (subtype);
-			break;
+			if (is_struct) {
+				break;
+			}
+			continue;
 		}
-		next_offset = cur_offset + fsize;
-		// Handle nested structs
-		if (offset > cur_offset && offset < next_offset) {
-			char *nested_type = (char *)r_str_word_get0 (subtype, 0);
-			if (r_str_startswith (nested_type, "struct ") && !r_str_endswith (nested_type, " *")) {
-				len = r_str_split (nested_type, ' ');
-				if (len < 2) {
-					free (subtype);
-					break;
+		int member_end = cur_offset + fsize;
+		if (is_struct) {
+			next_offset = member_end;
+		}
+		if (offset > cur_offset && offset < member_end) {
+			const char *nested_type = r_str_word_get0 (subtype, 0);
+			const char *nested_name = NULL;
+			const char *nested_kind = type_aggregate_kind (TDB, nested_type, &nested_name);
+			if (nested_kind) {
+				char *nested_path = r_str_newf ("%s.%s", path, name);
+				if (nested_path) {
+					res = type_get_memb_at (TDB, nested_kind, nested_name, offset - cur_offset, nested_path, seen, depth + 1);
+					free (nested_path);
 				}
-				nested_type = (char *)r_str_word_get0 (nested_type, 1);
-				char *nested_res = r_type_get_struct_memb (TDB, nested_type, offset - cur_offset);
-				if (nested_res) {
-					len = r_str_split(nested_res, '.');
-					res = r_str_newf ("%s.%s.%s", type, name, r_str_word_get0 (nested_res, len - 1));
-					free (nested_res);
+				if (res) {
 					free (subtype);
 					break;
 				}
@@ -269,16 +621,34 @@ R_API char *r_type_get_struct_memb(Sdb *TDB, const char *type, int offset) {
 	return res;
 }
 
+static char *type_get_memb(Sdb *R_NONNULL TDB, const char *R_NONNULL kind, const char *R_NONNULL type, int offset) {
+	HtSU *seen = ht_su_new0 ();
+	char *res = type_get_memb_at (TDB, kind, type, offset, type, seen, 0);
+	ht_su_free (seen);
+	return res;
+}
+
+R_API char *r_type_get_struct_memb(Sdb *R_NONNULL TDB, const char *R_NONNULL type, int offset) {
+	R_RETURN_VAL_IF_FAIL (TDB && type, NULL);
+	return type_get_memb (TDB, "struct", type, offset);
+}
+
 // XXX this function is slow!
-R_API RList* r_type_get_by_offset(Sdb *TDB, ut64 offset) {
-	RList *offtypes = r_list_new ();
+R_API RList *r_type_get_by_offset(Sdb *R_NONNULL TDB, ut64 offset) {
+	R_RETURN_VAL_IF_FAIL (TDB, NULL);
+	RList *offtypes = r_list_newf (free);
+	if (offset > ST32_MAX) {
+		return offtypes;
+	}
 	SdbList *ls = sdb_foreach_list (TDB, true);
 	SdbListIter *lsi;
 	SdbKv *kv;
 	ls_foreach (ls, lsi, kv) {
-		// TODO: Add unions support
-		if (!strncmp (sdbkv_value (kv), "struct", 6) && strncmp (sdbkv_key (kv), "struct.", 7)) {
-			char *res = r_type_get_struct_memb (TDB, sdbkv_key (kv), offset);
+		const char *kk = sdbkv_key (kv);
+		const char *vv = sdbkv_value (kv);
+		if (type_kind_is_aggregate (vv)
+			&& !r_str_startswith (kk, "struct.") && !r_str_startswith (kk, "union.")) {
+			char *res = type_get_memb (TDB, vv, kk, offset);
 			if (res) {
 				r_list_append (offtypes, res);
 			}
@@ -288,70 +658,64 @@ R_API RList* r_type_get_by_offset(Sdb *TDB, ut64 offset) {
 	return offtypes;
 }
 
-// XXX 12 is the maxstructsizedelta
-#define TYPE_RANGE_BASE(x) ((x)>>16)
+#define TYPE_RANGE_BASE(x) ( (x) >> 16)
 
 static RList *types_range_list(Sdb *db, ut64 addr) {
-	RList *list = NULL;
 	ut64 base = TYPE_RANGE_BASE (addr);
-	char *s = r_str_newf ("range.%"PFMT64x, base);
-	if (s) {
-		char *r = sdb_get (db, s, 0);
-		if (r) {
-			list = r_str_split_list (r, " ", -1);
-		}
-		free (s);
-	}
-	return list;
+	const char *value = sdb_const_getf (db, NULL, "range.%" PFMT64x, base);
+	return value? r_str_split_duplist (value, " ", true): NULL;
 }
 
 static void types_range_del(Sdb *db, ut64 addr) {
 	ut64 base = TYPE_RANGE_BASE (addr);
-	const char *k = sdb_fmt ("range.%"PFMT64x, base);
+	r_strf_var (k, 64, "range.%" PFMT64x, base);
 	char valstr[SDB_NUM_BUFSZ];
-	const char *v = sdb_itoa (addr, valstr, SDB_NUM_BASE);
+	const char *v = sdb_itoa (addr, SDB_NUM_BASE, valstr, sizeof (valstr));
 	sdb_array_remove (db, k, v, 0);
 }
 
 static void types_range_add(Sdb *db, ut64 addr) {
 	ut64 base = TYPE_RANGE_BASE (addr);
-	const char *k = sdb_fmt ("range.%"PFMT64x, base);
+	r_strf_var (k, 64, "range.%" PFMT64x, base);
 	(void)sdb_array_add_num (db, k, addr, 0);
 }
 
 R_API char *r_type_link_at(Sdb *TDB, ut64 addr) {
-	if (addr == UT64_MAX) {
+	if (addr == UT64_MAX || addr == (UT64_MAX - 1)) {
 		return NULL;
 	}
-	const char *query = sdb_fmt ("link.%08"PFMT64x, addr);
-	char *res = sdb_get (TDB, query, 0);
-	if (!res) { // resolve struct memb if possible for given addr
-		RList *list = types_range_list (TDB, addr);
-		RListIter *iter;
-		const char *s;
-		r_list_foreach (list, iter, s) {
-			ut64 laddr = r_num_get (NULL, s);
-			if (addr > laddr) {
-				int delta = addr - laddr;
-				const char *lk = sdb_fmt ("link.%08"PFMT64x, laddr);
-				char *k = sdb_get (TDB, lk, 0);
+	const char *value = sdb_const_getf (TDB, NULL, "link.%08" PFMT64x, addr);
+	char *res = value? strdup (value): NULL;
+	if (res) {
+		return res;
+	}
+	// resolve struct memb if possible for given addr
+	RList *list = types_range_list (TDB, addr);
+	RListIter *iter;
+	const char *s;
+	r_list_foreach (list, iter, s) {
+		ut64 laddr = r_num_get (NULL, s);
+		if (addr > laddr) {
+			int delta = addr - laddr;
+			const char *link = sdb_const_getf (TDB, NULL, "link.%08" PFMT64x, laddr);
+			char *k = link? strdup (link): NULL;
+			if (k) {
 				res = r_type_get_struct_memb (TDB, k, delta);
+				free (k);
 				if (res) {
 					break;
 				}
-				free (k);
 			}
 		}
 	}
+	r_list_free (list);
 	return res;
 }
 
 R_API int r_type_set_link(Sdb *TDB, const char *type, ut64 addr) {
-	if (sdb_const_get (TDB, type, 0)) {
-		char *laddr = r_str_newf ("link.%08"PFMT64x, addr);
-		sdb_set (TDB, laddr, type, 0);
+	if (sdb_const_get (TDB, type, 0) || r_type_get_bitsize (TDB, type)) {
+		sdb_setf (TDB, type, 0, "link.%08" PFMT64x, addr);
 		types_range_add (TDB, addr);
-		free (laddr);
 		return true;
 	}
 	return false;
@@ -359,324 +723,711 @@ R_API int r_type_set_link(Sdb *TDB, const char *type, ut64 addr) {
 
 R_API int r_type_link_offset(Sdb *TDB, const char *type, ut64 addr) {
 	if (sdb_const_get (TDB, type, 0)) {
-		char *laddr = r_str_newf ("offset.%08"PFMT64x, addr);
-		sdb_set (TDB, laddr, type, 0);
-		free (laddr);
+		sdb_setf (TDB, type, 0, "offset.%08" PFMT64x, addr);
 		return true;
 	}
 	return false;
 }
 
 R_API int r_type_unlink(Sdb *TDB, ut64 addr) {
-	char *laddr = sdb_fmt ("link.%08"PFMT64x, addr);
+	char *laddr = r_str_newf ("link.%08" PFMT64x, addr);
 	sdb_unset (TDB, laddr, 0);
+	free (laddr);
 	types_range_del (TDB, addr);
 	return true;
 }
 
+static int fmt_type_size(const char *tfmt, bool isfp, int elements) {
+	int size = 0;
+	if (isfp) {
+		size = 8;
+	} else if (tfmt) {
+		if (!strcmp (tfmt, "d") || !strcmp (tfmt, "i") || !strcmp (tfmt, "x") || !strcmp (tfmt, "o") || !strcmp (tfmt, "f")) {
+			size = 4;
+		} else if (!strcmp (tfmt, "q") || !strcmp (tfmt, "F") || !strcmp (tfmt, "p") || !strcmp (tfmt, "z") || !strcmp (tfmt, "*z")) {
+			size = 8;
+		} else if (!strcmp (tfmt, "w")) {
+			size = 2;
+		} else if (!strcmp (tfmt, "b") || !strcmp (tfmt, "c") || !strcmp (tfmt, "C")) {
+			size = 1;
+		} else {
+			size = 4;
+		}
+	} else {
+		size = 8;
+	}
+	if (elements > 0) {
+		size *= elements;
+	}
+	return size;
+}
+
 static char *fmt_struct_union(Sdb *TDB, char *var, bool is_typedef) {
-	// assumes var list is sorted by offset.. should do more checks here
-	char *p = NULL, *vars = NULL, var2[132], *fmt = NULL;
+	char *p = NULL, var2[132];
 	size_t n;
 	char *fields = r_str_newf ("%s.fields", var);
 	char *nfields = (is_typedef) ? fields : var;
+	RStrBuf *fmt_sb = r_strbuf_new ("");
+	RStrBuf *vars_sb = r_strbuf_new ("");
+	int current_offset = 0;
+	bool complete = true;
 	for (n = 0; (p = sdb_array_get (TDB, nfields, n, NULL)); n++) {
 		char *struct_name = NULL;
 		const char *tfmt = NULL;
 		bool isStruct = false;
 		bool isEnum = false;
 		bool isfp = false;
+		bool isHidden = false;
 		snprintf (var2, sizeof (var2), "%s.%s", var, p);
-		size_t alen = sdb_array_size (TDB, var2);
-		int elements = sdb_array_get_num (TDB, var2, alen - 1, NULL);
-		char *type = sdb_array_get (TDB, var2, 0, NULL);
+		ut64 member_offset = 0;
+		int elements = 0;
+		char *type = r_type_get_member (TDB, var2, &member_offset, &elements);
+		int field_offset = (int)member_offset;
+		if (field_offset > current_offset) {
+			int pad = field_offset - current_offset;
+			r_strbuf_appendf (fmt_sb, "[%d].", pad);
+			current_offset = field_offset;
+		}
+		// Check for @visibility(hidden) attribute
+		const char *visibility = sdb_const_getf (TDB, NULL, "%s.@.visibility", var2);
+		if (visibility && !strcmp (visibility, "hidden")) {
+			isHidden = true;
+		}
 		if (type) {
-			char var3[128] = {0};
-			// Handle general pointers except for char *
-			if ((strstr (type, "*(") || strstr (type, " *")) && strncmp (type, "char *", 7)) {
-				isfp = true;
-			} else if (r_str_startswith (type, "struct ")) {
-				struct_name = type + 7;
-				// TODO: iterate over all the struct fields, and format the format and vars
-				snprintf (var3, sizeof (var3), "struct.%s", struct_name);
-				tfmt = sdb_const_get (TDB, var3, NULL);
-				isStruct = true;
-			} else {
-				// special case for char[]. Use char* format type without *
-				if (!strcmp (type, "char") && elements > 0) {
-					tfmt = sdb_const_get (TDB, "type.char *", NULL);
-					if (tfmt && *tfmt == '*') {
-						tfmt++;
+			char var3[128] = { 0 };
+			char type_name[256] = { 0 };
+			const char *enum_name = NULL;
+			r_str_trim (type);
+			r_str_ncpy (type_name, type_skip_qualifiers (type), sizeof (type_name));
+			type_trim_qualifiers (type_name);
+			char *arr = strchr (type_name, '[');
+			if (arr) {
+				char *arr_end = strchr (arr + 1, ']');
+				if (arr_end) {
+					bool pointee_array = false;
+					char *close_paren = arr;
+					while (close_paren > type_name && (close_paren[-1] == ' ' || close_paren[-1] == '\t')) {
+						close_paren--;
 					}
-				} else {
-					if (r_str_startswith (type, "enum ")) {
-						snprintf (var3, sizeof (var3), "%s", type + 5);
-						isEnum = true;
-					} else {
-						snprintf (var3, sizeof (var3), "type.%s", type);
+					if (close_paren > type_name && close_paren[-1] == ')') {
+						char *open_paren = close_paren - 1;
+						while (open_paren >= type_name && *open_paren != '(') {
+							open_paren--;
+						}
+						if (open_paren >= type_name && memchr (open_paren, '*', (size_t)(close_paren - open_paren))) {
+							pointee_array = true;
+						}
 					}
-					tfmt = sdb_const_get (TDB, var3, NULL);
+					*arr_end = 0;
+					if (!pointee_array && elements <= 0) {
+						int parsed_elems = atoi (arr + 1);
+						if (parsed_elems > 0) {
+							elements = parsed_elems;
+						}
+					}
+					*arr = 0;
+					r_str_trim (type_name);
 				}
-
 			}
-			if (isfp) {
-				// consider function pointer as void * for printing
-				fmt = r_str_append (fmt, "p");
-				vars = r_str_append (vars, p);
-				vars = r_str_append (vars, " ");
-			} else if (tfmt) {
-				(void) r_str_replace_ch (type, ' ', '_', true);
-				if (elements > 0) {
-					fmt = r_str_appendf (fmt, "[%d]", elements);
-				}
-				if (isStruct) {
-					fmt = r_str_append (fmt, "?");
-					if (struct_name) {
-						vars = r_str_appendf (vars, "(%s)%s", struct_name, p);
-					}
-					vars = r_str_append (vars, " ");
-				} else if (isEnum) {
-					fmt = r_str_append (fmt, "E");
-					vars = r_str_appendf (vars, "(%s)%s", type + 5, p);
-					vars = r_str_append (vars, " ");
-				} else {
-					fmt = r_str_append (fmt, tfmt);
-					vars = r_str_append (vars, p);
-					vars = r_str_append (vars, " ");
-				}
+			const char *base_type = type_name;
+			if (r_str_startswith (base_type, "type.")) {
+				base_type += 5;
+			}
+			// a member typed by a scalar typedef formats as the typedef's target
+			char *resolved_member = r_type_resolve_typedef (TDB, base_type);
+			if (resolved_member && !type_aggregate_kind (TDB, resolved_member, &(const char *){ NULL })) {
+				r_str_ncpy (type_name, type_skip_qualifiers (resolved_member), sizeof (type_name));
+				type_trim_qualifiers (type_name);
+				base_type = type_name;
+			}
+			free (resolved_member);
+			// Handle general pointers except for char *
+			if (type_format_is_pointer (base_type) && strcmp (base_type, "char *") && strcmp (base_type, "char **")) {
+				isfp = true;
 			} else {
-				eprintf ("Cannot resolve type '%s'\n", var3);
+				const char *aggregate_name = NULL;
+				const char *type_kind = type_aggregate_kind (TDB, base_type, &aggregate_name);
+				if (type_kind) {
+					struct_name = (char *)aggregate_name;
+					int name_len = (int)(sizeof (var3) - strlen (type_kind) - 2);
+					snprintf (var3, sizeof (var3), "%s.%.*s", type_kind, name_len, aggregate_name);
+					tfmt = sdb_const_get (TDB, var3, NULL);
+					isStruct = true;
+				} else {
+					// special case for char[]. Use char* format type without *
+					if (!strcmp (base_type, "char") && elements > 0) {
+						tfmt = sdb_const_get (TDB, "type.char *", NULL);
+						if (tfmt && *tfmt == '*') {
+							tfmt++;
+						}
+					} else {
+						if (r_str_startswith (base_type, "enum ") || r_type_kind (TDB, base_type) == R_TYPE_ENUM) {
+							enum_name = r_str_startswith (base_type, "enum ")? base_type + 5: base_type;
+							snprintf (var3, sizeof (var3), "%.*s",
+									(int)(sizeof (var3) - 1), enum_name);
+							isEnum = true;
+						} else {
+							snprintf (var3, sizeof (var3), "type.%.*s",
+									(int)(sizeof (var3) - sizeof ("type.")), base_type);
+						}
+						tfmt = sdb_const_get (TDB, var3, NULL);
+						if (!tfmt) {
+							if (!strcmp (base_type, "int")) {
+								tfmt = sdb_const_get (TDB, "type.int32_t", NULL);
+								if (!tfmt) {
+									tfmt = "d";
+								}
+							} else if (!strcmp (base_type, "short") || !strcmp (base_type, "short int")) {
+								tfmt = sdb_const_get (TDB, "type.int16_t", NULL);
+								if (!tfmt) {
+									tfmt = "w";
+								}
+							} else if (!strcmp (base_type, "char")) {
+								tfmt = sdb_const_get (TDB, "type.int8_t", NULL);
+								if (!tfmt) {
+									tfmt = "c";
+								}
+							} else if (!strcmp (base_type, "long long")
+								|| !strcmp (base_type, "long long int")
+								|| !strcmp (base_type, "int64_t")) {
+								tfmt = sdb_const_get (TDB, "type.int64_t", NULL);
+								if (!tfmt) {
+									tfmt = "q";
+								}
+							}
+						}
+					}
+				}
+			}
+			if (tfmt && !strcmp (tfmt, "func")) {
+				isfp = true;
+				// function pointer
+			}
+			if (!tfmt && !isfp) {
+				R_LOG_DEBUG ("Cannot format member '%s' of type '%s'", p, type);
+				complete = false;
+			} else if (isHidden) {
+				// For hidden fields, skip the bytes without displaying
+				// Use [N]. to skip N bytes (. skips 1 byte)
+				int skip_bytes = 0;
+				if (isfp) {
+					// pointer size depends on platform, assume 8 for now
+					skip_bytes = 8;
+				} else if (tfmt) {
+					// Get size from type format
+					if (!strcmp (tfmt, "d") || !strcmp (tfmt, "i") || !strcmp (tfmt, "x") || !strcmp (tfmt, "o") || !strcmp (tfmt, "f")) {
+						skip_bytes = 4;
+					} else if (!strcmp (tfmt, "q") || !strcmp (tfmt, "F") || !strcmp (tfmt, "p")) {
+						skip_bytes = 8;
+					} else if (!strcmp (tfmt, "w")) {
+						skip_bytes = 2;
+					} else if (!strcmp (tfmt, "b") || !strcmp (tfmt, "c") || !strcmp (tfmt, "C") || !strcmp (tfmt, "z")) {
+						skip_bytes = 1;
+					} else {
+						skip_bytes = 4; // default
+					}
+				} else {
+					skip_bytes = 8; // assume pointer for unknown types
+				}
+				if (elements > 0) {
+					skip_bytes *= elements;
+				}
+				if (skip_bytes > 0) {
+					r_strbuf_appendf (fmt_sb, "[%d].", skip_bytes);
+					current_offset += skip_bytes;
+				}
+			} else if (isfp) {
+				r_strbuf_append (fmt_sb, "p");
+				r_strbuf_appendf (vars_sb, "%s ", p);
+				current_offset += fmt_type_size (NULL, true, elements);
+			} else if (tfmt) {
+				(void)r_str_replace_ch (type, ' ', '_', true);
+				if (elements > 0) {
+					r_strbuf_appendf (fmt_sb, "[%d]", elements);
+				}
+					if (isStruct) {
+						r_strbuf_append (fmt_sb, "?");
+						if (struct_name) {
+							r_strbuf_appendf (vars_sb, "(%s)%s", struct_name, p);
+						}
+						r_strbuf_append (vars_sb, " ");
+					} else if (isEnum) {
+						r_strbuf_append (fmt_sb, "E");
+						r_strbuf_appendf (vars_sb, "(%s)%s ", enum_name ? enum_name : base_type, p);
+					} else {
+						r_strbuf_append (fmt_sb, tfmt);
+						r_strbuf_append (vars_sb, p);
+					r_strbuf_append (vars_sb, " ");
+				}
+				current_offset += fmt_type_size (tfmt, false, elements);
 			}
 			free (type);
+		} else {
+			complete = false;
 		}
 		free (p);
+		if (!complete) {
+			break;
+		}
 	}
 	free (fields);
-	fmt = r_str_append (fmt, " ");
-	fmt = r_str_append (fmt, vars);
-	free (vars);
-	return fmt;
+	if (!complete) {
+		r_strbuf_free (fmt_sb);
+		r_strbuf_free (vars_sb);
+		return NULL;
+	}
+	r_strbuf_append (fmt_sb, " ");
+	char *vars_s = r_strbuf_drain (vars_sb);
+	r_strbuf_append (fmt_sb, vars_s);
+	free (vars_s);
+	return r_strbuf_drain (fmt_sb);
 }
 
-R_API char *r_type_format(Sdb *TDB, const char *t) {
-	char var[130], var2[132];
+static char *type_format(Sdb *TDB, const char *t, int depth);
+
+static char *type_format_base(Sdb *TDB, const char *t, int depth) {
 	const char *kind = sdb_const_get (TDB, t, NULL);
 	if (!kind) {
 		return NULL;
 	}
-	// only supports struct atm
-	snprintf (var, sizeof (var), "%s.%s", kind, t);
 	if (!strcmp (kind, "type")) {
-		const char *fmt = sdb_const_get (TDB, var, NULL);
+		const char *fmt = sdb_const_getf (TDB, NULL, "type.%s", t);
+		return fmt? strdup (fmt): NULL;
+	}
+	char var[130];
+	snprintf (var, sizeof (var), "%s.%s", kind, t);
+	if (!strcmp (kind, "struct")) {
+		return fmt_struct_union (TDB, var, false);
+	} else if (!strcmp (kind, "union")) {
+		char *fmt = fmt_struct_union (TDB, var, false);
 		if (fmt) {
-			return strdup (fmt);
+			char *res = r_str_newf ("0%s", fmt);
+			free (fmt);
+			return res;
 		}
-	} else if (!strcmp (kind, "struct") || !strcmp (kind, "union")) {
-		return fmt_struct_union(TDB, var, false);
+		return NULL;
 	}
 	if (!strcmp (kind, "typedef")) {
-		snprintf (var2, sizeof (var2), "typedef.%s", t);
-		const char *type = sdb_const_get (TDB, var2, NULL);
-		// only supports struct atm
+		const char *type = sdb_const_getf (TDB, NULL, "typedef.%s", t);
 		if (type && !strcmp (type, "struct")) {
 			return fmt_struct_union (TDB, var, true);
 		}
+		if (type && !strcmp (type, "union")) {
+			char *fmt = fmt_struct_union (TDB, var, true);
+			if (fmt) {
+				char *res = r_str_newf ("0%s", fmt);
+				free (fmt);
+				return res;
+			}
+			return NULL;
+		}
+		// a typedef of a scalar formats as its target: typedef.size_t=uint64_t is a q
+		char *target = r_type_resolve_typedef (TDB, t);
+		char *fmt = target? type_format (TDB, target, depth + 1): NULL;
+		free (target);
+		return fmt;
 	}
 	return NULL;
 }
 
+static char *type_format(Sdb *TDB, const char *t, int depth) {
+	if (depth >= TYPE_CHAIN_MAX) {
+		return NULL;
+	}
+	char *base = strdup (type_skip_qualifiers (t));
+	if (!base) {
+		return NULL;
+	}
+	type_trim_qualifiers (base);
+	ut64 elements;
+	if (!type_array_parse (base, &elements)) {
+		free (base);
+		return NULL;
+	}
+	type_trim_qualifiers (base);
+	const char *name = NULL;
+	const char *bare = type_aggregate_prefixed (base, &name)? name: base;
+	char *fmt = type_format_base (TDB, bare, depth);
+	if (!fmt && type_format_is_pointer (bare)) {
+		fmt = strdup ("p");
+	}
+	if (fmt && elements > 1) {
+		const char *body = fmt;
+		if (isdigit ((ut8)*fmt) && *fmt != '0') {
+			char *end;
+			ut64 count = strtoull (fmt, &end, 10);
+			if (r_mul_overflow (elements, count, &elements)) {
+				free (fmt);
+				free (base);
+				return NULL;
+			}
+			body = end;
+		}
+		char *array_fmt = r_str_newf (*body == '0'? "[%" PFMT64u "]? (pf %s)": "%" PFMT64u "%s", elements, body);
+		free (fmt);
+		fmt = array_fmt;
+	}
+	free (base);
+	return fmt;
+}
+
+R_API char *r_type_format(Sdb *TDB, const char *t) {
+	R_RETURN_VAL_IF_FAIL (TDB && t, NULL);
+	return type_format (TDB, t, 0);
+}
+
 R_API void r_type_del(Sdb *TDB, const char *name) {
+	r_strf_buffer (512);
+	if (strstr (name, ".arg.")) {
+		// ignore func argument definitions as they are not types
+		return;
+	}
+	if (r_str_endswith (name, ".include")) {
+		// ignore .include headers
+		return;
+	}
 	const char *kind = sdb_const_get (TDB, name, 0);
 	if (!kind) {
 		return;
 	}
+	const char *comma = strchr (kind, ',');
+	if (comma) {
+		R_LOG_WARN ("Unexpected comma in kind (%s) for (%s)", kind, name);
+	}
 	if (!strcmp (kind, "type")) {
-		sdb_unset (TDB, sdb_fmt ("type.%s", name), 0);
-		sdb_unset (TDB, sdb_fmt ("type.%s.size", name), 0);
-		sdb_unset (TDB, sdb_fmt ("type.%s.meta", name), 0);
+		sdb_unset (TDB, r_strf ("type.%s", name), 0);
+		sdb_unset (TDB, r_strf ("type.%s.size", name), 0);
+		sdb_unset (TDB, r_strf ("type.%s.meta", name), 0);
 		sdb_unset (TDB, name, 0);
 	} else if (!strcmp (kind, "struct") || !strcmp (kind, "union")) {
-		int i, n = sdb_array_length(TDB, sdb_fmt ("%s.%s", kind, name));
 		char *elements_key = r_str_newf ("%s.%s", kind, name);
-		for (i = 0; i< n; i++) {
+		int i, n = sdb_array_length (TDB, elements_key);
+		for (i = 0; i < n; i++) {
 			char *p = sdb_array_get (TDB, elements_key, i, NULL);
-			sdb_unset (TDB, sdb_fmt ("%s.%s", elements_key, p), 0);
+			sdb_unset (TDB, r_strf ("%s.%s", elements_key, p), 0);
+			sdb_unset (TDB, r_strf ("%s.%s.meta", elements_key, p), 0);
 			free (p);
 		}
 		sdb_unset (TDB, elements_key, 0);
+		sdb_unsetf (TDB, 0, "type.%s.size", name);
 		sdb_unset (TDB, name, 0);
 		free (elements_key);
 	} else if (!strcmp (kind, "func")) {
-		int i, n = sdb_num_get (TDB, sdb_fmt ("func.%s.args", name), 0);
+		int i, n = sdb_num_getf (TDB, NULL, "func.%s.args", name);
 		for (i = 0; i < n; i++) {
-			sdb_unset (TDB, sdb_fmt ("func.%s.arg.%d", name, i), 0);
+			sdb_unset (TDB, r_strf ("func.%s.arg.%d", name, i), 0);
 		}
-		sdb_unset (TDB, sdb_fmt ("func.%s.ret", name), 0);
-		sdb_unset (TDB, sdb_fmt ("func.%s.cc", name), 0);
-		sdb_unset (TDB, sdb_fmt ("func.%s.noreturn", name), 0);
-		sdb_unset (TDB, sdb_fmt ("func.%s.args", name), 0);
+		sdb_unset (TDB, r_strf ("func.%s.ret", name), 0);
+		sdb_unset (TDB, r_strf ("func.%s.cc", name), 0);
+		sdb_unset (TDB, r_strf ("func.%s.noreturn", name), 0);
+		sdb_unset (TDB, r_strf ("func.%s.args", name), 0);
 		sdb_unset (TDB, name, 0);
 	} else if (!strcmp (kind, "enum")) {
 		RList *list = r_type_get_enum (TDB, name);
 		RTypeEnum *member;
 		RListIter *iter;
 		r_list_foreach (list, iter, member) {
-			sdb_unset (TDB, sdb_fmt ("enum.%s.%s", name, member->name), 0);
-			sdb_unset (TDB, sdb_fmt ("enum.%s.%s", name, member->val), 0);
+			char *k = r_str_newf ("enum.%s.%s", name, member->name);
+			sdb_unset (TDB, k, 0);
+			free (k);
+			k = r_str_newf ("enum.%s.%s", name, member->val);
+			sdb_unset (TDB, k, 0);
+			free (k);
 		}
 		sdb_unset (TDB, name, 0);
 		r_list_free (list);
 	} else if (!strcmp (kind, "typedef")) {
-		RStrBuf buf;
-		r_strbuf_init (&buf);
-		r_strbuf_setf (&buf, "typedef.%s", name);
-		sdb_unset (TDB, r_strbuf_get (&buf), 0);
-		r_strbuf_fini (&buf);
+		char *buf = r_str_newf ("typedef.%s", name);
+		sdb_unset (TDB, buf, 0);
+		free (buf);
 		sdb_unset (TDB, name, 0);
 	} else {
-		eprintf ("Unrecognized type kind \"%s\"\n", kind);
+		R_LOG_WARN ("Unrecognized type kind \"%s\" for (%s)", kind, name);
 	}
+}
+
+// Strip leading __ prefix for type database lookup when the exact name
+// is not registered. This allows __strcpy_chk to match strcpy_chk
+static inline const char *trim_lodashes(Sdb *TDB, const char *name) {
+	while (r_str_startswith (name, "__") && !sdb_const_get (TDB, name, 0)
+		&& !sdb_const_getf (TDB, NULL, "func.%s.ret", name)) {
+		name += 2;
+	}
+	return name;
 }
 
 // Function prototypes api
 R_API int r_type_func_exist(Sdb *TDB, const char *func_name) {
-	const char *fcn = sdb_const_get (TDB, func_name, 0);
+	const char *fcn = sdb_const_get (TDB, trim_lodashes (TDB, func_name), 0);
 	return fcn && !strcmp (fcn, "func");
 }
 
-R_API const char *r_type_func_ret(Sdb *TDB, const char *func_name){
-	const char *query = sdb_fmt ("func.%s.ret", func_name);
-	return sdb_const_get (TDB, query, 0);
+R_API bool r_type_func_prototype_exist(Sdb *TDB, const char *func_name) {
+	R_RETURN_VAL_IF_FAIL (TDB && func_name, false);
+	const char *name = trim_lodashes (TDB, func_name);
+	const char *kind = sdb_const_get (TDB, name, 0);
+	// Argument recovery also writes func.*.args; only declarations have a kind or return type.
+	// struct stat overwrites stat=func, but the prototype under func.stat.* is still there
+	return (kind && !strcmp (kind, "func")) || sdb_const_getf (TDB, NULL, "func.%s.ret", name);
 }
 
-R_API int r_type_func_args_count(Sdb *TDB, const char *func_name) {
-	const char *query = sdb_fmt ("func.%s.args", func_name);
-	return sdb_num_get (TDB, query, 0);
+R_API const char *r_type_func_ret(Sdb *TDB, const char *func_name) {
+	return sdb_const_getf (TDB, NULL, "func.%s.ret", trim_lodashes (TDB, func_name));
 }
 
-R_API R_OWN char *r_type_func_args_type(Sdb *TDB, R_NONNULL const char *func_name, int i) {
-	const char *query = sdb_fmt ("func.%s.arg.%d", func_name, i);
-	char *ret = sdb_get (TDB, query, 0);
-	if (ret) {
-		char *comma = strchr (ret, ',');
-		if (comma) {
-			*comma = 0;
-			return ret;
+R_API bool r_type_func_args_count(Sdb *TDB, const char *name, int *argc) {
+	R_RETURN_VAL_IF_FAIL (TDB && name && argc, false);
+	while (true) {
+		const char *kind = sdb_const_get (TDB, name, 0);
+		// Recovered arguments alone do not declare a prototype; a struct may overwrite its kind.
+		if ((kind && !strcmp (kind, "func")) || sdb_const_getf (TDB, NULL, "func.%s.ret", name)) {
+			break;
 		}
-		free (ret);
+		if (kind || !r_str_startswith (name, "__")) {
+			return false;
+		}
+		name += 2;
 	}
-	return NULL;
+	const char *value = sdb_const_getf (TDB, NULL, "func.%s.args", name);
+	if (!value || !isdigit ((ut8)*value)) {
+		return false;
+	}
+	char *end;
+	ut64 count = strtoull (value, &end, 0);
+	if (*end || count > ST32_MAX) {
+		return false;
+	}
+	*argc = (int)count;
+	return true;
 }
 
-R_API const char *r_type_func_args_name(Sdb *TDB, R_NONNULL const char *func_name, int i) {
-	const char *query = sdb_fmt ("func.%s.arg.%d", func_name, i);
-	const char *get = sdb_const_get (TDB, query, 0);
-	if (get) {
-		char *ret = strchr (get, ',');
-		return ret == 0 ? ret : ret + 1;
+// Commas inside brackets or parentheses belong to the parameter's declarator
+static const char *func_arg_separator(const char *row) {
+	const char *separator = NULL;
+	int depth = 0;
+	const char *p;
+	for (p = row; *p; p++) {
+		if (*p == '[' || *p == '(') {
+			depth++;
+		} else if ((*p == ']' || *p == ')') && depth > 0) {
+			depth--;
+		} else if (*p == ',' && !depth) {
+			separator = p;
+		} else if (depth && (*p == '\'' || *p == '"')) {
+			const char quote = *p++;
+			while (*p && *p != quote) {
+				p += (*p == '\\' && p[1])? 2: 1;
+			}
+			if (!*p) {
+				break;
+			}
+		}
 	}
-	return NULL;
+	return (separator && !depth)? separator: strrchr (row, ',');
+}
+
+// __foo's recovered rows are not foo's: trim only to a declared prototype
+static const char *func_arg_row(Sdb *TDB, const char *func_name, int i) {
+	const bool trim = r_str_startswith (func_name, "__") && r_type_func_prototype_exist (TDB, func_name);
+	return sdb_const_getf (TDB, NULL, "func.%s.arg.%d", trim? trim_lodashes (TDB, func_name): func_name, i);
+}
+
+// *name points into the returned copy, so freeing the type frees both
+R_API R_OWNED char *r_type_func_arg_split(const char *R_NONNULL row, const char **name) {
+	if (name) {
+		*name = NULL;
+	}
+	R_RETURN_VAL_IF_FAIL (row, NULL);
+	char *type = strdup (row);
+	char *comma = type? (char *)func_arg_separator (type): NULL;
+	if (comma) {
+		*comma = 0;
+		if (name) {
+			*name = comma + 1;
+		}
+	}
+	return type;
+}
+
+R_API R_OWNED char *r_type_func_args_type(Sdb *TDB, const char *R_NONNULL func_name, int i) {
+	const char *value = func_arg_row (TDB, func_name, i);
+	return value? r_type_func_arg_split (value, NULL): NULL;
+}
+
+static const char *const argnames[10] = {
+	"arg0", "arg1", "arg2", "arg3", "arg4",
+	"arg5", "arg6", "arg7", "arg8", "arg9",
+};
+
+R_API const char *r_type_func_args_name(Sdb *TDB, const char *R_NONNULL func_name, int i) {
+	const char *row = func_arg_row (TDB, func_name, i);
+	if (row) {
+		const char *ret = func_arg_separator (row);
+		if (ret) {
+			return ret + 1;
+		}
+	}
+	return (i >= 0 && i < 10)? argnames[i]: "arg";
+}
+
+R_API bool r_type_func_is_variadic(Sdb *TDB, const char *R_NONNULL func_name, int argc) {
+	R_RETURN_VAL_IF_FAIL (TDB && func_name, false);
+	if (argc < 1) {
+		return false;
+	}
+	const char *row = func_arg_row (TDB, func_name, argc - 1);
+	if (!row) {
+		return false;
+	}
+	const char *comma = func_arg_separator (row);
+	// Current declarations store "..." in the name; older ones used the type.
+	return comma? !strcmp (comma + 1, "...") || (comma - row == 3 && !strncmp (row, "...", 3)): !strcmp (row, "...");
 }
 
 #define MIN_MATCH_LEN 4
 
 static inline bool is_function(const char *name) {
-	return name && !strcmp("func", name);
+	return name && !strcmp ("func", name);
 }
 
-static R_OWN char *type_func_try_guess(Sdb *TDB, R_NONNULL char *name) {
-	if (strlen(name) < MIN_MATCH_LEN) {
+static R_OWNED char *type_func_try_guess(Sdb *TDB, const char *name) {
+	if (strlen (name) < MIN_MATCH_LEN) {
 		return NULL;
 	}
-
-	const char *res = sdb_const_get(TDB, name, NULL);
-	if (is_function(res)) {
-		return strdup(name);
+	const char *res = sdb_const_get (TDB, name, NULL);
+	if (is_function (res)) {
+		return strdup (name);
 	}
-
+	// strip leading underscores (e.g., __libc_start_main -> libc_start_main)
+	if (r_str_startswith (name, "__")) {
+		const char *stripped = name;
+		while (*stripped == '_') {
+			stripped++;
+		}
+		res = sdb_const_get (TDB, stripped, NULL);
+		if (is_function (res)) {
+			return strdup (stripped);
+		}
+	}
 	return NULL;
 }
 
-static inline bool is_auto_named(char *func_name, size_t slen) {
+static inline bool is_auto_named(const char *func_name, size_t slen) {
 	return slen > 4 && (r_str_startswith (func_name, "fcn.") || r_str_startswith (func_name, "loc."));
 }
 
-static inline bool has_r_prefixes(char *func_name, int offset, size_t slen) {
+static inline bool has_r_prefixes(const char *func_name, int offset, size_t slen) {
 	return slen > 4 && (offset + 3 < slen) && func_name[offset + 3] == '.';
 }
 
-static char *strip_r_prefixes(char *func_name, size_t slen) {
+static const char *strip_r_prefixes(const char *func_name, size_t slen) {
 	// strip r2 prefixes (sym, sym.imp, etc')
 	int offset = 0;
-
-	while (has_r_prefixes(func_name, offset, slen)) {
+	while (has_r_prefixes (func_name, offset, slen)) {
 		offset += 4;
 	}
-
 	return func_name + offset;
 }
 
-static char *strip_common_prefixes_stdlib(char *func_name) {
+static const char *strip_common_prefixes_stdlib(const char *func_name) {
 	// strip common prefixes from standard lib functions
 	if (r_str_startswith (func_name, "__isoc99_")) {
 		func_name += 9;
-	} else if (r_str_startswith (func_name, "__libc_") && !strstr(func_name, "_main")) {
+	} else if (r_str_startswith (func_name, "__libc_") && !strstr (func_name, "_main")) {
 		func_name += 7;
 	} else if (r_str_startswith (func_name, "__GI_")) {
 		func_name += 5;
 	}
-
 	return func_name;
 }
 
-static char *strip_dll_prefix(char *func_name) {
-	char *tmp = strstr(func_name, "dll_");
+static const char *strip_dll_prefix(const char *func_name, bool *stripped) {
+	const char *tmp = strstr (func_name, "dll_");
 	if (tmp) {
-		return tmp + 3;
+		if (stripped) {
+			*stripped = true;
+		}
+		return tmp + 4;
 	}
-
+	if (stripped) {
+		*stripped = false;
+	}
 	return func_name;
 }
 
 static void clean_function_name(char *func_name) {
 	char *last = (char *)r_str_lchr (func_name, '_');
-	if (!last || !r_str_isnumber(last + 1)) {
+	if (!last || !r_str_isnumber (last + 1)) {
 		return;
 	}
-
 	*last = '\0';
 }
 
 // TODO:
 // - symbol names are long and noisy, some of them might not be matched due
 //	 to additional information added around name
-R_API R_OWN char *r_type_func_guess(Sdb *TDB, R_NONNULL char *func_name) {
-	char *str = func_name;
+R_API R_OWNED char *r_type_func_guess(Sdb *TDB, const char *R_NONNULL func_name) {
+	R_RETURN_VAL_IF_FAIL (TDB && func_name, NULL);
+	const char *str = func_name;
 	char *result = NULL;
-	r_return_val_if_fail (TDB, false);
-	r_return_val_if_fail (func_name, false);
 
 	size_t slen = strlen (str);
-	if (slen < MIN_MATCH_LEN || is_auto_named(str, slen)) {
+	if (slen < MIN_MATCH_LEN || is_auto_named (str, slen)) {
 		return NULL;
 	}
 
-	str = strip_r_prefixes(str, slen);
-	str = strip_common_prefixes_stdlib(str);
-	str = strip_dll_prefix(str);
+	str = strip_r_prefixes (str, slen);
+	str = strip_common_prefixes_stdlib (str);
+	bool dll_stripped = false;
+	str = strip_dll_prefix (str, &dll_stripped);
 
 	if ((result = type_func_try_guess (TDB, str))) {
 		return result;
 	}
 
-	str = strdup (str);
-	clean_function_name(str);
-
-	if (*str == '_' && (result = type_func_try_guess (TDB, str + 1))) {
-		free (str);
+	// afs stores prototypes under the prefixed name, retry it unstripped
+	if (str != func_name && (result = type_func_try_guess (TDB, func_name))) {
 		return result;
 	}
 
-	free (str);
+	char *str_copy = strdup (str);
+
+	// If we stripped dll_ prefix, try matching the cleaned name directly
+	if (dll_stripped) {
+		clean_function_name (str_copy);
+		result = type_func_try_guess (TDB, str_copy);
+	}
+	if (!result && *str_copy == '_') {
+		// Also try without leading underscore
+		result = type_func_try_guess (TDB, str_copy + 1);
+	}
+
+	// auto-detect JNI native functions and callbacks
+	if (!result && (r_str_startswith (str, "Java_") || r_str_startswith (str, "JNI_"))) {
+		result = type_func_try_guess (TDB, "jni_native");
+	}
+	free (str_copy);
 	return result;
+}
+
+// walks name, then the last dotted component, then the fuzzy guesser; `key` returns the db key matched
+static char *type_func_lookup(Sdb *types, const char *fname, bool key) {
+	R_RETURN_VAL_IF_FAIL (types && fname, NULL);
+	if (r_type_func_prototype_exist (types, fname)) {
+		return strdup (key? trim_lodashes (types, fname): fname);
+	}
+	const char *dot = strrchr (fname, '.');
+	if (dot && r_type_func_prototype_exist (types, dot + 1)) {
+		return strdup (key? trim_lodashes (types, dot + 1): dot + 1);
+	}
+	return r_type_func_guess (types, fname);
+}
+
+R_API char *r_type_func_name(Sdb *types, const char *fname) {
+	return type_func_lookup (types, fname, false);
+}
+
+// same walk as r_type_func_name, but hands back the db key the match went through
+R_API char *r_type_func_key(Sdb *types, const char *fname) {
+	return type_func_lookup (types, fname, true);
 }

@@ -1,0 +1,45 @@
+NAME=ELF: stripped pie imports only
+FILE=bins/elf/analysis/zigs_stripped
+CMDS=<<EOF
+i~^stripp
+i~^uncaps
+EOF
+EXPECT=<<EOF
+stripped true
+uncaps   false
+EOF
+RUN
+
+NAME=ELF: stripped pie with exported main
+FILE=bins/elf/analysis/hello-linux-i386-pie
+CMDS=<<EOF
+i~^stripp
+i~^uncaps
+EOF
+EXPECT=<<EOF
+stripped true
+uncaps   true
+EOF
+RUN
+
+# merged: ELF: weak undefined imports do not trigger uncaps
+NAME=ELF: stripped pie with linker exports only
+FILE=bins/elf/analysis/candypop
+CMDS=<<EOF
+i~^stripp
+i~^uncaps
+?e --
+e bin.relocs.apply=true
+ii~__gmon_start__[2]
+ii~__gmon_start__[4]
+i~^uncaps
+EOF
+EXPECT=<<EOF
+stripped true
+uncaps   false
+--
+WEAK
+__gmon_start__
+uncaps   false
+EOF
+RUN

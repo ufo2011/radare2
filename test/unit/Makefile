@@ -1,9 +1,16 @@
-BINDIR := bin
-BINS=$(patsubst %.c,$(BINDIR)/%,$(wildcard *.c))
-LDFLAGS+=$(shell pkg-config --libs r_core)
-CFLAGS+=-I../../libr/include
-CFLAGS+=-I../../shlr/sdb/src
-# $(shell pkg-config --cflags r_core) -g
+UNITS_BINDIR := bin
+BINS=$(patsubst %.c,$(UNITS_BINDIR)/%,$(wildcard *.c))
+# LDFLAGS+=$(shell pkg-config --libs r_core)
+-include ../../config-user.mk
+ifeq ($(USE_LIB_MAGIC),1)
+	BINS:=$(filter-out $(UNITS_BINDIR)/test_magic,$(BINS))
+endif
+CPPFLAGS+=-I$(INCLUDEDIR)
+CPPFLAGS+=-I../../libr/include
+CPPFLAGS+=-I../../subprojects/sdb/include
+CFLAGS+=-g
+LDLIBS+=-L$(LIBDIR)
+LDLIBS+=-lr_core -lr_main -lm -lr_config -lr_debug -lr_bin -lr_lang -lr_anal -lr_bp -lr_egg -lr_asm -lr_flag -lr_search -lr_syscall -lr_fs -lr_io -lr_socket -lr_cons -lr_magic -lr_muta -lr_arch -lr_esil -lr_reg -lr_util -ldl
 ifeq ($(ASAN),1)
 	ASAN_LD_PRELOAD=LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.5
 else
@@ -12,15 +19,40 @@ endif
 
 all: $(BINS)
 
-$(BINDIR)/%: %.c
-	mkdir -p "$(BINDIR)"
-	$(CC) $< -o $@ $(CFLAGS) $(LDFLAGS)
+$(UNITS_BINDIR)/test_bin_demangle: CPPFLAGS+=-I../../shlr/java/include
 
-run:
-	r=0 ; cd .. ; for a in $(BINS) ; do $(ASAN_LD_PRELOAD) ./unit/$$a || r=1; done ; echo unit$$r ; exit $$r
+$(UNITS_BINDIR)/test_gdb: CPPFLAGS+=-I../../shlr/gdb/include
+$(UNITS_BINDIR)/test_gdb: LDLIBS:=../../shlr/gdb/lib/libgdbr.a $(LDLIBS)
+$(UNITS_BINDIR)/test_gdb: test_gdb.c ../../shlr/gdb/lib/libgdbr.a
+
+$(UNITS_BINDIR)/test_winkd: CPPFLAGS+=-I../../shlr/winkd
+$(UNITS_BINDIR)/test_winkd: LDLIBS:=../../shlr/winkd/libr_winkd.a $(LDLIBS)
+$(UNITS_BINDIR)/test_winkd: test_winkd.c ../../shlr/winkd/libr_winkd.a
+
+asan:
+	CFLAGS=-fsanitize=address $(MAKE) ASAN=1
+
+$(UNITS_BINDIR)/%: %.c Makefile
+	mkdir -p "$(UNITS_BINDIR)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MD -MF $@.d $< -o $@ $(LDFLAGS) $(LDLIBS)
+
+# keep the built-in %: %.c rule from dropping binaries next to the sources
+test_%: $(UNITS_BINDIR)/test_%
+	@:
+
+run: $(BINS)
+	@export R2_DEBUG_ASSERT=1 ; R=0 ; r=0 ; cd .. ; \
+	  for a in $(BINS) ; do \
+	  	echo "$$a" ; \
+		R=0 ; $(ASAN_LD_PRELOAD) ./unit/$$a || R=1; \
+		if [ "$$R" = 1 ]; then r=1; echo '[X''X]'; fi; \
+	  done ; \
+	echo unit$$r ; exit $$r
 
 clean:
-	rm -f $(BINS)
-	rm -fd "$(BINDIR)"
+	rm -f $(BINS) $(BINS:=.d)
+	-rm -fd "$(UNITS_BINDIR)"
+
+-include $(BINS:=.d)
 
 .PHONY: all

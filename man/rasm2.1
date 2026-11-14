@@ -1,24 +1,26 @@
-.Dd Jul 25, 2021
+.Dd Jul 10, 2025
 .Dt RASM2 1
 .Sh NAME
 .Nm rasm2
-.Nd radare2 assembler and disassembler tool
+.Nd Radare2 Assembler and Disassembler Tool
 .Sh SYNOPSIS
 .Nm rasm2
-.Op Fl ABdDeEfCLvwrqx
+.Op Fl ACdDehHjLvwrNqxp
 .Op Fl a Ar arch
 .Op Fl b Ar bits
 .Op Fl c Ar cpu
-.Op Fl F Ar in:out
-.Op Fl o Ar offset
-.Op Fl @ Ar offset
-.Op Fl O Ar ofile
-.Op Fl s Ar syntax
-.Op Fl i Ar int
-.Op Fl l Ar int
-.Op ARG
+.Op Fl F Ar parser
+.Op Fl k Ar kernel
+.Op Fl o Ar ofile
+.Op Fl s Ar addr
+.Op Fl @ Ar addr
+.Op Fl S Ar syntax
+.Op Fl i Ar len
+.Op Fl I Ar dir
+.Op Fl l Ar len
+.Op Ar code|hex|-
 .Sh DESCRIPTION
-This tool uses r_asm to assemble and disassemble files or hexpair strings. It supports a large list of architectures which can be listed using the \-L flag.
+Assembles and disassembles code or hexpair strings for multiple architectures and syntax formats.
 .Pp
 .Bl -tag -width Fl
 .It Fl a Ar arch
@@ -26,7 +28,7 @@ Set architecture plugin
 .It Fl A
 Show analysis information of given hexpair string
 .It Fl b Ar bits
-Set architecture bits
+Set architecture bits (8, 16, 32, 64)
 .It Fl B
 Binary input/output (\-l is mandatory for binary input)
 .It Fl c Ar cpu
@@ -38,49 +40,213 @@ Disassemble hexpair bytes. rasm2 \-d 9090
 .It Fl D
 Disassemble showing hexpair and opcode
 .It Fl e
-Use big endian (or swap endianness if used more than once)
+Use big endian instead of little endian
 .It Fl E
-Output disassembled instructions in ESIL format.
-.It Fl f
-Read data from file instead of ARG.
-.It Fl F Ar in:out
-Specify input and/or output filters (att2intel, x86.pseudo, ...)
+Output disassembled instructions in ESIL format
+.It Fl f Ar file
+Read data from file instead of ARG
+.It Fl F Ar parser
+Specify parse plugin to be used (pseudo)
 .It Fl h
-Show usage help message.
+Show usage help message
 .It Fl hh
 Show long help message including supported assembler directives
-.It Fl l Ar int
-Input/Output length
-.It Fl i Ar int
+.It Fl H Op var
+Display variable
+.It Fl i Ar len
 Ignore/skip N bytes from the beginning of the input buffer
-.It Fl L
-List loaded asm plugins
-.It Fl LL
-List loaded anal plugins
-.It Fl o Ar offset
-Offset of the opcode to assemble (default is 0)
-.It Fl @ Ar offset
-Alias for -o
-.It Fl O Ar ofile
-output to file, for example 'rasm2 \-BF a a.asm'
-.It Fl r
-Show output in r2 script
-.It Fl s Ar syntax
-Select syntax output (intel, att)
-.It Fl w
-Describe opcode (whats op)
-.It Fl x
-Use hex dwords instead of hexpairs in the assembler output
+.It Fl I Ar dir
+Add an include search directory for SPP (\-p). May be repeated; directories are
+searched in command-line order after the input file's directory. Relative
+\-I paths are resolved from the current working directory.
+.It Fl j
+Output in json format
+.It Fl k Ar kernel
+Select operating system (linux, windows, darwin, android, ios, ...)
+.It Fl l Ar len
+Input/Output length
+.It Fl L Op name
+List RArch plugins: (a=asm, d=disasm, e=esil, p=parse)
+.It Fl LL Op name
+List RAsm parse plugins
+.It Fl N
+Don't load any plugin, same as R2_NOPLUGINS=1 or r2 -N
+.It Fl o Ar ofile
+Output to file, for example 'rasm2 \-Bf a.asm'
+.It Fl p
+Run SPP over input for assembly
+.Pp
+Relative .include paths are resolved from the directory of the input file
+specified with \-f, or the current directory for standard input and inline code.
+Additional \-I directories and SPP_INCDIR are searched afterward. SPP_INCDIR
+accepts a colon-separated list of directories (semicolon-separated on Windows).
+Absolute include paths are used directly. Nested includes first search the
+including file's directory; included assembly is preprocessed recursively.
+Include names may be double quoted. Missing includes, .error, unbalanced
+conditionals and excessive nesting fail assembly without emitting partial code.
+.Pp
+.set NAME VALUE stores a preprocessor environment variable; .get NAME expands
+its value. .if NAME tests that variable (unset, empty, or a value starting with
+0 is false), and .ifeq NAME VALUE compares it as a string. .else and .endif
+control the selected branch. These conditions do not evaluate assembler .equ
+symbols or numeric expressions: use .set TARGET_GB 1 followed by .if TARGET_GB.
+Directives inside comments and quoted assembly strings are literal.
 .It Fl q
 Quiet output (handy for -L, -v, ...)
+.It Fl r
+Show output in r2 script
+.It Fl s Ar addr
+Define initial start/seek address (default 0)
+.It Fl @ Ar addr
+Alias for -s
+.It Fl S Ar syntax
+Select syntax output (intel, att, masm, ...)
+.It Fl v
+Show version information
+.It Fl w
+Describe opcode (what's op)
+.It Fl x
+Use hex dwords instead of hexpairs in the assembler output
+.El
+.Sh STRING DIRECTIVES
+.Li .charset \(dqname\(dq
+selects an RMuta encoder for subsequent string literals.
+Supported encoders initially include pokered, ebcdic37 and base64.
+.Li .charset \(dqraw\(dq
+restores direct source-byte emission, the default at the start of each assembly.
+Unknown names and plugins without strict encoding support fail the entire
+assembly, even if no string follows.
+Selection emits no bytes and is inherited by textually included source.
+.Pp
+.Li .ascii \(dqtext\(dq
+emits the encoded literal without a terminator.
+.Li .string \(dqtext\(dq ,
+.Li .asciz \(dqtext\(dq
+and
+.Li .asciiz \(dqtext\(dq
+append one raw zero byte after encoding.
+Game-specific terminators must be emitted explicitly with a numeric
+.Li .byte
+directive.
+.Pp
+Strings must be double quoted.
+Escapes are interpreted once before encoding; \exNN supplies an input byte
+to the encoder.
+Text encoders reject malformed UTF-8 and unmappable characters without
+emitting partial output.
+Embedded NUL is encoded or rejected explicitly, never treated as the end
+of the input.
+Base64 processes each complete literal independently, including its padding.
+Numeric data directives, .hex, .incbin and instructions bypass charset encoding.
+.Bd -literal -offset indent
+\&.charset "pokered"
+\&.ascii "A<LINE>B"
+\&.byte 0x50
+\&.charset "ebcdic37"
+\&.string "AB"
+\&.charset "base64"
+\&.string "AB"
+\&.charset "raw"
+.Ed
+.Pp
+This emits 804f8150c1c2005155493d00.
+.Sh ENVIRONMENT
+.Pp
+.Bl -tag -width Fl
+.It Ev R2_NOPLUGINS
+Do not load shared plugins (speedup loading)
+.It Ev R2_PLUGINS_ORDER
+Plugin load order: i=internal, e=env, h=home, s=system; default=iehs; ? prints help
+.It Ev R2_LOG_LEVEL
+Change the log level
+.It Ev R2_DEBUG
+If defined, show error messages and crash signal
+.It Ev R2_DEBUG_ASSERT
+Enables runtime assertions for debugging
+.It Ev RASM2_ARCH
+Same as rasm2 -a
+.It Ev RASM2_BITS
+Same as rasm2 -b
 .El
 .Sh DIRECTIVES
 .Pp
 List the supported assembler and preprocessor directives with:
 .Pp
- $rasm2 -hh
-.Pp
+ $ rasm2 -hh
+.Bl -tag -width ".org address, fill"
+.It Cm .byte Ar expression Ns Op , Ns Ar expression ...
+Emit one byte for each comma-separated expression.
+Spaces and tabs are allowed within expressions; commas are required between
+operands, so whitespace-only lists are no longer accepted.
+Each result must be in the range 0 through 255.
+The
+.Cm .db
+and
+.Cm .int8
+directives use the same syntax and range.
+For example,
+.Cm .byte 1 + 2, (1 + 2) * 3
+emits 0309.
+.It Cm .dw Ar expression Ns Op , Ns Ar expression ...
+Emit one value per comma-separated expression, honoring the endian.
+The same list syntax applies to
+.Cm .word ,
+.Cm .short ,
+.Cm .dd ,
+.Cm .dword ,
+.Cm .dq ,
+.Cm .qword ,
+.Cm .intN
+and
+.Cm .uintN .
+For example,
+.Cm .dw 0x1234, 0x5678
+emits 34127856 in little endian.
+An empty operand or an out-of-range value rejects the whole directive.
+.It Cm .align Ar boundary Op , Ns Ar fill
+Emit fill bytes until the current program counter is a multiple of boundary.
+Without fill, the byte set by
+.Cm .fillvalue
+is used.
+An already aligned PC, or a boundary of 0 or 1, emits nothing.
+Alignment is relative to the PC, not to the file offset.
+For example,
+.Cm .byte 1; .align 4, 0xcc
+emits 01cccccc.
+.It Cm .fillvalue Ar byte
+Set the default padding byte used by
+.Cm .align
+and by
+.Cm .fill
+when its value is omitted.
+It must be in the range 0 through 255, starts at 0 for each assembly and
+applies to the directives that follow it.
+.Cm .org
+without fill never emits bytes and ignores it.
+.It Cm .org Ar address
+Set the program counter without emitting bytes.
+This preserves the historical
+behavior, including moving backwards, and changes the addresses used for
+labels and relative instructions without seeking in the output file.
+.It Cm .org Ar address , Ar fill
+Emit enough copies of the fill byte to advance the current program counter to
+address.
+The fill expression must evaluate to a byte (0 through 255).
+The target uses the same address space as the current PC, including any
+initial \-s address or preceding one-argument .org; it is not a file offset.
+A target equal to the current PC emits nothing.
+A backwards target, invalid
+fill or padding size exceeding the assembler's output-size limit is an error.
+Expressions must be resolvable when the directive is encountered.
 .El
+.Pp
+The two-argument form provides GAS-style padding.
+Unlike GAS, omitting fill
+retains the PC-only behavior; use an explicit zero fill to emit zero padding.
+For example, this emits 01ffffff02 and places the final byte at address 4:
+.Bd -literal -offset indent
+rasm2 '.byte 1; .org 4, 0xff; .byte 2'
+.Ed
 .Sh EXAMPLES
 .Pp
 Assemble opcode:
@@ -90,6 +256,26 @@ Assemble opcode:
 Disassemble opcode:
 .Pp
   $ rasm2 \-d 90
+.Pp
+Show all supported architectures:
+.Pp
+  $ rasm2 -L
+.Pp
+Assemble with specific syntax:
+.Pp
+  $ rasm2 -a x86 -b 32 -S att 'mov eax, 33'
+.Pp
+Output in JSON format:
+.Pp
+  $ rasm2 -j -a x86 -b 32 'mov eax, 33'
+.Pp
+Use big endian:
+.Pp
+  $ rasm2 -e -a arm -b 32 'add r0, r0, r1'
+.Pp
+Disassemble and show ESIL output:
+.Pp
+  $ rasm2 -d -E 90
 .Sh SEE ALSO
 .Pp
 .Xr radare2(1)

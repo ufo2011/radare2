@@ -1,13 +1,16 @@
-OBJ_VAX=asm_vax.o
-OBJ_VAX+=../arch/vax/vax-dis.o
+OBJ_VAXPSEUDO+=$(LIBR)/arch/p/vax/pseudo.o
 
-STATIC_OBJ+=${OBJ_VAX}
-TARGET_VAX=asm_vax.${EXT_SO}
+TARGET_VAXPSEUDO=parse_vax_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_VAXPSEUDO}
+STATIC_OBJ+=${OBJ_VAXPSEUDO}
 
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_VAX}
-
-${TARGET_VAX}: ${OBJ_VAX}
-	${CC} $(call libname,asm_vax) ${LDFLAGS} \
-		-I../arch/vax ${CFLAGS} -o asm_vax.${EXT_SO} ${OBJ_VAX}
+ifeq ($(CC),cccl)
+VAX_CFLAGS:=${CFLAGS}
+else
+VAX_CFLAGS:=${CFLAGS} ${LINK}
 endif
+
+${TARGET_VAXPSEUDO}: ${OBJ_VAXPSEUDO}
+	${CC} $(call libname,parse_vax_pseudo) -L../../util -llibr_util \
+		$(LDFLAGS_SHARED) ${VAX_CFLAGS} -o ${TARGET_VAXPSEUDO} ${OBJ_VAXPSEUDO}
+

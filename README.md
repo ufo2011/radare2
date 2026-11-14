@@ -1,110 +1,180 @@
-<img src="doc/images/r2emoji.png" alt="screenshot" align="left" width="128px">
+<a href="https://radare.org/"><img border=0 src="doc/images/r2emoji.png" alt="screenshot" align="left" width="128px"></a>
 
-## Radare2: Unix-Like Reverse Engineering Framework
+## Radare2: Libre Reversing Framework for Unix Geeks
 
-[![Tests Status](https://github.com/radareorg/radare2/workflows/CI/badge.svg?branch=master)](https://github.com/radareorg/radare2/actions/workflows/ci.yml?query=branch%3Amaster) [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/741/badge)](https://bestpractices.coreinfrastructure.org/projects/741) [![Build Status](https://scan.coverity.com/projects/416/badge.svg)](https://scan.coverity.com/projects/416) [![Total alerts](https://img.shields.io/lgtm/alerts/g/radareorg/radare2.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/radareorg/radare2/alerts/) [![TODO counter](https://img.shields.io/github/search/radareorg/radare2/TODO.svg)](https://github.com/radareorg/radare2/search?q=TODO) [![XXX counter](https://img.shields.io/github/search/radareorg/radare2/XXX.svg)](https://github.com/radareorg/radare2/search?q=XXX)
+[![Tests Status](https://github.com/radareorg/radare2/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/radareorg/radare2/actions/workflows/ci.yml?query=branch%3Amaster) [![build](https://github.com/radareorg/radare2/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/radareorg/radare2/actions/workflows/build.yml?query=branch%3Amaster) [![tcc](https://github.com/radareorg/radare2/actions/workflows/tcc.yml/badge.svg?branch=master)](https://github.com/radareorg/radare2/actions/workflows/tcc.yml)
+[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/741/badge)](https://bestpractices.coreinfrastructure.org/projects/741) [![Build Status](https://scan.coverity.com/projects/416/badge.svg)](https://scan.coverity.com/projects/416) [![Discord](https://badgen.net/discord/members/YBey7CR9jf)](https://discord.gg/YBey7CR9jf)
 
-Next release will be 5.5.0, current git is 5.4.3 and the [![latest packaged version(s)](https://repology.org/badge/latest-versions/radare2.svg)](https://repology.org/project/radare2/versions) See the [Release](https://github.com/radareorg/radare2/releases) downloads page.
+Current git `master` branch is `6.2.7`, next release will be `6.2.8`.
 
-r2 is a rewrite from scratch of radare. It provies a set of libraries, tools and
-plugins to ease reverse engineering tasks.
+### Description
 
-The radare project started as a simple command-line hexadecimal editor focused on
-forensics, over time more features were added to support a scriptable command-line
-low level tool to edit from local hard drives, kernel memory, programs, remote gdb
-servers and be able to analyze, emulate, debug, modify and disassemble any binary.
+r2 is a complete rewrite of radare. It provides a set of libraries, tools and
+plugins to ease reverse engineering tasks. Distributed under LGPLv3, despite
+each plugin can have different licenses (see `r2 -Lj` for details)
+
+The **radare** project started as a simple command-line hexadecimal editor
+focused on forensics. Today, r2 is a full-featured low-level command-line tool
+with support for scripting with the embedded Javascript interpreter or via r2pipe.
+
+r2 can edit files on local hard drives, view kernel memory, and debug programs
+locally or via a remote gdb/windbg servers. r2's wide architecture support allows
+you to analyze, emulate, debug, modify, and disassemble any binary.
 
 <p align="center">
 <a href="https://www.radare.org/"><img src="doc/images/shot.png" alt="screenshot" align="center" border=0 width="600px"></a>
 </p>
 
-* Install r2 from **Git** (Clone the repo and run `sys/install.sh`) or use `pip install r2env`
-* Read the [Official radare2 book](https://book.rada.re)
-* [COMMUNITY.md](COMMUNITY.md) engagement
-* [CONTRIBUTING.md](CONTRIBUTING.md) general rules
-* [DEVELOPERS.md](DEVELOPERS.md) to improve r2 for your needs
-* [SECURITY.md](SECURITY.md) on vulnerability report instructions
-* [USAGE.md](USAGE.md) for an introductory session
-* [INSTALL.md](INSTALL.md) instructions
+## Installation
 
-```
+Download the last [released](https://github.com/radareorg/radare2/releases) binaries.
+
+The recommended way to install radare2 is from Git repository source:
+
+```sh
 git clone https://github.com/radareorg/radare2
 radare2/sys/install.sh
 ```
 
-# Plugins
+* Run `sys/install.sh` for the default acr+make+symlink installation
+* meson/ninja (muon/samu also works) and make builds are supported.
 
-Most of the plugins you need may be available in the stock r2 installation,
-but you can find more in the [r2pm](https://github.com/radareorg/radare2-pm) package manager.
+### Nix
 
+radare2 provides Nix packaging under [`dist/nix`](dist/nix/README.md).
+
+### Source Build
+
+* r2 can be installed from `git` or via `pip` using `r2env`.
+* Windows builds require meson and msvc or mingw as compilers
+* To uninstall the current build of r2 run `make uninstall`
+* To uninstall ALL the system installations of r2 do: `sudo make purge`
+
+On Windows use the .bat scripts and msvc:
+
+```bat
+preconfigure.bat       REM setup python, meson, ninja
+configure.bat          REM run meson b + vs project
+make.bat               REM run ninja -C b
+prefix\bin\radare2.exe
 ```
-r2pm update          # initialize and update the package database
-r2pm install [pkg]   # installs the package
+
+## Popular Plugins:
+
+Using the `r2pm` tool you can browse and install many plugins and tools that use radare2.
+
+* [iaito](https://github.com/radareorg/iaito): The official Qt graphical interface
+* [keystone](https://github.com/radareorg/radare2-extras/tree/master/keystone) Assembler instructions using the Keystone library
+* [decai](https://github.com/radareorg/r2ai) Decompiler based on AI
+* [r2ai](https://github.com/radareorg/r2ai) Run a Language Model in localhost with Llama inside r2!
+* [r2dec](https://github.com/wargio/r2dec-js): A decompiler based on r2 written in JS, accessed with the `pdd` command
+* [r2diaphora](https://github.com/FernandoDoming/r2diaphora): [Diaphora](https://github.com/joxeankoret/diaphora)'s binary diffing engine on top of radare2
+* [r2flutter](https://github.com/trufae/r2flutter): Dart/Flutter AOT snapshot analysis for Android and iOS apps
+* [r2frida](https://github.com/nowsecure/r2frida): The frida io plugin. Start r2 with `r2 frida://0` to use it
+* [r2ghidra](https://github.com/radareorg/r2ghidra): The standalone native ghidra decompiler accessible with `pdg`
+* [r4ghidra](https://github.com/radareorg/r4ghidra): Feel the radare joy inside your Ghidra
+* [r2papi](https://github.com/radareorg/radare2-r2papi) High level api on top of r2pipe
+* [r2pipe](https://github.com/radareorg/radare2-r2pipe) Script radare2 from any programming language
+* [r2poke](https://github.com/radareorg/radare2-extras/tree/master/r2poke) Integration with GNU/Poke for extended binary parsing capabilities
+* [goresym](https://github.com/hanemile/radare2-GoReSym): Import GoReSym symbol as flags
+* [r2yara](https://github.com/radareorg/r2yara) Run Yara from r2 or use r2 primitives from Yara
+* [radius2](https://github.com/radareorg/radius2): A fast symbolic execution engine based on boolector and esil
+* [r2sarif](https://github.com/radareorg/r2sarif) import/extend/export SARIF documents
+* [r2hermes](https://github.com/radareorg/r2hermes) Disassembler and analyzer for React Native Hermes bytecode
+* [r2renef](https://github.com/Ahmeth4n/r2renef) Renef IO Plugin for Radare2 - Dynamic Android Instrumentation
+* [r2unity](https://github.com/radareorg/r2unity): Inspect Unity IL2CPP metadata and native binaries from radare2
+* [warrp](https://github.com/radareorg/warrp) Native radare2 plugin for the binary ninja's WARP format
+
+## Usage
+
+These are the first steps to use r2, read the book or find tutorials for more details
+
+```sh
+$ r2 /bin/ls   # open file in read-only
+> aaa          # analyse the program (r2 -A)
+> afl          # list all functions (try aflt, aflm)
+> px 32        # print 32 byte hexdump current block
+> s sym.main   # seek to main (using flag name)
+> f~foo        # filter flags matching 'foo' (internal |grep)
+> iS;is        # list sections and symbols (rabin2 -Ss)
+> pdf; agf     # disassembly and ascii-art function graph
+> oo+;w hello  # reopen in read-write and write a string
+> ?*~...       # interactive filter in all command help
+> q            # quit
 ```
 
-Some of the most installed packages are:
+Many plugins are included in r2 by default. But you can extend its capabilities
+by using the [r2pm](https://github.com/radareorg/radare2-pm) package manager.
 
-* [radius](https://github.com/aemmitt-ns/radius) fast symbolic execution engine based on boolector and r2
-* [r2ghidra](https://github.com/radareorg/r2ghidra) the native ghidra decompiler plugin: `pdg` command
-* [esilsolve](https://github.com/radareorg/esilsolve) symbolic execution r2 plugin based on esil and z3
-* [r2dec](https://github.com/wargio/r2dec-js) decompiler based on r2 written in js `pdd`
-* [r2frida](https://github.com/nowsecure/r2frida) the frida io plugin `r2 frida://0`
-* [iaito](https://github.com/radareorg/iaito) - official graphical interface (Qt)
+```sh
+r2pm -s <word>  # search packages matching a word
+r2pm -Uci <pkg> # update database and clean install a package
+r2pm -u <pkg>   # uninstall the given package
+r2pm -l <pkg>   # list installed packages
+```
+
+## Resources
+
+* [Official Book](https://book.rada.re): Read about r2 usage
+* [COMMUNITY.md](COMMUNITY.md): Community engagement and loose guidelines
+* [CONTRIBUTING.md](CONTRIBUTING.md): Information about reporting issues and
+  contributing. See also [Contributing](#contributing)
+* [DEVELOPERS.md](DEVELOPERS.md): Development guidelines for r2
+* [SECURITY.md](SECURITY.md): Instructions for reporting vulnerabilities
+* [USAGE.md](USAGE.md): Some example commands
+* [INSTALL.md](INSTALL.md): Installation instructions using make or meson
+
+## Documentation
+
+Learn more about r2 watching [youtube talks](https://www.youtube.com/c/r2con) from [r2con](https://rada.re/con). There are also many blogposts, slidedecks and the [official radare2 book](https://book.rada.re), but it's always a good idea to join any of the official chats and drop your questions or feedback there.
+
+## Community
+
+* Website: [https://www.radare.org/](https://www.radare.org/)
+* Discord: [Server](https://discord.gg/YBey7CR9jf)
+* Mastodon: [@radareorg](https://infosec.exchange/@radareorg)
+* Telegram: [Main](https://t.me/radare) and [Side](https://t.me/radare_side) channels
+* [irc.libera.chat](https://libera.chat): `#radare`, `#radare_side`
+* [Matrix](https://matrix.to/#/#radare:matrix.org): `#radare:matrix.org`
+
+# Supported Platforms
 
 ## Operating Systems
 
-Windows (since XP), Linux, Darwin, GNU/Hurd, Apple's {Mac,i,iPad,watch}OS, Android
-[Dragonfly, Net, Free, Open] BSD, Z/OS, QNX, SerenityOS, Solaris, Haiku, Vinix, FirefoxOS.
+Windows (since XP for x86/x64/arm64), Linux, Darwin, GNU/Hurd, Apple's {Mac,i,iPad,watch}OS,
+Android, Wasmer, [Dragonfly, Net, Free, Open] BSD, Z/OS, QNX, SerenityOS, Solaris, AIX,
+Haiku, Vinix, FirefoxOS.
 
 ## Architectures
 
-i386, x86-64, ARM, MIPS, PowerPC, SPARC, RISC-V, SH, m68k, m680x, AVR,
-XAP, S390, XCore, CR16, HPPA, ARC, Blackfin, Z80, H8/300, V810,
-V850, CRIS, XAP, PIC, LM32, 8051, 6502, i4004, i8080, Propeller,
-Tricore, CHIP-8, LH5801, T8200, GameBoy, SNES, SPC700, MSP430, Xtensa,
-NIOS II, Java, Dalvik, WebAssembly, MSIL, EBC, TMS320 (c54x, c55x,
-c55+, c66), Hexagon, Brainfuck, Malbolge, whitespace, DCPU16, LANAI,
-MCORE, mcs96, RSP, SuperH-4, VAX, AMD Am29000.
+i386, x86-64, Alpha, ARM, AVR, BPF, sBPF, MIPS, PowerPC, SPARC, RISC-V, SH, m68k,
+S390, XCore, CR16, HPPA, ARC, Blackfin, Z80, H8/300, V810, PDP11, m680x, V850,
+CRIS, XAP (CSR), PIC, LM32, 8051, 6502, i4004, i8080, Propeller, EVM, OR1K
+Tricore, CHIP-8, LH5801, T8200, GameBoy, SNES, SPC700, MSP430, Xtensa, xcore,
+NIOS II, Java, Dalvik, Pickle, WebAssembly, MSIL, EBC, TMS320 (c54x, c55x,
+c55+, c64x), Hexagon, Brainfuck, Malbolge, whitespace, DCPU16, LANAI, lm32,
+MSIL, InfernoDis, UXN, Cosmac, PythonBytecode, Sharp sm5xx MCPus, FreeScale QIQa,
+MCORE, mcs96, RSP, SuperH-4, VAX, KVX, Am29000, LOONGARCH, JDH8, s390x, STM8, Epson E0C62.
 
 ## File Formats
 
-ELF, Mach-O, Fatmach-O, PE, PE+, MZ, COFF, OMF, TE, XBE, BIOS/UEFI,
-Dyldcache, DEX, ART, CGC, Java class, Android boot image, Plan9 executable,
-ZIMG, MBN/SBL bootloader, ELF coredump, MDMP (Windows minidump),
-WASM (WebAssembly binary), Commodore VICE emulator, QNX, WAD, OFF, TIC-80
-Game Boy (Advance), Nintendo DS ROMs and Nintendo 3DS FIRMs, various filesystems.
+ELF, Mach-O, Fatmach-O, PE, PE+, MZ, COFF, XCOFF, OMF, TE, XBE, SEP64, BIOS/UEFI, BFLT, Pebble apps,
+Apple Dyldcache, Kernelcache, MCLF trustlets, DEX, ART, Java class, Android boot image, Plan9 executables, Amiga HUNK,
+ZIMG, MBN/SBL bootloader, ELF coredump, MDMP (Windows minidump), PDP11, XTAC, CGC, DotNet,
+WASM (WebAssembly binary), Commodore VICE emulator, DOL, QNX, WAD, OFF, TIC-80,
+GB/GBA, PSX, PRG (C64), Apple Classic PEF, NDS, z64, and N3DS
+...
 
-# Contributing
+## FileSystems
 
-There are many ways to contribute to the project, join the IRC/Matrix/Telegram
-channels, check out the github issues or grep for the TODO comments in the source.
-To contribute with code, create a branch in your forked repository and push
-a pull request, follow the coding style and ensure it passes the tests with
-the `r2r` tool to run the tests that are under the `tests/` subdirectory.
-
-For more details read the [CONTRIBUTING.md](CONTRIBUTING.md) file.
-
-## Community and Documentation
-
-To learn more about r2 we encourage you to watch youtube talks from
-[r2con](https://www.youtube.com/c/r2con) [conference](https://rada.re/con). As well as reading blogposts,
-slides or read the [Official radare2 book](https://book.rada.re), You can reach us in the following chats:
-
-* irc.libera.chat `#radare` `#radare_side`
-* [Matrix](https://matrix.org/) `#radare:matrix.org`
-* [Telegram](https://t.me/radare) and the [Side Channel](https://t.me/radare_side)
-* [Discord](https://discord.gg/MgEdxrMnqx) server
-* Twitter: [@radareorg](https://twitter.com/radareorg)
-* Website: [https://www.radare.org/](https://www.radare.org/)
+Mount in userland several filesystems like NTFS, FAT, HFS+, EXT, APFS, BeosFS, BFS, MINIX, ReiserFS, SFS, ubifs, ufs, jfs, ISO9660, UDF, xfs
 
 ## Packaging Status
 
+* [![Snap package](https://snapcraft.io/radare2/badge.svg)](https://snapcraft.io/radare2)
 * [![Termux package](https://repology.org/badge/version-for-repo/termux/radare2.svg)](https://repology.org/project/radare2/versions)
-* [![Alpine Linux Edge package](https://repology.org/badge/version-for-repo/alpine_edge/radare2.svg)](https://repology.org/project/radare2/versions) [![Alpine Linux 3.13 package](https://repology.org/badge/version-for-repo/alpine_3_13/radare2.svg)](https://repology.org/project/radare2/versions) [![Alpine Linux 3.12 package](https://repology.org/badge/version-for-repo/alpine_3_12/radare2.svg)](https://repology.org/project/radare2/versions)
-* [![Arch package](https://repology.org/badge/version-for-repo/arch/radare2.svg)](https://repology.org/project/radare2/versions) [![AUR package](https://repology.org/badge/version-for-repo/aur/radare2.svg)](https://repology.org/project/radare2/versions)
-* [![Fedora 34 package](https://repology.org/badge/version-for-repo/fedora_34/radare2.svg)](https://repology.org/project/radare2/versions) [![Fedora 32 package](https://repology.org/badge/version-for-repo/fedora_32/radare2.svg)](https://repology.org/project/radare2/versions)
-* [![FreeBSD port](https://repology.org/badge/version-for-repo/freebsd/radare2.svg)](https://repology.org/project/radare2/versions) [![OpenBSD port](https://repology.org/badge/version-for-repo/openbsd/radare2.svg)](https://repology.org/project/radare2/versions) [![pkgsrc current package](https://repology.org/badge/version-for-repo/pkgsrc_current/radare2.svg)](https://repology.org/project/radare2/versions)
+* [![Alpine Linux 3.23 package](https://repology.org/badge/version-for-repo/alpine_3_23/radare2.svg)](https://repology.org/project/radare2/versions)  [![Alpine Linux 3.22 package](https://repology.org/badge/version-for-repo/alpine_3_22/radare2.svg)](https://repology.org/project/radare2/versions) 
+* [![Arch package](https://repology.org/badge/version-for-repo/arch/radare2.svg)](https://repology.org/project/radare2/versions)
+* [![Fedora 42](https://repology.org/badge/version-for-repo/fedora_42/radare2.svg)](https://repology.org/project/radare2/versions) [![Fedora 41](https://repology.org/badge/version-for-repo/fedora_41/radare2.svg)](https://repology.org/project/radare2/versions)
 * [![Homebrew package](https://repology.org/badge/version-for-repo/homebrew/radare2.svg)](https://repology.org/project/radare2/versions) [![MacPorts package](https://repology.org/badge/version-for-repo/macports/radare2.svg)](https://repology.org/project/radare2/versions)
-* [![HaikuPorts master package](https://repology.org/badge/version-for-repo/haikuports_master/radare2.svg)](https://repology.org/project/radare2/versions)
-* [![Ubuntu 20.10 package](https://repology.org/badge/version-for-repo/ubuntu_20_10/radare2.svg)](https://repology.org/project/radare2/versions) [![Ubuntu 20.04 package](https://repology.org/badge/version-for-repo/ubuntu_20_04/radare2.svg)](https://repology.org/project/radare2/versions) [![Ubuntu 18.04 package](https://repology.org/badge/version-for-repo/ubuntu_18_04/radare2.svg)](https://repology.org/project/radare2/versions)
-* [![Debian Unstable package](https://repology.org/badge/version-for-repo/debian_unstable/radare2.svg)](https://repology.org/project/radare2/versions) [![Raspbian Stable package](https://repology.org/badge/version-for-repo/raspbian_stable/radare2.svg)](https://repology.org/project/radare2/versions) [![Kali Linux Rolling package](https://repology.org/badge/version-for-repo/kali_rolling/radare2.svg)](https://repology.org/project/radare2/versions)
+* [![Haiku Ports](https://repology.org/badge/version-for-repo/haikuports_master/radare2.svg)](https://repology.org/project/radare2/versions) [![Void Linux](https://repology.org/badge/version-for-repo/void_x86_64/radare2.svg)](https://repology.org/project/radare2/versions)

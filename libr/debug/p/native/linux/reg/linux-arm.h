@@ -16,19 +16,19 @@ return strdup (
 "gpr	cpsr	.32	64	0	____tfiae_________________qvczn\n" // CSPR
 "gpr	or0	.32	68	0\n" // r17 aka ORIG_r0
 // cpsr is at .512
-"gpr	tf	.1	64.5	0	thumb\n"
-"gpr	ef	.1	64.9	0	endian\n"
+"flg	tf	.1	64.5	0	thumb\n"
+"flg	ef	.1	64.9	0	endian\n"
 // ...
-"gpr	jf	.1	64.24	0	java\n"
+"flg	jf	.1	64.24	0	java\n"
 // ...
-"gpr	qf	.1	64.27	0	sticky_overflow\n" // +27
-"gpr	vf	.1	64.28	0	overflow\n" // +28
-"gpr	cf	.1	64.29	0	carry\n" // +29
-"gpr	zf	.1	64.30	0	zero\n" // +30
-"gpr	nf	.1	64.31	0	negative\n" // +31
+"flg	qf	.1	64.27	0	sticky_overflow\n" // +27
+"flg	vf	.1	64.28	0	overflow\n" // +28
+"flg	cf	.1	64.29	0	carry\n" // +29
+"flg	zf	.1	64.30	0	zero\n" // +30
+"flg	nf	.1	64.31	0	negative\n" // +31
 // if-then-counter
-"gpr	itc	.4	64.10	0	if_then_count\n" // +10
-"gpr	gef	.4	64.16	0	great_or_equal\n" // +16
+"flg	itc	.4	64.10	0	if_then_count\n" // +10
+"flg	gef	.4	64.16	0	great_or_equal\n" // +16
 
 "gpr	r0	.32	0	0\n"
 "gpr	r1	.32	4	0\n"

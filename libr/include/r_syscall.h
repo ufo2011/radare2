@@ -9,7 +9,7 @@ extern "C" {
 
 #include <r_types.h>
 #include <r_util.h>
-#include <sdb.h>
+#include <sdb/sdb.h>
 
 R_LIB_VERSION_HEADER (r_syscall);
 
@@ -34,13 +34,13 @@ typedef struct r_syscall_t {
 	char *arch;
 	char *os;
 	int bits;
+	int refs;
 	char *cpu;
 	// database
 	RSyscallItem *sysptr;
 	RSyscallPort *sysport;
 	Sdb *db;
 	Sdb *srdb;
-	int refs;
 } RSyscall;
 
 #if 0

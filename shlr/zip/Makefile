@@ -1,36 +1,26 @@
-NAME=rz
-LIBAR=librz.$(EXT_AR)
+# shlr/zip build configuration
+# There is no bundled libzip or zlib - only system libzip is supported
 
 include ../../config-user.mk
 include ../../libr/config.mk
 include ../../mk/platform.mk
 include ../../mk/$(COMPILER).mk
 include ../../shlr/sdb.mk
+SHLR?=..
 
-ifeq ($(USE_LIB_ZIP),1)
-all:
+pre: all
+
+include deps.mk
+
+all: $(OTEZIP_LIBA)
 	rm -f librz.$(EXT_AR)
+ifneq ($(WANT_ZIP),1)
+	@echo zip support disabled
 else
-
-LIBAR=librz.$(EXT_AR)
-RANLIB?=ranlib
-
-all: $(LIBAR)
-
-$(LIBAR): zip/libr_zip.$(EXT_AR)
-	@echo ${CC_AR} zlib/*.o zip/*.o
-	${CC_AR} zlib/*.o zip/*.o
-	@echo $(RANLIB) librz.$(EXT_AR)
-	$(RANLIB) librz.$(EXT_AR)
-
-zip/libr_zip.$(EXT_AR): zlib/libr_z.$(EXT_AR)
-	$(MAKE) -C zip
-
-zlib/libr_z.$(EXT_AR):
-	$(MAKE) -C zlib
+ifeq ($(USE_LIB_ZIP),1)
+	@echo no bundled zip to build
+endif
+endif
 
 clean:
-	$(MAKE) -C zlib clean
-	$(MAKE) -C zip clean
-	rm -f *.$(EXT_AR) *.${EXT_SO} zlib/*.$(EXT_AR) zip/*.$(EXT_AR)
-endif
+	rm -f *.$(EXT_AR) *.${EXT_SO} $(OTEZIP_LIBA)

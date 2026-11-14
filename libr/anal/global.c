@@ -1,38 +1,74 @@
-/* radare - LGPL - Copyright 2021 - pancake */
+/* radare - LGPL - Copyright 2021-2026 - pancake */
 
 #include <r_anal.h>
-#include <r_util/r_print.h>
 
+// R2R db/anal/globals
 #define GLOBAL_FLAGSPACE "globals"
 
+static void global_clear_inference(RAnal *anal, ut64 addr) {
+	sdb_unsetf (anal->sdb, 0, "global.inferred.0x%" PFMT64x, addr);
+	sdb_unsetf (anal->sdb, 0, "global.semantic.0x%" PFMT64x, addr);
+	sdb_unsetf (anal->sdb, 0, "global.layout.0x%" PFMT64x, addr);
+}
+
 R_API RFlagItem *r_anal_global_get(RAnal *anal, ut64 addr) {
-	RFlag *flags = anal->flb.f;
-	RFlagItem *fi = r_flag_get_i (flags, addr);
-	if (fi && fi->space && fi->space->name && !strcmp (fi->space->name, GLOBAL_FLAGSPACE)) {
-		return fi;
-	}
-	return NULL;
+	R_RETURN_VAL_IF_FAIL (anal && anal->flb.f, NULL);
+	return r_flag_get_by_spaces (anal->flb.f, false, addr, GLOBAL_FLAGSPACE, NULL);
 }
 
 R_API bool r_anal_global_add(RAnal *anal, ut64 addr, const char *type_name, const char *name) {
+	R_RETURN_VAL_IF_FAIL (anal && anal->flb.f && R_STR_ISNOTEMPTY (name), false);
 	RFlag *flags = anal->flb.f;
-	char *fmtstr = r_type_format (anal->sdb_types, type_name);
-	if (!fmtstr) {
-		eprintf ("Unknown type\n");
+	char *filtered_name = NULL;
+	if (!r_name_check (name)) {
+		filtered_name = strdup (name);
+		if (!filtered_name) {
+			return false;
+		}
+		r_str_trim (filtered_name);
+		r_name_filter (filtered_name, 0);
+	}
+	RFlagItem *named = r_flag_get (flags, filtered_name? filtered_name: name);
+	ut64 flag_addr = (flags->mask? addr & flags->mask: addr) + flags->base;
+	RFlagItem *global = r_anal_global_get (anal, flag_addr);
+	bool collision = (global && global != named)
+		|| (named && (named->addr != flag_addr
+			|| (named->space && strcmp (named->space->name, GLOBAL_FLAGSPACE))));
+	free (filtered_name);
+	if (collision) {
+		R_LOG_ERROR ("Global name or address is already occupied: %s", name);
 		return false;
 	}
-	int fmtsize = r_print_format_struct_size (anal->print, fmtstr, 0, 0);
-	if (fmtsize < 1) {
-		fmtsize = 4;
+	ut64 size = type_name? r_anal_type_bitsize (anal, type_name) / 8: 0;
+	ut64 end;
+	if (type_name && (!size || size > UT32_MAX || r_add_overflow (addr, size - 1, &end))) {
+		R_LOG_ERROR ("Unknown or oversized global type: %s", type_name);
+		return false;
 	}
-	// check if type exist
-	RFlagItem *fi = r_flag_set_inspace (flags, GLOBAL_FLAGSPACE, name, addr, 1);
-	if (fi) {
-		r_flag_item_set_type (fi, fmtstr);
+	char *type = type_name? strdup (type_name): NULL;
+	if (type_name && !type) {
+		return false;
 	}
-	r_meta_set (anal, R_META_TYPE_FORMAT, addr, fmtsize, fmtstr);
-	// implicit 
-	r_type_set_link (anal->sdb_types, fmtstr, addr);
+	RFlagItem *fi = r_flag_set_inspace (flags, GLOBAL_FLAGSPACE, name, addr, size);
+	if (!fi) {
+		free (type);
+		return false;
+	}
+	fi->space = r_flag_space_get (flags, GLOBAL_FLAGSPACE);
+	addr = fi->addr;
+	if (type) {
+		global_clear_inference (anal, addr);
+		r_flag_item_set_type (flags, fi, type);
+		char *fmtstr = r_type_format (anal->sdb_types, type);
+		r_meta_del (anal, R_META_TYPE_FORMAT, addr, 0);
+		if (fmtstr) {
+			r_meta_set (anal, R_META_TYPE_FORMAT, addr, size, fmtstr);
+			free (fmtstr);
+		}
+		r_anal_types_unlink (anal, addr);
+		r_anal_types_set_link (anal, type, addr);
+	}
+	free (type);
 	return true;
 }
 
@@ -40,19 +76,21 @@ R_API bool r_anal_global_del(RAnal *anal, ut64 addr) {
 	RFlagItem *fi = r_anal_global_get (anal, addr);
 	if (fi) {
 		RFlag *flags = anal->flb.f;
+		addr = fi->addr;
+		global_clear_inference (anal, addr);
 		r_meta_del (anal, R_META_TYPE_FORMAT, addr, 0);
 		r_flag_unset (flags, fi);
-		r_type_unlink (anal->sdb_types, addr);
+		r_anal_types_unlink (anal, addr);
 		return true;
 	}
 	return false;
 }
 
 R_API bool r_anal_global_retype(RAnal *anal, ut64 addr, const char *new_type) {
+	R_RETURN_VAL_IF_FAIL (anal && R_STR_ISNOTEMPTY (new_type), false);
 	RFlagItem *fi = r_anal_global_get (anal, addr);
 	if (fi) {
-		r_flag_item_set_type (fi, new_type);
-		return true;
+		return r_anal_global_add (anal, fi->addr - anal->flb.f->base, new_type, fi->name);
 	}
 	return false;
 }
@@ -60,9 +98,7 @@ R_API bool r_anal_global_retype(RAnal *anal, ut64 addr, const char *new_type) {
 R_API bool r_anal_global_rename(RAnal *anal, ut64 addr, const char *new_name) {
 	RFlagItem *fi = r_anal_global_get (anal, addr);
 	if (fi) {
-		RFlag *flags = anal->flb.f;
-		r_flag_rename (flags, fi, new_name);
-		return true;
+		return r_flag_rename (anal->flb.f, fi, new_name);
 	}
 	return false;
 }
@@ -70,7 +106,11 @@ R_API bool r_anal_global_rename(RAnal *anal, ut64 addr, const char *new_name) {
 R_API const char *r_anal_global_get_type(RAnal *anal, ut64 addr) {
 	RFlagItem *fi = r_anal_global_get (anal, addr);
 	if (fi) {
-		return fi->type;
+		RFlag *flags = anal->flb.f;
+		RFlagItemMeta *fim = r_flag_get_meta (flags, fi->id);
+		if (fim) {
+			return fim->type;
+		}
 	}
 	return NULL;
 }

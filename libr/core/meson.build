@@ -1,42 +1,21 @@
-r_core_sources = [
-  'rvc.c',
-  'anal_tp.c',
+
+r_core_sources += [
   'anal_objc.c',
   'casm.c',
+  'vmatrix.c',
   'cproject.c',
-  'blaze.c',
+  'clist.c',
+  'prompt.c',
   'citem.c',
   'canal.c',
   'carg.c',
   'cbin.c',
+  'cmd_print_list.c',
   'cconfig.c',
   'cio.c',
+  'core_esil.c',
   'cmd.c',
-  #'cmd_anal.c',
   'cmd_api.c',
-  #'cmd_cmp.c',
-  #'cmd_debug.c',
-  #'cmd_egg.c',
-  #'cmd_eval.c',
-  #'cmd_flag.c',
-  #'cmd_hash.c',
-  #'cmd_help.c',
-  #'cmd_info.c',
-  #'cmd_log.c',
-  #'cmd_macro.c',
-  #'cmd_magic.c',
-  #'cmd_meta.c',
-  #'cmd_mount.c',
-  #'cmd_open.c',
-  #'cmd_print.c',
-  #'cmd_project.c',
-  #'cmd_quit.c',
-  #'cmd_search.c',
-  #'cmd_search_rop.c',
-  #'cmd_seek.c',
-  #'cmd_type.c',
-  #'cmd_write.c',
-  #'cmd_zign.c',
   'core.c',
   'cundo.c',
   'disasm.c',
@@ -45,18 +24,18 @@ r_core_sources = [
   'gdiff.c',
   'zdiff.c',
   'agraph.c',
-  'hack.c',
   'libs.c',
-  #'linux_heap_glibc.c',
+  #'dmh_glibc.c',
+  #'dmh_jemalloc.c',
+  #'dmh_macos.c',
+  #'dmh_windows.c',
   'corelog.c',
   'panels.c',
   'patch.c',
+  'xpatch.c',
   'cplugin.c',
   'project.c',
-  'pseudo.c',
   'rtr.c',
-  #'rtr_http.c',
-  #'rtr_shell.c',
   'task.c',
   'vasm.c',
   'visual.c',
@@ -66,22 +45,39 @@ r_core_sources = [
   'vmenus_graph.c',
   'vmenus_zigns.c',
   'yank.c',
-  'p/core_a2f.c',
-  'p/core_sixref.c',
+  'p/core_agD.c',
+  'p/pseudo/plugin.c',
+  'p/pseudo/pdc_ast.c',
+  'p/pseudo/pdc_opt.c',
+  'p/pseudo/pseudo.c',
+  'p/core_writedwarf.c',
+  'p/core_prj.c',
   'p/core_java.c'
 ]
 
-r_core_inc = []
-if host_machine.system() == 'windows'
-  r_core_sources += 'windows_heap.c'
+r_core_sources += r_core_additional_sources
+
+if get_option('want_panels')
+  r_core_sources += [ 'p/panels/plugin.c' ]
 endif
-r_core_inc = [platform_inc, include_directories(r_core_inc)]
+if get_option('want_mmc')
+  r_core_sources += [ 'p/mmc/plugin.c' ]
+endif
+
+r_core_inc = [
+  'i/heap/jemalloc',
+  'i/heap/windows',
+  '../xps'
+]
+r_core_inc = [r_core_additional_inc, platform_inc, include_directories(r_core_inc)]
 
 r_core_deps = [
   r_util_dep,
   r_reg_dep,
   r_syscall_dep,
   r_search_dep,
+  r_arch_dep,
+  r_esil_dep,
   r_cons_dep,
   r_anal_dep,
   r_socket_dep,
@@ -89,12 +85,10 @@ r_core_deps = [
   r_fs_dep,
   r_lang_dep,
   r_magic_dep,
-  r_hash_dep,
   r_flag_dep,
-  r_parse_dep,
   r_egg_dep,
   r_debug_dep,
-  r_crypto_dep,
+  r_muta_dep,
   r_config_dep,
   r_bin_dep,
   r_asm_dep,
@@ -108,6 +102,7 @@ r_core_deps = [
 if use_libuv
   r_core_deps += libuv_dep
 endif
+r_core_deps += r_core_additional_deps
 
 r_core = library('r_core', r_core_sources,
   include_directories: r_core_inc,
@@ -121,6 +116,47 @@ r_core = library('r_core', r_core_sources,
 
 r_core_dep = declare_dependency(link_with: r_core, include_directories: r_core_inc)
 
+if get_option('blob')
+
+r_core_static_deps = [
+  gdb_static_dep,
+  java_static_dep,
+  lrt,
+  platform_deps,
+  r_anal_static_dep,
+  r_arch_static_dep,
+  r_asm_static_dep,
+  r_bin_static_dep,
+  r_bp_static_dep,
+  r_config_static_dep,
+  r_cons_static_dep,
+  r_muta_static_dep,
+  r_debug_static_dep,
+  r_egg_static_dep,
+  r_esil_static_dep,
+  r_flag_static_dep,
+  r_fs_static_dep,
+  r_io_static_dep,
+  r_lang_static_dep,
+  r_magic_static_dep,
+  r_reg_static_dep,
+  r_search_static_dep,
+  r_socket_static_dep,
+  r_syscall_static_dep,
+  r_util_static_dep,
+  r_core_additional_deps,
+]
+r_core_static = static_library('r_core_static', r_core_sources,
+  include_directories: r_core_inc,
+  c_args: library_cflags,
+  dependencies: r_core_static_deps,
+  install: true,
+  implicit_include_directories: false,
+)
+r_core_static_dep = declare_dependency(link_with: r_core_static,
+  include_directories: r_core_inc)
+endif
+
 pkgconfig_mod.generate(
   r_core,
   subdirs: 'libr',
@@ -129,26 +165,26 @@ pkgconfig_mod.generate(
   filebase: 'r_core',
   libraries: pkgcfg_sanitize_libs,
   requires: pkgconfig_magic_requires + [
-    'r_util',
-    'r_reg',
-    'r_syscall',
-    'r_search',
-    'r_cons',
     'r_anal',
-    'r_socket',
-    'r_io',
-    'r_fs',
-    'r_lang',
-    'r_hash',
-    'r_flag',
-    'r_parse',
-    'r_egg',
-    'r_debug',
-    'r_crypto',
-    'r_config',
-    'r_bin',
+    'r_arch',
     'r_asm',
-    'r_bp'
+    'r_bin',
+    'r_bp',
+    'r_config',
+    'r_cons',
+    'r_muta',
+    'r_debug',
+    'r_egg',
+    'r_esil',
+    'r_flag',
+    'r_fs',
+    'r_io',
+    'r_lang',
+    'r_reg',
+    'r_search',
+    'r_socket',
+    'r_syscall',
+    'r_util',
   ],
   description: 'radare foundation libraries'
 )

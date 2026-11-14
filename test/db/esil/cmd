@@ -1,0 +1,240 @@
+NAME=cmd.esil.trap
+FILE=-
+CMDS=<<EOF
+e cmd.esil.trap=?e hello world
+ae 2,1,TRAP
+EOF
+EXPECT=<<EOF
+hello world 1 2
+EOF
+RUN
+
+NAME=cmd.esil.trap via invalid pc
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e cmd.esil.trap=?e its a trap
+dr PC=0xdeadbeef
+aes
+EOF
+EXPECT=<<EOF
+its a trap 3735928559 3735928559
+EOF
+EXPECT_ERR=<<EOF
+ERROR: ESIL stopped at 0xdeadbeef: execute error (execute-err at 0xdeadbeef)
+EOF
+RUN
+
+NAME=cmd.esil.trap via invalid op
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e cmd.esil.trap=?e its a trap
+e io.cache=1
+wx ffffffffffffffffffffffffffffffffffffffff
+ao~type
+aes
+EOF
+EXPECT=<<EOF
+type: ill
+its a trap 0 7
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=aesu steps over invalid op by default
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e io.cache=1
+wx 9006909090
+aesu 0x4
+dr rip
+EOF
+EXPECT=<<EOF
+0x00000004
+EOF
+RUN
+
+NAME=aesu stops on invalid op with breakoninvalid
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e io.cache=1
+e esil.breakoninvalid=1
+wx 9006909090
+aesu 0x4
+dr rip
+EOF
+EXPECT=<<EOF
+0x00000001
+EOF
+EXPECT_ERR=<<EOF
+ERROR: ESIL stopped at 0x00000001: invalid instruction (invalid)
+EOF
+RUN
+
+NAME=aec stops at unmapped pc
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e esil.maxsteps=4
+omv 1 0x1000
+aei
+dr rip=0
+aec
+dr rip
+diq
+EOF
+EXPECT=<<EOF
+0x00000000
+segfault at 0x00000000
+EOF
+EXPECT_ERR=<<EOF
+ERROR: ESIL stopped at 0x00000000: execute error (execute-err at 0x00000000)
+EOF
+RUN
+
+NAME=cmd.esil.trap hint TRAP
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e cmd.esil.trap=?e its a trap
+ahe TRAP
+aes
+EOF
+EXPECT=<<EOF
+its a trap 0 7
+EOF
+RUN
+
+NAME=cmd.esil.intr
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx cd21
+e cmd.esil.intr=?e its an intr
+aes
+EOF
+EXPECT=<<EOF
+its an intr 33 0
+EOF
+RUN
+
+NAME=cmd.esil.ioer
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 8900  # mov dword [rax], eax
+e cmd.esil.ioer=?e its an ioer
+aer rax=0xdeadbeef
+aes
+EOF
+EXPECT=<<EOF
+its an ioer 0 0
+its an ioer 0 0
+its an ioer 0 1
+EOF
+EXPECT_ERR=<<EOF
+ERROR: ESIL stopped at 0x00000000: write error (write-err at 0xdeadbeef)
+EOF
+RUN
+
+NAME=esil.iotrap traps invalid writes
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 8900  # mov dword [rax], eax
+e cmd.esil.trap=?e trapped
+aer rax=0xdeadbeef
+aes
+EOF
+EXPECT=<<EOF
+trapped 0 3735928559
+EOF
+EXPECT_ERR=<<EOF
+ERROR: ESIL stopped at 0x00000000: write error (write-err at 0xdeadbeef)
+EOF
+RUN
+
+NAME=esil.iotrap=0 ignores invalid writes
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 8900  # mov dword [rax], eax
+e esil.iotrap=0
+e cmd.esil.trap=?e trapped
+aer rax=0xdeadbeef
+aes
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=cmd.esil.pin
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 90
+e cmd.esil.pin=?e pin triggered
+aep 0x1337
+aes
+EOF
+EXPECT=<<EOF
+pin triggered 0x1337
+EOF
+RUN
+
+NAME=cmd.esil.step
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 90
+e cmd.esil.step=?e step triggered
+aes
+EOF
+EXPECT=<<EOF
+step triggered 0 0
+EOF
+RUN
+
+NAME=cmd.esil.stepout
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 90
+e cmd.esil.stepout=?e stepout triggered
+aes
+EOF
+EXPECT=<<EOF
+stepout triggered 0 0
+EOF
+RUN
+
+NAME=ae???j native and body fields
+FILE=-
+CMDS=<<EOF
+ae???j~{}~&"body": "1,+"
+ae???j~{}~&info,"1,+"~?
+?vi `ae???j~{}~&"native",false~?` - `ae???j~{}~"body"~?`
+?vi `ae???j~{}~&"native",true~?` + `ae???j~{}~&"native",false~?` - `ae???j~{}~"name"~?`
+ae???j~{}~&type,"math":0
+ae???j~{=}~memr+memw[-1]:0
+ae???~^: ++ (1
+ae???~^: + (2
+ae???~^: = (2
+ae???~^: += (2
+EOF
+EXPECT=<<EOF
+    "body": "1,+",
+0
+0
+0
+    "type": "math",
+"math+memr+memw"
+: ++ (1 -- 1) \ 1,+ (math)
+: + (2 -- 1) \  (math)
+: = (2 -- 0) \  (regw)
+: += (2 -- 0) \ DUP,ROT,SWAP,+,SWAP,= (math+regw)
+EOF
+RUN

@@ -1,21 +1,12 @@
-/* radare - LPGL - Copyright 2017-2020 condret */
+/* radare - LPGL - Copyright 2017-2025 - condret */
 
-#include <r_lib.h>
-#include <r_core.h>
 #include <r_lang.h>
 
-static bool lang_lib_init(RLang *user) {
-	return true;
-}
-
-static bool lang_lib_file_run(RLang *user, const char *file) {
-	char *libpath;
+static bool lang_lib_file_run(RLangSession *user, const char *file) {
+	char *libpath = r_file_abspath (file);
 	void *lib;
-	if (!(libpath = r_str_new (file))) {
+	if (!libpath) {
 		return false;
-	}
-	if (!r_str_startswith (libpath, "/") && !r_str_startswith (libpath, "./")) {
-		libpath = r_str_prepend (libpath, "./");
 	}
 	if (!r_file_exists (libpath)) {
 		if (!r_str_endswith (libpath, R_LIB_EXT)) {
@@ -25,16 +16,22 @@ static bool lang_lib_file_run(RLang *user, const char *file) {
 	if (!r_file_exists (libpath)) {
 		free (libpath);
 		return false;
-	}	
-	
-	lib = r_lib_dl_open (libpath);
+	}
+
+	lib = r_lib_dl_open (libpath, false);
 	if (lib) {
 		void (*fcn)(RCore *);
 		fcn = r_lib_dl_sym (lib, "entry");
 		if (fcn) {
-			fcn (user->user);
+			fcn (user->user_data);
 		} else {
-			eprintf ("Cannot find 'entry' symbol in library\n");
+			void *rp = r_lib_dl_sym (lib, "radare_plugin");
+			if (rp) {
+				RCore *core = user->lang->user;
+				user->lang->cmdf (core, "'L %s", libpath);
+			} else {
+				R_LOG_ERROR ("Cannot find 'entry' or 'radare_plugin' symbols in library");
+			}
 		}
 		r_lib_dl_close (lib);
 	}
@@ -43,10 +40,12 @@ static bool lang_lib_file_run(RLang *user, const char *file) {
 }
 
 static RLangPlugin r_lang_plugin_lib = {
-	.name = "lib",
+	.meta = {
+		.name = "lib",
+		.author = "pancake",
+		.desc = "Load libs directly into r2",
+		.license = "MIT",
+	},
 	.ext = R_LIB_EXT,
-	.desc = "Load libs directly into r2",
-	.license = "LGPL",
-	.init = lang_lib_init,
 	.run_file = lang_lib_file_run,
 };

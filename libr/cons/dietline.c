@@ -1,16 +1,15 @@
-/* radare - LGPL - Copyright 2007-2021 - pancake */
+/* radare - LGPL - Copyright 2007-2025 - pancake */
 /* dietline is a lightweight and portable library similar to GNU readline */
 
+#include "r_util/r_str_util.h"
 #include <r_cons.h>
 #include <r_core.h>
-#include <string.h>
-#include <stdlib.h>
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 #include <windows.h>
-#define printf(...) r_cons_win_printf (false, __VA_ARGS__)
+#define printf(...) r_cons_win_printf(r_cons_singleton(), false, __VA_ARGS__)
 #define USE_UTF8 1
-static int r_line_readchar_win(ut8 *s, int slen);
+static int r_line_readchar_win(RCons *cons, ut8 *s, int slen);
 #else
 #include <sys/ioctl.h>
 #ifndef HAVE_PTY
@@ -20,21 +19,27 @@ static int r_line_readchar_win(ut8 *s, int slen);
 #define USE_UTF8 1
 #endif
 
-static char *r_line_nullstr = "";
-static const char word_break_characters[] = "\t\n ~`!@#$%^&*()-_=+[]{}\\|;:\"'<>,./";
+static const char word_break_characters[] = "\t\r\n ~`!@#$%^&*()-=+[]{}\\|;:\"'<>,./";
 
+typedef struct {
+	bool enable_yank_pop;
+	bool yank_flag;
+	int gcomp;
+	int count;
+	int gcomp_idx;
+} Dietline;
+
+static R_TH_LOCAL Dietline D = { 0 };
 
 typedef enum {
 	MINOR_BREAK,
 	MAJOR_BREAK
 } BreakMode;
 
-bool enable_yank_pop = false;
-
-static inline bool is_word_break_char(char ch, bool mode) {
+static inline bool is_word_break_char(char ch, BreakMode mode) {
 	int i;
 	if (mode == MAJOR_BREAK) {
-		return ch == ' ';
+		return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
 	}
 	int len =
 		sizeof (word_break_characters) /
@@ -47,122 +52,385 @@ static inline bool is_word_break_char(char ch, bool mode) {
 	return false;
 }
 
+static bool drain_csi_sequence(RCons *cons) {
+	R_RETURN_VAL_IF_FAIL (cons, false);
+	int ch;
+	for (;;) {
+		ch = r_cons_readchar (cons);
+		if (ch < 20) {
+			return false;
+		}
+		// check if it's a CSI terminator character
+		if (ch >= '@' && ch <= '~') {
+			break;
+		}
+	}
+	return true;
+}
+
+static bool read_sgr_mouse_param(RCons *cons, char *buf, size_t buf_len, int *end) {
+	size_t i = 0;
+	for (;;) {
+		int ch = r_cons_readchar (cons);
+		if (ch < 20) {
+			return false;
+		}
+		if (ch == ';' || ch == 'M' || ch == 'm') {
+			buf[i] = 0;
+			*end = ch;
+			return true;
+		}
+		if (i + 1 < buf_len) {
+			buf[i++] = ch;
+		}
+	}
+}
+
+static int read_sgr_mouse_event(RCons *cons) {
+	char button[8];
+	char xpos[16];
+	char ypos[16];
+	int end = 0;
+	if (!read_sgr_mouse_param (cons, button, sizeof (button), &end) || end != ';') {
+		return -1;
+	}
+	if (!read_sgr_mouse_param (cons, xpos, sizeof (xpos), &end) || end != ';') {
+		return -1;
+	}
+	if (!read_sgr_mouse_param (cons, ypos, sizeof (ypos), &end)) {
+		return -1;
+	}
+	if (end != 'M' && end != 'm') {
+		return -1;
+	}
+	int b = atoi (button);
+	cons->mouse_event = true;
+	switch (b) {
+	case 64: // wheel up
+		return 'k';
+	case 65: // wheel down
+		return 'j';
+	case 66: // wheel left
+		return 'h';
+	case 67: // wheel right
+		return 'l';
+	}
+	return 0;
+}
+
+static int read_urxvt_mouse_event(RCons *cons, int button) {
+	int ch = r_cons_readchar (cons);
+	if (ch != ';') {
+		return -1;
+	}
+	do {
+		ch = r_cons_readchar (cons);
+		if (ch < 20) {
+			return -1;
+		}
+	} while (ch != 'M' && ch != 'm');
+	cons->mouse_event = true;
+	switch (button) {
+	case 80: // control+wheel up
+		return 'h';
+	case 81: // control+wheel down
+		return 'l';
+	}
+	return 0;
+}
+
+static inline void swap_case(RLine *line, int index) {
+	if (isupper (line->state.buffer.data[index])) {
+		line->state.buffer.data[index] += 32;
+	} else if (islower (line->state.buffer.data[index])) {
+		line->state.buffer.data[index] -= 32;
+	}
+}
+
+static void backward_skip_major_word_break_chars(RLine *line, int *cursor) {
+	while (*cursor >= 0 && is_word_break_char (line->state.buffer.data[*cursor], MAJOR_BREAK)) {
+		(*cursor)--;
+	}
+}
+
+static void skip_major_word_break_chars(RLine *line, int *cursor) {
+	while (*cursor < line->state.buffer.length && is_word_break_char (line->state.buffer.data[*cursor], MAJOR_BREAK)) {
+		(*cursor)++;
+	}
+}
+
+static void goto_word_start(RLine *line, int *cursor, BreakMode break_mode) {
+	if (!is_word_break_char (line->state.buffer.data[*cursor], break_mode)) {
+		/* move cursor backwards to the next word-break char */
+		while (*cursor >= 0 && !is_word_break_char (line->state.buffer.data[*cursor], break_mode)) {
+			(*cursor)--;
+		}
+	} else if (is_word_break_char (line->state.buffer.data[*cursor], MINOR_BREAK)) {
+		/* move cursor backwards to the next non-word-break char OR MAJOR break char */
+		while (*cursor >= 0 && is_word_break_char (line->state.buffer.data[*cursor], MINOR_BREAK) && !is_word_break_char (line->state.buffer.data[*cursor], MAJOR_BREAK)) {
+			(*cursor)--;
+		}
+	} else {
+		/* move cursor backwards to the next MINOR word-break char OR non-word-break char */
+		while (*cursor >= 0 && is_word_break_char (line->state.buffer.data[*cursor], MAJOR_BREAK)) {
+			(*cursor)--;
+		}
+	}
+	/* increment cursor to go to the start of current word */
+	if (*cursor < line->state.buffer.length - 1) {
+		(*cursor)++;
+	}
+}
+
+static void goto_word_end(RLine *line, int *cursor, BreakMode break_mode) {
+	if (!is_word_break_char (line->state.buffer.data[*cursor], break_mode)) {
+		/* move cursor forward to the next word-break char */
+		while (*cursor < line->state.buffer.length && !is_word_break_char (line->state.buffer.data[*cursor], break_mode)) {
+			(*cursor)++;
+		}
+	} else if (is_word_break_char (line->state.buffer.data[*cursor], MINOR_BREAK)) {
+		/* move cursor forward to the next non-word-break char or MAJOR break char */
+		while (*cursor < line->state.buffer.length && is_word_break_char (line->state.buffer.data[*cursor], MINOR_BREAK) && !is_word_break_char (line->state.buffer.data[*cursor], MAJOR_BREAK)) {
+			(*cursor)++;
+		}
+	}
+	/* decrement cursor to go to the end of current word */
+	if (*cursor > 0) {
+		(*cursor)--;
+	}
+}
+
+static void goto_next_word(RLine *line, int *cursor, BreakMode break_mode) {
+	goto_word_end (line, cursor, break_mode);
+	(*cursor)++;
+	if (is_word_break_char (line->state.buffer.data[*cursor], MAJOR_BREAK)) {
+		skip_major_word_break_chars (line, cursor);
+	}
+}
+
+static int vi_end_word_motion(RLine *line, BreakMode break_mode) {
+	if (line->state.buffer.index < line->state.buffer.length - 1) {
+		int cursor = line->state.buffer.index;
+		if (is_word_break_char (line->state.buffer.data[cursor], MAJOR_BREAK)) {
+			skip_major_word_break_chars (line, &cursor);
+			goto_word_end (line, &cursor, break_mode);
+		} else {
+			cursor++;
+			skip_major_word_break_chars (line, &cursor);
+			goto_word_end (line, &cursor, break_mode);
+		}
+		return cursor;
+	}
+	return line->state.buffer.index;
+}
+
+static int vi_backward_word_motion(RLine *line, BreakMode break_mode) {
+	if (line->state.buffer.index > 0) {
+		int cursor = line->state.buffer.index - 1;
+		backward_skip_major_word_break_chars (line, &cursor);
+		goto_word_start (line, &cursor, break_mode);
+		return cursor;
+	}
+	return line->state.buffer.index;
+}
+
+static int vi_next_word_motion(RLine *line, BreakMode break_mode) {
+	int cursor;
+	if (line->state.buffer.index < line->state.buffer.length) {
+		cursor = line->state.buffer.index;
+		if (is_word_break_char (line->state.buffer.data[cursor], MAJOR_BREAK)) {
+			skip_major_word_break_chars (line, &cursor);
+		} else {
+			goto_next_word (line, &cursor, break_mode);
+		}
+		return cursor;
+	}
+	return line->state.buffer.index;
+}
+
+static inline void __delete_current_char(RLine *line) {
+	if (line->state.buffer.index < line->state.buffer.length) {
+		int len = r_str_utf8_charsize (line->state.buffer.data + line->state.buffer.index);
+		memmove (line->state.buffer.data + line->state.buffer.index,
+			line->state.buffer.data + line->state.buffer.index + len,
+			line->state.buffer.length - line->state.buffer.index - len + 1);
+		line->state.buffer.length -= len;
+		if (line->state.buffer.index > 0 && line->state.buffer.index == line->state.buffer.length) {
+			line->state.buffer.index--;
+		}
+	}
+}
+
+static inline int indexof(RLine *line, int c, int offset) {
+	char *ptr = strchr (line->state.buffer.data + offset, c);
+	if (ptr != NULL) {
+		return ptr - line->state.buffer.data;
+	}
+	return -1;
+}
+
+static inline int vi_motion_seek_to_char(RLine *line, int c) {
+	if (line->state.buffer.index < line->state.buffer.length) {
+		const int i = indexof (line, c, line->state.buffer.index + 1);
+		if (i != -1) {
+			return i;
+		}
+	}
+	return line->state.buffer.index;
+}
+
+static inline int vi_motion_seek_to_char_backward(RLine *line, int c) {
+	if (line->state.buffer.index > 0) {
+		int i = line->state.buffer.index - 1;
+		while (i >= 0) {
+			if (line->state.buffer.data[i] == c) {
+				return i;
+			}
+			i--;
+		}
+	}
+	return line->state.buffer.index;
+}
+
+static inline void shift_buffer(RLine *line, int start, int end) {
+	int len = end - start;
+	free (line->clipboard);
+	line->clipboard = r_str_ndup (line->state.buffer.data + start, len);
+	r_line_clipboard_push (line, line->clipboard);
+	memmove (line->state.buffer.data + start, line->state.buffer.data + end, line->state.buffer.length - end + 1);
+	line->state.buffer.length -= (end - start);
+}
+
 /* https://www.gnu.org/software/bash/manual/html_node/Commands-For-Killing.html */
-static void backward_kill_word(void) {
-	int i, len;
-	if (I.buffer.index > 0) {
-		for (i = I.buffer.index; i > 0 && is_word_break_char (I.buffer.data[i], MINOR_BREAK); i--) {
-			/* Move the cursor index back until we hit a non-word-break-character */
-		}
-		for (; i > 0 && !is_word_break_char (I.buffer.data[i], MINOR_BREAK); i--) {
-			/* Move the cursor index back until we hit a word-break-character */
-		}
-		if (i > 0) {
-			i++;
-		} else if (i < 0) {
-			i = 0;
-		}
-		if (I.buffer.index > I.buffer.length) {
-			I.buffer.length = I.buffer.index;
-		}
-		len = I.buffer.index - i + 1;
-		free (I.clipboard);
-		I.clipboard = r_str_ndup (I.buffer.data + i, len);
-		r_line_clipboard_push (I.clipboard);
-		memmove (I.buffer.data + i, I.buffer.data + I.buffer.index,
-				I.buffer.length - I.buffer.index + 1);
-		I.buffer.length = strlen (I.buffer.data);
-		I.buffer.index = i;
+static void backward_kill_word(RLine *line, BreakMode break_mode) {
+	int i = vi_backward_word_motion (line, break_mode);
+	if (i == line->state.buffer.index) {
+		return;
+	}
+	shift_buffer (line, i, line->state.buffer.index);
+	line->state.buffer.index = i;
+}
+
+static void kill_word(RLine *line, BreakMode break_mode, char motion) {
+	int i = 0;
+	if (line->state.buffer.index == line->state.buffer.length - 1) {
+		__delete_current_char (line);
+		return;
+	}
+	switch (motion) {
+	case 'w':
+		i = vi_next_word_motion (line, break_mode);
+		break;
+	case 'e':
+		i = vi_end_word_motion (line, break_mode) + 1;
+		break;
+	}
+	shift_buffer (line, line->state.buffer.index, i);
+	if (line->state.buffer.index > 0 && line->state.buffer.index == line->state.buffer.length) {
+		line->state.buffer.index--;
 	}
 }
 
-static void backward_kill_Word(void) {
-	int i, len;
-	if (I.buffer.index > 0) {
-		for (i = I.buffer.index; i > 0 && is_word_break_char (I.buffer.data[i], MAJOR_BREAK); i--) {
-			/* Move the cursor index back until we hit a non-word-break-character */
+/*
+ * diw and diW commands
+ * how it works:
+ *   - go to the start of the current word (spaces are considered words here)
+ *   - delete until the last character of the word
+ *   - handle edge cases when the last character of the current word is the last character of the line
+ */
+static void delete_in_word(RLine *line, BreakMode break_mode) {
+	int i;
+	if (line->state.buffer.length > 0) {
+		goto_word_start (line, &line->state.buffer.index, break_mode);
+		i = line->state.buffer.index;
+		if (!is_word_break_char (line->state.buffer.data[i], break_mode)) {
+			while (i < line->state.buffer.length && !is_word_break_char (line->state.buffer.data[i], break_mode)) {
+				i++;
+			}
+			if (i == line->state.buffer.length - 1 && !is_word_break_char (line->state.buffer.data[i], break_mode)) {
+				i--;
+			}
+		} else if (is_word_break_char (line->state.buffer.data[i], MAJOR_BREAK)) {
+			while (i < line->state.buffer.length && is_word_break_char (line->state.buffer.data[i], MAJOR_BREAK)) {
+				i++;
+			}
+			if (i == line->state.buffer.length - 1 && is_word_break_char (line->state.buffer.data[i], MAJOR_BREAK)) {
+				i--;
+			}
+		} else {
+			while (i < line->state.buffer.length && is_word_break_char (line->state.buffer.data[i], MINOR_BREAK) && !is_word_break_char (line->state.buffer.data[i], MAJOR_BREAK)) {
+				i++;
+			}
+			if (i == line->state.buffer.length - 1 && is_word_break_char (line->state.buffer.data[i], MINOR_BREAK) && !is_word_break_char (line->state.buffer.data[i], MAJOR_BREAK)) {
+				i--;
+			}
 		}
-		for (; i > 0 && !is_word_break_char (I.buffer.data[i], MAJOR_BREAK); i--) {
-			/* Move the cursor index back until we hit a word-break-character */
+		if (i == line->state.buffer.index) {
+			__delete_current_char (line);
+			return;
 		}
-		if (i > 0) {
-			i++;
-		} else if (i < 0) {
-			i = 0;
+		shift_buffer (line, line->state.buffer.index, i);
+		if (line->state.buffer.index > 0 && line->state.buffer.index == line->state.buffer.length) {
+			line->state.buffer.index--;
 		}
-		if (I.buffer.index > I.buffer.length) {
-			I.buffer.length = I.buffer.index;
-		}
-		len = I.buffer.index - i + 1;
-		free (I.clipboard);
-		I.clipboard = r_str_ndup (I.buffer.data + i, len);
-		r_line_clipboard_push (I.clipboard);
-		memmove (I.buffer.data + i, I.buffer.data + I.buffer.index,
-				I.buffer.length - I.buffer.index + 1);
-		I.buffer.length = strlen (I.buffer.data);
-		I.buffer.index = i;
 	}
 }
 
-static void kill_word(void) {
-	int i, len;
-	for (i = I.buffer.index; i < I.buffer.length && is_word_break_char (I.buffer.data[i], MINOR_BREAK); i++) {
-		/* Move the cursor index forward until we hit a non-word-break-character */
+/*
+ * function used for di", di(, di{, ... commands
+ * parameters:
+ *   - start -> starting character like '('
+ *   - end -> closing character like ')'
+ * how it works:
+ *   - start by looking for the start char backwards
+ *   - if not found look forward
+ *   - call indexof () to get the index of the closing char
+ *   - shift (resize) the buffer
+ * note: doesn't work well with nested chars like ((test))
+ * would need a stack for that
+ */
+static inline int delete_between(RLine *line, int start, int end) {
+	int i = vi_motion_seek_to_char_backward (line, start);
+	if (i == line->state.buffer.index) {
+		i = vi_motion_seek_to_char (line, start);
 	}
-	for (; i < I.buffer.length && !is_word_break_char (I.buffer.data[i], MINOR_BREAK); i++) {
-		/* Move the cursor index forward we hit a word-break-character */
+	if (i != line->state.buffer.index) {
+		int stop = indexof (line, end, i + 1);
+		if (stop != -1) {
+			shift_buffer (line, i + 1, stop);
+			return i + 1;
+		}
 	}
-	if (I.buffer.index >= I.buffer.length) {
-		I.buffer.length = I.buffer.index;
-	}
-	len = i - I.buffer.index + 1;
-	free (I.clipboard);
-	I.clipboard = r_str_ndup (I.buffer.data + I.buffer.index, len);
-	r_line_clipboard_push (I.clipboard);
-	memmove (I.buffer.data + I.buffer.index, I.buffer.data + i, len);
-	I.buffer.length = strlen (I.buffer.data);
+	return -1;
 }
 
-static void kill_Word(void) {
-	int i, len;
-	for (i = I.buffer.index; i < I.buffer.length && is_word_break_char (I.buffer.data[i], MAJOR_BREAK); i++) {
-		/* Move the cursor index forward until we hit a non-word-break-character */
+static void paste(RLine *line) {
+	D.enable_yank_pop = false;
+	if (!line->clipboard) {
+		return;
 	}
-	for (; i < I.buffer.length && !is_word_break_char (I.buffer.data[i], MAJOR_BREAK); i++) {
-		/* Move the cursor index forward we hit a word-break-character */
+	size_t len = strlen (line->clipboard);
+	if (line->state.buffer.length + len >= R_LINE_BUFSIZE) {
+		return;
 	}
-	if (I.buffer.index >= I.buffer.length) {
-		I.buffer.length = I.buffer.index;
-	}
-	len = i - I.buffer.index + 1;
-	free (I.clipboard);
-	I.clipboard = r_str_ndup (I.buffer.data + I.buffer.index, len);
-	r_line_clipboard_push (I.clipboard);
-	memmove (I.buffer.data + I.buffer.index, I.buffer.data + i, len);
-	I.buffer.length = strlen (I.buffer.data);
+	char *cursor = line->state.buffer.data + line->state.buffer.index;
+	int dist = (line->state.buffer.data + line->state.buffer.length) - cursor;
+	line->state.buffer.length += len;
+	memmove (cursor + len, cursor, dist);
+	memcpy (cursor, line->clipboard, len);
+	line->state.buffer.index += len;
+	D.enable_yank_pop = true;
 }
 
-static void paste(void) {
-	if (I.clipboard) {
-		char *cursor = I.buffer.data + I.buffer.index;
-		int dist = (I.buffer.data + I.buffer.length) - cursor;
-		int len = strlen (I.clipboard);
-		I.buffer.length += len;
-		memmove (cursor + len, cursor, dist);
-		memcpy (cursor, I.clipboard, len);
-		I.buffer.index += len;
-		enable_yank_pop = true;
-	}
-}
-
-static void unix_word_rubout(void) {
+static void unix_word_rubout(RCons *cons) {
 	int i, len;
-	if (I.buffer.index > 0) {
-		for (i = I.buffer.index - 1; i > 0 && I.buffer.data[i] == ' '; i--) {
+	RLine *line = cons->line;
+	if (line->state.buffer.index > 0) {
+		for (i = line->state.buffer.index - 1; i > 0 && line->state.buffer.data[i] == ' '; i--) {
 			/* Move cursor backwards until we hit a non-space character or EOL */
 			/* This removes any trailing spaces from the input */
 		}
-		for (; i > 0 && I.buffer.data[i] != ' '; i--) {
+		for (; i > 0 && line->state.buffer.data[i] != ' '; i--) {
 			/* Move cursor backwards until we hit a space character or EOL */
 			/* This deletes everything back to the previous space character */
 		}
@@ -171,66 +439,86 @@ static void unix_word_rubout(void) {
 		} else if (i < 0) {
 			i = 0;
 		}
-		if (I.buffer.index > I.buffer.length) {
-			I.buffer.length = I.buffer.index;
+		if (line->state.buffer.index > line->state.buffer.length) {
+			line->state.buffer.length = line->state.buffer.index;
 		}
-		len = I.buffer.index - i + 1;
-		free (I.clipboard);
-		I.clipboard = r_str_ndup (I.buffer.data + i, len);
-		r_line_clipboard_push (I.clipboard);
-		memmove (I.buffer.data + i,
-			I.buffer.data + I.buffer.index,
-			I.buffer.length - I.buffer.index + 1);
-		I.buffer.length = strlen (I.buffer.data);
-		I.buffer.index = i;
+		len = line->state.buffer.index - i;
+		free (line->clipboard);
+		line->clipboard = r_str_ndup (line->state.buffer.data + i, len);
+		r_line_clipboard_push (line, line->clipboard);
+		memmove (line->state.buffer.data + i,
+			line->state.buffer.data + line->state.buffer.index,
+			line->state.buffer.length - line->state.buffer.index + 1);
+		line->state.buffer.length = i + (line->state.buffer.length - line->state.buffer.index);
+		line->state.buffer.index = i;
 	}
 }
 
-static int inithist(void) {
-	ZERO_FILL (I.history);
-	if ((I.history.size + 1024) * sizeof (char *) < I.history.size) {
+static int inithist(RLine *line) {
+	if (line->history.data) {
+		int new_size = line->hist_size;
+		if (new_size > 0 && line->history.size != new_size) {
+			char **new_data = (char **)calloc (new_size, sizeof (char *));
+			if (new_data) {
+				int nb_copy_lines = R_MIN (line->history.top + 1, new_size);
+				memcpy (new_data, line->history.data + (line->history.top + 1 - nb_copy_lines), sizeof (char *) * nb_copy_lines);
+				int i;
+				for (i = 0; i < line->history.top + 1 - nb_copy_lines; i++) {
+					free (line->history.data[i]);
+				}
+				free (line->history.data);
+				line->history.data = new_data;
+				line->history.size = new_size;
+				line->history.top = R_MIN (line->history.top, nb_copy_lines - 1);
+				line->history.index = R_MIN (line->history.index, nb_copy_lines - 1);
+			}
+		}
+		return true;
+	}
+	ZERO_FILL (line->history);
+	line->history.size = line->hist_size;
+	if (line->history.size <= 0) {
 		return false;
 	}
-	I.history.data = (char **) calloc ((I.history.size + 1024), sizeof(char *));
-	if (!I.history.data) {
+	line->history.data = (char **)calloc (line->history.size, sizeof (char *));
+	if (!line->history.data) {
 		return false;
 	}
-	I.history.size = R_LINE_HISTSIZE;
 	return true;
 }
 
 /* initialize history stuff */
-R_API int r_line_dietline_init(void) {
-	ZERO_FILL (I.completion);
-	if (!inithist ()) {
+R_API bool r_line_dietline_init(RLine *line) {
+	ZERO_FILL (line->completion);
+	if (!inithist (line)) {
 		return false;
 	}
-	I.echo = true;
+	line->echo = true;
 	return true;
 }
 
 #if USE_UTF8
 /* read utf8 char into 's', return the length in bytes */
-static int r_line_readchar_utf8(ut8 *s, int slen) {
-#if __WINDOWS__
-	return r_line_readchar_win (s, slen);
+static int readchar_utf8(RCons *cons, ut8 *s, int slen) {
+#if R2__WINDOWS__
+	return r_line_readchar_win (cons, s, slen);
 #else
 	// TODO: add support for w32
 	ssize_t len, i;
 	if (slen < 1) {
 		return 0;
 	}
-	int ch = r_cons_readchar ();
+	int ch = -1;
+	if (cons->line->demo) {
+		ch = r_cons_readchar_timeout (cons, 80);
+	} else {
+		ch = r_cons_readchar (cons);
+	}
 	if (ch == -1) {
-		return -1;
+		return cons->line->demo? 0: -1;
 	}
 	*s = ch;
-#if 0
-	if ((t = read (0, s, 1)) != 1) {
-		return t;
-	}
-#endif
-	*s = r_cons_controlz (*s);
+	*s = r_cons_controlz (cons, *s);
 	if (*s < 0x80) {
 		len = 1;
 	} else if ((s[0] & 0xe0) == 0xc0) {
@@ -246,7 +534,7 @@ static int r_line_readchar_utf8(ut8 *s, int slen) {
 		return -1;
 	}
 	for (i = 1; i < len; i++) {
-		int ch = r_cons_readchar ();
+		ch = r_cons_readchar (cons);
 		if (ch != -1) {
 			s[i] = ch;
 		}
@@ -259,24 +547,23 @@ static int r_line_readchar_utf8(ut8 *s, int slen) {
 }
 #endif
 
-#if __WINDOWS__
-static int r_line_readchar_win(ut8 *s, int slen) { // this function handle the input in console mode
-	r_sys_backtrace();
-	INPUT_RECORD irInBuf = { { 0 } };
+#if R2__WINDOWS__
+static int r_line_readchar_win(RCons *cons, ut8 *s, int slen) {
+	INPUT_RECORD irInBuf = { 0 };
 	BOOL ret;
 	DWORD mode, out;
-	char buf[5] = {0};
+	char buf[5] = { 0 };
 	void *bed;
 
 	HANDLE h = GetStdHandle (STD_INPUT_HANDLE);
-	DWORD new_mode = I.vtmode == 2 ? ENABLE_VIRTUAL_TERMINAL_INPUT : 0;
+	DWORD new_mode = cons->vtmode == 2? ENABLE_VIRTUAL_TERMINAL_INPUT: 0;
 	GetConsoleMode (h, &mode);
 	SetConsoleMode (h, new_mode);
-	if (I.zerosep) {
-		bed = r_cons_sleep_begin ();
+	if (cons->line->zerosep) {
+		bed = r_cons_sleep_begin (cons);
 		DWORD rsz = 0;
 		BOOL ret = ReadFile (h, s, 1, &rsz, NULL);
-		r_cons_sleep_end (bed);
+		r_cons_sleep_end (cons, bed);
 		SetConsoleMode (h, mode);
 		if (!ret || rsz != 1) {
 			return 0;
@@ -284,20 +571,24 @@ static int r_line_readchar_win(ut8 *s, int slen) { // this function handle the i
 		return 1;
 	}
 do_it_again:
-	bed = r_cons_sleep_begin ();
-	if (r_cons_singleton()->term_xterm) {
+	bed = r_cons_sleep_begin (cons);
+	if (cons->term_xterm) {
 		ret = ReadFile (h, buf, 1, &out, NULL);
 	} else {
 		ret = ReadConsoleInput (h, &irInBuf, 1, &out);
 	}
-	r_cons_sleep_end (bed);
+	r_cons_sleep_end (cons, bed);
 	if (ret < 1) {
 		return 0;
 	}
 	if (irInBuf.EventType == KEY_EVENT) {
 		if (irInBuf.Event.KeyEvent.bKeyDown) {
 			if (irInBuf.Event.KeyEvent.uChar.UnicodeChar) {
-				char *tmp = r_sys_conv_win_to_utf8_l ((PTCHAR)&irInBuf.Event.KeyEvent.uChar, 1);
+				ut8 chbuf[4] = {
+					0
+				};
+				memcpy (chbuf, &(irInBuf.Event.KeyEvent.uChar), 2);
+				char *tmp = r_sys_conv_win_to_utf8_l ((PTCHAR)&chbuf, 1);
 				if (tmp) {
 					r_str_ncpy (buf, tmp, sizeof (buf));
 					free (tmp);
@@ -317,8 +608,8 @@ do_it_again:
 				case VK_PRIOR: buf[idx++] = '5'; break; // PAGE UP
 				case VK_NEXT: buf[idx++] = '6'; break; // PAGE DOWN
 				case VK_DELETE: buf[idx++] = '3'; break; // SUPR KEY
-				case VK_HOME: buf[idx++] = 'H'; break;	// HOME KEY
-				case VK_END: buf[idx++] = 'F'; break;	// END KEY
+				case VK_HOME: buf[idx++] = 'H'; break; // HOME KEY
+				case VK_END: buf[idx++] = 'F'; break; // END KEY
 				default: buf[0] = 0; break;
 				}
 			}
@@ -356,25 +647,25 @@ static inline bool match_hist_line(RLine *line, int i) {
 static void setup_hist_match(RLine *line) {
 	if (line->history.do_setup_match) {
 		R_FREE (line->history.match);
-		if (*line->buffer.data) {
-			line->history.match = strdup (line->buffer.data);
+		if (*line->state.buffer.data) {
+			line->history.match = strdup (line->state.buffer.data);
 		}
 	}
 	line->history.do_setup_match = false;
 }
 
 R_API int r_line_hist_cmd_up(RLine *line) {
-	if (line->hist_up) {
-		return line->hist_up (line->user);
+	if (line->state.hist_up) {
+		return line->state.hist_up (line->cons, line->user);
 	}
-	if (!line->history.data) {
-		inithist ();
+	if (!inithist (line)) {
+		return false;
 	}
 	if (line->history.index > 0 && line->history.data) {
 		setup_hist_match (line);
 		if (line->history.match) {
 			int i;
-			for (i= line->history.index - 1; i >= 0; i--) {
+			for (i = line->history.index - 1; i >= 0; i--) {
 				if (match_hist_line (line, i)) {
 					line->history.index = i;
 					break;
@@ -386,19 +677,19 @@ R_API int r_line_hist_cmd_up(RLine *line) {
 		} else {
 			line->history.index--;
 		}
-		strncpy (line->buffer.data, line->history.data[line->history.index], R_LINE_BUFSIZE - 1);
-		line->buffer.index = line->buffer.length = strlen (line->buffer.data);
+		strncpy (line->state.buffer.data, line->history.data[line->history.index], R_LINE_BUFSIZE - 1);
+		line->state.buffer.index = line->state.buffer.length = strlen (line->state.buffer.data);
 		return true;
 	}
 	return false;
 }
 
 R_API int r_line_hist_cmd_down(RLine *line) {
-	if (line->hist_down) {
-		return line->hist_down (line->user);
+	if (line->state.hist_down) {
+		return line->state.hist_down (line->cons, line->user);
 	}
 	if (!line->history.data) {
-		inithist ();
+		inithist (line);
 	}
 	setup_hist_match (line);
 	if (line->history.match) {
@@ -415,155 +706,171 @@ R_API int r_line_hist_cmd_down(RLine *line) {
 	if (line->history.index >= line->history.top) {
 		line->history.index = line->history.top;
 		if (line->history.match) {
-			strncpy (line->buffer.data, line->history.match, R_LINE_BUFSIZE - 1);
+			strncpy (line->state.buffer.data, line->history.match, R_LINE_BUFSIZE - 1);
 		} else {
-			line->buffer.data[0] = '\0';
+			line->state.buffer.data[0] = '\0';
 		}
-		line->buffer.index = line->buffer.length = strlen (line->buffer.data);
+		line->state.buffer.index = line->state.buffer.length = strlen (line->state.buffer.data);
 		return false;
 	}
 	if (line->history.data && line->history.data[line->history.index]) {
-		strncpy (line->buffer.data, line->history.data[line->history.index], R_LINE_BUFSIZE - 1);
-		line->buffer.index = line->buffer.length = strlen (line->buffer.data);
+		strncpy (line->state.buffer.data, line->history.data[line->history.index], R_LINE_BUFSIZE - 1);
+		line->state.buffer.index = line->state.buffer.length = strlen (line->state.buffer.data);
 	}
 	return true;
 }
 
-R_API int r_line_hist_add(const char *line) {
-	if (!line || !*line) {
+// TODO argument can be "owned" so we can save some unnecessary free/malloc's
+R_API bool r_line_hist_add(RLine *line, const char *text) {
+	if (R_STR_ISEMPTY (text)) {
 		return false;
 	}
-	if (!I.history.data) {
-		inithist ();
-	}
-	/* ignore dup */
-	if (I.history.top > 0) {
-		const char *data = I.history.data[I.history.top - 1];
-		if (data && !strcmp (line, data)) {
-			I.history.index = I.history.top;
+	if (!line->history.data) {
+		if (!inithist (line)) {
 			return false;
 		}
 	}
-	if (I.history.top == I.history.size) {
-		int i;
-		free (I.history.data[0]);
-		for (i = 0; i <= I.history.size - 2; i++) {
-			I.history.data[i] = I.history.data[i + 1];
-		}
-		I.history.top--;
+	if (!line->history.data || line->history.size <= 0) {
+		return false;
 	}
-	I.history.data[I.history.top++] = strdup (line);
-	I.history.index = I.history.top;
+	/* ignore dup */
+	if (line->history.top > 0) {
+		const char *data = line->history.data[line->history.top - 1];
+		if (data && !strcmp (text, data)) {
+			line->history.index = line->history.top;
+			return false;
+		}
+	}
+	if (line->history.top == line->history.size) {
+		int i;
+		free (line->history.data[0]);
+		for (i = 0; i <= line->history.size - 2; i++) {
+			line->history.data[i] = line->history.data[i + 1];
+		}
+		line->history.top--;
+	}
+	line->history.data[line->history.top++] = strdup (text);
+	line->history.index = line->history.top;
 	return true;
 }
 
-static int r_line_hist_up(void) {
-	if (!I.cb_history_up) {
-		r_line_set_hist_callback (&I, &r_line_hist_cmd_up, &r_line_hist_cmd_down);
+static int r_line_hist_up(RLine *line) {
+	if (!line->cb_history_up) {
+		r_line_set_hist_callback (line, &r_line_hist_cmd_up, &r_line_hist_cmd_down);
 	}
-	return I.cb_history_up (&I);
+	return line->cb_history_up (line);
 }
 
-static int r_line_hist_down(void) {
-	if (!I.cb_history_down) {
-		r_line_set_hist_callback (&I, &r_line_hist_cmd_up, &r_line_hist_cmd_down);
+static int r_line_hist_down(RLine *line) {
+	if (!line->cb_history_down) {
+		r_line_set_hist_callback (line, &r_line_hist_cmd_up, &r_line_hist_cmd_down);
 	}
-	return I.cb_history_down (&I);
+	return line->cb_history_down (line);
 }
 
-R_API const char *r_line_hist_get(int n) {
+R_API void r_line_hist_set_size(RLine *line, int size) {
+	line->hist_size = R_MIN (size, 65536);
+}
+
+R_API int r_line_hist_get_size(RLine *line) {
+	return line->history.size;
+}
+
+R_API const char *r_line_hist_get(RLine *line, int n) {
 	int i = 0;
-	if (!I.history.data) {
-		inithist ();
-	}
+	inithist (line);
 	n--;
-	if (I.history.data) {
-		for (i = 0; i < I.history.size && I.history.data[i]; i++) {
+	if (line->history.data) {
+		for (i = 0; i < line->history.size && line->history.data[i]; i++) {
 			if (n == i) {
-				return I.history.data[i];
+				return line->history.data[i];
 			}
 		}
 	}
 	return NULL;
 }
 
-R_API int r_line_hist_list(void) {
+R_API int r_line_hist_list(RLine *line, bool full) {
 	int i = 0;
-	if (!I.history.data) {
-		inithist ();
-	}
-	if (I.history.data) {
-		for (i = 0; i < I.history.size && I.history.data[i]; i++) {
-			const char *pad = r_str_pad (' ', 32 - strlen (I.history.data[i]));
-			r_cons_printf ("%s %s # !%d\n", I.history.data[i], pad, i);
+	inithist (line);
+	if (line->history.data) {
+		i = full? 0: line->history.load_index;
+		for (; i < line->history.size && line->history.data[i]; i++) {
+			int slen = strlen (line->history.data[i]);
+			int padlen = (32 > slen)? 32 - slen: 0;
+			r_cons_printf (line->cons, "%s %*s# !%d\n", line->history.data[i], padlen, "", i);
 		}
 	}
 	return i;
 }
 
-R_API void r_line_hist_free(void) {
-	int i;
-	if (I.history.data) {
-		for (i = 0; i < I.history.size; i++) {
-			R_FREE (I.history.data[i]);
+R_API void r_line_hist_free(RLine *line) {
+	if (line->history.data) {
+		size_t i;
+		for (i = 0; i < line->history.size; i++) {
+			R_FREE (line->history.data[i]);
 		}
 	}
-	R_FREE (I.history.data);
-	R_FREE (I.sdbshell_hist);
-	I.history.index = 0;
+	R_FREE (line->history.data);
+	R_FREE (line->sdbshell_hist);
+	line->history.index = 0;
 }
 
 /* load history from file. TODO: if file == NULL load from ~/.<prg>.history or so */
-R_API int r_line_hist_load(const char *file) {
-	FILE *fd;
-	char buf[R_LINE_BUFSIZE], *path = r_str_home (file);
-	if (!path) {
+R_API bool r_line_hist_load(RLine *line, const char *file) {
+	R_RETURN_VAL_IF_FAIL (file, false);
+	// R_LOG_DEBUG ("LOAD %s", file);
+	char *buf = calloc (1, R_LINE_BUFSIZE);
+	if (!buf) {
 		return false;
 	}
-	if (!(fd = r_sandbox_fopen (path, "r"))) {
-		free (path);
+	FILE *fd = r_sandbox_fopen (file, "rb");
+	if (!fd) {
+		free (buf);
 		return false;
 	}
-	while (fgets (buf, sizeof (buf), fd) != NULL) {
+	memset (buf, 0, R_LINE_BUFSIZE);
+	while (fgets (buf, R_LINE_BUFSIZE - 1, fd)) {
 		r_str_trim_tail (buf);
-		r_line_hist_add (buf);
+		if (*buf) {
+			r_line_hist_add (line, buf);
+		}
+		memset (buf, 0, R_LINE_BUFSIZE);
 	}
+	line->history.load_index = line->history.index;
 	fclose (fd);
-	free (path);
+	free (buf);
 	return true;
 }
 
-R_API bool r_line_hist_save(const char *file) {
-	r_return_val_if_fail (file && *file, false);
+R_API bool r_line_hist_save(RLine *line, const char *file) {
+	R_RETURN_VAL_IF_FAIL (file && *file, false);
+	// R_LOG_DEBUG ("SAVE %s", file);
 	int i;
 	bool ret = false;
-	char *p, *path = r_str_home (file);
-	if (path) {
-		p = (char *) r_str_lastbut (path, R_SYS_DIR[0], NULL);	// TODO: use fs
-		if (p) {
-			*p = 0;
-			if (!r_sys_mkdirp (path)) {
-				eprintf ("Could not save history into %s\n", path);
-				goto end;
+	char *p = (char *)r_str_lastbut (file, R_SYS_DIR[0], NULL);
+	if (p) {
+		*p = 0;
+		if (!r_sys_mkdirp (file)) {
+			if (r_sandbox_check (R_SANDBOX_GRAIN_FILES)) {
+				R_LOG_ERROR ("Could not save history into %s", file);
 			}
-			*p = R_SYS_DIR[0];
+			goto end;
 		}
-		FILE *fd = r_sandbox_fopen (path, "w");
-		if (fd) {
-			if (I.history.data) {
-				for (i = 0; i < I.history.index; i++) {
-					fputs (I.history.data[i], fd);
-					fputs ("\n", fd);
-				}
-				fclose (fd);
-				ret = true;
-			} else {
-				fclose (fd);
+		*p = R_SYS_DIR[0];
+	}
+	FILE *fd = r_sandbox_fopen (file, "w");
+	if (fd) {
+		if (line->history.data) {
+			for (i = 0; i < line->history.index; i++) {
+				fputs (line->history.data[i], fd);
+				fputs ("\n", fd);
 			}
+			ret = true;
 		}
+		fclose (fd);
 	}
 end:
-	free (path);
 	return ret;
 }
 
@@ -572,10 +879,10 @@ R_API int r_line_hist_chop(const char *file, int limit) {
 	return 0;
 }
 
-static void selection_widget_draw(void) {
-	RCons *cons = r_cons_singleton ();
-	RSelWidget *sel_widget = I.sel_widget;
-	int y, pos_y, pos_x = r_str_ansi_len (I.prompt);
+static void selection_widget_draw(RCons *cons) {
+	RLine *line = cons->line;
+	RSelWidget *sel_widget = line->sel_widget;
+	int y, pos_y, pos_x = r_str_ansi_len (line->state.prompt);
 	sel_widget->h = R_MIN (sel_widget->h, R_SELWIDGET_MAXH);
 	for (y = 0; y < sel_widget->options_len; y++) {
 		sel_widget->w = R_MAX (sel_widget->w, strlen (sel_widget->options[y]));
@@ -585,45 +892,47 @@ static void selection_widget_draw(void) {
 	} else {
 		pos_y = r_cons_get_cur_line ();
 		if (pos_y + sel_widget->h > cons->rows) {
-			printf ("%s\n", r_str_pad('\n', sel_widget->h));
+			char *padstr = r_str_pad (NULL, 0, '\n', sel_widget->h);
+			printf ("%s\n", padstr);
+			free (padstr);
 			pos_y = cons->rows - sel_widget->h - 1;
 		}
 	}
 	sel_widget->w = R_MIN (sel_widget->w, R_SELWIDGET_MAXW);
 
-	char *background_color = cons->context->color_mode ? cons->context->pal.widget_bg : Color_INVERT_RESET;
-	char *selected_color = cons->context->color_mode ? cons->context->pal.widget_sel : Color_INVERT;
+	char *background_color = cons->context->color_mode? cons->context->pal.widget_bg: Color_INVERT_RESET;
+	char *selected_color = cons->context->color_mode? cons->context->pal.widget_sel: Color_INVERT;
 	bool scrollbar = sel_widget->options_len > R_SELWIDGET_MAXH;
 	int scrollbar_y = 0, scrollbar_l = 0;
 	if (scrollbar) {
-		scrollbar_y = (R_SELWIDGET_MAXH * (sel_widget->selection - sel_widget->scroll)) / sel_widget->options_len;
+		scrollbar_y = (R_SELWIDGET_MAXH *(sel_widget->selection - sel_widget->scroll)) / sel_widget->options_len;
 		scrollbar_l = (R_SELWIDGET_MAXH * R_SELWIDGET_MAXH) / sel_widget->options_len;
 	}
 
 	for (y = 0; y < sel_widget->h; y++) {
 		if (sel_widget->direction == R_SELWIDGET_DIR_UP) {
-			r_cons_gotoxy (pos_x + 1, pos_y - y - 1);
+			r_cons_gotoxy (cons, pos_x + 1, pos_y - y - 1);
 		} else {
-			r_cons_gotoxy (pos_x + 1, pos_y + y + 1);
+			r_cons_gotoxy (cons, pos_x + 1, pos_y + y + 1);
 		}
 		int scroll = R_MAX (0, sel_widget->selection - sel_widget->scroll);
-		const char *option = y < sel_widget->options_len ? sel_widget->options[y + scroll] : "";
-		r_cons_printf ("%s", sel_widget->selection == y + scroll ? selected_color : background_color);
-		r_cons_printf ("%-*.*s", sel_widget->w, sel_widget->w, option);
+		const char *option = y < sel_widget->options_len? sel_widget->options[y + scroll]: "";
+		r_cons_printf (cons, "%s", sel_widget->selection == y + scroll? selected_color: background_color);
+		r_cons_printf (cons, "%-*.*s", sel_widget->w, sel_widget->w, option);
 		if (scrollbar && R_BETWEEN (scrollbar_y, y, scrollbar_y + scrollbar_l)) {
-			r_cons_write (Color_INVERT" "Color_INVERT_RESET, 10);
+			r_cons_write (cons, (const ut8 *)Color_INVERT " " Color_INVERT_RESET, 10);
 		} else {
-			r_cons_write (" ", 1);
+			r_cons_write (cons, (const ut8 *)" ", 1);
 		}
 	}
 
-	r_cons_gotoxy (pos_x + I.buffer.length, pos_y);
-	r_cons_write (Color_RESET_BG, 5);
-	r_cons_flush ();
+	r_cons_gotoxy (cons, pos_x + line->state.buffer.length, pos_y);
+	r_cons_write (cons, (const ut8 *)Color_RESET_BG, 5);
+	r_cons_flush (cons);
 }
 
-static void selection_widget_up(int steps) {
-	RSelWidget *sel_widget = I.sel_widget;
+static void selection_widget_up(RLine *line, int steps) {
+	RSelWidget *sel_widget = line->sel_widget;
 	if (sel_widget) {
 		if (sel_widget->direction == R_SELWIDGET_DIR_UP) {
 			int height = R_MIN (sel_widget->h, R_SELWIDGET_MAXH - 1);
@@ -644,8 +953,8 @@ static void selection_widget_up(int steps) {
 	}
 }
 
-static void selection_widget_down(int steps) {
-	RSelWidget *sel_widget = I.sel_widget;
+static void selection_widget_down(RLine *line, int steps) {
+	RSelWidget *sel_widget = line->sel_widget;
 	if (sel_widget) {
 		if (sel_widget->direction == R_SELWIDGET_DIR_UP) {
 			sel_widget->selection = R_MAX (sel_widget->selection - steps, 0);
@@ -667,129 +976,139 @@ static void selection_widget_down(int steps) {
 }
 
 static void print_rline_task(void *_core) {
-	r_cons_clear_line (0);
-	r_cons_printf ("%s%s%s", Color_RESET, I.prompt,  I.buffer.data);
-	r_cons_flush ();
+	RCore *core = (RCore *)_core;
+	RCons *cons = core->cons;
+	RLine *line = cons->line;
+	r_cons_clear_line (cons, false, false);
+	r_cons_printf (cons, "%s%s%s", Color_RESET, line->state.prompt, line->state.buffer.data);
+	r_cons_flush (cons);
 }
 
-static void selection_widget_erase(void) {
-	RSelWidget *sel_widget = I.sel_widget;
+static void selection_widget_erase(RLine *line) {
+	RSelWidget *sel_widget = line->sel_widget;
 	if (sel_widget) {
 		sel_widget->options_len = 0;
 		sel_widget->selection = -1;
-		selection_widget_draw ();
-		R_FREE (I.sel_widget);
-		RCons *cons = r_cons_singleton ();
+		RCons *cons = line->cons;
+		selection_widget_draw (line->cons);
+		R_FREE (line->sel_widget);
 		if (cons->event_resize && cons->event_data) {
 			cons->event_resize (cons->event_data);
-			RCore *core = (RCore *)(cons->user);
+			RCore *core = (RCore *) (cons->user);
 			if (core) {
-				cons->cb_task_oneshot (&core->tasks, print_rline_task, core);
+				print_rline_task (core);
 			}
 		}
 		printf ("%s", R_CONS_CLEAR_FROM_CURSOR_TO_END);
 	}
 }
 
-static void selection_widget_select(void) {
-	RSelWidget *sel_widget = I.sel_widget;
+static void selection_widget_select(RLine *line) {
+	RSelWidget *sel_widget = line->sel_widget;
 	if (sel_widget && sel_widget->selection < sel_widget->options_len) {
-		char *sp = strchr (I.buffer.data, ' ');
+		char *sp = strchr (line->state.buffer.data, ' ');
+		const char *opt = sel_widget->options[sel_widget->selection];
+		size_t optlen = strlen (opt);
 		if (sp) {
-			int delta = sp - I.buffer.data + 1;
-			I.buffer.length = R_MIN (delta + strlen (sel_widget->options[sel_widget->selection]), R_LINE_BUFSIZE - 1);
-			memcpy (I.buffer.data + delta, sel_widget->options[sel_widget->selection], strlen (sel_widget->options[sel_widget->selection]));
-			I.buffer.index = I.buffer.length;
+			int delta = sp - line->state.buffer.data + 1;
+			optlen = R_MIN (optlen, R_LINE_BUFSIZE - 1 - delta);
+			line->state.buffer.length = delta + optlen;
+			memcpy (line->state.buffer.data + delta, opt, optlen);
+			line->state.buffer.data[line->state.buffer.length] = '\0';
+			line->state.buffer.index = line->state.buffer.length;
 			return;
 		}
-		I.buffer.length = R_MIN (strlen (sel_widget->options[sel_widget->selection]), R_LINE_BUFSIZE - 1);
-		memcpy (I.buffer.data, sel_widget->options[sel_widget->selection], I.buffer.length);
-		I.buffer.data[I.buffer.length] = '\0';
-		I.buffer.index = I.buffer.length;
-		selection_widget_erase ();
+		line->state.buffer.length = R_MIN (optlen, R_LINE_BUFSIZE - 1);
+		memcpy (line->state.buffer.data, sel_widget->options[sel_widget->selection], line->state.buffer.length);
+		line->state.buffer.data[line->state.buffer.length] = '\0';
+		line->state.buffer.index = line->state.buffer.length;
+		selection_widget_erase (line);
 	}
 }
 
-static void selection_widget_update(void) {
-	int argc = r_pvector_len (&I.completion.args);
-	const char **argv = (const char **)r_pvector_data (&I.completion.args);
-	if (argc == 0 || (argc == 1 && I.buffer.length >= strlen (argv[0]))) {
-		selection_widget_erase ();
+static void selection_widget_update(RLine *line) {
+	int argc = (int)RVecCString_length (&line->completion.args);
+	const char **argv = (const char **)R_VEC_START_ITER (&line->completion.args);
+	if (argc == 0 || (argc == 1 && line->state.buffer.length >= strlen (argv[0]))) {
+		selection_widget_erase (line);
 		return;
 	}
-	if (!I.sel_widget) {
+	if (!line->sel_widget) {
 		RSelWidget *sel_widget = R_NEW0 (RSelWidget);
-		I.sel_widget = sel_widget;
+		line->sel_widget = sel_widget;
 	}
-	I.sel_widget->scroll = 0;
-	I.sel_widget->selection = 0;
-	I.sel_widget->options_len = argc;
-	I.sel_widget->options = argv;
-	I.sel_widget->h = R_MAX (I.sel_widget->h, I.sel_widget->options_len);
+	line->sel_widget->scroll = 0;
+	line->sel_widget->selection = 0;
+	line->sel_widget->options_len = argc;
+	line->sel_widget->options = argv;
+	line->sel_widget->h = R_MAX (line->sel_widget->h, line->sel_widget->options_len);
 
-	if (I.prompt_type ==  R_LINE_PROMPT_DEFAULT) {
-		I.sel_widget->direction = R_SELWIDGET_DIR_DOWN;
+	if (line->prompt_type == R_LINE_PROMPT_DEFAULT) {
+		line->sel_widget->direction = R_SELWIDGET_DIR_DOWN;
 	} else {
-		I.sel_widget->direction = R_SELWIDGET_DIR_UP;
+		line->sel_widget->direction = R_SELWIDGET_DIR_UP;
 	}
-	selection_widget_draw ();
-	r_cons_flush ();
+	selection_widget_draw (line->cons);
+	r_cons_flush (line->cons);
 	return;
 }
 
-R_API void r_line_autocomplete(void) {
+R_API void r_line_autocomplete(RCons *cons) {
 	char *p;
 	const char **argv = NULL;
 	int argc = 0, i, j, plen, len = 0;
 	bool opt = false;
-	int cols = (int)(r_cons_get_size (NULL) * 0.82);
-	RCons *cons = r_cons_singleton ();
+	int cols = (int) (r_cons_get_size (cons, NULL) * 0.82);
 
+	RLine *line = cons->line;
 	/* prepare argc and argv */
-	if (I.completion.run) {
-		I.completion.opt = false;
-		I.completion.run (&I.completion, &I.buffer, I.prompt_type, I.completion.run_user);
-		argc = r_pvector_len (&I.completion.args);
-		argv = (const char **)r_pvector_data (&I.completion.args);
-		opt = I.completion.opt;
+	if (line->completion.run) {
+		line->completion.opt = false;
+		line->completion.run (&line->completion, &line->state.buffer, line->prompt_type, line->completion.run_user);
+		argc = (int)RVecCString_length (&line->completion.args);
+		argv = (const char **)R_VEC_START_ITER (&line->completion.args);
+		opt = line->completion.opt;
 	}
-	if (I.sel_widget && !I.sel_widget->complete_common) {
-		selection_widget_update ();
+	if (line->sel_widget && !line->sel_widget->complete_common) {
+		selection_widget_update (line);
 		return;
 	}
-
 	if (opt) {
-		p = (char *) r_sub_str_lchr (I.buffer.data, 0, I.buffer.index, '=');
+		p = (char *)r_sub_str_lchr (line->state.buffer.data, 0, line->state.buffer.index, '=');
 	} else {
-		p = (char *) r_sub_str_lchr (I.buffer.data, 0, I.buffer.index, ' ');
+		p = (char *)r_sub_str_lchr (line->state.buffer.data, 0, line->state.buffer.index, ' ');
 	}
 	if (!p) {
-		p = (char *) r_sub_str_lchr (I.buffer.data, 0, I.buffer.index, '@');	// HACK FOR r2
+		p = (char *)r_sub_str_lchr (line->state.buffer.data, 0, line->state.buffer.index, '@'); // HACK FOR r2
 	}
 	if (p) {
 		p++;
-		plen = sizeof (I.buffer.data) - (int) (size_t) (p - I.buffer.data);
+		plen = sizeof (line->state.buffer.data) - (int) (size_t) (p - line->state.buffer.data);
 	} else {
-		p = I.buffer.data;	// XXX: removes current buffer
-		plen = sizeof (I.buffer.data);
+		p = line->state.buffer.data; // XXX: removes current buffer
+		plen = sizeof (line->state.buffer.data);
 	}
 	/* autocomplete */
 	if (argc == 1) {
-		const char *end_word = r_sub_str_rchr (I.buffer.data,
-			I.buffer.index, strlen (I.buffer.data), ' ');
-		const char *t = end_word != NULL?
-				end_word: I.buffer.data + I.buffer.index;
+		const char *end_word = r_sub_str_rchr (line->state.buffer.data,
+			line->state.buffer.index,
+			line->state.buffer.length,
+			' ');
+		const char *t = end_word? end_word: "";
 		int largv0 = strlen (r_str_get (argv[0]));
 		size_t len_t = strlen (t);
-		p[largv0] = '\0';
-
-		if ((p - I.buffer.data) + largv0 + 1 + len_t < plen) {
+		while (len_t > 0 && t[len_t - 1] == ' ') {
+			len_t--;
+		}
+		if ((p - line->state.buffer.data) + largv0 + 1 + len_t < plen) {
+			p[largv0] = '\0';
 			if (len_t > 0) {
 				int tt = largv0;
 				if (*t != ' ') {
 					p[tt++] = ' ';
 				}
 				memmove (p + tt, t, len_t);
+				p[tt + len_t] = '\0';
 			}
 			memcpy (p, argv[0], largv0);
 
@@ -799,16 +1118,22 @@ R_API void r_line_autocomplete(void) {
 					p[largv0 + 1] = '\0';
 				}
 			}
-			I.buffer.length = strlen (I.buffer.data);
-			I.buffer.index = I.buffer.length;
+			line->state.buffer.length = strlen (line->state.buffer.data);
+			line->state.buffer.index = line->state.buffer.length;
 		}
 	} else if (argc > 0) {
 		if (*p) {
-			// TODO: avoid overflow
-			const char *t = I.buffer.data + I.buffer.index;
+			const char *end_word = r_sub_str_rchr (line->state.buffer.data,
+				line->state.buffer.index,
+				line->state.buffer.length,
+				' ');
+			const char *t = end_word? end_word: "";
 			const char *root = argv[0];
 			int min_common_len = strlen (root);
 			size_t len_t = strlen (t);
+			while (len_t > 0 && isspace (t[len_t - 1])) {
+				len_t--;
+			}
 
 			// try to autocomplete argument
 			for (i = 0; i < argc; i++) {
@@ -816,11 +1141,18 @@ R_API void r_line_autocomplete(void) {
 				if (!argv[i]) {
 					break;
 				}
-				while (argv[i][j] == root[j] && root[j] != '\0') j++;
+				while (argv[i][j] == root[j] && root[j] != '\0') {
+					j++;
+				}
 				if (j < min_common_len) {
 					min_common_len = j;
 				}
 				root = argv[i];
+			}
+			// the common prefix, the trailing text and the terminator must fit in the line buffer
+			int room = plen - 1 - (int)len_t;
+			if (min_common_len > room) {
+				min_common_len = R_MAX (room, 0);
 			}
 			if (len_t > 0) {
 				int tt = min_common_len;
@@ -831,27 +1163,27 @@ R_API void r_line_autocomplete(void) {
 			if (!len_t) {
 				p[min_common_len] = '\0';
 			}
-			I.buffer.length = strlen (I.buffer.data);
-			I.buffer.index = (p - I.buffer.data) + min_common_len;
+			line->state.buffer.length = strlen (line->state.buffer.data);
+			line->state.buffer.index = (p - line->state.buffer.data) + min_common_len;
 		}
 	}
 
-	if (I.prompt_type != R_LINE_PROMPT_DEFAULT || cons->show_autocomplete_widget) {
-		selection_widget_update ();
-		if (I.sel_widget) {
-			I.sel_widget->complete_common = false;
+	if (line->prompt_type != R_LINE_PROMPT_DEFAULT || cons->show_autocomplete_widget) {
+		selection_widget_update (line);
+		if (line->sel_widget) {
+			line->sel_widget->complete_common = false;
 		}
 		return;
 	}
 
 	/* show options */
-	if (argc > 1 && I.echo) {
+	if (argc > 1 && line->echo) {
 		const int sep = 3;
 		int slen, col = 10;
-#ifdef __WINDOWS__
-		r_cons_win_printf (false, "%s%s\n", I.prompt, I.buffer.data);
+#ifdef R2__WINDOWS__
+		r_cons_win_printf (cons, false, "%s%s\n", line->state.prompt, line->state.buffer.data);
 #else
-		printf ("%s%s\n", I.prompt, I.buffer.data);
+		printf ("\r%s%s\n", line->state.prompt, line->state.buffer.data);
 #endif
 		for (i = 0; i < argc && argv[i]; i++) {
 			int l = strlen (argv[i]);
@@ -877,209 +1209,327 @@ R_API void r_line_autocomplete(void) {
 	fflush (stdout);
 }
 
-R_API const char *r_line_readline(void) {
-	return r_line_readline_cb (NULL, NULL);
+R_API const char *r_line_readline(RCons *cons) {
+	return r_line_readline_cb (cons, NULL, NULL);
 }
 
-static inline void rotate_kill_ring(void) {
-	if (enable_yank_pop) {
-		I.buffer.index -= strlen (r_list_get_n (I.kill_ring, I.kill_ring_ptr));
-		I.buffer.data[I.buffer.index] = 0;
-		I.kill_ring_ptr -= 1;
-		if (I.kill_ring_ptr < 0) {
-			I.kill_ring_ptr = I.kill_ring->length - 1;
-		}
-		I.clipboard = r_list_get_n (I.kill_ring, I.kill_ring_ptr);
-		paste ();
+static inline void rotate_kill_ring(RCons *cons) {
+	RLine *line = cons->line;
+	if (!D.enable_yank_pop) {
+		return;
 	}
-}
-
-static inline void __delete_next_char(void) {
-	if (I.buffer.index < I.buffer.length) {
-		int len = r_str_utf8_charsize (I.buffer.data + I.buffer.index);
-		memmove (I.buffer.data + I.buffer.index,
-			I.buffer.data + I.buffer.index + len,
-			strlen (I.buffer.data + I.buffer.index + 1) + 1);
-		I.buffer.length -= len;
+	const char *yanked = r_list_get_n (line->kill_ring, line->kill_ring_ptr);
+	if (!yanked) {
+		return;
 	}
+	size_t yanked_len = strlen (yanked);
+	if (yanked_len > (size_t)line->state.buffer.index) {
+		return;
+	}
+	char *cursor = line->state.buffer.data + line->state.buffer.index;
+	memmove (cursor - yanked_len, cursor, line->state.buffer.length - line->state.buffer.index + 1);
+	line->state.buffer.index -= yanked_len;
+	line->state.buffer.length -= yanked_len;
+	line->kill_ring_ptr -= 1;
+	if (line->kill_ring_ptr < 0) {
+		line->kill_ring_ptr = line->kill_ring->length - 1;
+	}
+	free (line->clipboard);
+	line->clipboard = r_str_new (r_list_get_n (line->kill_ring, line->kill_ring_ptr));
+	paste (line);
 }
 
-static inline void __delete_prev_char(void) {
-	if (I.buffer.index < I.buffer.length) {
-		if (I.buffer.index > 0) {
-			size_t len = r_str_utf8_charsize_prev (I.buffer.data + I.buffer.index, I.buffer.index);
-			I.buffer.index -= len;
-			memmove (I.buffer.data + I.buffer.index,
-				I.buffer.data + I.buffer.index + len,
-				strlen (I.buffer.data + I.buffer.index));
-			I.buffer.length -= len;
+static inline void __delete_prev_char(RLine *line) {
+	if (line->state.buffer.index < line->state.buffer.length) {
+		if (line->state.buffer.index > 0) {
+			size_t len = r_str_utf8_charsize_prev (line->state.buffer.data + line->state.buffer.index, line->state.buffer.index);
+			line->state.buffer.index -= len;
+			memmove (line->state.buffer.data + line->state.buffer.index,
+				line->state.buffer.data + line->state.buffer.index + len,
+				strlen (line->state.buffer.data + line->state.buffer.index));
+			line->state.buffer.length -= len;
 		}
 	} else {
-		I.buffer.length -= r_str_utf8_charsize_last (I.buffer.data);
-		I.buffer.index = I.buffer.length;
-		if (I.buffer.length < 0) {
-			I.buffer.length = 0;
+		line->state.buffer.length -= r_str_utf8_charsize_last (line->state.buffer.data);
+		line->state.buffer.index = line->state.buffer.length;
+		if (line->state.buffer.length < 0) {
+			line->state.buffer.length = 0;
 		}
 	}
-	I.buffer.data[I.buffer.length] = '\0';
-	if (I.buffer.index < 0) {
-		I.buffer.index = 0;
+	line->state.buffer.data[line->state.buffer.length] = '\0';
+	if (line->state.buffer.index < 0) {
+		line->state.buffer.index = 0;
 	}
 }
 
-static inline void delete_till_end(void) {
-	I.buffer.data[I.buffer.index] = '\0';
-	I.buffer.length = I.buffer.index;
-	I.buffer.index = I.buffer.index > 0 ? I.buffer.index - 1 : 0;
+static inline void delete_till_end(RLine *line) {
+	line->state.buffer.data[line->state.buffer.index] = '\0';
+	line->state.buffer.length = line->state.buffer.index;
+	line->state.buffer.index = line->state.buffer.index > 0? line->state.buffer.index - 1: 0;
 }
 
-static void __print_prompt(void) {
-        RCons *cons = r_cons_singleton ();
-	int columns = r_cons_get_size (NULL) - 2;
-	int len, i, cols = R_MAX (1, columns - r_str_ansi_len (I.prompt) - 2);
+static inline void delete_till_start(RLine *line) {
+	if (line->state.buffer.index > 0) {
+		int tail = line->state.buffer.length - line->state.buffer.index;
+		memmove (line->state.buffer.data, line->state.buffer.data + line->state.buffer.index, tail);
+		line->state.buffer.length = tail;
+		line->state.buffer.index = 0;
+		line->state.buffer.data[line->state.buffer.length] = '\0';
+	}
+}
+
+static const char *promptcolor(RCons *cons) {
+	if (cons->line->demo) {
+		return cons->context->pal.prompt;
+	}
+	return Color_RESET;
+}
+
+static void __print_prompt(RCons *cons) {
+	R_RETURN_IF_FAIL (cons);
+	RLine *line = cons->line;
+	int columns = r_cons_get_size (cons, NULL) - 2;
+	int len, i, cols = R_MAX (1, columns - r_str_ansi_len (line->state.prompt) - 2);
 	if (cons->line->prompt_type == R_LINE_PROMPT_OFFSET) {
-                r_cons_gotoxy (0,  cons->rows);
-                r_cons_flush ();
+		r_cons_gotoxy (cons, 0, cons->rows);
 	}
-	r_cons_clear_line (0);
+	r_cons_clear_line (cons, false, false);
 	if (cons->context->color_mode > 0) {
-		printf ("\r%s%s", Color_RESET, I.prompt);
+		printf ("%s%s%s", Color_RESET, promptcolor (cons), line->state.prompt);
 	} else {
-		printf ("\r%s", I.prompt);
+		printf ("%s", line->state.prompt);
 	}
-	if (I.buffer.length > 0) {
-		fwrite (I.buffer.data, I.buffer.length, 1, stdout);
+	if (line->state.buffer.length > 0) {
+		int maxlen = R_MIN (line->state.buffer.length, cols);
+		if (maxlen > 0) {
+			fwrite (line->state.buffer.data, maxlen, 1, stdout);
+			if (line->state.buffer.length > cols) {
+				fwrite (" >", 2, 1, stdout);
+			}
+		}
 	}
-	printf ("\r%s", I.prompt);
-	if (I.buffer.index > cols) {
+	if (line->demo) {
+		// 15% cpu usage, but yeah its fancy demoscene. may be good to optimize
+		int pos = (D.count > 0)? D.count % strlen (line->state.prompt): 0;
+		char *a = strdup (line->state.prompt);
+		char *kb = (char *)r_str_ansi_chrn (a, pos);
+		char *kc = (char *)r_str_ansi_chrn (kb, 3);
+		char *b = r_str_ndup (kb, kc - kb);
+		char *c = strdup (kc);
+		char *rb = r_str_newf (Color_WHITE "%s%s", b, promptcolor (cons));
+		*kb = 0;
+		printf ("\r%s%s%s%s%s", promptcolor (cons), a, rb, c, Color_RESET);
+		free (a);
+		free (b);
+		free (rb);
+		free (c);
+		D.count++;
+		if (D.count > strlen (line->state.prompt)) {
+			D.count = 0;
+		}
+	} else {
+#if R2__WINDOWS__
+		if (!cons->vtmode && line->state.buffer.index <= cols) {
+			// legacy console: the line was already blanked by clear_line, so
+			// just place the caret instead of repainting prompt and buffer a
+			// second time; avoids blinking on slow consoles (reactos, xp)
+			fflush (stdout);
+			if (!cons->hStdout) {
+				cons->hStdout = GetStdHandle (STD_OUTPUT_HANDLE);
+			}
+			CONSOLE_SCREEN_BUFFER_INFO csbi;
+			if (GetConsoleScreenBufferInfo (cons->hStdout, &csbi)) {
+				int cx = r_str_ansi_len (line->state.prompt) + line->state.buffer.index;
+				COORD cpos = { (SHORT)R_MIN (cx, csbi.dwSize.X - 1), csbi.dwCursorPosition.Y };
+				SetConsoleCursorPosition (cons->hStdout, cpos);
+				return;
+			}
+		}
+#endif
+		printf ("\r%s%s%s", promptcolor (cons), line->state.prompt, promptcolor (cons));
+	}
+	if (line->state.buffer.index > cols) {
 		printf ("< ");
-		i = I.buffer.index - cols;
-		if (i > sizeof (I.buffer.data)) {
-			i = sizeof (I.buffer.data) - 1;
+		i = line->state.buffer.index - cols;
+		if (i > sizeof (line->state.buffer.data)) {
+			i = sizeof (line->state.buffer.data) - 1;
 		}
 	} else {
 		i = 0;
 	}
-	len = I.buffer.index - i;
-	if (len > 0 && (i + len) <= I.buffer.length) {
-		if (i < I.buffer.length) {
-			size_t slen = R_MIN (len, (I.buffer.length - i));
-			if (slen > 0 && i < sizeof (I.buffer.data)) {
-				fwrite (I.buffer.data + i, 1, slen, stdout);
-			}
+	len = line->state.buffer.index - i;
+	if (len > 0 && (i + len) <= line->state.buffer.length && i < line->state.buffer.length) {
+		size_t slen = R_MIN (len, (line->state.buffer.length - i));
+		if (slen > 0 && i < sizeof (line->state.buffer.data)) {
+			fwrite (line->state.buffer.data + i, 1, slen, stdout);
 		}
 	}
 	fflush (stdout);
 }
 
-static inline void __move_cursor_right(void) {
-	I.buffer.index = I.buffer.index < I.buffer.length
-		? I.buffer.index + r_str_utf8_charsize (I.buffer.data + I.buffer.index)
-		: I.buffer.length;
+static inline void vi_delete_commands(RCons *cons, int rep) {
+	int i;
+	char t, e;
+	RLine *line = cons->line;
+	char c = r_cons_readchar (cons);
+	while (rep--) {
+		switch (c) {
+		case 'i':
+			t = r_cons_readchar (cons);
+			switch (t) {
+			case 'w':
+				delete_in_word (line, MINOR_BREAK);
+				break;
+			case 'W':
+				delete_in_word (line, MINOR_BREAK);
+				break;
+			case 'b':
+				t = '(';
+				e = ')';
+				i = delete_between (line, t, e);
+				if (i != -1) {
+					line->state.buffer.index = i;
+				}
+				break;
+			case '"':
+				e = '"';
+				i = delete_between (line, t, e);
+				if (i != -1) {
+					line->state.buffer.index = i;
+				}
+				break;
+			case '\'':
+				e = '\'';
+				i = delete_between (line, t, e);
+				if (i != -1) {
+					line->state.buffer.index = i;
+				}
+				break;
+			case '(':
+				e = ')';
+				i = delete_between (line, t, e);
+				if (i != -1) {
+					line->state.buffer.index = i;
+				}
+				break;
+			case '[':
+				e = ']';
+				i = delete_between (line, t, e);
+				if (i != -1) {
+					line->state.buffer.index = i;
+				}
+				break;
+			case '<':
+				e = '>';
+				i = delete_between (line, t, e);
+				if (i != -1) {
+					line->state.buffer.index = i;
+				}
+				break;
+			case '{':
+				e = '}';
+				i = delete_between (line, t, e);
+				if (i != -1) {
+					line->state.buffer.index = i;
+				}
+				break;
+			}
+			if (line->hud) {
+				line->hud->vi = false;
+			}
+			break;
+		case 'f':
+			t = r_cons_readchar (cons);
+			i = vi_motion_seek_to_char (line, t);
+			if (i != line->state.buffer.index) {
+				shift_buffer (line, line->state.buffer.index, i + 1);
+			}
+			break;
+		case 'F':
+			t = r_cons_readchar (cons);
+			i = vi_motion_seek_to_char_backward (line, t);
+			if (i != line->state.buffer.index) {
+				shift_buffer (line, i, line->state.buffer.index);
+				line->state.buffer.index = i;
+			}
+			break;
+		case 't':
+			t = r_cons_readchar (cons);
+			i = vi_motion_seek_to_char (line, t);
+			if (i != line->state.buffer.index) {
+				shift_buffer (line, line->state.buffer.index, i);
+			}
+			break;
+		case 'T':
+			t = r_cons_readchar (cons);
+			i = vi_motion_seek_to_char_backward (line, t);
+			if (i != line->state.buffer.index) {
+				if (i < line->state.buffer.length) {
+					i++;
+				}
+				shift_buffer (line, i, line->state.buffer.index);
+				line->state.buffer.index = i;
+			}
+			break;
+		case 'E':
+			kill_word (line, MAJOR_BREAK, 'e');
+			break;
+		case 'e':
+			kill_word (line, MINOR_BREAK, 'e');
+			break;
+		case 'W':
+			kill_word (line, MAJOR_BREAK, 'w');
+			break;
+		case 'w':
+			kill_word (line, MINOR_BREAK, 'w');
+			break;
+		case 'B':
+			backward_kill_word (line, MAJOR_BREAK);
+			break;
+		case 'b':
+			backward_kill_word (line, MINOR_BREAK);
+			break;
+		case 'h':
+			__delete_prev_char (line);
+			break;
+		case 'l':
+			__delete_current_char (line);
+			break;
+		case '$':
+			delete_till_end (line);
+			break;
+		case '^':
+		case '0':
+			delete_till_start (line);
+			break;
+		case 'c':
+		case 'd':
+			line->state.buffer.index = 0;
+			delete_till_end (line);
+			break;
+		}
+		__print_prompt (cons);
+	} // end of while (rep--)
 }
 
-static inline void __move_cursor_left(void) {
-	I.buffer.index = I.buffer.index
-		? I.buffer.index - r_str_utf8_charsize_prev (I.buffer.data + I.buffer.index, I.buffer.index)
+static inline void __move_cursor_right(RLine *line) {
+	line->state.buffer.index = line->state.buffer.index < line->state.buffer.length
+		? line->state.buffer.index + r_str_utf8_charsize (line->state.buffer.data + line->state.buffer.index)
+		: line->state.buffer.length;
+}
+
+static inline void __move_cursor_left(RLine *line) {
+	line->state.buffer.index = line->state.buffer.index
+		? line->state.buffer.index - r_str_utf8_charsize_prev (line->state.buffer.data + line->state.buffer.index, line->state.buffer.index)
 		: 0;
 }
 
-static inline void vi_cmd_b(void) {
-	int i;
-	for (i = I.buffer.index - 2; i >= 0; i--) {
-		if ((is_word_break_char (I.buffer.data[i], MINOR_BREAK)
-		 && !is_word_break_char (I.buffer.data[i], MAJOR_BREAK))
-		 || (is_word_break_char (I.buffer.data[i - 1], MINOR_BREAK)
-		 && !is_word_break_char (I.buffer.data[i], MINOR_BREAK))) {
-			I.buffer.index = i;
-			break;
-		}
-	}
-	if (i < 0) {
-		I.buffer.index = 0;
-	}
-}
-
-static inline void vi_cmd_B(void) {
-	int i;
-	for (i = I.buffer.index - 2; i >= 0; i--) {
-		if ((!is_word_break_char (I.buffer.data[i], MAJOR_BREAK)
-		 && is_word_break_char (I.buffer.data[i-1], MAJOR_BREAK))) {
-			I.buffer.index = i;
-			break;
-		}
-	}
-	if (i < 0) {
-		I.buffer.index = 0;
-	}
-}
-
-static inline void vi_cmd_W(void) {
-	int i;
-	for (i = I.buffer.index + 1; i < I.buffer.length; i++) {
-		if ((!is_word_break_char (I.buffer.data[i], MAJOR_BREAK)
-		 && is_word_break_char (I.buffer.data[i-1], MAJOR_BREAK))) {
-			I.buffer.index = i;
-			break;
-		}
-	}
-	if (i >= I.buffer.length) {
-		I.buffer.index = I.buffer.length - 1;
-	}
-}
-
-static inline void vi_cmd_w(void) {
-	int i;
-	for (i = I.buffer.index + 1; i < I.buffer.length; i++) {
-		if ((!is_word_break_char (I.buffer.data[i], MINOR_BREAK)
-		 && is_word_break_char (I.buffer.data[i - 1], MINOR_BREAK))
-		 || (is_word_break_char (I.buffer.data[i], MINOR_BREAK)
-		 && !is_word_break_char (I.buffer.data[i], MAJOR_BREAK))) {
-			I.buffer.index = i;
-			break;
-		}
-	}
-	if (i >= I.buffer.length) {
-		I.buffer.index = I.buffer.length - 1;
-	}
-}
-
-static inline void vi_cmd_E(void) {
-	int i;
-	for (i = I.buffer.index + 1; i < I.buffer.length; i++) {
-		if ((!is_word_break_char (I.buffer.data[i], MAJOR_BREAK)
-		 && is_word_break_char (I.buffer.data[i+1], MAJOR_BREAK))) {
-			I.buffer.index = i;
-			break;
-		}
-	}
-	if (i >= I.buffer.length) {
-		I.buffer.index = I.buffer.length - 1;
-	}
-}
-
-static inline void vi_cmd_e(void) {
-	int i;
-	for (i = I.buffer.index + 1; i < I.buffer.length; i++) {
-		if ((!is_word_break_char (I.buffer.data[i], MINOR_BREAK)
-		 && is_word_break_char (I.buffer.data[i+1], MINOR_BREAK))
-		 || (is_word_break_char (I.buffer.data[i], MINOR_BREAK)
-		 && !is_word_break_char (I.buffer.data[i], MAJOR_BREAK))) {
-			I.buffer.index = i;
-			break;
-		}
-	}
-	if (i >= I.buffer.length) {
-		I.buffer.index = I.buffer.length - 1;
-	}
-}
-
-static void __update_prompt_color (void) {
-	RCons *cons = r_cons_singleton ();
-	const char *BEGIN = "", *END = "";
+static void __update_prompt_color(RCons *cons) {
+	const char *BEGIN = "", *END = Color_RESET;
+	RLine *line = cons->line;
 	if (cons->context->color_mode) {
-		if (I.prompt_mode) {
-			switch (I.vi_mode) {
+		if (line->prompt_mode) {
+			switch (line->vi_mode) {
 			case CONTROL_MODE:
 				BEGIN = cons->context->pal.invalid;
 				break;
@@ -1091,449 +1541,486 @@ static void __update_prompt_color (void) {
 		} else {
 			BEGIN = cons->context->pal.prompt;
 		}
-		END = cons->context->pal.reset;
+		// END = cons->context->pal.reset;
 	}
-	char *prompt = r_str_escape (I.prompt);		// remote the color
-	free (I.prompt);
-	I.prompt = r_str_newf ("%s%s%s", BEGIN, prompt, END);
+	char *prompt = r_str_escape (line->state.prompt); // remove the color
+	free (line->state.prompt);
+	line->state.prompt = r_str_newf ("%s%s%s", BEGIN, prompt, END);
+	free (prompt);
 }
 
-static void __vi_mode(void) {
+static bool __vi_mode(RCons *cons) {
 	char ch;
-	I.vi_mode = CONTROL_MODE;
-	__update_prompt_color ();
+	RLine *line = cons->line;
+	line->vi_mode = CONTROL_MODE;
+	__update_prompt_color (cons);
 	const char *gcomp_line = "";
-	static int gcomp = 0;
+	/* mimic vim's behaviour when entering normal mode */
+	__move_cursor_left (line);
 	for (;;) {
 		int rep = 0;
-		if (I.echo) {
-			__print_prompt ();
+		if (line->echo) {
+			__print_prompt (cons);
 		}
-		if (I.vi_mode != CONTROL_MODE) { // exit if insert mode is selected
-			__update_prompt_color ();
+		if (line->vi_mode != CONTROL_MODE) { // exit if insert mode is selected
+			__update_prompt_color (cons);
 			break;
 		}
-		bool o_do_setup_match = I.history.do_setup_match;
-		I.history.do_setup_match = true;
-		ch = r_cons_readchar ();
-		while (IS_DIGIT (ch)) {			// handle commands like 3b
-			if (ch == '0' && rep == 0) {	// to handle the command 0
+		bool o_do_setup_match = line->history.do_setup_match;
+		line->history.do_setup_match = true;
+		ch = r_cons_readchar (cons);
+		while (isdigit (ch)) { // handle commands like 3b
+			if (ch == '0' && rep == 0) { // to handle the command 0
 				break;
 			}
 			int tmp = ch - '0';
 			rep = (rep * 10) + tmp;
-			ch = r_cons_readchar ();
+			ch = r_cons_readchar (cons);
 		}
-		rep = rep > 0 ? rep : 1;
+		rep = rep > 0? rep: 1;
 
 		switch (ch) {
 		case 3:
-			if (I.hud) {
-				I.hud->activate = false;
-				I.hud->current_entry_n = -1;
+			if (line->hud) {
+				line->hud->activate = false;
+				line->hud->current_entry_n = -1;
 			}
-			if (I.echo) {
+			if (line->echo) {
 				eprintf ("^C\n");
 			}
-			I.buffer.index = I.buffer.length = 0;
-			*I.buffer.data = '\0';
-			gcomp = 0;
-			return;
+			line->state.buffer.index = line->state.buffer.length = 0;
+			*line->state.buffer.data = '\0';
+			D.gcomp = 0;
+			return false;
+		case 'C':
+			delete_till_end (line);
+			line->state.buffer.index++;
+			if (line->hud) {
+				line->hud->vi = false;
+			}
+			line->vi_mode = INSERT_MODE;
+			break;
 		case 'D':
-			delete_till_end ();
+			delete_till_end (line);
 			break;
-		case 'r': {
-			char c =  r_cons_readchar ();
-			I.buffer.data[I.buffer.index] = c;
+		case 'r':
+			ch = r_cons_readchar (cons);
+			line->state.buffer.data[line->state.buffer.index] = ch;
 			break;
-		}
 		case 'x':
 			while (rep--) {
-				__delete_next_char ();
+				__delete_current_char (line);
 			}
 			break;
-		case 'c': {
-			I.vi_mode = INSERT_MODE;	// goto insert mode
+		case 'c':
+			if (line->hud) {
+				line->hud->vi = false;
+			}
+			line->vi_mode = INSERT_MODE;
+		/* fall through */
+		case 'd':
+			vi_delete_commands (cons, rep);
 			break;
-		}
-		case 'd': {
-			char c = r_cons_readchar ();
-			while (rep--) {
-				switch (c) {
-				case 'i': {
-					char t = r_cons_readchar ();
-					if (t == 'w') {		// diw
-						kill_word ();
-						backward_kill_word ();
-					} else if (t == 'W') {  // diW
-						kill_Word ();
-						backward_kill_word ();
-					}
-					if (I.hud) {
-						I.hud->vi = false;
-					}
-					break;
-				}
-				case 'W':
-					kill_Word ();
-					break;
-				case 'w':
-					kill_word ();
-					break;
-				case 'B':
-					backward_kill_Word ();
-					break;
-				case 'b':
-					backward_kill_word ();
-					break;
-				case 'h':
-					__delete_prev_char ();
-					break;
-				case 'l':
-					__delete_next_char ();
-					break;
-				case '$':
-					delete_till_end ();
-					break;
-				case '^':
-				case '0':
-					strncpy (I.buffer.data, I.buffer.data + I.buffer.index, I.buffer.length);
-					I.buffer.length -= I.buffer.index;
-					I.buffer.index = 0;
-					break;
-				} __print_prompt ();
-			} // end of while (rep--)
-			break;
-		} // end of case 'd'
 		case 'I':
-			if (I.hud) {
-				I.hud->vi = false;
+			if (line->hud) {
+				line->hud->vi = false;
 			}
-			I.vi_mode = INSERT_MODE;
-			/* fall through */
+			line->vi_mode = INSERT_MODE;
+		/* fall through */
 		case '^':
 		case '0':
-			if (gcomp) {
-				strcpy (I.buffer.data, gcomp_line);
-				I.buffer.length = strlen (I.buffer.data);
-				I.buffer.index = 0;
-				gcomp = false;
+			if (D.gcomp > 0) {
+				r_str_ncpy (line->state.buffer.data, gcomp_line, R_LINE_BUFSIZE);
+				line->state.buffer.length = strlen (line->state.buffer.data);
+				line->state.buffer.index = 0;
+				D.gcomp = 0;
 			}
-			I.buffer.index = 0;
+			line->state.buffer.index = 0;
 			break;
 		case 'A':
-			I.vi_mode = INSERT_MODE;
-			/* fall through */
-		case '$':
-			if (gcomp) {
-				strcpy (I.buffer.data, gcomp_line);
-				I.buffer.index = strlen (I.buffer.data);
-				I.buffer.length = I.buffer.index;
-				gcomp = false;
+			if (D.gcomp > 0) {
+				r_str_ncpy (line->state.buffer.data, gcomp_line, R_LINE_BUFSIZE);
+				line->state.buffer.index = strlen (line->state.buffer.data);
+				line->state.buffer.length = line->state.buffer.index;
+				D.gcomp = 0;
 			} else {
-				I.buffer.index = I.buffer.length;
+				line->state.buffer.index = line->state.buffer.length;
+			}
+			if (line->hud) {
+				line->hud->vi = false;
+			}
+			line->vi_mode = INSERT_MODE;
+			break;
+		case '$':
+			if (D.gcomp > 0) {
+				r_str_ncpy (line->state.buffer.data, gcomp_line, R_LINE_BUFSIZE);
+				line->state.buffer.index = strlen (line->state.buffer.data);
+				line->state.buffer.length = line->state.buffer.index;
+				D.gcomp = 0;
+			} else {
+				line->state.buffer.index = line->state.buffer.length - 1;
 			}
 			break;
 		case 'p':
 			while (rep--) {
-				paste ();
+				paste (line);
 			}
 			break;
 		case 'a':
-			__move_cursor_right ();
-			break;
+			line->state.buffer.index = line->state.buffer.index < line->state.buffer.length
+				? line->state.buffer.index + r_str_utf8_charsize (line->state.buffer.data + line->state.buffer.index)
+				: line->state.buffer.length;
+		/* fall through */
 		case 'i':
-			I.vi_mode = INSERT_MODE;
-			if (I.hud) {
-				I.hud->vi = false;
+			if (line->hud) {
+				line->hud->vi = false;
 			}
+			line->vi_mode = INSERT_MODE;
 			break;
 		case 'h':
 			while (rep--) {
-				__move_cursor_left ();
+				__move_cursor_left (line);
 			}
 			break;
 		case 'l':
 			while (rep--) {
-				__move_cursor_right ();
+				__move_cursor_right (line);
 			}
 			break;
 		case 'E':
 			while (rep--) {
-				vi_cmd_E ();
+				line->state.buffer.index = vi_end_word_motion (line, MAJOR_BREAK);
 			}
 			break;
 		case 'e':
 			while (rep--) {
-				vi_cmd_e ();
+				line->state.buffer.index = vi_end_word_motion (line, MINOR_BREAK);
 			}
 			break;
 		case 'B':
 			while (rep--) {
-				vi_cmd_B ();
+				line->state.buffer.index = vi_backward_word_motion (line, MAJOR_BREAK);
 			}
 			break;
 		case 'b':
 			while (rep--) {
-				vi_cmd_b ();
+				line->state.buffer.index = vi_backward_word_motion (line, MINOR_BREAK);
 			}
 			break;
 		case 'W':
 			while (rep--) {
-				vi_cmd_W ();
+				line->state.buffer.index = vi_next_word_motion (line, MAJOR_BREAK);
+				if (line->state.buffer.index == line->state.buffer.length) {
+					line->state.buffer.index--;
+				}
 			}
 			break;
 		case 'w':
 			while (rep--) {
-				vi_cmd_w ();
+				line->state.buffer.index = vi_next_word_motion (line, MINOR_BREAK);
+				if (line->state.buffer.index == line->state.buffer.length) {
+					line->state.buffer.index--;
+				}
 			}
 			break;
-		default:					// escape key
-			ch = tolower (r_cons_arrow_to_hjkl (ch));
+		case '~':
+			while (rep--) {
+				swap_case (line, line->state.buffer.index);
+				__move_cursor_right (line);
+			}
+			break;
+		case 'f':
+			ch = r_cons_readchar (cons);
+			while (rep--) {
+				line->state.buffer.index = vi_motion_seek_to_char (line, ch);
+			}
+			break;
+		case 'F':
+			ch = r_cons_readchar (cons);
+			while (rep--) {
+				line->state.buffer.index = vi_motion_seek_to_char_backward (line, ch);
+			}
+			break;
+		case 't':
+			ch = r_cons_readchar (cons);
+			while (rep--) {
+				line->state.buffer.index = vi_motion_seek_to_char (line, ch);
+				if (line->state.buffer.index > 0) {
+					line->state.buffer.index--;
+				}
+			}
+			break;
+		case 'T':
+			ch = r_cons_readchar (cons);
+			while (rep--) {
+				line->state.buffer.index = vi_motion_seek_to_char_backward (line, ch);
+				if (line->state.buffer.index < line->state.buffer.length - 1) {
+					line->state.buffer.index++;
+				}
+			}
+			break;
+		case 13:
+		/* fall through */
+		case '\n':
+			return true;
+		default: // escape key
+			ch = tolower (r_cons_arrow_to_hjkl (cons, ch));
 			switch (ch) {
-			case 'k': 			// up
- 				I.history.do_setup_match = o_do_setup_match;
-				r_line_hist_up ();
+			case 'k': // up
+				line->history.do_setup_match = o_do_setup_match;
+				r_line_hist_up (line);
 				break;
-			case 'j':			// down
- 				I.history.do_setup_match = o_do_setup_match;
-				r_line_hist_down ();
+			case 'j': // down
+				line->history.do_setup_match = o_do_setup_match;
+				r_line_hist_down (line);
 				break;
-			case 'l':			// right
-				__move_cursor_right ();
+			case 'l': // right
+				__move_cursor_right (line);
 				break;
-			case 'h':			// left
-				__move_cursor_left ();
+			case 'h': // left
+				__move_cursor_left (line);
 				break;
 			}
 			break;
 		}
-		if (I.hud) {
-			return;
+		if (line->hud) {
+			return false;
 		}
 	}
+	return false;
 }
 
 static void dietline_print_risprompt(const char *gcomp_line) {
 	RCons *cons = r_cons_singleton ();
-	if (cons->context->color_mode && *gcomp_line && I.buffer.length > 0) {
+	RLine *line = cons->line;
+	r_cons_clear_line (cons, false, false);
+	if (cons->context->color_mode && *gcomp_line && line->state.buffer.length > 0) {
 		printf ("\r (ri-search): ");
-		const char *line = gcomp_line;
-		while (line) {
-			char *m = strstr (line, I.buffer.data);
+		const char *text = gcomp_line;
+		while (text) {
+			const char *m = strstr (text, line->state.buffer.data);
 			if (m) {
-				fwrite (line, m - line, 1, stdout);
+				fwrite (text, m - text, 1, stdout);
 				printf (Color_INVERT);
-				fwrite (m, I.buffer.length, 1, stdout);
+				fwrite (m, line->state.buffer.length, 1, stdout);
 				printf (Color_RESET);
-				line = m + I.buffer.length;
+				text = m + line->state.buffer.length;
 			} else {
-				printf ("%s", line);
-				line = NULL;
+				printf ("%s", text);
+				text = NULL;
 			}
 		}
 		printf ("\r");
 	} else {
-		printf ("\r(ri-search (%s)): %s\r", I.buffer.data, gcomp_line);
+		printf ("\r(ri-search (%s)): %s\r", line->state.buffer.data, gcomp_line);
 	}
 }
 
-R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
+R_API const char *r_line_readline_cb(RCons *cons, RLineReadCallback cb, void *user) {
+	RLine *line = cons->line;
 	int rows;
 	const char *gcomp_line = "";
-	static int gcomp_idx = 0;
-	static bool yank_flag = 0;
-	static int gcomp = 0;
 	signed char buf[10];
 #if USE_UTF8
 	int utflen;
 #endif
-	int ch = 0, key, i = 0;	/* grep completion */
+	int ch = 0, key, i = 0; /* grep completion */
 	char *tmp_ed_cmd, prev = 0;
 	int prev_buflen = -1;
-	RCons *cons = r_cons_singleton ();
+	// RCons *cons = r_cons_singleton ();
 
-	if (!I.hud || (I.hud && !I.hud->activate)) {
-		I.buffer.index = I.buffer.length = 0;
-		I.buffer.data[0] = '\0';
-		if (I.hud) {
-			I.hud->activate = true;
+	if (!line->hud || (line->hud && !line->hud->activate)) {
+		line->state.buffer.index = line->state.buffer.length = 0;
+		line->state.buffer.data[0] = '\0';
+		D.enable_yank_pop = false;
+		if (line->hud) {
+			line->hud->activate = true;
+			line->hud->current_entry_n = 0;
 		}
 	}
 	int mouse_status = cons->mouse;
-	if (I.hud && I.hud->vi) {
-		__vi_mode ();
+	if (line->hud && line->hud->vi) {
+		__vi_mode (cons);
 		goto _end;
 	}
-	if (I.contents) {
-		memmove (I.buffer.data, I.contents,
-			R_MIN (strlen (I.contents) + 1, R_LINE_BUFSIZE - 1));
-		I.buffer.data[R_LINE_BUFSIZE - 1] = '\0';
-		I.buffer.index = I.buffer.length = strlen (I.contents);
+	if (line->state.contents) {
+		memmove (line->state.buffer.data, line->state.contents, R_MIN (strlen (line->state.contents) + 1, R_LINE_BUFSIZE - 1));
+		line->state.buffer.data[R_LINE_BUFSIZE - 1] = '\0';
+		line->state.buffer.index = line->state.buffer.length = strlen (line->state.contents);
 	}
-	if (I.disable) {
-		if (!fgets (I.buffer.data, R_LINE_BUFSIZE, stdin)) {
+	if (line->disable) {
+		if (!fgets (line->state.buffer.data, R_LINE_BUFSIZE, stdin)) {
 			return NULL;
 		}
-		return (*I.buffer.data)? I.buffer.data: r_line_nullstr;
+		return (*line->state.buffer.data)? line->state.buffer.data: "";
 	}
 
 	memset (&buf, 0, sizeof buf);
-	r_cons_set_raw (1);
+	r_cons_set_raw (cons, 1);
 
-	if (I.echo) {
-		__print_prompt ();
+	if (cons->line->echo) {
+		__print_prompt (cons);
 	}
-	r_cons_break_push (NULL, NULL);
-	r_cons_enable_mouse (I.hud);
+	r_cons_break_push (cons, NULL, NULL);
+	r_cons_enable_mouse (cons, cons->line->hud);
 	for (;;) {
-		yank_flag = 0;
-		if (r_cons_is_breaked ()) {
+		D.yank_flag = false;
+		if (r_cons_is_breaked (cons)) {
 			break;
 		}
-		I.buffer.data[I.buffer.length] = '\0';
+#if 0
+		// detect truncation
+		if (line->state.buffer.length > line->length) {
+			line->state.buffer.data[0] = 0;
+			line->state.buffer.length = 0;
+			return NULL;
+		}
+#endif
+		line->state.buffer.data[line->state.buffer.length] = '\0';
 		if (cb) {
-			int cbret = cb (user, I.buffer.data);
+			int cbret = cb (cons, user, line->state.buffer.data);
 			if (cbret == 0) {
-				I.buffer.data[0] = 0;
-				I.buffer.length = 0;
+				line->state.buffer.data[0] = 0;
+				line->state.buffer.length = 0;
 			}
 		}
 #if USE_UTF8
-		utflen = r_line_readchar_utf8 ((ut8 *) buf, sizeof (buf));
-		if (utflen < 1) {
-			r_cons_break_pop ();
+		utflen = readchar_utf8 (cons, (ut8 *)buf, sizeof (buf));
+		if (utflen < (line->demo? 0: 1)) {
+			r_cons_break_pop (cons);
 			return NULL;
 		}
 		buf[utflen] = 0;
+		if (line->demo && utflen == 0) {
+			// refresh
+			__print_prompt (cons);
+			D.count++;
+			continue;
+		}
 #else
-#if __WINDOWS__
+#if R2__WINDOWS__
 		{
-			int len = r_line_readchar_win ((ut8 *)buf, sizeof (buf));
+			int len = r_line_readchar_win (cons, (ut8 *)buf, sizeof (buf));
 			if (len < 1) {
-				r_cons_break_pop ();
+				r_cons_break_pop (cons);
 				return NULL;
 			}
 			buf[len] = 0;
 		}
 #else
-		ch = r_cons_readchar ();
+		ch = r_cons_readchar (cons);
 		if (ch == -1) {
-			r_cons_break_pop ();
+			r_cons_break_pop (cons);
 			return NULL;
 		}
 		buf[0] = ch;
 #endif
 #endif
-		bool o_do_setup_match = I.history.do_setup_match;
-		I.history.do_setup_match = true;
-		if (I.echo && cons->context->color_mode) {
-			r_cons_clear_line (0);
-		}
-		(void)r_cons_get_size (&rows);
+		bool o_do_setup_match = line->history.do_setup_match;
+		line->history.do_setup_match = true;
+		// Avoid clearing the whole line before redraw to prevent flicker.
+repeat:
+		(void)r_cons_get_size (cons, &rows);
 		switch (*buf) {
-		case 0:	// control-space
+		case 0: // control-space
 			/* ignore atm */
 			break;
-		case 1:	// ^A
-			if (gcomp) {
-				strcpy (I.buffer.data, gcomp_line);
-				I.buffer.length = strlen (I.buffer.data);
-				I.buffer.index = 0;
-				gcomp = false;
+		case 1: // ^A
+			if (D.gcomp > 0) {
+				r_str_ncpy (line->state.buffer.data, gcomp_line, R_LINE_BUFSIZE);
+				line->state.buffer.length = strlen (line->state.buffer.data);
+				line->state.buffer.index = 0;
+				D.gcomp = 0;
 			}
-			I.buffer.index = 0;
+			line->state.buffer.index = 0;
 			break;
-		case 2:	// ^b // emacs left
-			__move_cursor_left ();
+		case 2: // ^b // emacs left
+			__move_cursor_left (line);
 			break;
-		case 5:	// ^E
-			if (gcomp) {
-				strcpy (I.buffer.data, gcomp_line);
-				I.buffer.index = strlen (I.buffer.data);
-				I.buffer.length = I.buffer.index;
-				gcomp = false;
-			} else if (prev == 24) {// ^X = 0x18
-				I.buffer.data[I.buffer.length] = 0;	// probably unnecessary
-				tmp_ed_cmd = I.cb_editor (I.user, I.buffer.data);
+		case 5: // ^E
+			if (D.gcomp > 0) {
+				r_str_ncpy (line->state.buffer.data, gcomp_line, R_LINE_BUFSIZE);
+				line->state.buffer.index = strlen (line->state.buffer.data);
+				line->state.buffer.length = line->state.buffer.index;
+				D.gcomp = 0;
+			} else if (prev == 24) { // ^X = 0x18
+				line->state.buffer.data[line->state.buffer.length] = 0; // probably unnecessary
+				tmp_ed_cmd = line->cons->cb_editor (line->user, NULL, line->state.buffer.data, 0, NULL);
 				if (tmp_ed_cmd) {
 					/* copied from yank (case 25) */
-					I.buffer.length = strlen (tmp_ed_cmd);
-					if (I.buffer.length < R_LINE_BUFSIZE) {
-						I.buffer.index = I.buffer.length;
-						strncpy (I.buffer.data, tmp_ed_cmd, R_LINE_BUFSIZE - 1);
-						I.buffer.data[R_LINE_BUFSIZE - 1] = '\0';
-					} else {
-						I.buffer.length -= strlen (tmp_ed_cmd);
+					size_t len = r_str_nlen (tmp_ed_cmd, R_LINE_BUFSIZE);
+					if (len < R_LINE_BUFSIZE) {
+						line->state.buffer.length = (int)len;
+						line->state.buffer.index = line->state.buffer.length;
+						memcpy (line->state.buffer.data, tmp_ed_cmd, len + 1);
 					}
 					free (tmp_ed_cmd);
 				}
 			} else {
-				I.buffer.index = I.buffer.length;
+				line->state.buffer.index = line->state.buffer.length;
 			}
 			break;
-		case 3:	// ^C
-			if (I.hud) {
-				I.hud->activate = false;
-				I.hud->current_entry_n = -1;
+		case 3: // ^C
+			if (line->hud) {
+				line->hud->activate = false;
+				line->hud->current_entry_n = -1;
 			}
-			if (I.echo) {
+			if (line->echo) {
 				eprintf ("^C\n");
 			}
-			I.buffer.index = I.buffer.length = 0;
-			*I.buffer.data = '\0';
-			gcomp = 0;
+			line->state.buffer.index = line->state.buffer.length = 0;
+			*line->state.buffer.data = '\0';
+			D.gcomp = 0;
 			goto _end;
-		case 4:	// ^D
-			if (!I.buffer.data[0]) {/* eof */
-				if (I.echo) {
+		case 4: // ^D
+			if (!line->state.buffer.data[0]) { /* eof */
+				if (line->echo) {
 					eprintf ("^D\n");
 				}
-				r_cons_set_raw (false);
-				r_cons_break_pop ();
+				r_cons_set_raw (cons, false);
+				r_cons_break_pop (cons);
 				return NULL;
 			}
-			if (I.buffer.index < I.buffer.length) {
-				__delete_next_char ();
+			if (line->state.buffer.index < line->state.buffer.length) {
+				__delete_current_char (line);
 			}
 			break;
-		case 11:// ^K
-			I.buffer.data[I.buffer.index] = '\0';
-			I.buffer.length = I.buffer.index;
+		case 11: // ^K
+			line->state.buffer.data[line->state.buffer.index] = '\0';
+			line->state.buffer.length = line->state.buffer.index;
 			break;
-		case 6:	// ^f // emacs right
-			__move_cursor_right ();
+		case 6: // ^f // emacs right
+			__move_cursor_right (line);
 			break;
-		case 12:// ^L -- right
-			__move_cursor_right ();
-			if (I.echo) {
+		case 12: // ^L -- clear screen
+			if (line->echo) {
 				eprintf ("\x1b[2J\x1b[0;0H");
 			}
 			fflush (stdout);
 			break;
-		case 18:// ^R -- autocompletion
-			if (gcomp) {
-				gcomp_idx++;
+		case 18: // ^R -- autocompletion
+			if (D.gcomp > 0) {
+				D.gcomp_idx++;
 			}
-			gcomp = 1;
+			D.gcomp = 1;
 			break;
-		case 19:// ^S -- backspace
-			if (gcomp) {
-				gcomp--;
+		case 19: // ^S -- backspace
+			if (D.gcomp > 0) {
+				D.gcomp--;
 			} else {
-				__move_cursor_left ();
+				__move_cursor_left (line);
 			}
 			break;
-		case 21:// ^U - cut
-			free (I.clipboard);
-			I.clipboard = strdup (I.buffer.data);
-			r_line_clipboard_push (I.clipboard);
-			I.buffer.data[0] = '\0';
-			I.buffer.length = 0;
-			I.buffer.index = 0;
+		case 21: // ^U - cut
+			free (line->clipboard);
+			line->clipboard = strdup (line->state.buffer.data);
+			r_line_clipboard_push (line, line->clipboard);
+			line->state.buffer.data[0] = '\0';
+			line->state.buffer.length = 0;
+			line->state.buffer.index = 0;
 			break;
-#if __WINDOWS__
-		case 22:// ^V - Paste from windows clipboard
+#if R2__WINDOWS__
+		case 22: // ^V - Paste from windows clipboard
 		{
 			HANDLE hClipBoard;
 			PTCHAR clipText;
@@ -1548,16 +2035,16 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 					if (clipText) {
 						char *txt = r_sys_conv_win_to_utf8 (clipText);
 						if (!txt) {
-							R_LOG_ERROR ("Failed to allocate memory\n");
+							R_LOG_ERROR ("Failed to allocate memory");
 							break;
 						}
 						int len = strlen (txt);
-						I.buffer.length += len;
-						if (I.buffer.length < R_LINE_BUFSIZE) {
-							I.buffer.index = I.buffer.length;
-							strcat (I.buffer.data, txt);
+						line->state.buffer.length += len;
+						if (line->state.buffer.length < R_LINE_BUFSIZE) {
+							line->state.buffer.index = line->state.buffer.length;
+							strcat (line->state.buffer.data, txt);
 						} else {
-							I.buffer.length -= len;
+							line->state.buffer.length -= len;
 						}
 						free (txt);
 					}
@@ -1566,347 +2053,423 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 				CloseClipboard ();
 			}
 		}
-			break;
+		break;
 #endif
-		case 23:// ^W ^w unix-word-rubout
-			unix_word_rubout ();
+		case 23: // ^W ^w unix-word-rubout
+			unix_word_rubout (cons);
 			break;
-		case 24:// ^X
-			if (I.buffer.index > 0) {
-				strncpy (I.buffer.data, I.buffer.data + I.buffer.index, I.buffer.length);
-				I.buffer.length -= I.buffer.index;
-				I.buffer.index = 0;
-			}
+		case 24: // ^X
+			delete_till_start (line);
 			break;
-		case 25:// ^Y - paste
-			paste ();
-			yank_flag = 1;
+		case 25: // ^Y - paste
+			paste (line);
+			D.yank_flag = D.enable_yank_pop;
 			break;
-		case 29:  // ^^ - rotate kill ring
-			rotate_kill_ring ();
-			yank_flag = enable_yank_pop ? 1 : 0;
+		case 29: // ^^ - rotate kill ring
+			rotate_kill_ring (cons);
+			D.yank_flag = D.enable_yank_pop;
 			break;
-		case 20:  // ^t Kill from point to the end of the current word,
-			kill_word ();
+		case 20: // ^t Kill from point to the end of the current word,
+			kill_word (line, MINOR_BREAK, 'w');
 			break;
 		case 15: // ^o kill backward
-			backward_kill_word ();
+			backward_kill_word (line, MINOR_BREAK);
 			break;
-		case 14:// ^n
-			if (I.hud) {
-				if (I.hud->top_entry_n + 1 < I.hud->current_entry_n) {
-					I.hud->top_entry_n++;
+		case 14: // ^n
+			if (line->hud) {
+				if (line->hud->top_entry_n + 1 < line->hud->current_entry_n) {
+					line->hud->top_entry_n++;
 				}
-			} else if (I.sel_widget) {
-				selection_widget_down (1);
-				selection_widget_draw ();
-			} else if (gcomp) {
-				if (gcomp_idx > 0) {
-					gcomp_idx--;
+			} else if (line->sel_widget) {
+				selection_widget_down (line, 1);
+				selection_widget_draw (cons);
+			} else if (D.gcomp > 0) {
+				if (D.gcomp_idx > 0) {
+					D.gcomp_idx--;
 				}
 			} else {
-				I.history.do_setup_match = o_do_setup_match;
-				r_line_hist_down ();
+				line->history.do_setup_match = o_do_setup_match;
+				r_line_hist_down (line);
 			}
 			break;
-		case 16:// ^p
-			if (I.hud) {
-				if (I.hud->top_entry_n >= 0) {
-					I.hud->top_entry_n--;
+		case 16: // ^p
+			if (line->hud) {
+				if (line->hud->top_entry_n >= 0) {
+					line->hud->top_entry_n--;
 				}
-			} else if (I.sel_widget) {
-				selection_widget_up (1);
-				selection_widget_draw ();
-			} else if (gcomp) {
-				gcomp_idx++;
+			} else if (line->sel_widget) {
+				selection_widget_up (line, 1);
+				selection_widget_draw (cons);
+			} else if (D.gcomp > 0) {
+				D.gcomp_idx++;
 			} else {
-				I.history.do_setup_match = o_do_setup_match;
-				r_line_hist_up ();
+				line->history.do_setup_match = o_do_setup_match;
+				r_line_hist_up (line);
 			}
 			break;
 		case 27: // esc-5b-41-00-00 alt/meta key
-#if __WINDOWS__
+#if R2__WINDOWS__
 			// always skip escape
 			memmove (buf, buf + 1, strlen ((char *)buf));
-#if 0
-			if (I.vtmode != 2) {
-				if (buf[1] == '[') {
-					memmove (buf, buf + 2, strlen (buf));
-				} else {
-					memmove (buf, buf + 1, strlen (buf));
-				}
-				if (!buf[0]) {
-					buf[0] = -1;
-				}
-			} else {
-				buf[0] = r_cons_readchar_timeout (50);
-			}
-#endif
 #else
-			buf[0] = r_cons_readchar_timeout (50);
+			buf[0] = r_cons_readchar_timeout (cons, 50);
 #endif
 			switch (buf[0]) {
 			case 127: // alt+bkspace
-				backward_kill_word ();
+				backward_kill_word (line, MINOR_BREAK);
 				break;
-			case -1:  // escape key, goto vi mode
-				if (I.enable_vi_mode) {
-					if (I.hud) {
-						I.hud->vi = true;
+			case -1: // escape key, goto vi mode
+				if (line->enable_vi_mode) {
+					if (line->hud) {
+						line->hud->vi = true;
 					}
-					__vi_mode ();
+					if (__vi_mode (cons)) {
+						goto _end;
+					}
 				};
-				if (I.sel_widget) {
-					selection_widget_erase ();
+				if (line->sel_widget) {
+					selection_widget_erase (line);
 				}
 				break;
-			case 1:	// begin
-				I.buffer.index = 0;
+			case 1: // begin
+				line->state.buffer.index = 0;
 				break;
-			case 5:	// end
-				I.buffer.index = I.buffer.length;
+			case 5: // end
+				line->state.buffer.index = line->state.buffer.length;
 				break;
 			case 'B':
 			case 'b':
-				for (i = I.buffer.index - 2; i >= 0; i--) {
-					if (is_word_break_char (I.buffer.data[i], MINOR_BREAK)
-					 && !is_word_break_char (I.buffer.data[i + 1], MINOR_BREAK)) {
-						I.buffer.index = i + 1;
+				for (i = line->state.buffer.index - 2; i >= 0; i--) {
+					if (is_word_break_char (line->state.buffer.data[i], MINOR_BREAK) && !is_word_break_char (line->state.buffer.data[i + 1], MINOR_BREAK)) {
+						line->state.buffer.index = i + 1;
 						break;
 					}
 				}
 				if (i < 0) {
-					I.buffer.index = 0;
+					line->state.buffer.index = 0;
 				}
 				break;
 			case 'D':
 			case 'd':
-				kill_word ();
+				kill_word (line, MINOR_BREAK, 'w');
 				break;
 			case 'F':
 			case 'f':
 				// next word
-				for (i = I.buffer.index + 1; i < I.buffer.length; i++) {
-					if (!is_word_break_char (I.buffer.data[i], MINOR_BREAK)
-					 && is_word_break_char (I.buffer.data[i - 1], MINOR_BREAK)) {
-						I.buffer.index = i;
+				for (i = line->state.buffer.index + 1; i < line->state.buffer.length; i++) {
+					if (!is_word_break_char (line->state.buffer.data[i], MINOR_BREAK) && is_word_break_char (line->state.buffer.data[i - 1], MINOR_BREAK)) {
+						line->state.buffer.index = i;
 						break;
 					}
 				}
-				if (i >= I.buffer.length) {
-					I.buffer.index = I.buffer.length;
+				if (i >= line->state.buffer.length) {
+					line->state.buffer.index = line->state.buffer.length;
 				}
 				break;
-			default:
-#if !__WINDOWS__
-				if (I.vtmode == 2) {
-					buf[1] = r_cons_readchar_timeout (50);
+			default:;
+#if R2__UNIX__
+				if (line->vtmode == 2) {
+					buf[1] = r_cons_readchar_timeout (cons, 50);
 					if (buf[1] == -1) { // alt+e
-						r_cons_break_pop ();
-						__print_prompt ();
+						r_cons_break_pop (cons);
+						__print_prompt (cons);
 						continue;
 					}
 				} else {
-					buf[1] = r_cons_readchar_timeout (50);
+					buf[1] = r_cons_readchar_timeout (cons, 50);
 				}
 #endif
-				if (buf[0] == '[') { // [
-					switch (buf[1]) {
-					case '3': // supr or mouse click
-						__delete_next_char ();
-						if (I.vtmode == 2) {
-							buf[1] = r_cons_readchar ();
-							if (buf[1] == 126) {
-								// handle SUPR key
-								r_cons_break_pop ();
-								__print_prompt ();
-								continue;
+				if (buf[0] == 'O' && strchr ("ABCDFH", buf[1]) != NULL) { // O
+					buf[0] = '[';
+				}
+				if (buf[0] == 79) {
+					// Function Keys
+					if (line->state.cb_fkey) {
+						ut8 kbuf = buf[1] & 0xff;
+						switch (kbuf) {
+						case 80:
+						case 81:
+						case 82:
+						case 83:
+						case 84:
+							{
+								int fkey = kbuf - 80 + 1;
+								if (fkey > 0 && fkey < 13) {
+									line->state.cb_fkey (line->user, fkey);
+								}
 							}
-							if (buf[1] == -1) {
-								r_cons_break_pop ();
-								return NULL;
+							break;
+						}
+					}
+				} else if (buf[0] == '[') { // [
+					int fkey = 0;
+					switch (buf[1]) {
+					case '<':
+						key = read_sgr_mouse_event (cons);
+						if (key == -1) {
+							r_cons_break_pop (cons);
+							return NULL;
+						}
+						if (key == 'k') {
+							if (line->hud && line->hud->top_entry_n + 1 < line->hud->current_entry_n) {
+								line->hud->top_entry_n--;
+							}
+						} else if (key == 'j') {
+							if (line->hud && line->hud->top_entry_n >= 0) {
+								line->hud->top_entry_n++;
 							}
 						}
-						for (;;) {
-							ch = r_cons_readchar ();
-							if (ch < 20) {
-								r_cons_break_pop ();
+						break;
+					case '2': // termfix
+						while (true) {
+							ch = r_cons_readchar (cons);
+							if (fkey == 0) {
+								// F9, F10 ,..
+								if (ch >= '0' && ch < '8') {
+									fkey = ch - '0' + 9;
+									if (fkey > 11) {
+										fkey--;
+									}
+								}
+							}
+							if (!isdigit (ch) && ch != ';') {
+								*buf = '\n';
+								// if we get fkey15 here its actually control+return
+								if (fkey > 0 && fkey < 13) {
+									if (line->state.cb_fkey) {
+										line->state.cb_fkey (line->user, fkey);
+									}
+								}
+								goto repeat;
+								break;
+							}
+						}
+						break;
+					case '3': // supr or mouse click
+						// printf "\x1b\x5b\x33\x3b\x35\x7e\n" \x1b[3;5~
+						// Insert=2~, Delete=3~, Home=1~, End=4~, PageUp=5~, PageDown=6~…).
+						// Modifier: 2=Shift, 3=Alt, 5=Ctrl, 6=Shift+Ctrl
+						// VTMode: 0=UNIX, 1=Windows, 2=Visual???
+						__delete_current_char (line);
+						if (line->vtmode == 0) {
+							if (!drain_csi_sequence (cons)) {
+								r_cons_break_pop (cons);
 								return NULL;
 							}
-							if (isupper (ch)) { // read until 'M'
-								break;
+						} else if (line->vtmode == 2) {
+							key = r_cons_readchar (cons);
+							if (key == 126) {
+								// handle SUPR key
+								r_cons_break_pop (cons);
+								__print_prompt (cons);
+								continue;
+							}
+							if (key == -1) {
+								r_cons_break_pop (cons);
+								return NULL;
+							}
+							if (!drain_csi_sequence (cons)) {
+								r_cons_break_pop (cons);
+								return NULL;
 							}
 						}
 						break;
 					case '5': // pag up
-						if (I.vtmode == 2) {
-							buf[1] = r_cons_readchar ();
+						if (line->vtmode == 2) {
+							buf[1] = r_cons_readchar (cons);
 						}
-						if (I.hud) {
-							I.hud->top_entry_n -= (rows - 1);
-							if (I.hud->top_entry_n < 0) {
-								I.hud->top_entry_n = 0;
+						if (line->hud) {
+							line->hud->top_entry_n -= (rows - 1);
+							if (line->hud->top_entry_n < 0) {
+								line->hud->top_entry_n = 0;
 							}
 						}
-						if (I.sel_widget) {
-							selection_widget_up (R_MIN (I.sel_widget->h, R_SELWIDGET_MAXH));
-							selection_widget_draw ();
+						if (line->sel_widget) {
+							selection_widget_up (line, R_MIN (line->sel_widget->h, R_SELWIDGET_MAXH));
+							selection_widget_draw (cons);
 						}
 						break;
 					case '6': // pag down
-						if (I.vtmode == 2) {
-							buf[1] = r_cons_readchar ();
+						if (line->vtmode == 2) {
+							buf[1] = r_cons_readchar (cons);
 						}
-						if (I.hud) {
-							I.hud->top_entry_n += (rows - 1);
-							if (I.hud->top_entry_n >= I.hud->current_entry_n) {
-								I.hud->top_entry_n = I.hud->current_entry_n - 1;
+						if (line->hud) {
+							line->hud->top_entry_n += (rows - 1);
+							if (line->hud->top_entry_n >= line->hud->current_entry_n) {
+								line->hud->top_entry_n = line->hud->current_entry_n - 1;
 							}
 						}
-						if (I.sel_widget) {
-							selection_widget_down (R_MIN (I.sel_widget->h, R_SELWIDGET_MAXH));
-							selection_widget_draw ();
+						if (line->sel_widget) {
+							selection_widget_down (line, R_MIN (line->sel_widget->h, R_SELWIDGET_MAXH));
+							selection_widget_draw (cons);
 						}
 						break;
 					case '9': // handle mouse wheel
-						key = r_cons_readchar ();
+						key = r_cons_readchar (cons);
 						cons->mouse_event = 1;
-						if (key == '6') {	// up
-							if (I.hud && I.hud->top_entry_n + 1 < I.hud->current_entry_n) {
-								I.hud->top_entry_n--;
+						if (key == '6') { // up
+							if (line->hud && line->hud->top_entry_n + 1 < line->hud->current_entry_n) {
+								line->hud->top_entry_n--;
 							}
-						} else if (key == '7') {	 // down
-							if (I.hud && I.hud->top_entry_n >= 0) {
-								I.hud->top_entry_n++;
+						} else if (key == '7') { // down
+							if (line->hud && line->hud->top_entry_n >= 0) {
+								line->hud->top_entry_n++;
 							}
 						}
-						while (r_cons_readchar () != 'M') {}
+						drain_csi_sequence (cons);
 						break;
 					/* arrows */
-					case 'A':	// up arrow
-						if (I.hud) {
-							if (I.hud->top_entry_n > 0) {
-								I.hud->top_entry_n--;
+					case 'A': // up arrow
+						if (line->hud) {
+							if (line->hud->current_entry_n > 0) {
+								line->hud->current_entry_n--;
 							}
-						} else if (I.sel_widget) {
-							selection_widget_up (1);
-							selection_widget_draw ();
-						} else if (gcomp) {
-							gcomp_idx++;
+						} else if (line->sel_widget) {
+							selection_widget_up (line, 1);
+							selection_widget_draw (cons);
+						} else if (D.gcomp > 0) {
+							D.gcomp_idx++;
 						} else {
-							I.history.do_setup_match = o_do_setup_match;
-							if (r_line_hist_up () == -1) {
-								r_cons_break_pop ();
+							line->history.do_setup_match = o_do_setup_match;
+							if (r_line_hist_up (line) == -1) {
+								r_cons_break_pop (line->cons);
 								return NULL;
 							}
 						}
 						break;
-					case 'B':	// down arrow
-						if (I.hud) {
-							if (I.hud->top_entry_n + 1 < I.hud->current_entry_n) {
-								I.hud->top_entry_n++;
-							}
-						} else if (I.sel_widget) {
-							selection_widget_down (1);
-							selection_widget_draw ();
-						} else if (gcomp) {
-							if (gcomp_idx > 0) {
-								gcomp_idx--;
+					case 'B': // down arrow
+						if (line->hud) {
+							line->hud->current_entry_n++;
+						} else if (line->sel_widget) {
+							selection_widget_down (line, 1);
+							selection_widget_draw (cons);
+						} else if (D.gcomp > 0) {
+							if (D.gcomp_idx > 0) {
+								D.gcomp_idx--;
 							}
 						} else {
-							I.history.do_setup_match = o_do_setup_match;
-							if (r_line_hist_down () == -1) {
-								r_cons_break_pop ();
+							line->history.do_setup_match = o_do_setup_match;
+							if (r_line_hist_down (line) == -1) {
+								r_cons_break_pop (line->cons);
 								return NULL;
 							}
 						}
 						break;
-					case 'C':	// right arrow
-						__move_cursor_right ();
+					case 'C': // right arrow
+						__move_cursor_right (line);
 						break;
-					case 'D':	// left arrow
-						__move_cursor_left ();
+					case 'D': // left arrow
+						__move_cursor_left (line);
 						break;
-					case 0x31:	// control + arrow
-						if (I.vtmode == 2) {
-							ch = r_cons_readchar ();
+						break;
+					case '1': // 0x31 - control + arrow + home key
+						if (line->vtmode == 2) {
+							ch = r_cons_readchar (cons);
 							if (ch == 0x7e) { // HOME in screen/tmux
 								// corresponding END is 0x34 below (the 0x7e is ignored there)
-								I.buffer.index = 0;
+								line->state.buffer.index = 0;
 								break;
 							}
-							r_cons_readchar ();
+							switch (ch) {
+							case '5':
+								fkey = ch - '0';
+								break;
+							case '6':
+							case '7':
+							case '8':
+							case '9':
+
+								fkey = ch - '0' - 1;
+								break;
+							default:
+								R_LOG_ERROR ("Unknown fkey %d pressed", fkey);
+								break;
+							}
+							ch = r_cons_readchar (cons); // should be '5'
+							// ch = r_cons_readchar (cons);
 						}
-#if __WINDOWS__
+#if R2__WINDOWS__
 						else {
 							ch = buf[2];
+							fkey = ch - '0';
 						}
 #endif
-						int fkey = ch - '0';
 						switch (ch) {
 						case 0x41:
 							// first
-							I.buffer.index = 0;
+							line->state.buffer.index = 0;
 							break;
 						case 0x44:
 							// previous word
-							for (i = I.buffer.index; i > 0; i--) {
-								if (I.buffer.data[i] == ' ') {
-									I.buffer.index = i - 1;
-									break;
-								}
-							}
-							if (I.buffer.data[i] != ' ') {
-								I.buffer.index = 0;
-							}
+							i = line->state.buffer.index;
+							do {
+								i--;
+							} while (i > 0 && line->state.buffer.data[i - 1] != ' ');
+							line->state.buffer.index = i;
 							break;
 						case 0x42:
 							// end
-							I.buffer.index = I.buffer.length;
+							line->state.buffer.index = line->state.buffer.length;
 							break;
 						case 0x43:
 							// next word
-							for (i = I.buffer.index; i < I.buffer.length; i++) {
-								if (I.buffer.data[i] == ' ') {
-									I.buffer.index = i + 1;
+							for (i = line->state.buffer.index; i < line->state.buffer.length; i++) {
+								if (line->state.buffer.data[i] == ' ') {
+									line->state.buffer.index = i + 1;
 									break;
 								}
 							}
-							if (I.buffer.data[i] != ' ') {
-								I.buffer.index = I.buffer.length;
+							if (line->state.buffer.data[i] != ' ') {
+								line->state.buffer.index = line->state.buffer.length;
 							}
 							break;
 						default:
-							if (I.vtmode == 2) {
-								if (I.cb_fkey) {
-									I.cb_fkey (I.user, fkey);
+							if (line->vtmode == 2) {
+								if (line->state.cb_fkey) {
+									line->state.cb_fkey (line->user, fkey);
 								}
 							}
 							break;
 						}
-						r_cons_set_raw (1);
+						r_cons_set_raw (cons, true);
 						break;
-					case 0x37:	// HOME xrvt-unicode
-						r_cons_readchar ();
+					case 0x37: // HOME xrvt-unicode
+						r_cons_readchar (cons);
 						break;
-					case 0x48:	// HOME
-						if (I.sel_widget) {
-							selection_widget_up (I.sel_widget->options_len - 1);
-							selection_widget_draw ();
+					case 0x48: // HOME
+						if (line->sel_widget) {
+							selection_widget_up (line, line->sel_widget->options_len - 1);
+							selection_widget_draw (cons);
 							break;
 						}
-						I.buffer.index = 0;
+						line->state.buffer.index = 0;
 						break;
-					case 0x34:	// END
-					case 0x38:	// END xrvt-unicode
-						r_cons_readchar ();
-					case 0x46:	// END
-						if (I.sel_widget) {
-							selection_widget_down (I.sel_widget->options_len - 1);
-							selection_widget_draw ();
+					case '4': // END
+						r_cons_readchar (cons);
+					case 0x46: // END
+						if (line->sel_widget) {
+							selection_widget_down (line, line->sel_widget->options_len - 1);
+							selection_widget_draw (cons);
 							break;
 						}
-						I.buffer.index = I.buffer.length;
+						line->state.buffer.index = line->state.buffer.length;
+						break;
+					case '8': // END xrvt-unicode or urxvt mouse
+						ch = r_cons_readchar (cons);
+						if (ch == '0' || ch == '1') {
+							key = read_urxvt_mouse_event (cons, ch == '0'? 80: 81);
+							if (key == -1) {
+								r_cons_break_pop (cons);
+								return NULL;
+							}
+							break;
+						}
+						if (line->sel_widget) {
+							selection_widget_down (line, line->sel_widget->options_len - 1);
+							selection_widget_draw (cons);
+							break;
+						}
+						line->state.buffer.index = line->state.buffer.length;
 						break;
 					}
 				}
@@ -1914,53 +2477,53 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 			break;
 		case 8:
 		case 127:
-			if (I.hud && (I.buffer.index == 0)) {
-				I.hud->activate = false;
-				I.hud->current_entry_n = -1;
+			if (line->hud && (line->state.buffer.index == 0)) {
+				line->hud->activate = false;
+				line->hud->current_entry_n = -1;
 			}
-			__delete_prev_char ();
+			__delete_prev_char (line);
 			break;
-		case 9:	// TAB tab
-			if (I.buffer.length > 0 && I.buffer.data[I.buffer.length - 1] == '@') {
-				strcpy (I.buffer.data + I.buffer.length, " ");
-				I.buffer.length++;
-				I.buffer.index++;
+		case 9: // TAB tab
+			if (line->state.buffer.length > 0 && line->state.buffer.data[line->state.buffer.length - 1] == '@') {
+				strcpy (line->state.buffer.data + line->state.buffer.length, " ");
+				line->state.buffer.length++;
+				line->state.buffer.index++;
 			}
-			if (I.sel_widget) {
-				selection_widget_down (1);
-				I.sel_widget->complete_common = true;
-				selection_widget_draw ();
+			if (line->sel_widget) {
+				selection_widget_down (line, 1);
+				line->sel_widget->complete_common = true;
+				selection_widget_draw (cons);
 			}
-			if (I.hud) {
-				if (I.hud->top_entry_n + 1 < I.hud->current_entry_n) {
-					I.hud->top_entry_n++;
+			if (line->hud) {
+				if (line->hud->top_entry_n + 1 < line->hud->current_entry_n) {
+					line->hud->top_entry_n++;
 				} else {
-					I.hud->top_entry_n = 0;
+					line->hud->top_entry_n = 0;
 				}
 			} else {
-				r_line_autocomplete ();
+				r_line_autocomplete (cons);
 			}
 			break;
 		case 10: // ^J
 		case 13: // enter
-			if (I.hud) {
-				I.hud->activate = false;
+			if (line->hud) {
+				line->hud->activate = false;
 				break;
 			}
-			if (I.sel_widget) {
-				selection_widget_select ();
+			if (line->sel_widget) {
+				selection_widget_select (line);
 				break;
 			}
-			if (gcomp && I.buffer.length > 0) {
-				strncpy (I.buffer.data, gcomp_line, R_LINE_BUFSIZE - 1);
-				I.buffer.data[R_LINE_BUFSIZE - 1] = '\0';
-				I.buffer.length = strlen (gcomp_line);
+			if (D.gcomp > 0 && line->state.buffer.length > 0) {
+				r_str_ncpy (line->state.buffer.data, gcomp_line, R_LINE_BUFSIZE);
+				line->state.buffer.length = strlen (line->state.buffer.data);
 			}
-			gcomp_idx = gcomp = 0;
+			D.gcomp_idx = 0;
+			D.gcomp = 0;
 			goto _end;
 		default:
-			if (gcomp) {
-				gcomp++;
+			if (D.gcomp > 0) {
+				D.gcomp++;
 			}
 			{
 #if USE_UTF8
@@ -1968,104 +2531,111 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 #else
 				int size = 1;
 #endif
-				if (I.buffer.length + size >= R_LINE_BUFSIZE) {
+				if (line->state.buffer.length + size >= R_LINE_BUFSIZE) {
 					break;
 				}
 			}
-			if (I.buffer.index < I.buffer.length) {
+			if (line->state.buffer.index < line->state.buffer.length) {
 #if USE_UTF8
-				if ((I.buffer.length + utflen) < sizeof (I.buffer.data)) {
-					I.buffer.length += utflen;
-					for (i = I.buffer.length; i > I.buffer.index; i--) {
-						I.buffer.data[i] = I.buffer.data[i - utflen];
+				if ((line->state.buffer.length + utflen) < sizeof (line->state.buffer.data)) {
+					line->state.buffer.length += utflen;
+					for (i = line->state.buffer.length; i > line->state.buffer.index; i--) {
+						line->state.buffer.data[i] = line->state.buffer.data[i - utflen];
 					}
-					memcpy (I.buffer.data + I.buffer.index, buf, utflen);
+					memcpy (line->state.buffer.data + line->state.buffer.index, buf, utflen);
 				}
 #else
-				for (i = ++I.buffer.length; i > I.buffer.index; i--) {
-					I.buffer.data[i] = I.buffer.data[i - 1];
+				for (i = ++line->state.buffer.length; i > line->state.buffer.index; i--) {
+					line->state.buffer.data[i] = line->state.buffer.data[i - 1];
 				}
-				I.buffer.data[I.buffer.index] = buf[0];
+				line->state.buffer.data[line->state.buffer.index] = buf[0];
 #endif
 			} else {
 #if USE_UTF8
-				if ((I.buffer.length + utflen) < sizeof (I.buffer.data)) {
-					memcpy (I.buffer.data + I.buffer.length, buf, utflen);
-					I.buffer.length += utflen;
+				if ((line->state.buffer.length + utflen + 1) < sizeof (line->state.buffer.data)) {
+					memcpy (line->state.buffer.data + line->state.buffer.length, buf, utflen);
+					line->state.buffer.length += utflen;
 				}
-				I.buffer.data[I.buffer.length] = '\0';
+				line->state.buffer.data[line->state.buffer.length] = '\0';
 #else
-				I.buffer.data[I.buffer.length] = buf[0];
-				I.buffer.length++;
-				if (I.buffer.length > (R_LINE_BUFSIZE - 1)) {
-					I.buffer.length--;
+				line->state.buffer.data[line->state.buffer.length] = buf[0];
+				line->state.buffer.length++;
+				if (line->state.buffer.length > (R_LINE_BUFSIZE - 1)) {
+					line->state.buffer.length--;
 				}
-				I.buffer.data[I.buffer.length] = '\0';
+				line->state.buffer.data[line->state.buffer.length] = '\0';
 #endif
 			}
 #if USE_UTF8
-			if ((I.buffer.index + utflen) <= I.buffer.length) {
-				I.buffer.index += utflen;
+			if ((line->state.buffer.index + utflen) <= line->state.buffer.length) {
+				line->state.buffer.index += utflen;
 			}
 #else
-			if (I.buffer.index < I.buffer.length) {
-				I.buffer.index++;
+			if (line->state.buffer.index < line->state.buffer.length) {
+				line->state.buffer.index++;
 			}
 #endif
 			break;
 		}
-		if (I.sel_widget && I.buffer.length != prev_buflen) {
-			prev_buflen = I.buffer.length;
-			r_line_autocomplete ();
+		if (line->sel_widget && line->state.buffer.length != prev_buflen) {
+			prev_buflen = line->state.buffer.length;
+			r_line_autocomplete (cons);
 		}
 		prev = buf[0];
-		if (I.echo) {
-			if (gcomp) {
+		if (line->echo) {
+			if (D.gcomp > 0) {
 				gcomp_line = "";
 				int counter = 0;
-				if (I.history.data) {
-					for (i = I.history.size - 1; i >= 0; i--) {
-						if (!I.history.data[i]) {
+				if (line->history.data) {
+					for (i = line->history.size - 1; i >= 0; i--) {
+						if (!line->history.data[i]) {
 							continue;
 						}
-						if (strstr (I.history.data[i], I.buffer.data)) {
-							gcomp_line = I.history.data[i];
-							if (++counter > gcomp_idx) {
+						if (strstr (line->history.data[i], line->state.buffer.data)) {
+							gcomp_line = line->history.data[i];
+							if (++counter > D.gcomp_idx) {
 								break;
 							}
 						}
 						if (i == 0) {
-							gcomp_idx--;
+							D.gcomp_idx--;
 						}
 					}
 				}
 				dietline_print_risprompt (gcomp_line);
 			} else {
-			        __print_prompt ();
+				__print_prompt (cons);
 			}
 			fflush (stdout);
 		}
-		enable_yank_pop = yank_flag ? 1 : 0;
-		if (I.hud) {
+		D.enable_yank_pop = D.yank_flag;
+		if (line->hud) {
 			goto _end;
 		}
 	}
 _end:
-	r_cons_break_pop ();
-	r_cons_set_raw (0);
-	r_cons_enable_mouse (mouse_status);
-	if (I.echo) {
-		printf ("\r%s%s\n", I.prompt, I.buffer.data);
+	r_cons_break_pop (cons);
+	r_cons_set_raw (cons, false);
+	r_cons_enable_mouse (cons, mouse_status);
+#if 0
+	if (line->state.buffer.length > 1024) {	// R2_590 - use line->maxlength
+		line->state.buffer.data[0] = 0;
+		line->state.buffer.length = 0;
+		R_LOG_WARN ("Input is too large");
+		return line->state.buffer.data;
+	}
+#endif
+	if (line->echo) {
+		printf ("\r%s%s%s%s\n", line->state.prompt, promptcolor (cons), line->state.buffer.data, Color_RESET);
 		fflush (stdout);
 	}
 
-	R_FREE (I.sel_widget);
+	R_FREE (line->sel_widget);
 
-	// should be here or not?
-	if (!memcmp (I.buffer.data, "!history", 8)) {
-		// if (I.buffer.data[0]=='!' && I.buffer.data[1]=='\0') {
-		r_line_hist_list ();
-		return r_line_nullstr;
+	// shouldnt be here
+	if (r_str_startswith (line->state.buffer.data, "!history")) {
+		r_line_hist_list (line, true);
+		return "";
 	}
-	return I.buffer.data[0] != '\0'? I.buffer.data: r_line_nullstr;
+	return line->state.buffer.data[0] != '\0'? line->state.buffer.data: "";
 }

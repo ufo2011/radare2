@@ -1,13 +1,13 @@
-/* radare2 - LGPL - Copyright 2019 - condret */
+/* radare2 - LGPL - Copyright 2019 - 2024 - condret */
 
+#include <r_anal.h>
 #include <r_types.h>
 #include <r_util.h>
-#include <r_anal.h>
 
-/*	shared internal state of the subgraph generating functions	*/
+/* shared internal state of the subgraph generating functions */
 
 typedef struct esil_cfg_generator_t {
-	RAnalEsil *esil;
+	REsil *esil;
 	union {
 		RStack *ifelse;
 		RStack *vals;
@@ -16,11 +16,13 @@ typedef struct esil_cfg_generator_t {
 	RRBTree *blocks;
 	// consider moving this to cfg? well, yes and no.
 	// making Graph nodes fast available in RAnalEsilCFG is great idea
-	// A balanced tree is only best solution, if we want to store and lookup intervals
-	// We need to look for intervals, so that we can resolve goto destinations INSIDE of a cpu-instruction
-	// After an instruction got graphed, we only need their entry node (nodes with first == {xxx, 0 })
-	// So after graphing an instruction, the blocks-tree should be cleared (don't free the content)
-	// and nodes with first == {xxx, 0} should be stored in an sdb or similar in cfg, with xxx as key
+	// A balanced tree is only best solution, if we want to store and lookup
+	// intervals We need to look for intervals, so that we can resolve goto
+	// destinations INSIDE of a cpu-instruction After an instruction got graphed,
+	// we only need their entry node (nodes with first == {xxx, 0 }) So after
+	// graphing an instruction, the blocks-tree should be cleared (don't free the
+	// content) and nodes with first == {xxx, 0} should be stored in an sdb or
+	// similar in cfg, with xxx as key
 	RAnalEsilCFG *cfg;
 	RGraphNode *cur;
 	// current graph-node, so that I don't have to abuse cfg->start
@@ -33,56 +35,33 @@ typedef struct esil_cfg_generator_t {
 // esil has support for multiple elses,
 // so we need these cookies on the ifelse-stack to keep track of things:
 // when entering an if-block the parent is set as the else_block
-// when entering an else block it is set as else_block, if is_else is false, other wise as if_block
-// when entering an else block is_else flips
+// when entering an else block it is set as else_block, if is_else is false,
+// other wise as if_block when entering an else block is_else flips
 typedef struct esil_cfg_scope_cookie_t {
 	RGraphNode *if_block;
 	RGraphNode *else_block;
 	bool is_else;
 } EsilCfgScopeCookie;
 
-typedef enum {
-	ESIL_VAL_CONST,
+typedef enum { ESIL_VAL_CONST,
 	ESIL_VAL_REG,
-	ESIL_VAL_RESULT
-} EsilValType;
+	ESIL_VAL_RESULT } EsilValType;
 
 typedef struct esil_value_t {
-	ut64 val; //should be a union, but for goto-analysis ut64 is fine
+	ut64 val; // should be a union, but for goto-analysis ut64 is fine
 	EsilValType type;
 } EsilVal;
 
-/*	HELPERS 	*/
-
-static char *condrets_strtok(char *str, const char tok) {
-	if (!str) {
-		return NULL;
-	}
-	ut32 i = 0;
-	while (1 == 1) {
-		if (!str[i]) {
-			break;
-		}
-		if (str[i] == tok) {
-			str[i] = '\0';
-			return &str[i + 1];
-		}
-		i++;
-	}
-	return NULL;
-}
-
-RAnalEsilOp *esil_get_op (RAnalEsil *esil, const char *op) {
-	r_return_val_if_fail (R_STR_ISNOTEMPTY (op) && esil && esil->ops, NULL);
-	return ht_pp_find (esil->ops, op, NULL);
-}
+/* HELPERS */
 
 // this little thot atomizes an esil expressions by splitting it on ','
 static void esil_expr_atomize(RIDStorage *atoms, char *expr) {
 	ut32 forget_me;
-	for (
-		; !!expr && r_id_storage_add (atoms, expr, &forget_me);
-		expr = condrets_strtok (expr, ',')) {
+	char *save_ptr = NULL;
+	char *token = r_str_tok_r (expr, ",", &save_ptr);
+	while (token) {
+		r_id_storage_add (atoms, token, &forget_me);
+		token = r_str_tok_r (NULL, ",", &save_ptr);
 	}
 }
 
@@ -92,10 +71,12 @@ static void _free_bb_cb(void *data) {
 	free (bb);
 }
 
-// REMINDER: generating the block content needs to prepend setting the program counter
-// r_anal_esil_cfg_op does this ^, use it whenever generating cfg from op
+// REMINDER: generating the block content needs to prepend setting the program
+// counter r_anal_esil_cfg_op does this ^, use it whenever generating cfg from
+// op
 
-// this nasty function is an insert-compare for RGraphNodes that contain RAnalEsilBB
+// this nasty function is an insert-compare for RGraphNodes that contain
+// RAnalEsilBB
 static int _graphnode_esilbb_insert_cmp(void *incoming, void *in, void *user) {
 	RGraphNode *incoming_gnode = (RGraphNode *)incoming;
 	RGraphNode *in_gnode = (RGraphNode *)in;
@@ -107,8 +88,8 @@ static int _graphnode_esilbb_insert_cmp(void *incoming, void *in, void *user) {
 #if 0
 	return incoming_bb->first - in_bb->first;
 #endif
-	// We MUST NOT use direct subtraction here, since st64 vs st32 can break the tree
-	// be careful and check by compares
+	// We MUST NOT use direct subtraction here, since st64 vs st32 can break the
+	// tree be careful and check by compares
 	if (incoming_bb->first.off < in_bb->first.off) {
 		return -1;
 	}
@@ -139,7 +120,8 @@ static int _graphnode_esilbb_find_cmp(void *incoming, void *in, void *user) {
 	return 0;
 }
 
-static int _graphnode_delete_always_0_cmp(void *incoming, void *in, void *user) {
+static int _graphnode_delete_always_0_cmp(void *incoming, void *in,
+	void *user) {
 	EsilCfgGen *gen = (EsilCfgGen *)user;
 	RGraphNode *delete_me = (RGraphNode *)in;
 	RAnalEsilBB *delete_me_bb = (RAnalEsilBB *)delete_me->data;
@@ -151,7 +133,7 @@ static int _graphnode_delete_always_0_cmp(void *incoming, void *in, void *user) 
 	return 0;
 }
 
-void _handle_if_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
+static void _handle_if_enter(EsilCfgGen *gen, ut32 id, const bool has_next) {
 	if (!has_next) {
 		return;
 	}
@@ -159,7 +141,7 @@ void _handle_if_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
 	EsilCfgScopeCookie *cookie = R_NEW0 (EsilCfgScopeCookie);
 
 	// get current bb
-	//	RAnalEsilBB *bb = (RAnalEsilBB *)gen->cur->data;
+	// RAnalEsilBB *bb = (RAnalEsilBB *)gen->cur->data;
 
 	// create if-enter-bb
 	RAnalEsilBB *entered_bb = R_NEW0 (RAnalEsilBB);
@@ -170,7 +152,8 @@ void _handle_if_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
 	// create if-entered-graph-node
 	RGraphNode *entered_node = r_graph_add_node (gen->cfg->g, entered_bb);
 	entered_node->free = _free_bb_cb;
-	r_crbtree_insert (gen->blocks, entered_node, _graphnode_esilbb_insert_cmp, NULL);
+	r_crbtree_insert (gen->blocks, entered_node, _graphnode_esilbb_insert_cmp,
+		NULL);
 
 	// add edge from entering node to entered node
 	r_graph_add_edge (gen->cfg->g, gen->cur, entered_node);
@@ -182,7 +165,7 @@ void _handle_if_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
 	gen->cur = entered_node;
 }
 
-void _handle_else_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
+static void _handle_else_enter(EsilCfgGen *gen, ut32 id, const bool has_next) {
 	if (!has_next || r_stack_is_empty (gen->ifelse)) {
 		// no cookie no todo
 		return;
@@ -197,7 +180,8 @@ void _handle_else_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
 	// create if-entered-graph-node
 	RGraphNode *entered_node = r_graph_add_node (gen->cfg->g, entered_bb);
 	entered_node->free = _free_bb_cb;
-	r_crbtree_insert (gen->blocks, entered_node, _graphnode_esilbb_insert_cmp, NULL);
+	r_crbtree_insert (gen->blocks, entered_node, _graphnode_esilbb_insert_cmp,
+		NULL);
 
 	if (cookie->is_else) {
 		entered_bb->enter = R_ANAL_ESIL_BLOCK_ENTER_TRUE;
@@ -215,7 +199,7 @@ void _handle_else_enter (EsilCfgGen *gen, ut32 id, const bool has_next) {
 	gen->cur = entered_node;
 }
 
-void _handle_fi_leave(EsilCfgGen *gen, ut32 id, const bool has_next) {
+static void _handle_fi_leave(EsilCfgGen *gen, ut32 id, const bool has_next) {
 	EsilCfgScopeCookie *cookie = r_stack_pop (gen->ifelse);
 	if (!cookie) {
 		// no if, no fi todo
@@ -233,18 +217,22 @@ void _handle_fi_leave(EsilCfgGen *gen, ut32 id, const bool has_next) {
 		RGraphNode *leaving_node = r_graph_add_node (gen->cfg->g, leaving_bb);
 		leaving_node->free = _free_bb_cb;
 		r_graph_add_edge (gen->cfg->g, gen->cur, leaving_node);
-		r_crbtree_insert (gen->blocks, leaving_node, _graphnode_esilbb_insert_cmp, NULL);
+		r_crbtree_insert (gen->blocks, leaving_node, _graphnode_esilbb_insert_cmp,
+			NULL);
 		gen->cur = leaving_node;
 	}
-	r_graph_add_edge (gen->cfg->g, cookie->is_else ? cookie->if_block : cookie->else_block, gen->cur);
+	r_graph_add_edge (gen->cfg->g,
+		cookie->is_else? cookie->if_block: cookie->else_block,
+		gen->cur);
 	free (cookie);
 }
 
 // this function handles '?{','}{’ and '}'
 // return type should probably be a bool, but idk
-void _handle_control_flow_ifelsefi (EsilCfgGen *gen, char *atom, ut32 id) {
+static void _handle_control_flow_ifelsefi(EsilCfgGen *gen, char *atom,
+	ut32 id) {
 	// we're probably going to see more ?{ and }, than }{
-	// so checking against ?{ and } befor }{ is therefor better for perf (lololol)
+	// so checking against? { and } befor }{ is therefor better for perf (lololol)
 	if (!strcmp (atom, "?{")) {
 		_handle_if_enter (gen, id, !!r_id_storage_get (gen->atoms, id + 1));
 		return;
@@ -260,21 +248,22 @@ void _handle_control_flow_ifelsefi (EsilCfgGen *gen, char *atom, ut32 id) {
 
 // this little function is expected to generate a subgraph with most nodes in it
 // but not all edges. It's expected to handle if, else and fi
-bool _round_0_cb (void *user, void *data, ut32 id) {
+static bool _round_0_cb(void *user, void *data, ut32 id) {
 	EsilCfgGen *gen = (EsilCfgGen *)user;
 	char *atom = (char *)data;
 	RAnalEsilBB *bb = (RAnalEsilBB *)gen->cur->data;
-	RAnalEsilOp *op = esil_get_op (gen->esil, atom);
+	REsilOp *op = r_esil_get_op (gen->esil, r_strs_from (atom));
 	bb->last.idx = (ut16)id;
-	if (op && op->type == R_ANAL_ESIL_OP_TYPE_CONTROL_FLOW) {
+	if (op && op->type == R_ESIL_OP_TYPE_CONTROL_FLOW) {
 		_handle_control_flow_ifelsefi (gen, atom, id);
 	}
 	return true;
 }
 
-RGraphNode *_common_break_goto (EsilCfgGen *gen, ut32 id) {
+static RGraphNode *_common_break_goto(EsilCfgGen *gen, ut32 id) {
 	RAnalEsilEOffset off = { gen->off, (ut16)id };
-	RGraphNode *gnode = r_crbtree_find (gen->blocks, &off, _graphnode_esilbb_find_cmp, NULL);
+	RGraphNode *gnode =
+		r_crbtree_find (gen->blocks, &off, _graphnode_esilbb_find_cmp, NULL);
 	RAnalEsilBB *bb = (RAnalEsilBB *)gnode->data;
 	if (id != bb->last.idx) {
 		RAnalEsilBB *next_bb = R_NEW0 (RAnalEsilBB);
@@ -283,33 +272,32 @@ RGraphNode *_common_break_goto (EsilCfgGen *gen, ut32 id) {
 		next_bb->first.idx = id + 1;
 		next_bb->last = bb->last;
 		bb->last.idx = id;
-		RGraphNode *next_gnode = r_graph_node_split_forward (gen->cfg->g, gnode, next_bb);
+		RGraphNode *next_gnode =
+			r_graph_node_split_forward (gen->cfg->g, gnode, next_bb);
 		// TODO: implement node_split in graph api
-		r_crbtree_insert (gen->blocks, next_gnode, _graphnode_esilbb_insert_cmp, NULL);
+		r_crbtree_insert (gen->blocks, next_gnode, _graphnode_esilbb_insert_cmp,
+			NULL);
 	} else {
-		RListIter *iter, *ator;
-		RGraphNode *node;
 		// TODO: improve perf here
-		r_list_foreach_safe (gnode->out_nodes, iter, ator, node) {
+		while (!RVecGraphNodePtr_empty (&gnode->out_nodes)) {
+			RGraphNode *node = *RVecGraphNodePtr_last (&gnode->out_nodes);
 			r_graph_del_edge (gen->cfg->g, gnode, node);
 		}
 	}
 	return gnode;
-	// r_graph_add_edge(gen->cfg->g, gnode, gen->cfg->end);
+	// r_graph_add_edge (gen->cfg->g, gnode, gen->cfg->end);
 }
 
-void _handle_break (EsilCfgGen *gen, ut32 id) {
+static void _handle_break(EsilCfgGen *gen, ut32 id) {
 	r_graph_add_edge (gen->cfg->g, _common_break_goto (gen, id), gen->cfg->end);
 }
 
-void _handle_goto (EsilCfgGen *gen, ut32 idx) {
+static void _handle_goto(EsilCfgGen *gen, ut32 idx) {
 	RGraphNode *gnode = _common_break_goto (gen, idx);
 	RAnalEsilBB *bb = (RAnalEsilBB *)gnode->data;
-	// so what we're doing here is emulating this block with a certain degree of abstraction:
-	// no reg-access
-	// no io-access
-	// stack-movents
-	// maybe arithmetic stack operations
+	// so what we're doing here is emulating this block with a certain degree of
+	// abstraction: no reg-access no io-access stack-movents maybe arithmetic
+	// stack operations
 	//
 	// we need to figure out the goto destination
 	// ex: "a,b,=,12,GOTO" => goto dst is 12
@@ -320,7 +308,7 @@ void _handle_goto (EsilCfgGen *gen, ut32 idx) {
 	// bb->last.idx is the GOTO operation itself, we do not reach this in the loop
 	for (id = bb->first.idx; id < bb->last.idx; id++) {
 		char *atom = (char *)r_id_storage_get (gen->atoms, (ut32)id);
-		RAnalEsilOp *op = esil_get_op (gen->esil, atom);
+		REsilOp *op = r_esil_get_op (gen->esil, r_strs_from (atom));
 		if (op) {
 			ut32 j;
 			for (j = 0; j < op->pop; j++) {
@@ -345,13 +333,14 @@ void _handle_goto (EsilCfgGen *gen, ut32 idx) {
 	EsilVal *v = r_stack_pop (gen->vals);
 	if (!v || v->type != ESIL_VAL_CONST) {
 		free (v);
-		eprintf ("Cannot resolve GOTO dst :(\n");
+		R_LOG_ERROR ("Cannot resolve GOTO dst :(");
 		goto beach;
 	}
 
 	// get the node to the corresponding GOTO destination
 	RAnalEsilEOffset dst_off = { gen->off, (ut16)v->val };
-	RGraphNode *dst_node = r_crbtree_find (gen->blocks, &dst_off, _graphnode_esilbb_find_cmp, NULL);
+	RGraphNode *dst_node =
+		r_crbtree_find (gen->blocks, &dst_off, _graphnode_esilbb_find_cmp, NULL);
 	if (!dst_node) {
 		// out-of-bounds
 		// check if this works
@@ -363,7 +352,8 @@ void _handle_goto (EsilCfgGen *gen, ut32 idx) {
 			split_bb[0] = dst_bb[0];
 			dst_bb->last.idx = v->val - 1;
 			split_bb->first.idx = v->val;
-			RGraphNode *split = r_graph_node_split_forward (gen->cfg->g, dst_node, split_bb);
+			RGraphNode *split =
+				r_graph_node_split_forward (gen->cfg->g, dst_node, split_bb);
 			r_graph_add_edge (gen->cfg->g, dst_node, split);
 			dst_node = split;
 		}
@@ -376,11 +366,11 @@ beach:
 	}
 }
 
-bool _round_1_cb(void *user, void *data, ut32 id) {
+static bool _round_1_cb(void *user, void *data, ut32 id) {
 	EsilCfgGen *gen = (EsilCfgGen *)user;
 	char *atom = (char *)data;
-	RAnalEsilOp *op = esil_get_op (gen->esil, atom);
-	if (op && op->type == R_ANAL_ESIL_OP_TYPE_CONTROL_FLOW) {
+	REsilOp *op = r_esil_get_op (gen->esil, r_strs_from (atom));
+	if (op && op->type == R_ESIL_OP_TYPE_CONTROL_FLOW) {
 		if (!strcmp ("BREAK", atom)) {
 			_handle_break (gen, id);
 		}
@@ -391,10 +381,12 @@ bool _round_1_cb(void *user, void *data, ut32 id) {
 	return true;
 }
 
-void _round_2_cb (RGraphNode *n, RGraphVisitor *vi) {
+static void _round_2_cb(RGraphNode *n, RGraphVisitor *vi) {
 	RAnalEsilBB *bb = (RAnalEsilBB *)n->data;
 	EsilCfgGen *gen = (EsilCfgGen *)vi->data;
-	RStrBuf *buf = r_strbuf_new ((char *)r_id_storage_get (gen->atoms, bb->first.idx));
+	RStrBuf *buf = r_strbuf_new (
+		n == gen->cfg->end? NULL
+				: (char *)r_id_storage_get (gen->atoms, bb->first.idx));
 	r_strbuf_append (buf, ",");
 	ut32 id;
 	for (id = bb->first.idx + 1; id <= bb->last.idx; id++) {
@@ -409,7 +401,9 @@ void _round_2_cb (RGraphNode *n, RGraphVisitor *vi) {
 // this function takes a cfg, an offset and an esil expression
 // concatinates to already existing graph.
 // Also expects RIDStorage atoms and RRBTree to be allocate in prior of the call
-static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *atoms, RRBTree *blocks, RStack *stack, ut64 off, char *expr) {
+static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal,
+	RIDStorage *atoms, RRBTree *blocks,
+	RStack *stack, ut64 off, char *expr) {
 	// consider expr as RStrBuf, so that we can sanitze broken esil
 	// (ex: "b,a,+=,$z,zf,:=,7,$c,cf,:=,zf,?{,1,b,+=,cf,?{,3,a,-=" =>
 	// 	"b,a,+=,$z,zf,:=,7,$c,cf,:=,zf,?{,1,b,+=,cf,?{,3,a,-=,},}")
@@ -417,13 +411,9 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 	// allocate some stuff
 	char *_expr = strdup (expr);
 	if (!_expr) {
-		return cfg; //NULL?
+		return cfg; // NULL?
 	}
 	RAnalEsilBB *end_bb = R_NEW0 (RAnalEsilBB);
-	if (!end_bb) {
-		free (_expr);
-		return cfg;
-	}
 	RGraphNode *start, *end = r_graph_add_node (cfg->g, end_bb);
 	if (!end) {
 		free (end_bb);
@@ -434,7 +424,8 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 
 	esil_expr_atomize (atoms, _expr);
 
-	// previous expression's post-dominator is the current expression starting point
+	// previous expression's post-dominator is the current expression starting
+	// point
 	//
 	// MUST NOT use cfg->start as starting point of subgraph,
 	// since it marks the start of the whole graph
@@ -460,8 +451,8 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 
 	// We created a new graph node above, which is going to be the post-dominator
 	// of the subgraph, that we are going to add to the existing graph.
-	// The post-dominator of the previous added subgraph is the starting node here.
-	// We add this to the block-tree
+	// The post-dominator of the previous added subgraph is the starting node
+	// here. We add this to the block-tree
 	r_crbtree_insert (blocks, gen.cur, _graphnode_esilbb_insert_cmp, NULL);
 
 	// end of the initial setup, next generate blocks and insert them in the tree
@@ -475,7 +466,8 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 		EsilCfgScopeCookie *cookie;
 		while ((cookie = r_stack_pop (stack))) {
 			r_graph_add_edge (cfg->g,
-				cookie->is_else ? cookie->if_block : cookie->else_block, cfg->end);
+				cookie->is_else? cookie->if_block: cookie->else_block,
+				cfg->end);
 			free (cookie);
 		}
 	}
@@ -485,7 +477,8 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 
 	// next do dfs:
 	//  - remove each node from blocks-tree, that can be reached by a dfs path
-	//  - when removing a node from block-tree, synthesize node->bb->expr with RStrBuf
+	//  - when removing a node from block-tree, synthesize node->bb->expr with
+	//  RStrBuf
 	{
 		// dfs walk removes used atoms
 		RGraphVisitor vi = { _round_2_cb, NULL, NULL, NULL, NULL, &gen };
@@ -493,54 +486,52 @@ static RAnalEsilCFG *esil_cfg_gen(RAnalEsilCFG *cfg, RAnal *anal, RIDStorage *at
 	}
 	// this loop removes unused atoms
 	do {
-	} while (blocks->root && r_crbtree_delete (blocks, NULL, _graphnode_delete_always_0_cmp, &gen));
+	} while (
+		blocks->root &&
+		r_crbtree_delete (blocks, NULL, _graphnode_delete_always_0_cmp, &gen));
 
 	free (_expr);
 	return cfg;
 }
 
-R_API RAnalEsilCFG *r_anal_esil_cfg_new(void) {
+R_IPI RAnalEsilCFG *r_anal_esil_cfg_new(void) {
 	RAnalEsilCFG *cf = R_NEW0 (RAnalEsilCFG);
-	if (cf) {
-		RAnalEsilBB *p = R_NEW0 (RAnalEsilBB);
-		if (!p) {
-			free (cf);
-			return NULL;
-		}
-		p->expr = strdup ("end");
-		if (!p->expr) {
-			free (p);
-			free (cf);
-			return NULL;
-		}
-		cf->g = r_graph_new ();
-		if (!cf->g) {
-			free (p->expr);
-			free (p);
-			free (cf);
-			return NULL;
-		}
-		cf->start = cf->end = r_graph_add_node (cf->g, p);
-		// end node is always needed as post-dominator
-		// idea here is to split the initial one node graph in the node
-		if (!cf->end) {
-			free (p->expr);
-			free (p);
-			r_graph_free (cf->g);
-			free (cf);
-			return NULL;
-		}
-		if (cf->g->nodes) {
-			cf->end->free = _free_bb_cb;
-		}
+	RAnalEsilBB *p = R_NEW0 (RAnalEsilBB);
+	p->expr = strdup ("end");
+	if (!p->expr) {
+		free (p);
+		free (cf);
+		return NULL;
+	}
+	cf->g = r_graph_new ();
+	if (!cf->g) {
+		free (p->expr);
+		free (p);
+		free (cf);
+		return NULL;
+	}
+	cf->start = cf->end = r_graph_add_node (cf->g, p);
+	// end node is always needed as post-dominator
+	// idea here is to split the initial one node graph in the node
+	if (!cf->end) {
+		free (p->expr);
+		free (p);
+		r_graph_free (cf->g);
+		free (cf);
+		return NULL;
+	}
+	if (cf->g->nodes) {
+		cf->end->free = _free_bb_cb;
 	}
 	return cf;
 }
 
 // this little function takes a cfg, an offset and an esil expression
 // concatinates to already existing graph
-R_API RAnalEsilCFG *r_anal_esil_cfg_expr(RAnalEsilCFG *cfg, RAnal *anal, const ut64 off, char *expr) {
-	if (!anal || !anal->esil) {
+R_API RAnalEsilCFG *r_anal_esil_cfg_expr(RAnalEsilCFG *cfg, RAnal *anal,
+	const ut64 off, char *expr) {
+	R_RETURN_VAL_IF_FAIL (expr && anal, NULL);
+	if (!anal->esil) {
 		return NULL;
 	}
 	RStack *stack = r_stack_new (4);
@@ -558,7 +549,7 @@ R_API RAnalEsilCFG *r_anal_esil_cfg_expr(RAnalEsilCFG *cfg, RAnal *anal, const u
 		r_crbtree_free (blocks);
 		return NULL;
 	}
-	RAnalEsilCFG *cf = cfg ? cfg : r_anal_esil_cfg_new ();
+	RAnalEsilCFG *cf = cfg? cfg: r_anal_esil_cfg_new ();
 	if (!cf) {
 		r_stack_free (stack);
 		r_id_storage_free (atoms);
@@ -572,28 +563,24 @@ R_API RAnalEsilCFG *r_anal_esil_cfg_expr(RAnalEsilCFG *cfg, RAnal *anal, const u
 	return ret;
 }
 
-R_API RAnalEsilCFG *r_anal_esil_cfg_op(RAnalEsilCFG *cfg, RAnal *anal, RAnalOp *op) {
-	if (!op || !anal || !anal->reg || !anal->esil) {
+R_API RAnalEsilCFG *r_anal_esil_cfg_op(RAnalEsilCFG *R_NULLABLE cfg,
+	RAnal *anal, RAnalOp *op) {
+	R_RETURN_VAL_IF_FAIL (anal && op, NULL);
+	if (!anal->reg || !anal->esil) {
 		return NULL;
 	}
 	RAnalEsilBB *glue_bb = R_NEW0 (RAnalEsilBB);
-	if (!glue_bb) {
-		eprintf ("Couldn't allocate glue_bb\n");
-		return NULL;
-	}
 	RStrBuf *glue = r_strbuf_new ("");
 	if (!glue) {
 		free (glue_bb);
-		eprintf ("Couldn't allocate glue\n");
 		return NULL;
 	}
-	const char *pc = r_reg_get_name (anal->reg, R_REG_NAME_PC);
+	const char *pc = r_reg_alias_getname (anal->reg, R_REG_ALIAS_PC);
 	r_strbuf_setf (glue, "0x%" PFMT64x ",%s,:=,", op->addr + op->size, pc);
 	glue_bb->expr = strdup (r_strbuf_get (glue));
 	r_strbuf_free (glue);
 	if (!glue_bb->expr) {
 		free (glue_bb);
-		eprintf ("Couldn't strdup\n");
 		return NULL;
 	}
 	glue_bb->enter = R_ANAL_ESIL_BLOCK_ENTER_GLUE;
@@ -621,21 +608,23 @@ R_API RAnalEsilCFG *r_anal_esil_cfg_op(RAnalEsilCFG *cfg, RAnal *anal, RAnalOp *
 	return ret;
 }
 
-static void merge_2_blocks(RAnalEsilCFG *cfg, RGraphNode *node, RGraphNode *block) {
+static void merge_2_blocks(RAnalEsilCFG *cfg, RGraphNode *node,
+	RGraphNode *block) {
 	// merge node and block, block dies in this
 	// block----->node ===> node
 	if (node == cfg->end) {
 		// do not merge the post-dominator
 		return;
 	}
-	RListIter *iter;
-	RGraphNode *n;
-	r_list_foreach (block->in_nodes, iter, n) {
+	RGraphNode **iter;
+	R_VEC_FOREACH (&block->in_nodes, iter) {
+		RGraphNode *n = *iter;
 		r_graph_add_edge (cfg->g, n, node);
 	}
 	RAnalEsilBB *block_bb, *node_bb = (RAnalEsilBB *)node->data;
 	block_bb = (RAnalEsilBB *)block->data;
-	if ((block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_TRUE) || (block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_FALSE)) {
+	if ((block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_TRUE) ||
+		(block_bb->enter == R_ANAL_ESIL_BLOCK_ENTER_FALSE)) {
 		node_bb->enter = block_bb->enter;
 	} else {
 		node_bb->enter = R_ANAL_ESIL_BLOCK_ENTER_NORMAL;
@@ -659,13 +648,15 @@ R_API void r_anal_esil_cfg_merge_blocks(RAnalEsilCFG *cfg) {
 	RListIter *iter, *ator;
 	RGraphNode *node;
 	r_list_foreach_safe (cfg->g->nodes, iter, ator, node) {
-		if (r_list_length (node->in_nodes) == 1) {
+		if (RVecGraphNodePtr_length (&node->in_nodes) == 1) {
 			RAnalEsilBB *bb = (RAnalEsilBB *)node->data;
-			RGraphNode *top = (RGraphNode *)r_list_get_top (node->out_nodes);
-			// segfaults here ?
-			if (!(top && bb->enter == R_ANAL_ESIL_BLOCK_ENTER_GLUE && (r_list_length (top->in_nodes) > 1))) {
-				RGraphNode *block = (RGraphNode *)r_list_get_top (node->in_nodes);
-				if (r_list_length (block->out_nodes) == 1) {
+			RGraphNode **top_ptr = RVecGraphNodePtr_last (&node->out_nodes);
+			RGraphNode *top = top_ptr? *top_ptr: NULL;
+			// segfaults here?
+			if (! (top && bb->enter == R_ANAL_ESIL_BLOCK_ENTER_GLUE &&
+				(RVecGraphNodePtr_length (&top->in_nodes) > 1))) {
+				RGraphNode *block = *RVecGraphNodePtr_last (&node->in_nodes);
+				if (RVecGraphNodePtr_length (&block->out_nodes) == 1) {
 					merge_2_blocks (cfg, node, block);
 				}
 			}

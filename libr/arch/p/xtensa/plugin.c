@@ -1,0 +1,2022 @@
+/* radare2 - GPL - Copyright 2016-2026 - pancake */
+
+#include <r_arch.h>
+#include "gnu/xtensa-isa.h"
+#include "../../include/disas-asm.h"
+
+#define INSN_BUFFER_SIZE 4
+
+typedef struct plugin_data_t {
+	xtensa_insnbuf insn_buffer;
+	xtensa_insnbuf slot_buffer;
+} PluginData;
+
+static int xtensa_buffer_read_memory(bfd_vma memaddr, bfd_byte *myaddr, ut32 length, struct disassemble_info *info) {
+	// TODO honor delta ?
+	if (length > INSN_BUFFER_SIZE) {
+		length = INSN_BUFFER_SIZE;
+	}
+	ut8 *bytes = info->buffer;
+	memcpy (myaddr, bytes, length);
+	return 0;
+}
+
+static int symbol_at_address(bfd_vma addr, struct disassemble_info *info) {
+	return 0;
+}
+
+static void memory_error_func(int status, bfd_vma memaddr, struct disassemble_info *info) {
+	//--
+}
+
+DECLARE_GENERIC_PRINT_ADDRESS_FUNC_NOGLOBALS()
+DECLARE_GENERIC_FPRINTF_FUNC_NOGLOBALS()
+
+static int disassemble(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len) {
+	ut8 bytes[INSN_BUFFER_SIZE] = {0};
+	struct disassemble_info disasm_obj;
+	RStrBuf *sb = r_strbuf_new ("");
+	if (len > INSN_BUFFER_SIZE) {
+		len = INSN_BUFFER_SIZE;
+	}
+	memcpy (bytes, buf, len); // TODO handle thumb
+
+	/* prepare disassembler */
+	memset (&disasm_obj, '\0', sizeof (struct disassemble_info));
+	disasm_obj.disassembler_options = (a->config->bits == 64)?"64":"";
+	disasm_obj.buffer = bytes;
+	disasm_obj.buffer_vma = len;
+	disasm_obj.buffer_length = R_MIN (len, INSN_BUFFER_SIZE);
+	disasm_obj.read_memory_func = &xtensa_buffer_read_memory;
+	disasm_obj.symbol_at_address_func = &symbol_at_address;
+	disasm_obj.memory_error_func = &memory_error_func;
+	disasm_obj.print_address_func = &generic_print_address_func;
+	disasm_obj.endian = !R_ARCH_CONFIG_IS_BIG_ENDIAN (a->config);
+	disasm_obj.fprintf_func = &generic_fprintf_func;
+	disasm_obj.stream = sb;
+
+	op->size = print_insn_xtensa ((bfd_vma)addr, &disasm_obj);
+	if (op->size == -1) {
+		r_strbuf_set (sb, "(data)");
+	}
+	op->mnemonic = r_strbuf_drain (sb);
+	return op->size;
+}
+// GNU DISASM END
+
+#define CM ","
+#define XTENSA_MAX_LENGTH 8
+
+static const int length_table[16] = { 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 8, 8 };
+
+static int xtensa_length(const ut8 *insn) {
+	return length_table[*insn & 0xf];
+}
+
+static inline ut64 xtensa_offset(ut64 addr, const ut8 *buf) {
+	ut32 offset = ((buf[0] >> 4) & 0xc) | (((ut32)buf[1]) << 4) | (((ut32)buf[2]) << 12);
+	if (offset & 0x80000) {
+		return (addr + 4 + offset - 0x100000) & ~3;
+	}
+	return (addr + 4 + offset) & ~3;
+}
+
+static inline ut64 xtensa_imm18s(ut64 addr, const ut8 *buf) {
+	ut32 offset = (buf[0] >> 6) | (((ut32)buf[1]) << 2) | (((ut32)buf[2]) << 10);
+	if (offset & 0x20000) {
+		return addr + 4 + offset - 0x40000;
+	}
+	return addr + 4 + offset;
+}
+
+static inline ut64 xtensa_imm6s(ut64 addr, const ut8 *buf) {
+	ut8 imm6 = (buf[1] >> 4) | (buf[0] & 0x30);
+	return (addr + 4 + imm6);
+}
+
+static inline ut64 xtensa_imm8s(ut64 addr, ut8 imm8) {
+	if (imm8 & 0x80) {
+		return (addr + 4 + imm8 - 0x100);
+	}
+	return (addr + 4 + imm8);
+}
+
+static inline ut64 xtensa_imm12s(ut64 addr, const ut8 *buf) {
+	ut16 imm12 = (buf[1] >> 4) | (((ut16)buf[2]) << 4);
+	if (imm12 & 0x800) {
+		return (addr + 4 + imm12 - 0x1000);
+	}
+	return (addr + 4 + imm12);
+}
+
+typedef void (*XtensaOpFn) (RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf);
+
+static void xtensa_null_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_NULL;
+}
+
+static void xtensa_unk_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_UNK;
+}
+
+static void xtensa_mov_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_MOV;
+}
+
+static void xtensa_load_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_LOAD;
+}
+
+static void xtensa_store_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_STORE;
+}
+
+static void xtensa_add_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_ADD;
+}
+
+static void xtensa_sub_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_SUB;
+}
+
+static void xtensa_mul_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_MUL;
+}
+
+static void xtensa_div_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_DIV;
+}
+
+static void xtensa_mod_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_MOD;
+}
+
+static void xtensa_and_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_AND;
+}
+
+static void xtensa_or_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_OR;
+}
+
+static void xtensa_xor_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_XOR;
+}
+
+static void xtensa_shl_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_SHL;
+}
+
+static void xtensa_shr_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_SHR;
+}
+
+static void xtensa_l32r_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_LOAD;
+	op->ptr = ((addr + 3) & ~3) + ((buf[2] << 8 | buf[1]) << 2) - 0x40000;
+	op->refptr = 4;
+}
+
+static void xtensa_snm0_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[0] >> 4) & 0xf) {
+	case 0x0: case 0x1: case 0x2: case 0x3:
+		op->type = R_ANAL_OP_TYPE_ILL;
+		break;
+	case 0x8: case 0x9:
+		op->type = R_ANAL_OP_TYPE_RET;
+		break;
+	case 0xa:
+		op->type = R_ANAL_OP_TYPE_UJMP;
+		break;
+	case 0xc: case 0xd: case 0xe: case 0xf:
+		op->type = R_ANAL_OP_TYPE_UCALL;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_sync_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[0] >> 4) & 0xf) {
+	case 0x0: case 0x1: case 0x2: case 0x3:
+	case 0x8:
+	case 0xc: case 0xd:
+		/* Wait/sync instructions? */
+		op->type = R_ANAL_OP_TYPE_NULL;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_rfei_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[0] >> 4) & 0xf) {
+	case 0x0:
+		switch (buf[1] & 0xf) {
+		case 0x0: case 0x1: case 0x2:
+		case 0x4: case 0x5:
+			op->type = R_ANAL_OP_TYPE_RET;
+			break;
+		default:
+			xtensa_unk_op (anal, op, addr, buf);
+			break;
+		}
+		break;
+	case 0x1: case 0x2:
+		op->type = R_ANAL_OP_TYPE_RET;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_st0_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[1] >> 4) & 0xf) {
+	case 0x0:
+		xtensa_snm0_op (anal, op, addr, buf);
+		break;
+	case 0x1:
+		op->type = R_ANAL_OP_TYPE_CMOV;
+		break;
+	case 0x2:
+		xtensa_sync_op (anal, op, addr, buf);
+		break;
+	case 0x3:
+		xtensa_rfei_op (anal, op, addr, buf);
+		break;
+	case 0x4:
+		op->type = R_ANAL_OP_TYPE_TRAP;
+		break;
+	case 0x5: case 0x6: case 0x7:
+		op->type = R_ANAL_OP_TYPE_SWI;
+		break;
+	case 0x8: case 0x9: case 0xa: case 0xb:
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_st1_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[1] >> 4) & 0xf) {
+	case 0x0: case 0x1: case 0x2: case 0x3:
+	case 0x4:
+		/* Set shift-amount-register */
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
+	case 0x6: case 0x7:
+		op->type = R_ANAL_OP_TYPE_IO;
+		/*op->type = R_ANAL_OP_TYPE_MOV;*/
+		break;
+	case 0x8:
+		op->type = R_ANAL_OP_TYPE_SWI;
+		break;
+	case 0xe: case 0xf:
+		op->type = R_ANAL_OP_TYPE_NULL;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_rt0_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch (buf[1] & 0xf) {
+	case 0:
+		op->type = R_ANAL_OP_TYPE_NOT;
+		break;
+	case 1:
+		/*op->type = R_ANAL_OP_TYPE_ABS;*/
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_tlb_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[2] >> 4) & 0xf) {
+	case 0x3:
+	case 0x4: case 0x5: case 0x6: case 0x7:
+	case 0xb:
+	case 0xc: case 0xd: case 0xe: case 0xf:
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_accer_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[2] >> 4) & 0xf) {
+	case 0x0:
+	case 0x8:
+		op->type = R_ANAL_OP_TYPE_IO;
+		/*op->type = R_ANAL_OP_TYPE_MOV;*/
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_imp_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[1] >> 4) & 0xf) {
+	case 0x0: case 0x1: case 0x2: case 0x3:
+	case 0x8: case 0x9:
+		op->type = R_ANAL_OP_TYPE_NULL;
+		break;
+	case 0xe:
+		if (((buf[0] >> 4) & 0xf) <= 1) {
+			op->type = R_ANAL_OP_TYPE_RET;
+		} else {
+			xtensa_unk_op (anal, op, addr, buf);
+		}
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static XtensaOpFn xtensa_rst0_fns[] = {
+	xtensa_st0_op,
+	xtensa_and_op,
+	xtensa_or_op,
+	xtensa_xor_op,
+	xtensa_st1_op,
+	xtensa_tlb_op,
+	xtensa_rt0_op,
+	xtensa_unk_op,
+	xtensa_add_op,
+	xtensa_add_op,
+	xtensa_add_op,
+	xtensa_add_op,
+	xtensa_sub_op,
+	xtensa_sub_op,
+	xtensa_sub_op,
+	xtensa_sub_op
+};
+
+static XtensaOpFn xtensa_rst1_fns[] = {
+	xtensa_shl_op,
+	xtensa_shl_op,
+	xtensa_shr_op,
+	xtensa_shr_op,
+	xtensa_shr_op,
+	xtensa_unk_op,
+	xtensa_null_op,
+	xtensa_accer_op,
+	xtensa_shr_op,
+	xtensa_shr_op,
+	xtensa_shl_op,
+	xtensa_shr_op,
+	xtensa_mul_op,
+	xtensa_mul_op,
+	xtensa_unk_op,
+	xtensa_imp_op
+};
+
+static XtensaOpFn xtensa_rst2_fns[] = {
+	xtensa_and_op,
+	xtensa_and_op,
+	xtensa_or_op,
+	xtensa_or_op,
+	xtensa_xor_op,
+	xtensa_unk_op,
+	xtensa_unk_op,
+	xtensa_unk_op,
+	xtensa_mul_op,
+	xtensa_unk_op,
+	xtensa_mul_op,
+	xtensa_mul_op,
+	xtensa_div_op,
+	xtensa_div_op,
+	xtensa_mod_op,
+	xtensa_mod_op
+};
+
+static void xtensa_rst0_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	xtensa_rst0_fns[(buf[2] >> 4) & 0xf] (anal, op, addr, buf);
+}
+
+static void xtensa_rst1_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	xtensa_rst1_fns[(buf[2] >> 4) & 0xf] (anal, op, addr, buf);
+}
+
+static void xtensa_rst2_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	xtensa_rst2_fns[(buf[2] >> 4) & 0xf] (anal, op, addr, buf);
+}
+
+static void xtensa_lsc4_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[2] >> 4) & 0xf) {
+	case 0x0:
+		xtensa_load_op (anal, op, addr, buf);
+		break;
+	case 0x4:
+		xtensa_store_op (anal, op, addr, buf);
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_lscx_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->family = R_ANAL_OP_FAMILY_FPU;
+	switch ((buf[2] >> 4) & 0xf) {
+	case 0x0: case 0x1:
+		xtensa_load_op (anal, op, addr, buf);
+		break;
+	case 0x4: case 0x5:
+		xtensa_store_op (anal, op, addr, buf);
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_fp0_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->family = R_ANAL_OP_FAMILY_FPU;
+	switch ((buf[2] >> 4) & 0xf) {
+	case 0x0: case 0x4:
+		op->type = R_ANAL_OP_TYPE_ADD;
+		break;
+	case 0x1: case 0x5:
+		op->type = R_ANAL_OP_TYPE_SUB;
+		break;
+	case 0x2:
+		op->type = R_ANAL_OP_TYPE_MUL;
+		break;
+	case 0x8: case 0x9: case 0xa: case 0xb:
+	case 0xc: case 0xd: case 0xe:
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
+	case 0xf:
+		switch ((buf[0] >> 4) & 0xf) {
+		case 0x0: case 0x4: case 0x5:
+			op->type = R_ANAL_OP_TYPE_MOV;
+			break;
+		case 0x1:
+			op->type = R_ANAL_OP_TYPE_ABS;
+			break;
+		case 0x6:
+			op->type = R_ANAL_OP_TYPE_NOT;
+			break;
+		default:
+			xtensa_unk_op (anal, op, addr, buf);
+			break;
+		}
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_fp1_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->family = R_ANAL_OP_FAMILY_FPU;
+	switch ((buf[2] >> 4) & 0xf) {
+	case 0x1: case 0x2: case 0x3:
+	case 0x4: case 0x5: case 0x6: case 0x7:
+		op->type = R_ANAL_OP_TYPE_CMP;
+		break;
+	case 0x8: case 0x9: case 0xa: case 0xb:
+	case 0xc: case 0xd:
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static XtensaOpFn xtensa_qrst_fns[] = {
+	xtensa_rst0_op,
+	xtensa_rst1_op,
+	xtensa_rst2_op,
+	xtensa_mov_op, /*xtensa_rst3_op,*/
+	xtensa_and_op, /*xtensa_extui_op,*/
+	xtensa_and_op, /*xtensa_extui_op,*/
+	xtensa_unk_op, /*xtensa_cust0_op,*/
+	xtensa_unk_op, /*xtensa_cust1_op,*/
+	xtensa_lscx_op,
+	xtensa_lsc4_op,
+	xtensa_fp0_op,
+	xtensa_fp1_op,
+	xtensa_unk_op,
+	xtensa_unk_op,
+	xtensa_unk_op,
+	xtensa_unk_op
+};
+
+static void xtensa_qrst_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	xtensa_qrst_fns[buf[2] & 0xf] (anal, op, addr, buf);
+}
+
+static XtensaOpFn xtensa_lsai_fns[] = {
+	xtensa_load_op,
+	xtensa_load_op,
+	xtensa_load_op,
+	xtensa_unk_op,
+	xtensa_store_op,
+	xtensa_store_op,
+	xtensa_store_op,
+	xtensa_null_op, /*xtensa_cache_op,probably not interesting for anal?*/
+	xtensa_unk_op,
+	xtensa_load_op,
+	xtensa_mov_op,
+	xtensa_load_op,
+	xtensa_add_op,
+	xtensa_add_op,
+	xtensa_store_op,
+	xtensa_store_op
+};
+
+static void xtensa_lsai_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	xtensa_lsai_fns[(buf[1] >> 4) & 0xf] (anal, op, addr, buf);
+}
+
+static void xtensa_lsci_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	ut8 r = buf[1] >> 4;
+	op->family = R_ANAL_OP_FAMILY_FPU;
+	if ((r & 3) == 0) {
+		if (r & 4) {
+			xtensa_store_op (anal, op, addr, buf);
+		} else {
+			xtensa_load_op (anal, op, addr, buf);
+		}
+	} else {
+		xtensa_unk_op (anal, op, addr, buf);
+	}
+}
+
+static void xtensa_calln_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_CALL;
+	op->fail = addr + op->size;
+	op->jump = xtensa_offset (addr, buf);
+}
+
+static void xtensa_b_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	op->type = R_ANAL_OP_TYPE_CJMP;
+	op->fail = addr + op->size;
+	op->jump = xtensa_imm8s (addr, buf[2]);
+}
+
+static void xtensa_si_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	ut8 n = (buf[0] >> 4) & 3;
+	ut8 m = (buf[0] >> 6);
+	switch (n) {
+	case 0:
+		op->type = R_ANAL_OP_TYPE_JMP;
+		op->jump = xtensa_imm18s (addr, buf);
+		break;
+	case 1:
+		op->type = R_ANAL_OP_TYPE_CJMP;
+		op->fail = addr + op->size;
+		op->jump = xtensa_imm12s (addr, buf);
+		break;
+	case 2:
+		xtensa_b_op (anal, op, addr, buf);
+		break;
+	case 3:
+		switch (m) {
+		case 0:
+			op->type = R_ANAL_OP_TYPE_UPUSH;
+			break;
+		case 1:
+			switch (buf[1] >> 4) {
+			case 0: case 1:
+				xtensa_b_op (anal, op, addr, buf);
+				break;
+			case 0x8:
+				op->type = R_ANAL_OP_TYPE_MOV;
+				op->ptr = addr + 4 + buf[2];
+				break;
+			case 0x9: case 0xa:
+				op->type = R_ANAL_OP_TYPE_CJMP;
+				op->cond = (buf[1] >> 4) == 0x9? R_ANAL_CONDTYPE_EQ: R_ANAL_CONDTYPE_LE;
+				op->sign = (buf[1] >> 4) == 0xa;
+				op->fail = addr + op->size;
+				op->jump = addr + 4 + buf[2];
+				break;
+			default:
+				xtensa_unk_op (anal, op, addr, buf);
+				break;
+			}
+			break;
+		case 2: case 3:
+			xtensa_b_op (anal, op, addr, buf);
+			break;
+		default:
+			xtensa_unk_op (anal, op, addr, buf);
+			break;
+		}
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static void xtensa_st2n_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	if (buf[0] & 0x80) {
+		op->type = R_ANAL_OP_TYPE_CJMP;
+		op->fail = addr + op->size;
+		op->jump = xtensa_imm6s (addr, buf);
+	} else {
+		op->type = R_ANAL_OP_TYPE_MOV;
+	}
+}
+
+static void xtensa_st3n_op(RArchSession *anal, RAnalOp *op, ut64 addr, const ut8 *buf) {
+	switch ((buf[1] >> 4) & 0xf) {
+	case 0x0:
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
+	case 0xf:
+		switch ((buf[0] >> 4) & 0xf) {
+		case 0: case 1:
+			op->type = R_ANAL_OP_TYPE_RET;
+			break;
+		case 2:
+			op->type = R_ANAL_OP_TYPE_TRAP;
+			break;
+		case 3:
+			op->type = R_ANAL_OP_TYPE_NOP;
+			break;
+		case 6:
+			op->type = R_ANAL_OP_TYPE_ILL;
+			break;
+		default:
+			xtensa_unk_op (anal, op, addr, buf);
+			break;
+		}
+		break;
+	default:
+		xtensa_unk_op (anal, op, addr, buf);
+		break;
+	}
+}
+
+static XtensaOpFn xtensa_op0_fns[] = {
+	xtensa_qrst_op,
+	xtensa_l32r_op,
+	xtensa_lsai_op,
+	xtensa_lsci_op,
+	xtensa_null_op, /*xtensa_mac16_op,*/
+	xtensa_calln_op,
+	xtensa_si_op,
+	xtensa_b_op,
+
+	xtensa_load_op,
+	xtensa_store_op,
+	xtensa_add_op,
+	xtensa_add_op,
+	xtensa_st2n_op,
+	xtensa_st3n_op,
+	xtensa_null_op, /*xtensa_xt_format1_op,*/ /*TODO*/
+	xtensa_null_op  /*xtensa_xt_format2_op*/ /*TODO*/
+};
+
+static inline void sign_extend(st32 *value, ut8 bit) {
+	if (*value & (1 << bit)) {
+		*value |= 0xFFFFFFFF << bit;
+	}
+}
+
+static inline void sign_extend2(st32 *value, ut8 bit1, ut8 bit2, ut8 shift) {
+	if (((*value >> bit1) & 1) && ((*value >> bit2) & 1)) {
+		*value |= UT32_MAX << (32 - shift);
+	}
+}
+
+static void xtensa_check_stack_op(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	st32 imm;
+	ut32 dst;
+	ut32 src;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &src);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, (ut32 *) &imm);
+
+	// Decode sign, scale and the special ADDI.N -1 encoding.
+	xtensa_operand_decode (isa, opcode, 2, (ut32 *) &imm);
+
+	// a1 = stack
+	if (dst == 1 && src == 1) {
+		op->val = imm;
+		op->stackptr = -imm;
+		op->stackop = R_ANAL_STACK_INC;
+	}
+}
+
+static const char *xtensa_regname(xtensa_isa isa, xtensa_regfile rf, ut32 reg) {
+	const char *pfx = xtensa_regfile_shortname (isa, rf);
+	static const char * const aregs[] = {
+		"a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+		"a8", "a9", "a10", "a11", "a12", "a13", "a14", "a15"
+	};
+	if (pfx && !strcmp (pfx, "a") && reg < R_ARRAY_SIZE (aregs)) {
+		return aregs[reg];
+	}
+	return NULL;
+}
+
+static int xtensa_load_size(xtensa_opcode opcode, R_OUT ut32 *offset) {
+	switch (opcode) {
+	case 84: // l32i
+	case 31: // l32i.n
+		*offset <<= 2;
+		return 4;
+	case 83: // l16si
+	case 82: // l16ui
+		*offset <<= 1;
+		return 2;
+	default:
+		return 1;
+	}
+}
+
+static int xtensa_store_size(xtensa_opcode opcode, R_OUT ut32 *offset) {
+	switch (opcode) {
+	case 100: // s32i
+	case 453: // s32cli
+	case 36: // s32i.n
+		*offset <<= 2;
+		return 4;
+	case 99: // s16i
+		*offset <<= 1;
+		return 2;
+	default:
+		return 1;
+	}
+}
+
+static void xtensa_fillval_load_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 offset;
+	ut32 reg_d;
+	ut32 reg_a;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg_d);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &reg_a);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &offset);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+	const int size = xtensa_load_size (opcode, &offset);
+
+	RAnalValue *dst = RVecRArchValue_emplace_back (&op->dsts);
+	dst->reg = xtensa_regname (isa, dst_rf, reg_d);
+	RAnalValue *src = RVecRArchValue_emplace_back (&op->srcs);
+	src->reg = xtensa_regname (isa, src_rf, reg_a);
+	src->delta = offset;
+	src->memref = size;
+	op->direction = R_ANAL_OP_DIR_READ;
+	op->ptrsize = size;
+}
+
+static void xtensa_fillval_store_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 offset;
+	ut32 reg_d;
+	ut32 reg_a;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg_d);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &reg_a);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &offset);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+	const int size = xtensa_store_size (opcode, &offset);
+
+	RAnalValue *src = RVecRArchValue_emplace_back (&op->srcs);
+	src->reg = xtensa_regname (isa, dst_rf, reg_d);
+	RAnalValue *dst = RVecRArchValue_emplace_back (&op->dsts);
+	dst->reg = xtensa_regname (isa, src_rf, reg_a);
+	dst->delta = offset;
+	dst->memref = size;
+	op->direction = R_ANAL_OP_DIR_WRITE;
+	op->ptrsize = size;
+}
+
+static void xtensa_fillval_add_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	st32 imm;
+	ut32 dst;
+	ut32 src;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &src);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, (ut32 *) &imm);
+
+	xtensa_operand_decode (isa, opcode, 2, (ut32 *) &imm);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+	RAnalValue *dval = RVecRArchValue_emplace_back (&op->dsts);
+	dval->reg = xtensa_regname (isa, dst_rf, dst);
+	RAnalValue *sval = RVecRArchValue_emplace_back (&op->srcs);
+	sval->reg = xtensa_regname (isa, src_rf, src);
+	sval = RVecRArchValue_emplace_back (&op->srcs);
+	sval->imm = imm;
+	xtensa_check_stack_op (isa, opcode, format, i, slot_buffer, op);
+}
+
+static void analop_val(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	switch (opcode) {
+	case 453: /* s32c1i */
+	case 36:  /* s32i.n */
+	case 100: /* s32i */
+	case 99:  /* s16i */
+	case 101: /* s8i */
+		xtensa_fillval_store_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 27: /* addi.n */
+	case 39: /* addi */
+	case 40: /* addmi */
+		xtensa_fillval_add_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 82: /* l16ui */
+	case 83: /* l16si */
+	case 84: /* l32i */
+	case 31: /* l32i.n */
+	case 86: /* l8ui */
+		xtensa_fillval_load_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	}
+}
+
+static void esil_push_signed_imm(RStrBuf *esil, st32 imm) {
+	if (imm >= 0) {
+		r_strbuf_appendf (esil, "0x%x" CM, imm);
+	} else {
+		r_strbuf_appendf (
+			esil,
+			"0x%x"	CM
+			"0x0"	CM
+			"-"	CM,
+			- imm
+		);
+	}
+}
+
+static void esil_sign_extend(RStrBuf *esil, ut8 bit) {
+	// check sign bit, and, if needed, apply or mask
+
+	ut32 bit_mask = 1 << bit;
+	ut32 extend_mask = 0xFFFFFFFF << bit;
+
+	r_strbuf_appendf (
+		esil,
+		"DUP"	CM
+		"0x%x"	CM
+		"&"	CM
+		"0"	CM
+		"==,$z,!"	CM
+		"?{"	CM
+			"0x%x"	CM
+			"|"	CM
+		"}"	CM,
+		bit_mask,
+		extend_mask
+	);
+}
+
+static void esil_load_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 offset;
+	ut32 reg_d;
+	ut32 reg_a;
+	ut8 sign_extend_bit;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg_d);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &reg_a);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &offset);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+
+	// example: l32i a2, a1, 0x10
+	//          0x10,a1,+, // address on stack
+	//          [x], // read data
+	//          a2, // push data reg
+	//			= // assign to data reg
+
+	ut8 data_size = opcode == 82 ? 2 // l16ui
+			: opcode == 83 ? 2 // l16si
+			: opcode == 84 ? 4 // l32i
+			: opcode == 31 ? 4 // l32i.n
+			: 1; // opcode == 86 ? 1 : 1; // l8ui
+
+	sign_extend_bit = 0;
+
+	switch (opcode) {
+	case 84: // l32i
+	case 31: // l32i.n
+		offset <<= 2;
+		break;
+	case 83: // l16si
+		sign_extend_bit = 15;
+		/* no break */
+	case 82: // l16ui
+		offset <<= 1;
+		break;
+	}
+
+	r_strbuf_appendf (
+		&op->esil,
+			"0x%x"	CM
+			"%s%d"	CM
+			"+"	CM
+			"[%d]"	CM,
+		// offset
+		offset,
+		// address
+		xtensa_regfile_shortname (isa, src_rf),
+		reg_a,
+		// size
+		data_size
+	);
+
+	if (sign_extend_bit != 0) {
+		esil_sign_extend (&op->esil, sign_extend_bit);
+	}
+
+	r_strbuf_appendf (
+		&op->esil,
+			"%s%d"	CM
+			"=",
+		// data
+		xtensa_regfile_shortname (isa, dst_rf),
+		reg_d
+	);
+}
+
+static void esil_load_relative(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 offset;
+	st32 dst;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, (ut32 *) &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &offset);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+
+	// example: l32r a2, 0x10
+	//          0x10,$$,3,+ // l32r address + 3 on stack
+	//          0xFFFFFFFC,&, // clear 2 lsb
+	//          -, // subtract offset
+	//          [4], // read data
+	//          a2, // push data reg
+	//          = // assign to data reg
+
+	offset = - (st64)((offset | 0xFFFF0000) << 2);
+
+	r_strbuf_appendf (
+		&op->esil,
+			"0x%x" 		CM
+			"0x%"PFMT64x	CM
+			"3"		CM
+			"+"		CM
+			"0xFFFFFFFC"	CM
+			"&" 		CM
+			"-"    		CM
+			"[4]"		CM
+			"%s%d" 		CM
+			"=",
+		// offset
+		offset,
+		op->addr,
+		// data
+		xtensa_regfile_shortname (isa, dst_rf),
+		dst
+	);
+}
+
+static void esil_add_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	st32 imm;
+	ut32 dst;
+	ut32 src;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &src);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, (ut32 *) &imm);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+
+	// example: addi a3, a4, 0x01
+	//          a4,0x01,+,a3,=
+
+	// Decode sign, scale and the special ADDI.N -1 encoding.
+	xtensa_operand_decode (isa, opcode, 2, (ut32 *) &imm);
+
+	r_strbuf_appendf (&op->esil, "%s%d" CM, xtensa_regfile_shortname (isa, src_rf), src);
+	esil_push_signed_imm (&op->esil, imm);
+	r_strbuf_appendf (
+		&op->esil,
+			"+"    CM
+			"%s%d" CM
+			"=",
+		xtensa_regfile_shortname (isa, dst_rf),
+		dst
+	);
+}
+
+static void esil_store_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+
+	ut32 offset;
+	ut32 reg_d;
+	ut32 reg_a;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg_d);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &reg_a);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &offset);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+
+	// example: s32i a2, a1, 0x10
+	//          a2, // push data
+	//          0x10,a1,+, // address on stack
+	//          =[x] // write data
+
+	ut8 data_size =
+		opcode == 453 ? 4 // s32cli
+		: opcode == 36 ? 4 // s32i.n
+		: opcode == 100 ? 4 // s32i
+		: opcode == 99 ? 2 // s16i
+		: 1; // opcode == 101 ? 1 : 1; // s8i
+
+	switch (opcode) {
+	case 100: // s32i
+	case 453: // s32cli
+	case 36: // s32i.n
+		offset <<= 2;
+		break;
+	case 99: // s16i
+		offset <<= 1;
+		break;
+	}
+
+	r_strbuf_appendf (
+		&op->esil,
+			"%s%d" CM
+			"0x%x" CM
+			"%s%d" CM
+			"+"    CM
+			"=[%d]",
+		// data
+		xtensa_regfile_shortname (isa, dst_rf),
+		reg_d,
+		// offset
+		offset,
+		// address
+		xtensa_regfile_shortname (isa, src_rf),
+		reg_a,
+		// size
+		data_size
+	);
+}
+
+static void esil_move_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	st32 imm;
+	ut32 reg;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, (ut32 *) &imm);
+
+	xtensa_regfile rf = xtensa_operand_regfile (isa, opcode, 0);
+
+	// sign extension
+	// 90: movi
+	if (opcode == 90) {
+		sign_extend (&imm, 11);
+	}
+
+	// 33: movi.n
+	if (opcode == 33) {
+		sign_extend2 (&imm, 6, 5, 25);
+	}
+
+	esil_push_signed_imm (&op->esil, imm);
+
+	r_strbuf_appendf (
+		&op->esil,
+			"%s%d" CM
+			"=",
+		xtensa_regfile_shortname (isa, rf),
+		reg
+	);
+}
+
+static void esil_move(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 dst;
+	ut32 src;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &src);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+
+	r_strbuf_appendf (
+		&op->esil,
+			"%s%d" CM
+			"%s%d" CM
+			"=",
+		xtensa_regfile_shortname (isa, src_rf),
+		src,
+		xtensa_regfile_shortname (isa, dst_rf),
+		dst
+	);
+}
+
+static void esil_move_conditional(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 dst;
+	ut32 src;
+	ut32 cond;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &src);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &cond);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+	xtensa_regfile cond_rf = xtensa_operand_regfile (isa, opcode, 2);
+
+	const char *compare_op = "";
+
+	switch (opcode) {
+	case 91:	/* moveqz */
+		compare_op = "==,$z";
+		break;
+	case 92:	/* movnez */
+		compare_op = "==,$z,!";
+		break;
+	case 93:	/* movltz */
+		compare_op = "<";
+		break;
+	case 94:	/* movgez */
+		compare_op = ">=";
+		break;
+	}
+
+	// example: moveqz a3, a4, a5
+	//          0,
+	//          a5,
+	//          ==,
+	//          ?{,
+	//            a4,
+	//            a3,
+	//            =,
+	//          }
+
+	r_strbuf_appendf (
+		&op->esil,
+			"0"	CM
+			"%s%d"	CM
+			"%s"	CM
+			"?{"	CM
+				"%s%d"	CM
+				"%s%d"	CM
+				"="	CM
+			"}",
+		xtensa_regfile_shortname (isa, cond_rf),
+		cond,
+		compare_op,
+		xtensa_regfile_shortname (isa, src_rf),
+		src,
+		xtensa_regfile_shortname (isa, dst_rf),
+		dst
+	);
+}
+
+static void esil_add_sub(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 dst;
+	ut32 op1;
+	ut32 op2;
+	bool is_add;
+	ut8 shift;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &op1);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &op2);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile op1_rf = xtensa_operand_regfile (isa, opcode, 1);
+	xtensa_regfile op2_rf = xtensa_operand_regfile (isa, opcode, 2);
+
+	is_add =
+		(opcode == 26) ||
+		(opcode == 41) ||
+		(opcode == 43) ||
+		(opcode == 44) ||
+		(opcode == 45);
+
+	switch (opcode) {
+	case 43:
+	case 46:
+		shift = 1;
+		break;
+	case 44:
+	case 47:
+		shift = 2;
+		break;
+	case 45:
+	case 48:
+		shift = 3;
+		break;
+	default:
+		shift = 0;
+		break;
+	}
+
+	r_strbuf_appendf (
+		&op->esil,
+			"%s%d"	CM
+			"%d"    CM
+			"%s%d"	CM
+			"<<"    CM
+			"%s"	CM
+			"%s%d"	CM
+			"=",
+		xtensa_regfile_shortname (isa, op2_rf),
+		op2,
+		shift,
+		xtensa_regfile_shortname (isa, op1_rf),
+		op1,
+		(is_add ? "+" : "-"),
+		xtensa_regfile_shortname (isa, dst_rf),
+		dst
+	);
+}
+
+static void esil_branch_compare_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 reg, imm;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &imm);
+	xtensa_operand_decode (isa, opcode, 1, &imm);
+	const bool unsign = opcode == 58 || opcode == 59;
+	const char *compare = opcode == 52 ? "==,$z" : opcode == 53 ? "==,$z,!"
+		: opcode == 54 || opcode == 58 ? ">=" : "<";
+	if (unsign) {
+		r_strbuf_appendf (&op->esil, "0x%x,0xffffffff,a%d,&,", imm, reg);
+	} else {
+		esil_push_signed_imm (&op->esil, (st32)imm);
+		r_strbuf_appendf (&op->esil, "32,a%d,~,", reg);
+	}
+	r_strbuf_appendf (&op->esil, "%s,?{,0x%"PFMT64x",pc,=,}", compare, op->jump);
+}
+
+static void esil_branch_compare(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 left, right;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &left);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &right);
+	const char *compare = opcode == 60 ? "==,$z" : opcode == 61 ? "==,$z,!"
+		: opcode == 62 || opcode == 64 ? ">=" : "<";
+	if (opcode == 64 || opcode == 65) {
+		r_strbuf_appendf (&op->esil, "0xffffffff,a%d,&,0xffffffff,a%d,&,", right, left);
+	} else {
+		r_strbuf_appendf (&op->esil, "32,a%d,~,32,a%d,~,", right, left);
+	}
+	r_strbuf_appendf (&op->esil, "%s,?{,0x%"PFMT64x",pc,=,}", compare, op->jump);
+}
+
+static void esil_branch_compare_single(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 reg;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg);
+	const char *compare = opcode == 72 || opcode == 28 ? "==,$z"
+		: opcode == 73 || opcode == 29 ? "==,$z,!" : opcode == 74 ? ">=" : "<";
+	r_strbuf_appendf (&op->esil, "0,a%d,%s,?{,0x%"PFMT64x",pc,=,}", reg, compare, op->jump);
+}
+
+static void esil_branch_check_mask(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 left, right;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &left);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &right);
+	r_strbuf_appendf (&op->esil, "a%d,a%d,&,", left, right);
+	if (opcode == 68 || opcode == 69) {
+		r_strbuf_appendf (&op->esil, "a%d,", right);
+	} else {
+		r_strbuf_append (&op->esil, "0,");
+	}
+	r_strbuf_appendf (&op->esil, "==,$z,%s?{,0x%"PFMT64x",pc,=,}",
+		opcode == 66 || opcode == 69 ? "!," : "", op->jump);
+}
+
+static void esil_bitwise_op(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+		size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 dst;
+	ut32 op1;
+	ut32 op2;
+	char bop;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &op1);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &op2);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile op1_rf = xtensa_operand_regfile (isa, opcode, 1);
+	xtensa_regfile op2_rf = xtensa_operand_regfile (isa, opcode, 2);
+
+	switch (opcode) {
+	case 49:	/* and */
+		bop = '&';
+		break;
+	case 50:	/* or */
+		bop = '|';
+		break;
+	case 51:	/* xor */
+		bop = '^';
+		break;
+	default:
+		bop = '=';
+		break;
+	}
+
+	r_strbuf_appendf (
+		&op->esil,
+			"%s%d"	CM
+			"%s%d"	CM
+			"%c"    CM
+			"%s%d"	CM
+			"=",
+		xtensa_regfile_shortname (isa, op1_rf),
+		op1,
+		xtensa_regfile_shortname (isa, op2_rf),
+		op2,
+		bop,
+		xtensa_regfile_shortname (isa, dst_rf),
+		dst
+	);
+}
+
+static void esil_branch_check_bit_imm(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 src, bit;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &src);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &bit);
+	xtensa_operand_decode (isa, opcode, 1, &bit);
+	xtensa_regfile rf = xtensa_operand_regfile (isa, opcode, 0);
+	ut32 mask = bit < 32? (ut32)1 << bit: 0;
+	r_strbuf_appendf (&op->esil, "%s%u,0x%x,&,0,==,$z,%s?{,0x%"PFMT64x",pc,=,}",
+		xtensa_regfile_shortname (isa, rf), src, mask, opcode == 56? "": "!,", op->jump);
+}
+
+static void esil_branch_check_bit(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 src, bit;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &src);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &bit);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile bit_rf = xtensa_operand_regfile (isa, opcode, 1);
+	r_strbuf_appendf (&op->esil, "31,%s%u,&,1,<<,%s%u,&,0,==,$z,%s?{,0x%"PFMT64x",pc,=,}",
+		xtensa_regfile_shortname (isa, bit_rf), bit,
+		xtensa_regfile_shortname (isa, src_rf), src, opcode == 70? "": "!,", op->jump);
+}
+
+static void esil_abs_neg(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 dst, src;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &src);
+	if (opcode == 96) {
+		r_strbuf_appendf (&op->esil, "0,a%d,<,?{,a%d,0,-,}{,a%d,},a%d,=", src, src, src, dst);
+	} else {
+		r_strbuf_appendf (&op->esil, "a%d,0,-,a%d,=", src, dst);
+	}
+}
+
+static void esil_call(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	if (opcode == 76) {
+		r_strbuf_appendf (&op->esil, "0x%"PFMT64x",a0,=,", op->addr + op->size);
+	}
+	r_strbuf_appendf (&op->esil, "0x%"PFMT64x",pc,=", op->jump);
+}
+
+static void esil_callx(xtensa_isa isa, xtensa_opcode opcode,
+		xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	bool callx = opcode == 77;
+	ut32 dst_reg;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst_reg);
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+
+	r_strbuf_appendf (
+		&op->esil,
+		"%s%d" CM "0" CM "+" CM,
+		xtensa_regfile_shortname (isa, dst_rf),
+		dst_reg
+	);
+
+	if (callx) {
+		r_strbuf_append (
+			&op->esil,
+			"pc"	CM
+			"a0"	CM
+			"="	CM
+		);
+	}
+
+	r_strbuf_append (&op->esil, "pc" CM "=");
+}
+
+static void esil_set_shift_amount(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 src;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &src);
+	r_strbuf_appendf (&op->esil, "31,a%d,&,", src);
+	if (opcode == 103) {
+		r_strbuf_append (&op->esil, "32,-,");
+	} else if (opcode == 104 || opcode == 105) {
+		r_strbuf_append (&op->esil, "3,&,3,SWAP,<<,");
+		if (opcode == 105) {
+			r_strbuf_append (&op->esil, "32,-,");
+		}
+	}
+	r_strbuf_append (&op->esil, "sar,=");
+}
+
+static void esil_set_shift_amount_imm(xtensa_isa isa, xtensa_opcode opcode,
+		xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 sa_imm;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &sa_imm);
+	xtensa_operand_decode (isa, opcode, 0, &sa_imm);
+
+	r_strbuf_appendf (
+		&op->esil,
+			"0x%x"	CM
+			"sar"	CM
+			"=",
+		sa_imm
+	);
+}
+
+static void esil_shift_logic_imm(xtensa_isa isa, xtensa_opcode opcode,
+		xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 reg_dst;
+	ut32 reg_src;
+	ut32 imm_amount;
+
+	const char *shift_op = "";
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg_dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &reg_src);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &imm_amount);
+	xtensa_operand_decode (isa, opcode, 2, &imm_amount);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+
+	// srli
+	if (opcode == 112) {
+		shift_op = "ASR";
+	} else if (opcode == 113) {
+		shift_op = ">>";
+	} else {
+		shift_op = "<<";
+	}
+
+	r_strbuf_appendf (
+		&op->esil,
+			"0x%x"	CM
+			"%s%d"	CM
+			"%s"	CM
+			"%s%d"	CM
+			"=",
+		imm_amount,
+		xtensa_regfile_shortname (isa, src_rf),
+		reg_src,
+		shift_op,
+		xtensa_regfile_shortname (isa, dst_rf),
+		reg_dst
+	);
+}
+
+static void esil_shift_logic_sar(xtensa_isa isa, xtensa_opcode opcode,
+		xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 reg_dst;
+	ut32 reg_src;
+
+	const char *shift_op = "";
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg_dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &reg_src);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+
+	// srl
+	if (opcode == 110) {
+		shift_op = "ASR";
+	} else if (opcode == 109) {
+		shift_op = ">>";
+	} else {
+		shift_op = "<<";
+	}
+
+	r_strbuf_appendf (
+		&op->esil,
+			"sar"	CM
+			"%s"	CM
+			"%s%d"	CM
+			"%s"	CM
+			"%s%d"	CM
+			"=",
+		opcode == 107 ? "32,-" : "",
+		xtensa_regfile_shortname (isa, src_rf),
+		reg_src,
+		shift_op,
+		xtensa_regfile_shortname (isa, dst_rf),
+		reg_dst
+	);
+}
+
+static void esil_extract_unsigned(xtensa_isa isa, xtensa_opcode opcode,
+		xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 reg_dst;
+	ut32 reg_src;
+	ut32 imm_shift;
+	ut32 imm_mask;
+
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg_dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &reg_src);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &imm_shift);
+	xtensa_operand_get_field (isa, opcode, 3, format, i, slot_buffer, &imm_mask);
+
+	xtensa_regfile dst_rf = xtensa_operand_regfile (isa, opcode, 0);
+	xtensa_regfile src_rf = xtensa_operand_regfile (isa, opcode, 1);
+
+	ut32 and_mask = (1U << (imm_mask + 1)) - 1;
+
+	r_strbuf_appendf (
+		&op->esil,
+			"0x%x"	CM
+			"%s%d"	CM
+			">>"	CM
+			"0x%x"	CM
+			"&"	CM
+			"%s%d"	CM
+			"=",
+		imm_shift,
+		xtensa_regfile_shortname (isa, src_rf),
+		reg_src,
+		and_mask,
+		xtensa_regfile_shortname (isa, dst_rf),
+		reg_dst
+	);
+}
+
+static void esil_integer_op(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format, size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	ut32 dst, left, right;
+	xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &dst);
+	xtensa_operand_get_field (isa, opcode, 1, format, i, slot_buffer, &left);
+	xtensa_operand_get_field (isa, opcode, 2, format, i, slot_buffer, &right);
+	if (opcode == 108) { // SRC concatenates the high and low words before shifting.
+		r_strbuf_appendf (&op->esil, "sar,a%d,32,a%d,<<,|,>>,a%d,=", right, left, dst);
+	} else if (opcode >= 444 && opcode <= 447) {
+		if (opcode >= 446) {
+			r_strbuf_appendf (&op->esil, "0xffffffff,a%d,&,0xffffffff,a%d,&,", right, left);
+		} else {
+			r_strbuf_appendf (&op->esil, "32,a%d,~,32,a%d,~,", right, left);
+		}
+		r_strbuf_appendf (&op->esil, "%s,?{,a%d,}{,a%d,},a%d,=",
+			opcode == 444 || opcode == 446 ? "<" : ">", left, right, dst);
+	} else if (opcode == 450) {
+		xtensa_operand_decode (isa, opcode, 2, &right);
+		r_strbuf_appendf (&op->esil, "%u,a%d,~,a%d,=", right + 1, left, dst);
+	} else if (opcode == 453) {
+		r_strbuf_appendf (&op->esil,
+			"0x%x,a%d,+,[4],DUP,scompare1,==,$z,?{,a%d,0x%x,a%d,+,=[4],},a%d,=",
+			right << 2, left, dst, right << 2, left, dst);
+	} else {
+		const char *operation = opcode == 457 ? "/" : opcode == 458 ? "~/"
+			: opcode == 459 ? "%" : opcode == 460 ? "~%" : "*";
+		if (opcode == 296) {
+			r_strbuf_appendf (&op->esil, "0xffff,a%d,&,0xffff,a%d,&,", right, left);
+		} else if (opcode == 297) {
+			r_strbuf_appendf (&op->esil, "16,a%d,~,16,a%d,~,", right, left);
+		} else {
+			r_strbuf_appendf (&op->esil, "a%d,a%d,", right, left);
+		}
+		r_strbuf_appendf (&op->esil, "%s,a%d,=", operation, dst);
+	}
+}
+
+static void analop_esil(xtensa_isa isa, xtensa_opcode opcode, xtensa_format format,
+						 size_t i, xtensa_insnbuf slot_buffer, RAnalOp *op) {
+	switch (opcode) {
+	case 87: /* loop */
+	case 88: /* loopnez */
+	case 89: /* loopgtz */
+		{
+			ut32 reg;
+			ut32 end = op->addr + 4 + op->bytes[2];
+			xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg);
+			r_strbuf_appendf (&op->esil, "1,a%u,-,lcount,=,0x%x,lbeg,=,0x%x,lend,=",
+				reg, (ut32)(op->addr + op->size), end);
+			if (opcode == 88) {
+				r_strbuf_appendf (&op->esil, ",a%u,!,?{,0x%x,pc,=,}", reg, end);
+			} else if (opcode == 89) {
+				r_strbuf_appendf (&op->esil, ",0,32,a%u,~,<=,?{,0x%x,pc,=,}", reg, end);
+			}
+		}
+		break;
+	case 121: case 122: case 123: /* rsr/wsr/xsr.lend */
+	case 124: case 125: case 126: /* rsr/wsr/xsr.lcount */
+	case 127: case 128: case 129: /* rsr/wsr/xsr.lbeg */
+		{
+			static const char *names[] = { "lend", "lcount", "lbeg" };
+			const char *name = names[(opcode - 121) / 3];
+			ut32 reg;
+			xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg);
+			switch ((opcode - 121) % 3) {
+			case 0:
+				r_strbuf_appendf (&op->esil, "%s,a%u,=", name, reg);
+				break;
+			case 1:
+				r_strbuf_appendf (&op->esil, "a%u,%s,=", reg, name);
+				break;
+			case 2:
+				r_strbuf_appendf (&op->esil, "a%u,0,+,%s,a%u,=,%s,=", reg, name, reg, name);
+				break;
+			}
+		}
+		break;
+	case 108: /* src */
+	case 296: /* mul16u */
+	case 297: /* mul16s */
+	case 444: /* min */
+	case 445: /* max */
+	case 446: /* minu */
+	case 447: /* maxu */
+	case 450: /* sext */
+	case 453: /* s32c1i */
+	case 457: /* quou */
+	case 458: /* quos */
+	case 459: /* remu */
+	case 460: /* rems */
+	case 461: /* mull */
+		esil_integer_op (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 454: /* rsr.scompare1 */
+	case 455: /* wsr.scompare1 */
+		{
+			ut32 reg;
+			xtensa_operand_get_field (isa, opcode, 0, format, i, slot_buffer, &reg);
+			if (opcode == 454) {
+				r_strbuf_appendf (&op->esil, "scompare1,a%d,=", reg);
+			} else {
+				r_strbuf_appendf (&op->esil, "a%d,scompare1,=", reg);
+			}
+		}
+		break;
+	case 26: /* add.n */
+	case 41: /* add */
+	case 43: /* addx2 */
+	case 44: /* addx4 */
+	case 45: /* addx8 */
+	case 42: /* sub */
+	case 46: /* subx2 */
+	case 47: /* subx4 */
+	case 48: /* subx8 */
+		esil_add_sub (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 32: /* mov.n */
+		esil_move (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 90: /* movi */
+	case 33: /* movi.n */
+		esil_move_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 0:  /* excw */
+	case 34: /* nop.n */
+		r_strbuf_setf (&op->esil, "%s", "");
+		break;
+	case 36:  /* s32i.n */
+	case 100: /* s32i */
+	case 99:  /* s16i */
+	case 101: /* s8i */
+		esil_store_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 27: /* addi.n */
+	case 39: /* addi */
+	case 40: /* addmi */
+		xtensa_check_stack_op (isa, opcode, format, i, slot_buffer, op);
+		esil_add_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 98: /* ret */
+	case 35: /* ret.n */
+		r_strbuf_set (&op->esil, "a0,pc,=");
+		break;
+	case 82: /* l16ui */
+	case 83: /* l16si */
+	case 84: /* l32i */
+	case 31: /* l32i.n */
+	case 86: /* l8ui */
+		esil_load_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	// TODO: s32r
+	// l32r is different because it is relative to LITBASE
+	// which also may or may not be present
+	case 85: /* l32r */
+		esil_load_relative (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 49: /* and */
+	case 50: /* or */
+	case 51: /* xor */
+		esil_bitwise_op (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 52: /* beqi */
+	case 53: /* bnei */
+	case 54: /* bgei */
+	case 55: /* blti */
+	case 58: /* bgeui */
+	case 59: /* bltui */
+		esil_branch_compare_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 56: /* bbci */
+	case 57: /* bbsi */
+		esil_branch_check_bit_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 60: /* beq */
+	case 61: /* bne */
+	case 62: /* bge */
+	case 63: /* blt */
+	case 64: /* bgeu */
+	case 65: /* bltu */
+		esil_branch_compare (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 66: /* bany */
+	case 67: /* bnone */
+	case 68: /* ball */
+	case 69: /* bnall */
+		esil_branch_check_mask (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 70: /* bbc */
+	case 71: /* bbs */
+		esil_branch_check_bit (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 72: /* beqz */
+	case 73: /* bnez */
+	case 28: /* beqz.n */
+	case 29: /* bnez.n */
+	case 74: /* bgez */
+	case 75: /* bltz */
+		esil_branch_compare_single (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 78: /* extui */
+		esil_extract_unsigned (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 79: /* ill */
+		r_strbuf_setf (&op->esil, "%s", "");
+		break;
+	// TODO: windowed calls?
+	case 7: /* call4 */
+		break;
+	case 76: /* call0 */
+	case 80: /* j */
+		esil_call (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 81: /* jx */
+	case 77: /* callx0 */
+		esil_callx (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 91: /* moveqz */
+	case 92: /* movnez */
+	case 93: /* movltz */
+	case 94: /* movgez */
+		esil_move_conditional (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 96: /* abs */
+	case 95: /* neg */
+		esil_abs_neg (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 102: /* ssr */
+	case 103: /* ssl */
+	case 104: /* ssa8l */
+	case 105: /* ssa8b */
+		esil_set_shift_amount (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 111: /* slli */
+	case 112: /* srai */
+	case 113: /* srli */
+		esil_shift_logic_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 106: /* ssai */
+		esil_set_shift_amount_imm (isa, opcode, format, i, slot_buffer, op);
+		break;
+	case 107: /* sll */
+	case 110: /* sra */
+	case 109: /* srl */
+		esil_shift_logic_sar (isa, opcode, format, i, slot_buffer, op);
+		break;
+	}
+}
+
+static bool decode(RArchSession *a, RAnalOp *op, RArchDecodeMask mask) {
+	R_RETURN_VAL_IF_FAIL (op && op->bytes && op->size > 0, false);
+	const size_t len_original = op->size;
+	const ut8 *buf_original = op->bytes;
+	const ut64 addr = op->addr;
+	const int instruction_size = xtensa_length (buf_original);
+	op->size = instruction_size;
+	if (op->size > len_original) {
+		op->type = R_ANAL_OP_TYPE_ILL;
+		return false;
+	}
+	if (mask & R_ARCH_OP_MASK_DISASM) {
+		disassemble (a, op, addr, buf_original, len_original);
+		op->size = instruction_size;
+	}
+
+	xtensa_op0_fns[(buf_original[0] & 0xf)] (a, op, addr, buf_original);
+
+	ut8 buffer[XTENSA_MAX_LENGTH] = {0};
+	int len = R_MIN (op->size, XTENSA_MAX_LENGTH);
+	memcpy (buffer, buf_original, len);
+
+	unsigned int i;
+	if (!xtensa_default_isa) {
+		xtensa_default_isa = xtensa_isa_init (0, 0);
+	}
+
+	xtensa_opcode opcode;
+	xtensa_isa isa = xtensa_default_isa;
+	xtensa_format format;
+	int nslots;
+
+	PluginData *pd = a->data;
+	if (!pd->insn_buffer) {
+		pd->insn_buffer = xtensa_insnbuf_alloc (isa);
+		pd->slot_buffer = xtensa_insnbuf_alloc (isa);
+	}
+
+	memset (pd->insn_buffer, 0, xtensa_insnbuf_size (isa) * sizeof (xtensa_insnbuf_word));
+
+	xtensa_insnbuf_from_chars (isa, pd->insn_buffer, buffer, len);
+	format = xtensa_format_decode (isa, pd->insn_buffer);
+
+	if (format == XTENSA_UNDEFINED) {
+		return op->size;
+	}
+
+	nslots = xtensa_format_num_slots (isa, format);
+	if (nslots < 1) {
+		return op->size;
+	}
+
+	for (i = 0; i < nslots; i++) {
+		xtensa_format_get_slot (isa, format, i, pd->insn_buffer, pd->slot_buffer);
+		opcode = xtensa_opcode_decode (isa, format, i, pd->slot_buffer);
+
+		if (opcode == 39 || opcode == 40 || opcode == 27) { /* addi/addmi/addi.n */
+			xtensa_check_stack_op (isa, opcode, format, i, pd->slot_buffer, op);
+		}
+
+		if (opcode == 11) { /* entry */
+			ut32 amount;
+			xtensa_operand_get_field (isa, opcode, 2, format, i, pd->slot_buffer, &amount);
+			xtensa_operand_decode (isa, opcode, 2, &amount);
+			op->stackop = R_ANAL_STACK_INC;
+			op->stackptr = amount;
+		}
+
+		if (mask & R_ARCH_OP_MASK_VAL) {
+			analop_val (isa, opcode, format, i, pd->slot_buffer, op);
+		}
+		if (mask & R_ARCH_OP_MASK_ESIL) {
+			analop_esil (isa, opcode, format, i, pd->slot_buffer, op);
+		}
+	}
+
+	return op->size;
+}
+
+static char *regs(RArchSession *as) {
+	return strdup (
+		// Assuming call0 ABI
+		"# a0		return address\n"
+		"# a1		stack pointer\n"
+		"# a2-a7	arguments\n"
+		"# a2-a5	return value (call0 ABI)\n"
+		"# a12-a15	callee-saved (call0 ABI)\n"
+		"=PC	pc\n"
+		"=SP	a1\n"
+		"=LR	a0\n"
+		"=R0	a2\n"
+		"=R1	a3\n"
+		"=SN	a1\n"
+		"=A0	a2\n"
+		"=A1	a3\n"
+		"=A2	a4\n"
+		"=A3	a5\n"
+		"=A4	a6\n"
+		"=A5	a7\n"
+		"gpr	a0	.32	0	0\n"
+		"gpr	a1	.32	4	0\n"
+		"gpr	a2	.32	8	0\n"
+		"gpr	a3	.32	16	0\n"
+		"gpr	a4	.32	20	0\n"
+		"gpr	a5	.32	24	0\n"
+		"gpr	a6	.32	28	0\n"
+		"gpr	a7	.32	32	0\n"
+		"gpr	a8	.32	36	0\n"
+		"gpr	a9	.32	40	0\n"
+		"gpr	a10	.32	44	0\n"
+		"gpr	a11	.32	48	0\n"
+		"gpr	a12	.32	52	0\n"
+		"gpr	a13	.32	56	0\n"
+		"gpr	a14	.32	60	0\n"
+		"gpr	a15	.32	64	0\n"
+
+		// pc
+		"gpr	pc	.32	68	0\n"
+
+		// sr
+		"gpr	sar	.32	72	0\n"
+		"gpr	scompare1	.32	76	0\n"
+		"gpr	lbeg	.32	80	0\n"
+		"gpr	lend	.32	84	0\n"
+		"gpr	lcount	.32	88	0\n"
+	);
+}
+
+
+static int archinfo(RArchSession *as, ut32 q) {
+	switch (q) {
+	case R_ARCH_INFO_WODST:
+		return 0;
+	case R_ARCH_INFO_MAXOP_SIZE:
+		return 8;
+	case R_ARCH_INFO_INVOP_SIZE:
+	case R_ARCH_INFO_MINOP_SIZE:
+		return 2;
+	case R_ARCH_INFO_DATA_ALIGN:
+	case R_ARCH_INFO_CODE_ALIGN:
+		return 1;
+	}
+	return 1; // XXX
+}
+
+static bool init(RArchSession *as) {
+	R_RETURN_VAL_IF_FAIL (as, false);
+	if (as->data) {
+		R_LOG_WARN ("Already initialized");
+		return false;
+	}
+
+	as->data = R_NEW0 (PluginData);
+	return !!as->data;
+}
+
+static bool fini(RArchSession *as) {
+	R_RETURN_VAL_IF_FAIL (as, false);
+	PluginData *pd = as->data;
+	if (pd) {
+		xtensa_insnbuf_free (xtensa_default_isa, pd->insn_buffer);
+		xtensa_insnbuf_free (xtensa_default_isa, pd->slot_buffer);
+	}
+	R_FREE (as->data);
+	return true;
+}
+
+const RArchPlugin r_arch_plugin_xtensa = {
+	.meta = {
+		.name = "xtensa",
+		.desc = "Modular Tensilica's Xtensa Processor",
+		.license = "GPL-3.0-only",
+	},
+	.endian = R_SYS_ENDIAN_LITTLE | R_SYS_ENDIAN_BIG,
+	.info = archinfo,
+	.arch = "xtensa",
+	.bits = R_SYS_BITS_PACK1 (32),
+	.decode = decode,
+	.regs = regs,
+	.init = init,
+	.fini = fini,
+};
+
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
+	.type = R_LIB_TYPE_ARCH,
+	.data = &r_arch_plugin_xtensa,
+	.version = R2_VERSION
+};
+#endif

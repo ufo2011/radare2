@@ -1,0 +1,62 @@
+# Agentic Coding Guidelines for radare2
+
+## Work and references
+
+Make the smallest coherent fix. Reuse existing helpers; avoid unrelated cleanup,
+speculative abstractions and repeated scans in hot paths. Extract helpers when
+they simplify logic.
+
+Search symbols and paths first; read only relevant sections:
+
+- APIs: `libr/include/` declarations, corresponding `libr/` implementations and callers. Verify signatures and ownership against current code.
+- Layout: libraries in `libr/`, CLI tools in `binr/`, plugins in `libr/*/p/`.
+- Style/build details: `DEVELOPERS.md` and `doc/indent-example.c`; public API/ABI changes: `doc/abi.md`.
+- Commands: `man/`, `r2 -h` and `<command>?`; test formats: `test/README.md` and nearby `test/db/` cases.
+
+## Style
+
+- Use descriptive function and variable names so code is readable without comments in most cases. Do not add multiline comments; use short single-line comments only for non-obvious intent.
+- Match nearby code: tabs, no trailing whitespace, braces even for single statements, and `case` labels aligned with `switch`.
+- Space before calls/control parentheses: `foo ()`, `if (x)`, `sizeof (int)`. Keep function signatures on one line without a space before `(`.
+- Initialize variables near first use; declare loop variables before `for`, not inside it.
+- Use `<r_types.h>` integer types (`ut8`, `ut32`, etc.), `PFMT64` formatting and `R_PACKED` for packed structures.
+- Do not run `clang-format-radare2` unless requested. `sys/lint.sh` provides style diagnostics for the whole tree; distinguish pre-existing findings.
+
+## Memory and APIs
+
+- Project convention omits NULL checks for small constant `R_NEW`/`R_NEW0` allocations.
+- Check runtime-sized allocations for failure; guard size arithmetic with `r_mul_overflow_*`/`r_add_overflow_*` before allocating. Check bounds before buffer access; endian helpers do not.
+- Never use `alloca` or variable-length stack arrays. Avoid NULL guards around `free` and destructors that accept NULL.
+- Use `R_RETURN_*` for public API preconditions; ordinary `if` for runtime/input errors. Use `r_util/r_assert.h` instead of `<assert.h>`.
+- Prefer `!strcmp ()`, `r_str_newf`, `r_str_pad` and endian helpers such as `r_read_le32`. Use `r_strbuf_*` for concatenation in loops to avoid repeated copying.
+- Use annotations from `libr/include/r_types.h` and `libr/include/r_types_null.h`; ownership macros are `R_OWNED`/`R_UNOWNED`.
+- Prefer `r_json_parsedup`; when borrowing buffers, follow the lifetime rules in `libr/include/r_util/r_json.h`.
+- New commands need `?` help. Use `R_LOG_*` for diagnostics and the existing console APIs for command output; remove debugging `eprintf` calls.
+
+## Build
+
+- For code changes, run `./configure` if needed, then `make -j2` from the root (adjust jobs to available resources). Keep failure output. Do not compile individual `.c`/`.o` files directly.
+- Run `sys/install.sh --without-pull` for a full clean rebuild and symlink installation.
+- `.d` files are compiler generated. If one causes a build failure, remove it and rebuild; do not edit it.
+- Edit `configure.acr` and regenerate `configure` with `acr`; do not edit generated `configure` directly.
+- Update both Make and Meson for library dependencies. Register new plugins in `dist/plugins-cfg/plugins.def.cfg`, `dist/plugins-cfg/plugins.static.cfg` and the relevant `libr/*/meson.build`.
+
+## Verify
+
+- Use `r2r` tests in `test/db/` for `r2` behavior and C unit tests in `test/unit/` for direct API behavior. Reuse test files and fixtures when suitable. Cover the reported behavior and edge cases; check expected output before changing it.
+- When writing r2r tests, avoid the need to create temporal files or execute system programs like '!!' or '| grep'
+- Build before running `r2r -C test db/...` from the root. Existing `symstall` symlinks use rebuilt files without reinstalling. Otherwise, install this checkout or set its executable, library and plugin paths. See [Regression testing](DEVELOPERS.md#regression-testing).
+- Keep the filename last in `r2` invocations. Use `-n` only for raw input: it skips binary loading. `io.va=false` changes addressing, not binary loading.
+- Binary fixtures belong in `radare2-testbins` (`test/bins/`), not this repository. `// R2R` comments can link source files to tests.
+- For memory debugging, see `DEVELOPERS.md` (Error diagnosis): `R2_DEBUG=1` and `sys/sanitize.sh`.
+- Run `git diff --check`; report what was tested and any blockers. Documentation-only changes need reference checks, not a full build.
+- Before reporting completion, inspect `git status --short` and the diff. Verify every requested deliverable exists and contains the required content; remove temporary artifacts you created.
+
+## Commits
+
+Commit only when requested or needed for a requested PR; otherwise suggest a one-line message.
+Write a one-line subject starting with a capital letter. If a body is needed,
+separate it with a blank line and use only short bullet points.
+For user-visible changes, append one existing `##tag` as the final word of the
+subject; security fixes use `##crash`. See [Commit messages](DEVELOPERS.md#commit-messages)
+for details, issue references and the tag list.

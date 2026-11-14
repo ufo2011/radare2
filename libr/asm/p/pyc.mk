@@ -1,17 +1,18 @@
-PYC_ROOT=$(LIBR)/asm/arch/pyc
-OBJ_PYC=asm_pyc.o
-OBJ_PYC+=$(PYC_ROOT)/opcode_all.o
-OBJ_PYC+=$(PYC_ROOT)/opcode_arg_fmt.o
-OBJ_PYC+=$(PYC_ROOT)/opcode_anal.o
-OBJ_PYC+=$(PYC_ROOT)/opcode.o
-OBJ_PYC+=$(PYC_ROOT)/pyc_dis.o
+OBJ_PYC_PSEUDO+=$(LIBR)/arch/p/pyc/pseudo.o
 
-STATIC_OBJ+=${OBJ_PYC}
-TARGET_PYC=asm_pyc.$(EXT_SO)
+TARGET_PYC_PSEUDO=parse_pyc_pseudo.${EXT_SO}
+STATIC_OBJ+=${OBJ_PYC_PSEUDO}
+ifeq ($(CC),cccl)
+LIBDEPS=-L../../util -llibr_util
+LIBDEPS+=-L../../flag -llibr_flag
+else
+LIBDEPS=-L../../util -lr_util
+LIBDEPS+=-L../../flag -lr_flag
+endif
 
-ALL_TARGETS+=${TARGET_PYC}
-CFLAGS+=-I$(PYC_ROOT)
-
-${TARGET_PYC}: ${OBJ_PYC}
-	${CC} ${CFLAGS} $(LDFLAGS) -o ${TARGET_PYC} ${OBJ_PYC} -lr_util
-
+ifeq ($(WITHPIC),1)
+ALL_TARGETS+=${TARGET_PYC_PSEUDO}
+${TARGET_PYC_PSEUDO}: ${OBJ_PYC_PSEUDO}
+	${CC} $(call libname,parse_pyc_pseudo) ${LIBDEPS} $(LDFLAGS) \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_PYC_PSEUDO} ${OBJ_PYC_PSEUDO}
+endif

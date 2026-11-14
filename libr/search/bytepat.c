@@ -1,11 +1,11 @@
-/* radare - LGPL - Copyright 2006-2019 - esteve, pancake */
+/* radare - LGPL - Copyright 2006-2024 - esteve, pancake */
 
-#include <r_search.h>
 #include <r_util.h>
 #include <r_util/r_print.h>
+#include <r_search.h>
 
 #define CTXMINB 5
-#define BSIZE (1024*1024)
+#define BSIZE (1024 * 1024)
 #define MAX_PATLEN 1024
 
 typedef struct _fnditem {
@@ -14,11 +14,7 @@ typedef struct _fnditem {
 } fnditem;
 
 static fnditem* init_fi(void) {
-	fnditem* n;
-	n = (fnditem*) malloc (sizeof (fnditem));
-	if (!n) {
-		return NULL;
-	}
+	fnditem* n = R_NEW0 (fnditem);
 	n->next = NULL;
 	return n;
 }
@@ -35,12 +31,12 @@ static void fini_fi(fnditem* fi) {
 	free (fu);
 }
 
-static void add_fi (fnditem* n, unsigned char* blk, int patlen) {
+static void add_fi(fnditem* n, unsigned char* blk, int patlen) {
 	fnditem* p;
-	for (p = n; p->next != NULL; p = p->next) {
+	for (p = n; p->next; p = p->next) {
 		;
 	}
-	p->next = (fnditem*) malloc (sizeof (fnditem));
+	p->next = R_NEW0 (fnditem);
 	p = p->next;
 	memcpy (p->str, blk, patlen);
 	p->next = NULL;
@@ -48,7 +44,7 @@ static void add_fi (fnditem* n, unsigned char* blk, int patlen) {
 
 static int is_fi_present(fnditem* n, unsigned char* blk , int patlen) {
 	fnditem* p;
-	for (p = n; p->next != NULL; p = p->next) {
+	for (p = n; p->next; p = p->next) {
 		if (!memcmp (blk, p->str, patlen)) {
 			return true;
 		}
@@ -56,10 +52,12 @@ static int is_fi_present(fnditem* n, unsigned char* blk , int patlen) {
 	return false;
 }
 
-R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
-	ut8 block[BSIZE+MAX_PATLEN], sblk[BSIZE+MAX_PATLEN+1];
-	ut64 addr, bact, bytes, intaddr, rb, bproc = 0;
-	int nr,i, moar=0, pcnt, cnt = 0, k = 0;
+R_IPI bool search_pattern(RSearch *s, ut64 from, ut64 to) {
+	R_RETURN_VAL_IF_FAIL (s, false);
+	ut8 block[BSIZE+MAX_PATLEN], sblk[BSIZE+MAX_PATLEN + 1];
+	ut64 addr, bact, bytes, intaddr, bproc = 0;
+	int rb;
+	int nr,i, moar = 0, pcnt, cnt = 0, k = 0;
 	int patlen = s->pattern_size;
 	fnditem* root;
 
@@ -70,26 +68,26 @@ R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
 	}
 	bact = from;
 	bytes = to;
-	//bytes += bact;
+	// bytes += bact;
 	root = init_fi ();
 	pcnt = -1;
-
-// bact = from
-// bytes = to
-// bproc = from2
+	// bact = from
+	// bytes = to
+	// bproc = from2
 	while (bact < bytes) {
 		addr = bact;
+#if 0
 		if (r_print_is_interrupted ()) {
 			break;
 		}
-
+#endif
 		bproc = bact + patlen ;
-//		read ( fd, sblk, patlen );
-//XXX bytepattern should be used with a read callback
 		nr = ((bytes - bproc) < BSIZE)?(bytes - bproc):BSIZE;
-	//XXX	radare_read_at(bact, sblk, patlen);
 		rb = s->iob.read_at (s->iob.io, addr, sblk, nr);
-		sblk[patlen] = 0; // XXX
+		if (rb < patlen) {
+			break;
+		}
+		sblk[patlen] = 0;
 
 		intaddr = bact;
 		cnt = 0;
@@ -104,8 +102,8 @@ R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
 			nr = rb;
 			addr += nr;
 			moar = 0;
-			for (i = 0; i<nr; i++) {
-				if (!memcmp (&block[i], sblk, patlen) && !is_fi_present (root, sblk, patlen)){
+			for (i = 0; i < nr; i++) {
+				if (!memcmp (&block[i], sblk, patlen) && !is_fi_present (root, sblk, patlen)) {
 					if (cnt == 0) {
 						add_fi (root, sblk, patlen);
 						pcnt++;
@@ -129,5 +127,5 @@ R_API int r_search_pattern(RSearch *s, ut64 from, ut64 to) {
 	}
 	eprintf ("\n");
 	fini_fi (root);
-	return 0;
+	return true;
 }

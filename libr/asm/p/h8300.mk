@@ -1,14 +1,14 @@
-OBJ_H8300=asm_h8300.o
-H8300_ROOT=$(LIBR)/asm/arch/h8300
-OBJ_H8300+=$(H8300_ROOT)/h8300_disas.o
-CFLAGS+=-I$(H8300_ROOT)
+OBJ_H8300PSEUDO+=$(LIBR)/arch/p/h8300/pseudo.o
 
-STATIC_OBJ+=${OBJ_H8300}
-TARGET_H8300=asm_h8300.${EXT_SO}
+TARGET_H8300PSEUDO=parse_h8300_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_H8300PSEUDO}
+STATIC_OBJ+=${OBJ_H8300PSEUDO}
 
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_H8300}
-
-${TARGET_H8300}: ${OBJ_H8300}
-	${CC} ${LDFLAGS} ${CFLAGS} -o ${TARGET_H8300} ${OBJ_H8300}
+${TARGET_H8300PSEUDO}: ${OBJ_H8300PSEUDO}
+ifeq ($(CC),cccl)
+	${CC} $(call libname,parse_h8300_pseudo) -L../../util -llibr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_H8300PSEUDO} ${OBJ_H8300PSEUDO}
+else
+	${CC} $(call libname,parse_h8300_pseudo) -L../../util -lr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_H8300PSEUDO} ${OBJ_H8300PSEUDO}
 endif

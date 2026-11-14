@@ -50,6 +50,18 @@ agraph.nodes.title1.body=base64:aGVsbG8gd29ybGQ=
 EOF
 RUN
 
+NAME=utf8 base64 body
+FILE=-
+CMDS=<<EOF
+e scr.utf8=true
+agn "Phi" base64:zqY=
+agg~Φ
+EOF
+EXPECT=<<EOF
+| Φ                  |
+EOF
+RUN
+
 NAME=long base64 body
 FILE=-
 CMDS=<<EOF
@@ -132,10 +144,9 @@ RUN
 
 NAME=get graph of a function
 FILE=bins/elf/analysis/hello-linux-x86_64
-BROKEN=1
 CMDS=<<EOF
 af
-aggk $$~nodes=
+agfk $$~nodes=
 EOF
 EXPECT=<<EOF
 agraph.nodes=0x400410
@@ -161,14 +172,13 @@ FILE=-
 CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=32
-e asm.calls=false
+e asm.cmt.calls=false
 "wa push ebp;mov ebp,esp;pop ebp;ret"
 af
 agf
 EOF
 EXPECT=<<EOF
-[0x00000000]>  # fcn.00000000 ();
- ----------------------.
+.----------------------.
 |  0x0                 |
 | (fcn) fcn.00000000 5 |
 | push ebp             |
@@ -324,24 +334,22 @@ e scr.strconv=asciidot
 agf
 EOF
 EXPECT=<<EOF
-[0x0008049c]>  # super_mario_fix ();
- --------------------------------------------.
-|  0x8049c                                   |
-| 8: super_mario_fix ();                     |
-|    ; segment.ehdr                          |
-| lui v0, 8                                  |
-|    ; "\u00a2\u00a2\u00a2World" sym..rodata |
-| addiu a0, v0, 0x510                        |
-`--------------------------------------------'
-[0x0008049c]>  # super_mario_fix ();
- -----------------------------.
-|  0x8049c                    |
-| 8: super_mario_fix ();      |
-|    ; segment.ehdr           |
-| lui v0, 8                   |
-|    ; "...World" sym..rodata |
-| addiu a0, v0, 0x510         |
-`-----------------------------'
+.------------------------------------------------.
+|  0x8049c                                       |
+| 8: super_mario_fix ();                         |
+|    ; segment.ehdr                              |
+| lui v0, 8                                      |
+|    ; "\u00a2\u00a2\u00a2World" section..rodata |
+| addiu a0, v0, 0x510                            |
+`------------------------------------------------'
+.---------------------------------.
+|  0x8049c                        |
+| 8: super_mario_fix ();          |
+|    ; segment.ehdr               |
+| lui v0, 8                       |
+|    ; "...World" section..rodata |
+| addiu a0, v0, 0x510             |
+`---------------------------------'
 EOF
 RUN
 
@@ -399,16 +407,74 @@ agraph.edge.0x123_0x456.highlight=true
 --
 agraph.edge.0x123_0x456.highlight=true
 --
-agraph.edge.0x123_0x123.highlight=true
 agraph.edge.0x123_0x456.highlight=true
 agraph.edge.0x456_0x123.highlight=true
+agraph.edge.0x123_0x123.highlight=true
 EOF
 RUN
 
+NAME=crossing sweeps with shared destinations and high fan-in
+FILE=-
+CMDS=<<EOF
+agn p0
+agn p1
+agn p2
+agn p3
+agn p4
+agn p5
+agn p6
+agn p7
+agn u
+agn v
+agn w
+agn a
+agn b
+agn c
+age p0 v
+age p1 u
+age p1 w
+age p2 u
+age p2 v
+age p3 u
+age p4 u
+age p5 v
+age p6 v
+age p7 w
+age u c
+age u b
+age v a
+age v b
+age w b
+age p0 b
+aggk~nodes.~.x=
+EOF
+EXPECT=<<EOF
+agraph.nodes.a.x=0x6c
+agraph.nodes.b.x=0x3f
+agraph.nodes.c.x=0x11
+agraph.nodes.p0.x=0x68
+agraph.nodes.p1.x=0x34
+agraph.nodes.p2.x=0x4e
+agraph.nodes.p3.x=0
+agraph.nodes.p4.x=0x1a
+agraph.nodes.p5.x=0x9c
+agraph.nodes.p6.x=0xb6
+agraph.nodes.p7.x=0x82
+agraph.nodes.u.x=0x11
+agraph.nodes.v.x=0x6c
+agraph.nodes.w.x=0x48
+EOF
+RUN
+
+# wont run on big endian because of a bug in capstone
 NAME=lowaddr lights
 FILE=bins/elf/elf_one_symbol_shdr
+REQUIRE=little
 ARGS=-n
 CMDS=<<EOF
+e asm.var.summary=0
+e asm.arch=x86
+e asm.bits=64
 s 0x44b
 af
 ageh 0x452 0x458
@@ -418,18 +484,222 @@ EOF
 EXPECT=<<EOF
 agraph.edge.0x452_0x458.highlight=true
 digraph code {
-	graph [bgcolor=azure fontsize=8 fontname="Courier" splines="ortho"];
-	node [fillcolor=gray style=filled shape=box];
+	graph [fontsize=8 fontname="Courier" bgcolor=azure splines="ortho"];
+	node [fillcolor=white style=filled shape=box];
 	edge [arrowhead="normal"];
-	"0x0000044b" [URL="fcn.0000044b/0x0000044b", fillcolor="white",color="#767676", fontname="Courier",label="54: fcn.0000044b (int64_t arg1, int64_t arg2, int64_t arg_4h, int64_t arg_8h, int64_t arg_34h, int64_t arg_38h);\l; arg int64_t arg_4h @ rsp+0x4\l; arg int64_t arg_8h @ rsp+0x8\l; arg int64_t arg_34h @ rsp+0x34\l; arg int64_t arg_38h @ rsp+0x38\l; arg int64_t arg1 @ rdi\l; arg int64_t arg2 @ rsi\l0x0000044b      sar esi, 2                                             ; arg2\l0x0000044e      test esi, esi                                          ; arg2\l0x00000450      je 0x479\l"]
-	"0x00000479" [URL="fcn.0000044b/0x00000479", fillcolor="white",color="#767676", fontname="Courier",label="0x00000479      add esp, 0x1c\l0x0000047c      pop rbx\l0x0000047d      pop rsi\l0x0000047e      pop rdi\l0x0000047f      pop rbp\l0x00000480      ret\l"]
-	"0x00000452" [URL="fcn.0000044b/0x00000452", fillcolor="white",color="#767676", fontname="Courier",label="0x00000452      lea esi, [rsi]                                         ; arg2\l"]
-	"0x00000458" [URL="fcn.0000044b/0x00000458", fillcolor="white",color="#767676", fontname="Courier",label="0x00000458      mov eax, dword [arg_38h]\l0x0000045c      mov dword [rsp], ebp\l0x0000045f      mov dword [arg_8h], eax\l0x00000463      mov eax, dword [arg_34h]\l0x00000467      mov dword [arg_4h], eax\l0x0000046b      call qword [rbx + rdi*4 - 0xf8]\l0x00000472      add edi, 1                                             ; arg1\l0x00000475      cmp edi, esi                                           ; arg2\l0x00000477      jne 0x458\l"]
+	"0x0000044b" [URL="fcn.0000044b/0x0000044b", fontcolor="#767676", fontname="Courier", label="54: fcn.0000044b (int64_t arg1, int32_t arg_4h, int32_t arg_8h, int32_t arg_34h, int32_t arg_38h);\l; arg int64_t arg1 @ rsi\l; arg int32_t arg_4h @ rsp+0x4\l; arg int32_t arg_8h @ rsp+0x8\l; arg int32_t arg_34h @ rsp+0x34\l; arg int32_t arg_38h @ rsp+0x38\l0x0000044b      sar esi, 2                                             ; arg1\l0x0000044e      test esi, esi                                          ; arg1\l0x00000450      je 0x479\l"]
+	"0x00000452" [URL="fcn.0000044b/0x00000452", fontcolor="#767676", fontname="Courier", label="0x00000452      lea esi, [rsi]                                         ; arg1\l"]
+	"0x00000458" [URL="fcn.0000044b/0x00000458", fontcolor="#767676", fontname="Courier", label="0x00000458      mov eax, dword [arg_38h]\l0x0000045c      mov dword [rsp], ebp\l0x0000045f      mov dword [arg_8h], eax\l0x00000463      mov eax, dword [arg_34h]\l0x00000467      mov dword [arg_4h], eax\l0x0000046b      call qword [rbx + rdi*4 - 0xf8]\l0x00000472      add edi, 1\l0x00000475      cmp edi, esi\l0x00000477      jne 0x458\l"]
+	"0x00000479" [URL="fcn.0000044b/0x00000479", fontcolor="#767676", fontname="Courier", label="0x00000479      add esp, 0x1c\l0x0000047c      pop rbx\l0x0000047d      pop rsi\l0x0000047e      pop rdi\l0x0000047f      pop rbp\l0x00000480      ret\l"]
         "0x0000044b" -> "0x00000479" [color="#13a10e"];
         "0x0000044b" -> "0x00000452" [color="#c50f1f"];
         "0x00000452" -> "0x00000458" [color="cyan"];
         "0x00000458" -> "0x00000458" [color="#13a10e"];
         "0x00000458" -> "0x00000479" [color="#c50f1f"];
 }
+EOF
+RUN
+
+NAME=visual graph scroll keeps edges whose endpoints are offscreen
+FILE=-
+CMDS=<<EOF
+e scr.utf8=false
+e scr.color=0
+e scr.cols=40
+e scr.rows=8
+agn a
+agn b base64:bDAKbDEKbDIKbDMKbDQKbDUKbDYKbDcKbDgKbDkKbDEwCmwxMQpsMTIKbDEzCmwxNApsMTUKbDE2CmwxNwpsMTgKbDE5Cg==
+agn c
+age a b
+age b c
+age a c
+"$capture=aggv @e:scr.interactive=true > $frame"
+<jjjjq
+$capture > /dev/null
+cat $frame~?l12
+cat $frame~?l12                \|    \|
+EOF
+EXPECT=<<EOF
+1
+1
+EOF
+RUN
+
+NAME=visual horizontal scroll keeps a back-edge channel with offscreen endpoints
+FILE=-
+CMDS=<<EOF
+e scr.utf8=true
+e scr.color=0
+e scr.cols=40
+e scr.rows=8
+e graph.layout=1
+e graph.dotted=true
+agn a
+agn b 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+agn c
+age a b
+age b c
+age a c
+age c a
+age c c
+"$capture=aggv @e:scr.interactive=true > $frame"
+<jjllllllllq
+$capture > /dev/null
+cat $frame~?\xe2\x95\xb4\xe2\x95\xb4\xe2\x95\xb4\xe2\x95\xb4
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=aggb and agfb without output do not crash
+FILE=-
+CMDS=<<EOF
+aggb
+agfb
+?e ok
+EOF
+EXPECT=<<EOF
+ok
+EOF
+EXPECT_ERR=<<EOF
+ERROR: No function to graph
+EOF
+RUN
+
+NAME=generated graphs preserve quoted function names and edges
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e anal.in=io.maps
+wx e80b000000c3
+wx c3 @ 16
+af
+af @ 16
+afn base64:YSJiJ2NcZCBl
+axC 16 0
+.agC*
+aggj
+agg* > $graph
+ag-
+. $graph
+aggj
+'age- a\"b\'c\\d\ e fcn.00000010
+aggj
+'agn- a\"b\'c\\d\ e
+aggj
+ag-
+.agr*
+aggj
+ag-
+.axg* @ 16
+aggj
+ag-
+afvr rdi x int
+.txg
+aggj
+ag-
+afn caller @ 0
+afn base64:YSJiJ2NcZCBl @ 16
+.axtg @ 16
+aggj
+EOF
+EXPECT=<<EOF
+{"nodes":[{"id":0,"title":"a\"b'c\\d e","body":"","out_nodes":[1]},{"id":1,"title":"fcn.00000010","body":"","out_nodes":[]}]}
+{"nodes":[{"id":0,"title":"a\"b'c\\d e","body":"\n","out_nodes":[1]},{"id":1,"title":"fcn.00000010","body":"\n","out_nodes":[]}]}
+{"nodes":[{"id":0,"title":"a\"b'c\\d e","body":"\n","out_nodes":[]},{"id":1,"title":"fcn.00000010","body":"\n","out_nodes":[]}]}
+{"nodes":[{"id":1,"title":"fcn.00000010","body":"\n","out_nodes":[]}]}
+{"nodes":[{"id":0,"title":"a\"b'c\\d e","body":"","out_nodes":[1]},{"id":1,"title":"fcn.00000010","body":"","out_nodes":[]}]}
+{"nodes":[{"id":0,"title":"0x00000010","body":"fcn.00000010\n","out_nodes":[]},{"id":1,"title":"0x00000000","body":"a\"b'c\\d e\n","out_nodes":[0]}]}
+{"nodes":[{"id":0,"title":"a\"b'c\\d e","body":"","out_nodes":[]},{"id":1,"title":"int","body":"","out_nodes":[0]}]}
+{"nodes":[{"id":0,"title":"0x0","body":"a_bcd_e\n","out_nodes":[1]},{"id":1,"title":"0x10","body":"a\"b'c\\d e\n","out_nodes":[]}]}
+EOF
+RUN
+
+NAME=graph escaping preserves paths and unknown backslash escapes
+FILE=-
+CMDS=<<EOF
+'agn C:\tmp\file "body\text\next"
+'agn C:\\tmp\\ "body\\text\\"
+'age C:\tmp\file C:\\tmp\\
+aggj
+agg* > $graph
+ag-
+. $graph
+aggj
+EOF
+EXPECT=<<EOF
+{"nodes":[{"id":0,"title":"C:\\tmp\\file","body":"body\\text\\next\n","out_nodes":[1]},{"id":1,"title":"C:\\tmp\\","body":"body\\text\\\n","out_nodes":[]}]}
+{"nodes":[{"id":0,"title":"C:\\tmp\\file","body":"body\\text\\next\n","out_nodes":[1]},{"id":1,"title":"C:\\tmp\\","body":"body\\text\\\n","out_nodes":[]}]}
+EOF
+RUN
+
+NAME=agg node body ending in an unterminated ANSI escape
+FILE=-
+CMDS=<<EOF
+agn a base64:V1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXVwpRUVFRG1s=
+agg~QQQQ
+EOF
+EXPECT=<<EOF
+| QQQQ                                     |
+EOF
+RUN
+
+NAME=Function graphs retain interrupt handlers
+FILE=malloc://16
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx cf
+af
+aflj~{[0].type}
+agfj~{[0].type}
+agfj~{[0].blocks[0].ops[0].type}
+agfj~{[0].blocks[0].ops[0].opcode}
+EOF
+EXPECT=<<EOF
+int
+int
+ret
+iretd
+EOF
+RUN
+
+NAME=fanout nodes in the same layer use separate bend lanes
+FILE=-
+CMDS=<<EOF
+e scr.utf8=false
+e scr.color=0
+agn a
+agn b
+agn c
+agn d
+agn e
+agn f
+age a d
+age a e
+age a f
+age b c
+age b d
+age b e
+agg
+EOF
+EXPECT=<<EOF
+                          .--------------------.    .--------------------.
+                          |  a                 |    |  b                 |
+                          `--------------------'    `--------------------'
+                                 v v v                     v v v
+                                 | | |                     | | |
+                                 | | '--------------------.| | |
+    .----------------------------' |                      || | |
+    |                           .--'                      || | |
+    |                           |                         || | |
+    |                           |                         || | '------------------.
+    |                           | .------------------------' |                    |
+    |                           | |                       | .'                    |
+    |                           | |                       | |                     |
+    |                           | |                       | |                     |
+.--------------------.    .--------------------.    .--------------------.    .--------------------.
+|  f                 |    |  d                 |    |  e                 |    |  c                 |
+`--------------------'    `--------------------'    `--------------------'    `--------------------'
 EOF
 RUN

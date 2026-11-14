@@ -1,34 +1,37 @@
-/* radare - LGPL - Copyright 2012-2020 - pancake */
+/* radare - LGPL - Copyright 2012-2026 - pancake */
 
-#include <stdio.h>
-#include <string.h>
 #include <r_main.h>
-#include <r_util.h>
+#include <r_userconf.h>
+#include <r_lib.h>
 
 R_LIB_VERSION(r_main);
 
-static RMain foo[] = {
-	{ "r2", r_main_radare2 },
+static const RMain foo[] = {
+	{ "r2pm", r_main_r2pm },
 	{ "rax2", r_main_rax2 },
 	{ "radiff2", r_main_radiff2 },
 	{ "rafind2", r_main_rafind2 },
+	{ "ravc2", r_main_ravc2 },
 	{ "rarun2", r_main_rarun2 },
+	{ "rafs2", r_main_rafs2 },
 	{ "rasm2", r_main_rasm2 },
 	{ "ragg2", r_main_ragg2 },
+	{ "rapatch2", r_main_rapatch2 },
+	{ "rahash2", r_main_rahash2 },
 	{ "rabin2", r_main_rabin2 },
 	{ "radare2", r_main_radare2 },
+	{ "r2", r_main_radare2 },
 	{ NULL, NULL }
 };
 
-R_API RMain *r_main_new (const char *name) {
-	int i = 0;
+R_API RMain *r_main_new(const char *name) {
+	size_t i = 0;
 	while (foo[i].name) {
-		if (!strcmp (name, foo[i].name)) {
+		const RMain *entry = &foo[i];
+		if (r_str_startswith (name, entry->name)) {
 			RMain *m = R_NEW0 (RMain);
-			if (m) {
-				m->name = strdup (foo[i].name);
-				m->main = foo[i].main;
-			}
+			m->name = entry->name;
+			m->main = entry->main;
 			return m;
 		}
 		i++;
@@ -41,13 +44,105 @@ R_API void r_main_free(RMain *m) {
 }
 
 R_API int r_main_run(RMain *m, int argc, const char **argv) {
-	r_return_val_if_fail (m && m->main, -1);
+	R_RETURN_VAL_IF_FAIL (m && m->main, -1);
 	return m->main (argc, argv);
 }
 
-R_API int r_main_version_print(const char *progname) {
-	char *s = r_str_version (progname);
-	printf ("%s\n", s);
-	free (s);
+R_API RCons *r_main_cons_init(bool *own_cons) {
+	R_RETURN_VAL_IF_FAIL (own_cons, NULL);
+	RCons *cons = (RCons *)(size_t)r_sys_getenv_asut64 ("R2CONS");
+	*own_cons = !cons;
+	return cons? cons: r_cons_new ();
+}
+
+R_API int r_main_cons_fini(RCons *cons, bool own_cons, int rc) {
+	R_RETURN_VAL_IF_FAIL (cons, 1);
+	if (own_cons) {
+		size_t size;
+		char *output = r_cons_drain (cons, &size);
+		if (size && write (1, output, size) != size) {
+			R_LOG_ERROR ("Failed to write output");
+			rc = 1;
+		}
+		free (output);
+		r_cons_free (cons);
+	}
+	return rc;
+}
+
+R_API int r_main_version_print(RCons *cons, const char *progname, int mode) {
+	R_RETURN_VAL_IF_FAIL (progname, 1);
+	char *version;
+	PJ *pj;
+	switch (mode) {
+	case 'j':
+	case 'J':
+		pj = pj_new ();
+		pj_o (pj);
+		pj_ks (pj, "name", progname);
+		pj_ks (pj, "version", R2_VERSION);
+		pj_ki (pj, "abiversion", R2_ABIVERSION);
+		pj_ks (pj, "birth", R2_BIRTH);
+		pj_ks (pj, "commit", R2_GITTIP);
+		pj_ki (pj, "commits", R2_VERSION_COMMIT);
+		pj_ks (pj, "license", "LGPLv3");
+		pj_ks (pj, "tap", R2_GITTAP);
+		pj_ko (pj, "semver");
+		pj_ki (pj, "major", R2_VERSION_MAJOR);
+		pj_ki (pj, "minor", R2_VERSION_MINOR);
+		pj_ki (pj, "patch", R2_VERSION_PATCH);
+		pj_end (pj);
+		pj_end (pj);
+		version = pj_drain (pj);
+		break;
+	case 'q':
+		version = strdup (R2_VERSION);
+		break;
+	default:
+		version = r_str_version (progname);
+		break;
+	}
+	if (version) {
+		if (cons) {
+			r_cons_println (cons, version);
+		} else {
+			puts (version);
+		}
+		free (version);
+	}
 	return 0;
+}
+
+#define LIBSTRING \
+	"-lr_core -lr_config -lr_debug -lr_bin -lr_lang -lr_anal " \
+	"-lr_bp -lr_egg -lr_asm -lr_flag -lr_search -lr_syscall " \
+	"-lr_fs -lr_io -lr_socket -lr_cons -lr_magic -lr_muta " \
+	"-lr_arch -lr_esil -lr_reg -lr_util"
+R_API bool r_main_buildflags(char **out_cflags, char **out_ldflags, char **out_libs) {
+	R_RETURN_VAL_IF_FAIL (out_cflags && out_ldflags && out_libs, false);
+	*out_cflags = NULL;
+	*out_ldflags = NULL;
+	*out_libs = NULL;
+#if R2__WINDOWS__
+	char *libdir = r_str_r2_prefix (R2_LIBDIR);
+	char *incdir = r_str_r2_prefix (R2_INCDIR);
+#else
+	char *libdir = strdup (R2_LIBDIR);
+	char *incdir = strdup (R2_INCDIR);
+#endif
+	if (!libdir || !incdir) {
+		free (libdir);
+		free (incdir);
+		return false;
+	}
+	*out_cflags = r_str_newf ("-I%s", incdir);
+	*out_ldflags = r_str_newf ("-L%s", libdir);
+#if R2__UNIX__ && !__APPLE__
+	*out_libs = strdup (LIBSTRING" -ldl");
+#else
+	*out_libs = strdup (LIBSTRING);
+#endif
+	free (libdir);
+	free (incdir);
+	return true;
 }

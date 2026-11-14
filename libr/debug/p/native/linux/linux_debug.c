@@ -1,16 +1,14 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_userconf.h>
 
 #if DEBUGGER
 #include <r_debug.h>
+#include <r_core.h>
 #include <r_asm.h>
-#include <r_reg.h>
 #include <r_lib.h>
 #include <r_anal.h>
-#include <signal.h>
 #include <sys/uio.h>
-#include <errno.h>
 #include "linux_debug.h"
 #include "../procfs.h"
 
@@ -20,27 +18,172 @@
 
 #include "linux_ptrace.h"
 
-#ifdef __GLIBC__
-#define HAVE_YMM 1
-#else
-#define HAVE_YMM 0
+#include "../reg_vector.h"
+
+#if __x86_64__
+static ut8 *linux_xstate(RDebug *dbg, struct iovec *iov, NativeX86Layout *layout, int *width) {
+	ut32 a, b, c, d;
+	native_x86_cpuid (0, 0, &a, &b, &c, &d);
+	if (a < 0xd) {
+		return NULL;
+	}
+	native_x86_cpuid (0xd, 0, &a, &b, &c, &d);
+	if (c < 576 || c > INT_MAX) {
+		return NULL;
+	}
+	iov->iov_base = calloc (1, c);
+	iov->iov_len = c;
+	if (!iov->iov_base) {
+		return NULL;
+	}
+	const int tid = dbg->tid > 0? dbg->tid: dbg->pid;
+	ut8 *state = iov->iov_base;
+	if (tid <= 0 || r_debug_ptrace (dbg, PTRACE_GETREGSET, tid, (void *)NT_X86_XSTATE, iov)
+			|| iov->iov_len < 576 || (r_read_le64 (state + 520) >> 63)) {
+		free (state);
+		return NULL;
+	}
+	// Linux exports the supported XCR0 mask in the legacy software-reserved area.
+	const ut64 features = r_read_le64 (state + 464);
+	int *offsets[] = { &layout->ymm, &layout->opmask, &layout->zmm, &layout->hi16 };
+	const int ids[] = { 2, 5, 6, 7 };
+	int i;
+	for (i = 0; i < R_ARRAY_SIZE (ids); i++) {
+		*offsets[i] = -1;
+		if (features & (1ULL << ids[i])) {
+			native_x86_cpuid (0xd, ids[i], &a, &b, &c, &d);
+			if (b >= 576 && (ut64)b + a <= iov->iov_len) {
+				*offsets[i] = b;
+			}
+		}
+	}
+	*width = layout->ymm < 0? 128: layout->opmask >= 0 && layout->zmm >= 0 && layout->hi16 >= 0? 512: 256;
+	return state;
+}
+
+static int linux_vector_width(RDebug *dbg) {
+	NativeX86Layout layout = {0};
+	struct iovec iov;
+	int width = 128;
+	free (linux_xstate (dbg, &iov, &layout, &width));
+	return width;
+}
+
+static bool linux_vector_regs(RDebug *dbg, ut8 *buf, int size, bool write) {
+	NativeX86Layout layout = {0};
+	struct iovec iov;
+	int available = 128;
+	ut8 *state = linux_xstate (dbg, &iov, &layout, &available);
+	struct user_fpregs_struct legacy;
+	const int tid = dbg->tid > 0? dbg->tid: dbg->pid;
+	const int width = native_vector_width (dbg->reg, "zmm0")? 512: native_vector_width (dbg->reg, "ymm0")? 256: 128;
+	bool ok = width <= available;
+	if (ok && !state) {
+		ok = !r_debug_ptrace (dbg, PTRACE_GETFPREGS, tid, NULL, &legacy);
+	}
+	if (ok) {
+		ok = native_x86_transfer (buf, size, state? state: (ut8 *)&legacy,
+			state? iov.iov_len: sizeof (legacy), &layout, dbg->bits, width, write);
+	}
+	if (ok && write) {
+		if (state) {
+			ut64 features = width == 512? 0xe7: width == 256? 7: 3;
+			r_write_le64 (state + 512, r_read_le64 (state + 512) | features);
+			ok = !r_debug_ptrace (dbg, PTRACE_SETREGSET, tid, (void *)NT_X86_XSTATE, &iov);
+		} else {
+			ok = !r_debug_ptrace (dbg, PTRACE_SETFPREGS, tid, NULL, &legacy);
+		}
+	}
+	free (state);
+	return ok;
+}
+#elif __aarch64__ || __arm64__
+static int linux_sve_vl(RDebug *dbg) {
+#ifdef NT_ARM_SVE
+	struct user_sve_header header = {0};
+	struct iovec iov = { &header, sizeof (header) };
+	int tid = dbg->tid > 0? dbg->tid: dbg->pid;
+	if (tid > 0 && !r_debug_ptrace (dbg, PTRACE_GETREGSET, tid, (void *)NT_ARM_SVE, &iov)
+			&& iov.iov_len == sizeof (header) && header.vl >= 16 && header.vl <= 256 && !(header.vl & 15)) {
+		return header.vl;
+	}
+#endif
+	return 0;
+}
+
+static bool linux_vector_regs(RDebug *dbg, ut8 *buf, int size, bool write) {
+	const int tid = dbg->tid > 0? dbg->tid: dbg->pid;
+	const int vl = native_vector_width (dbg->reg, "z0") / 8;
+#ifdef NT_ARM_SVE
+	if (vl) {
+		if (vl < 16 || vl > 256 || (vl & 15)) {
+			return false;
+		}
+		const int vq = vl / 16;
+		const int len = SVE_PT_SIZE (vq, SVE_PT_REGS_SVE);
+		ut8 *state = calloc (1, len);
+		if (!state) {
+			return false;
+		}
+		struct iovec iov = { state, len };
+		struct user_sve_header *header = (struct user_sve_header *)state;
+		bool ok = !r_debug_ptrace (dbg, PTRACE_GETREGSET, tid, (void *)NT_ARM_SVE, &iov)
+			&& iov.iov_len >= sizeof (*header) && header->vl == vl;
+		if (ok && (header->flags & SVE_PT_REGS_MASK) == SVE_PT_REGS_FPSIMD) {
+			ok = iov.iov_len >= SVE_PT_FPSIMD_OFFSET + 520;
+			if (ok && !write) {
+				ok = native_arm64_fpsimd (buf, size, state + SVE_PT_FPSIMD_OFFSET,
+					iov.iov_len - SVE_PT_FPSIMD_OFFSET, vl, true, R_SYS_ENDIAN, false);
+			}
+		} else if (ok) {
+			ok = iov.iov_len >= len;
+			if (ok && !write) {
+				ok = native_arm64_sve (buf, size, state, len, vl, R_SYS_ENDIAN, false);
+			}
+		}
+		if (ok && write) {
+			header->flags = (header->flags & ~SVE_PT_REGS_MASK) | SVE_PT_REGS_SVE;
+			header->size = len;
+			iov.iov_len = len;
+			ok = native_arm64_sve (buf, size, state, len, vl, R_SYS_ENDIAN, true)
+				&& !r_debug_ptrace (dbg, PTRACE_SETREGSET, tid, (void *)NT_ARM_SVE, &iov);
+		}
+		free (state);
+		return ok;
+	}
+#endif
+	ut8 state[528];
+	struct iovec iov = { state, sizeof (state) };
+	return !r_debug_ptrace (dbg, PTRACE_GETREGSET, tid, (void *)NT_PRFPREG, &iov)
+		&& native_arm64_fpsimd (buf, size, state, iov.iov_len, 16, false, R_SYS_ENDIAN, write)
+		&& (!write || !r_debug_ptrace (dbg, PTRACE_SETREGSET, tid, (void *)NT_PRFPREG, &iov));
+}
 #endif
 
-char *linux_reg_profile (RDebug *dbg) {
+static char *linux_reg_profile_base(RDebug *dbg) {
 #if __arm__
 #	include "reg/linux-arm.h"
 #elif __riscv
 #	include "reg/linux-riscv64.h"
 #elif __arm64__ || __aarch64__
-#	include "reg/linux-arm64.h"
+	const bool is64 = R_SYS_BITS_CHECK (dbg->bits, 64);
+	if (is64) {
+#		include "reg/linux-arm64.h"
+	} else {
+#		include "reg/linux-arm.h"
+	}
 #elif __mips__
-	if ((dbg->bits & R_SYS_BITS_32) && (dbg->bp->endian == 1)) {
+	const bool is32 = R_SYS_BITS_CHECK (dbg->bits, 32);
+	if (is32 && (dbg->bp->endian == 1)) {
 #		include "reg/linux-mips.h"
 	} else {
 #		include "reg/linux-mips64.h"
 	}
+#elif __loongarch__
+#		include "reg/linux-loongarch64.h"
 #elif (__i386__ || __x86_64__)
-	if (dbg->bits & R_SYS_BITS_32) {
+	const bool is32 = R_SYS_BITS_CHECK (dbg->bits, 32);
+	if (is32) {
 #if __x86_64__
 #		include "reg/linux-x64-32.h"
 #else
@@ -50,17 +193,36 @@ char *linux_reg_profile (RDebug *dbg) {
 #		include "reg/linux-x64.h"
 	}
 #elif __powerpc__
-	if (dbg->bits & R_SYS_BITS_32) {
-#		include "reg/linux-ppc.h"
-	} else {
+	const bool is64 = R_SYS_BITS_CHECK (dbg->bits, 64);
+	if (is64) {
 #		include "reg/linux-ppc64.h"
+	} else {
+#		include "reg/linux-ppc.h"
 	}
 #elif __s390x__
-#	include "reg/linux-s390x.h"
+	const bool is64 = R_SYS_BITS_CHECK (dbg->bits, 64);
+	if (is64) {
+#		include "reg/linux-zarch.h"
+	} else {
+#		include "reg/linux-s390x.h"
+	}
 #else
 #	error "Unsupported Linux CPU"
 	return NULL;
 #endif
+}
+
+char *linux_reg_profile(RDebug *dbg) {
+	char *base = linux_reg_profile_base (dbg);
+#if __x86_64__
+	return native_x86_profile (base, dbg->bits, linux_vector_width (dbg));
+#elif __aarch64__ || __arm64__
+	if (R_SYS_BITS_CHECK (dbg->bits, 64)) {
+		const int vl = linux_sve_vl (dbg);
+		return native_arm64_profile (base, vl? vl: 16, vl != 0);
+	}
+#endif
+	return base;
 }
 
 static void linux_detach_all(RDebug *dbg);
@@ -74,8 +236,144 @@ static void linux_dbg_wait_break_main(RDebug *dbg);
 static void linux_dbg_wait_break(RDebug *dbg);
 static RDebugReasonType linux_handle_new_task(RDebug *dbg, int tid);
 
+static bool is_syscall_stop(int status) {
+	return WIFSTOPPED (status) && WSTOPSIG (status) == (SIGTRAP | 0x80);
+}
+
+static void syscall_state_key(char *buf, size_t buf_size, int pid, int tid, const char *name) {
+	snprintf (buf, buf_size, "dbg.syscall.%d.%d.%s", pid, tid, name);
+}
+
+static bool syscall_resume(RDebug *dbg, int tid, bool trace_syscalls) {
+	const int request = trace_syscalls? PTRACE_SYSCALL: PTRACE_CONT;
+	if (r_debug_ptrace (dbg, request, tid, 0, 0) == -1) {
+		r_sys_perror (trace_syscalls? "PTRACE_SYSCALL": "PTRACE_CONT");
+		return false;
+	}
+	return true;
+}
+
+static bool syscall_fasttime_enabled(RDebug *dbg) {
+	return dbg && dbg->options.fasttime;
+}
+
+static const char *syscall_hook_cmd(RDebug *dbg, const char *key) {
+	if (!strcmp (key, "cmd.syscall.enter")) {
+		return dbg? dbg->options.cmd_syscall_enter: NULL;
+	}
+	if (!strcmp (key, "cmd.syscall.leave")) {
+		return dbg? dbg->options.cmd_syscall_leave: NULL;
+	}
+	return NULL;
+}
+
+static bool syscall_hooks_suppressed(RDebug *dbg) {
+	return dbg && dbg->options.syscall_hook_suppress;
+}
+
+static bool syscall_hooks_enabled(RDebug *dbg) {
+	return syscall_fasttime_enabled (dbg) || R_STR_ISNOTEMPTY (dbg->options.cmd_syscall_enter)
+		|| R_STR_ISNOTEMPTY (dbg->options.cmd_syscall_leave);
+}
+
+static bool syscall_is_timer(RDebug *dbg, int syscall_num) {
+	if (!dbg || !dbg->anal || !dbg->anal->syscall || syscall_num < 0) {
+		return false;
+	}
+	const int nanosleep_num = r_syscall_get_num (dbg->anal->syscall, "nanosleep");
+	const int clock_nanosleep_num = r_syscall_get_num (dbg->anal->syscall, "clock_nanosleep");
+	return syscall_num == nanosleep_num || syscall_num == clock_nanosleep_num;
+}
+
+static bool syscall_run_cmd(RDebug *dbg, const char *key) {
+	const char *cmd = syscall_hook_cmd (dbg, key);
+	if (R_STR_ISEMPTY (cmd) || !dbg->coreb.cmd) {
+		return true;
+	}
+	dbg->coreb.cmd (dbg->coreb.core, cmd);
+	if (dbg->coreb.core) {
+		RCore *core = (RCore *)dbg->coreb.core;
+		r_cons_flush (core->cons);
+	}
+	return true;
+}
+
+static void syscall_fasttime_enter(RDebug *dbg, Sdb *sdb, int tid, int syscall_num) {
+	if (!syscall_fasttime_enabled (dbg) || !syscall_is_timer (dbg, syscall_num)) {
+		return;
+	}
+	const char *sn = dbg->reg? r_reg_alias_getname (dbg->reg, R_REG_ALIAS_SN): NULL;
+	if (R_STR_ISNOTEMPTY (sn) && r_debug_reg_set (dbg, sn, UT64_MAX)) {
+		char key[64];
+		syscall_state_key (key, sizeof (key), dbg->pid, tid, "fasttime");
+		sdb_bool_set (sdb, key, true, 0);
+	}
+}
+
+static void syscall_fasttime_unset(RDebug *dbg, Sdb *sdb, int tid) {
+	char key[64];
+	syscall_state_key (key, sizeof (key), dbg->pid, tid, "fasttime");
+	sdb_unset (sdb, key, 0);
+}
+
+static void syscall_fasttime_leave(RDebug *dbg, Sdb *sdb, int tid) {
+	char key[64];
+	syscall_state_key (key, sizeof (key), dbg->pid, tid, "fasttime");
+	if (!sdb_bool_get (sdb, key, NULL)) {
+		return;
+	}
+	const char *r0 = dbg->reg? r_reg_alias_getname (dbg->reg, R_REG_ALIAS_R0): NULL;
+	if (R_STR_ISEMPTY (r0)) {
+		r0 = dbg->reg? r_reg_alias_getname (dbg->reg, R_REG_ALIAS_A0): NULL;
+	}
+	if (R_STR_ISNOTEMPTY (r0)) {
+		(void)r_debug_reg_set (dbg, r0, 0);
+	}
+	syscall_fasttime_unset (dbg, sdb, tid);
+}
+
+static bool syscall_handle_stop(RDebug *dbg, int tid) {
+	if (syscall_hooks_suppressed (dbg)) {
+		return false;
+	}
+	RCore *core = (RCore *)dbg->coreb.core;
+	if (!core || !core->sdb) {
+		return false;
+	}
+	char key[64];
+	syscall_state_key (key, sizeof (key), dbg->pid, tid, "in");
+	const bool in_syscall = sdb_bool_get (core->sdb, key, NULL);
+	if (!in_syscall && !syscall_hooks_enabled (dbg)) {
+		return false;
+	}
+	if (!r_debug_select (dbg, dbg->pid, tid)) {
+		if (in_syscall) {
+			sdb_bool_set (core->sdb, key, false, 0);
+			syscall_fasttime_unset (dbg, core->sdb, tid);
+		}
+		return false;
+	}
+	if (!in_syscall) {
+		sdb_bool_set (core->sdb, key, true, 0);
+		syscall_run_cmd (dbg, "cmd.syscall.enter");
+		if (syscall_fasttime_enabled (dbg)) {
+			bool err = false;
+			int syscall_num = (int)r_debug_reg_get_err (dbg, "SN", &err);
+			if (!err) {
+				syscall_fasttime_enter (dbg, core->sdb, tid, syscall_num);
+			}
+		}
+	} else {
+		sdb_bool_set (core->sdb, key, false, 0);
+		syscall_fasttime_leave (dbg, core->sdb, tid);
+		syscall_run_cmd (dbg, "cmd.syscall.leave");
+	}
+	return syscall_resume (dbg, tid, !in_syscall || syscall_hooks_enabled (dbg));
+}
+
 int linux_handle_signals(RDebug *dbg, int tid) {
-	siginfo_t siginfo = { 0 };
+	RCore *core = dbg->coreb.core;
+	siginfo_t siginfo = {0};
 	int ret = r_debug_ptrace (dbg, PTRACE_GETSIGINFO, tid, 0, (r_ptrace_data_t)&siginfo);
 	if (ret == -1) {
 		/* ESRCH means the process already went away :-/ */
@@ -111,16 +409,16 @@ int linux_handle_signals(RDebug *dbg, int tid) {
 			break;
 		case SIGTRAP:
 		{
-			if (dbg->glob_libs || dbg->glob_unlibs) {
+			if (dbg->options.glob_libs || dbg->options.glob_unlibs) {
 				ut64 pc_addr = r_debug_reg_get (dbg, "PC");
-				RBreakpointItem *b = r_bp_get_at (dbg->bp, pc_addr - dbg->bpsize);
+				RBreakpointItem *b = r_bp_get_at (dbg->bp, pc_addr - dbg->options.bpsize);
 				if (b && b->internal) {
 					char *p = strstr (b->data, "dbg.");
 					if (p) {
 						if (r_str_startswith (p, "dbg.libs")) {
 							const char *name = strstr (b->data, "sym.imp.dlopen")
-								? r_reg_get_name (dbg->reg, R_REG_NAME_A0)
-								: r_reg_get_name (dbg->reg, R_REG_NAME_A1);
+								? r_reg_alias_getname (dbg->reg, R_REG_ALIAS_A0)
+								: r_reg_alias_getname (dbg->reg, R_REG_ALIAS_A1);
 							b->data = r_str_appendf (b->data, ";ps@r:%s", name);
 							dbg->reason.type = R_DEBUG_REASON_NEW_LIB;
 							break;
@@ -147,10 +445,10 @@ int linux_handle_signals(RDebug *dbg, int tid) {
 		default:
 			break;
 		}
-		if (dbg->reason.signum != SIGTRAP && (dbg->reason.signum != SIGINT || !r_cons_is_breaked ())) {
-			eprintf ("[+] SIGNAL %d errno=%d addr=0x%08"PFMT64x
-				" code=%d si_pid=%d ret=%d\n",
-				siginfo.si_signo, siginfo.si_errno,
+		if (dbg->reason.signum != SIGTRAP && (dbg->reason.signum != SIGINT || !r_cons_is_breaked (core->cons))) {
+			const char *name = r_signal_tostring (dbg->reason.signum);
+			eprintf ("[+] SIGNAL %d (aka %s) errno=%d addr=0x%08"PFMT64x " code=%d si_pid=%d ret=%d\n",
+				siginfo.si_signo, name, siginfo.si_errno,
 				(ut64) (size_t)siginfo.si_addr, siginfo.si_code, siginfo.si_pid, ret);
 		}
 		return true;
@@ -166,8 +464,6 @@ int linux_handle_signals(RDebug *dbg, int tid) {
 // Used to remove breakpoints before detaching from a fork, without it the child
 // will die upon hitting a breakpoint while not being traced
 static void linux_remove_fork_bps(RDebug *dbg) {
-	RListIter *iter;
-	RBreakpointItem *b;
 	int prev_pid = dbg->pid;
 	int prev_tid = dbg->tid;
 
@@ -175,14 +471,16 @@ static void linux_remove_fork_bps(RDebug *dbg) {
 	dbg->pid = dbg->forked_pid;
 	dbg->tid = dbg->forked_pid;
 	r_debug_select (dbg, dbg->forked_pid, dbg->forked_pid);
-
+#if __i386__ || __x86_64__
+	RListIter *iter;
+	RBreakpointItem *b;
 	// Unset all hw breakpoints in the child process
 	r_debug_reg_sync (dbg, R_REG_TYPE_DRX, false);
 	r_list_foreach (dbg->bp->bps, iter, b) {
 		r_debug_drx_unset (dbg, r_bp_get_index_at (dbg->bp, b->addr));
 	}
 	r_debug_reg_sync (dbg, R_REG_TYPE_DRX, true);
-
+#endif
 	// Unset software breakpoints in the child process
 	r_debug_bp_update (dbg);
 	r_bp_restore (dbg->bp, false);
@@ -234,12 +532,12 @@ RDebugReasonType linux_ptrace_event (RDebug *dbg, int ptid, int status, bool dow
 			// The new child has a pending SIGSTOP.  We can't affect it until it
 			// hits the SIGSTOP, but we're already attached.  */
 			if (waitpid ((int)data, &status, 0) == -1) {
-				perror ("waitpid");
+				r_sys_perror ("waitpid");
 			}
 		}
 
 		linux_add_new_thread (dbg, (int)data);
-		if (dbg->trace_clone) {
+		if (dbg->options.trace_clone) {
 			r_debug_select (dbg, dbg->pid, (int)data);
 		}
 		eprintf ("(%d) Created thread %d\n", ptid, (int)data);
@@ -256,16 +554,16 @@ RDebugReasonType linux_ptrace_event (RDebug *dbg, int ptid, int status, bool dow
 			// The new child has a pending SIGSTOP. We can't affect it until it
 			// hits the SIGSTOP, but we're already attached.  */
 			if (waitpid (dbg->forked_pid, &status, 0) == -1) {
-				perror ("waitpid");
+				r_sys_perror ("waitpid");
 			}
 		}
 		eprintf ("(%d) Created process %d\n", ptid, (int)data);
-		if (!dbg->trace_forks) {
+		if (!dbg->options.trace_forks) {
 			// We need to do this even if the new process will be detached since the
 			// breakpoints are inherited from the parent
 			linux_remove_fork_bps (dbg);
 			if (r_debug_ptrace (dbg, PTRACE_DETACH, dbg->forked_pid, NULL, (r_ptrace_data_t)(size_t)NULL) == -1) {
-				perror ("PTRACE_DETACH");
+				r_sys_perror ("PTRACE_DETACH");
 			}
 		}
 		return R_DEBUG_REASON_NEW_PID;
@@ -275,7 +573,7 @@ RDebugReasonType linux_ptrace_event (RDebug *dbg, int ptid, int status, bool dow
 			r_sys_perror ("ptrace GETEVENTMSG");
 			return R_DEBUG_REASON_ERROR;
 		}
-		//TODO: Check other processes exit if dbg->trace_forks is on
+		//TODO: Check other processes exit if dbg->options.trace_forks is on
 		if (ptid != dbg->pid) {
 			eprintf ("(%d) Thread exited with status=0x%"PFMT64x"\n", ptid, (ut64)data);
 			return R_DEBUG_REASON_EXIT_TID;
@@ -309,7 +607,7 @@ static RDebugReasonType linux_handle_new_task(RDebug *dbg, int tid) {
 				continue;
 			}
 			// Retrieve the signal without consuming it with PTRACE_GETSIGINFO
-			siginfo_t siginfo = { 0 };
+			siginfo_t siginfo = {0};
 			ret = r_debug_ptrace (dbg, PTRACE_GETSIGINFO, th->pid, 0, (r_ptrace_data_t)(size_t)&siginfo);
 			// Skip if PTRACE_GETSIGINFO fails when the thread is running.
 			if (ret == -1) {
@@ -341,9 +639,8 @@ int linux_step(RDebug *dbg) {
 	int ret = false;
 	int pid = dbg->tid;
 	ret = r_debug_ptrace (dbg, PTRACE_SINGLESTEP, pid, 0, 0);
-	//XXX(jjd): why?? //linux_handle_signals (dbg);
 	if (ret == -1) {
-		perror ("native-singlestep");
+		r_sys_perror ("native-singlestep");
 		ret = false;
 	} else {
 		ret = true;
@@ -356,24 +653,25 @@ bool linux_set_options(RDebug *dbg, int pid) {
 	traceflags |= PTRACE_O_TRACEFORK;
 	traceflags |= PTRACE_O_TRACEVFORK;
 	traceflags |= PTRACE_O_TRACECLONE;
-	if (dbg->trace_forks) {
+	if (dbg->options.trace_forks) {
 		traceflags |= PTRACE_O_TRACEVFORKDONE;
 	}
-	if (dbg->trace_execs) {
+	if (dbg->options.trace_execs) {
 		traceflags |= PTRACE_O_TRACEEXEC;
 	}
-	if (dbg->trace_aftersyscall) {
+	if (dbg->options.trace_aftersyscall) {
 		traceflags |= PTRACE_O_TRACEEXIT;
 	}
 	/* SIGTRAP | 0x80 on signal handler .. not supported on all archs */
 	traceflags |= PTRACE_O_TRACESYSGOOD;
+	RCore *core = dbg->coreb.core;
 
 	// PTRACE_SETOPTIONS can fail because of the asynchronous nature of ptrace
 	// If the target is traced, the loop will always end with success
 	while (r_debug_ptrace (dbg, PTRACE_SETOPTIONS, pid, 0, (r_ptrace_data_t)(size_t)traceflags) == -1) {
-		void *bed = r_cons_sleep_begin ();
+		void *bed = r_cons_sleep_begin (core->cons);
 		usleep (1000);
-		r_cons_sleep_end (bed);
+		r_cons_sleep_end (core->cons, bed);
 	}
 	return true;
 }
@@ -386,7 +684,7 @@ static void linux_detach_all(RDebug *dbg) {
 		r_list_foreach (th_list, it, th) {
 			if (th->pid != dbg->main_pid) {
 				if (r_debug_ptrace (dbg, PTRACE_DETACH, th->pid, NULL, (r_ptrace_data_t)(size_t)NULL) == -1) {
-					perror ("PTRACE_DETACH");
+					r_sys_perror ("PTRACE_DETACH");
 				}
 			}
 		}
@@ -394,7 +692,7 @@ static void linux_detach_all(RDebug *dbg) {
 
 	// Detaching from main proc
 	if (r_debug_ptrace (dbg, PTRACE_DETACH, dbg->main_pid, NULL, (r_ptrace_data_t)(size_t)NULL) == -1) {
-		perror ("PTRACE_DETACH");
+		r_sys_perror ("PTRACE_DETACH");
 	}
 }
 
@@ -459,14 +757,14 @@ static void linux_dbg_wait_break_main(RDebug *dbg) {
 	// in another process group.
 	if (dpgid != tpgid) {
 		if (!linux_kill_thread (dbg->pid, SIGINT)) {
-			eprintf ("Could not interrupt pid (%d)\n", dbg->pid);
+			R_LOG_ERROR ("Could not interrupt pid (%d)", dbg->pid);
 		}
 	}
 }
 
 static void linux_dbg_wait_break(RDebug *dbg) {
 	if (!linux_kill_thread (dbg->pid, SIGINT)) {
-		eprintf ("Could not interrupt pid (%d)\n", dbg->pid);
+		R_LOG_ERROR ("Could not interrupt pid (%d)", dbg->pid);
 	}
 }
 
@@ -484,32 +782,51 @@ RDebugReasonType linux_dbg_wait(RDebug *dbg, int pid) {
 		// In the main context, SIGINT is propagated to the debuggee if it is
 		// in the same process group. Otherwise, the task is running in
 		// background and SIGINT will not be propagated to the debuggee.
-		if (r_cons_context_is_main ()) {
-			r_cons_break_push ((RConsBreak)linux_dbg_wait_break_main, dbg);
+		RCore *core = dbg->coreb.core;
+		const bool is_main = r_cons_context_is_main (core->cons, core->cons->context);
+		if (is_main) {
+			r_cons_break_push (core->cons, (RConsBreak)linux_dbg_wait_break_main, dbg);
 		} else {
-			r_cons_break_push ((RConsBreak)linux_dbg_wait_break, dbg);
+			r_cons_break_push (core->cons, (RConsBreak)linux_dbg_wait_break, dbg);
 		}
-		void *bed = r_cons_sleep_begin ();
-		if (dbg->continue_all_threads) {
+		void *bed = r_cons_sleep_begin (core->cons);
+		if (dbg->options.continue_all_threads) {
 			ret = waitpid (-1, &status, flags);
 		} else {
 			ret = waitpid (pid, &status, flags);
 		}
-		r_cons_sleep_end (bed);
-		r_cons_break_pop ();
+		r_cons_sleep_end (core->cons, bed);
+		r_cons_break_pop (core->cons);
 
 		if (ret < 0) {
 			// Continue when interrupted by user;
 			if (errno == EINTR) {
 				continue;
 			}
-			perror ("waitpid");
+			r_sys_perror ("waitpid");
 			break;
 		} else if (ret == 0) {
 			// Unset WNOHANG to call next waitpid in blocking mode.
 			flags &= ~WNOHANG;
 		} else {
 			tid = ret;
+
+			if (is_syscall_stop (status)) {
+				if (syscall_handle_stop (dbg, tid)) {
+					continue;
+				}
+				if (syscall_hooks_suppressed (dbg)) {
+					dbg->reason.type = R_DEBUG_REASON_STEP;
+					dbg->reason.signum = SIGTRAP;
+					reason = dbg->reason.type;
+					break;
+				}
+				if (syscall_resume (dbg, tid, false)) {
+					continue;
+				}
+				reason = R_DEBUG_REASON_ERROR;
+				break;
+			}
 
 			// Handle SIGTRAP with PTRACE_EVENT_*
 			reason = linux_ptrace_event (dbg, tid, status, true);
@@ -572,6 +889,14 @@ RDebugReasonType linux_dbg_wait(RDebug *dbg, int pid) {
 			}
 		}
 	}
+#if __aarch64__ || __arm64__
+	const int vl = R_SYS_BITS_CHECK (dbg->bits, 64)? linux_sve_vl (dbg): 0;
+	if (vl && vl != native_vector_width (dbg->reg, "z0") / 8) {
+		char *profile = linux_reg_profile (dbg);
+		r_reg_set_profile_string (dbg->reg, profile);
+		free (profile);
+	}
+#endif
 	dbg->reason.tid = tid;
 	return reason;
 }
@@ -601,7 +926,7 @@ static bool linux_kill_thread(int tid, int signo) {
 	int ret = syscall (__NR_tkill, tid, signo);
 
 	if (ret == -1) {
-		perror ("tkill");
+		r_sys_perror ("tkill");
 		return false;
 	}
 
@@ -610,7 +935,7 @@ static bool linux_kill_thread(int tid, int signo) {
 
 static bool linux_stop_thread(RDebug *dbg, int tid) {
 	int status, ret;
-	siginfo_t siginfo = { 0 };
+	siginfo_t siginfo = {0};
 
 	// Return if the thread is already stopped
 	ret = r_debug_ptrace (dbg, PTRACE_GETSIGINFO, tid, 0,
@@ -621,7 +946,7 @@ static bool linux_stop_thread(RDebug *dbg, int tid) {
 
 	if (linux_kill_thread (tid, SIGSTOP)) {
 		if ((ret = waitpid (tid, &status, 0)) == -1) {
-			perror ("waitpid");
+			r_sys_perror ("waitpid");
 		}
 		return ret == tid;
 	}
@@ -645,7 +970,7 @@ bool linux_stop_threads(RDebug *dbg, int except) {
 }
 
 static bool linux_attach_single_pid(RDebug *dbg, int pid) {
-	siginfo_t sig = { 0 };
+	siginfo_t sig = {0};
 
 	if (pid < 0) {
 		return false;
@@ -657,21 +982,22 @@ static bool linux_attach_single_pid(RDebug *dbg, int pid) {
 	// GETSIGINFO can be called multiple times and would fail without attachment.
 	if (r_debug_ptrace (dbg, PTRACE_GETSIGINFO, pid, NULL,
 		(r_ptrace_data_t)&sig) == -1) {
+		// TODO: PTRACE_SEIZE enables PTRACE_INTERRUPT, but wont stop on attach
 		if (r_debug_ptrace (dbg, PTRACE_ATTACH, pid, NULL, NULL) == -1) {
-			perror ("ptrace (PT_ATTACH)");
+			r_sys_perror ("ptrace (PT_ATTACH)");
 			return false;
 		}
 
 		// Make sure SIGSTOP is delivered and wait for it since we can't affect the pid
 		// until it hits SIGSTOP.
 		if (!linux_stop_thread (dbg, pid)) {
-			eprintf ("Could not stop pid (%d)\n", pid);
+			R_LOG_ERROR ("Could not stop pid (%d)", pid);
 			return false;
 		}
 	}
 
 	if (!linux_set_options (dbg, pid)) {
-		eprintf("failed set_options on %d\n", pid);
+		R_LOG_ERROR("failed set_options on %d", pid);
 		return false;
 	}
 	dbg->pid = pid;
@@ -680,7 +1006,7 @@ static bool linux_attach_single_pid(RDebug *dbg, int pid) {
 
 static RList *get_pid_thread_list(RDebug *dbg, int main_pid) {
 	RList *list = r_list_new ();
-	if (list) {
+	if (R_LIKELY (list)) {
 		list = linux_thread_list (dbg, main_pid, list);
 		dbg->main_pid = main_pid;
 	}
@@ -717,9 +1043,6 @@ static char *read_link(int pid, const char *file) {
 RDebugInfo *linux_info(RDebug *dbg, const char *arg) {
 	char proc_buff[1024];
 	RDebugInfo *rdi = R_NEW0 (RDebugInfo);
-	if (!rdi) {
-		return NULL;
-	}
 
 	RList *th_list;
 	bool list_alloc = false;
@@ -760,10 +1083,7 @@ RDebugInfo *linux_info(RDebug *dbg, const char *arg) {
 
 RDebugPid *fill_pid_info(const char *info, const char *path, int tid) {
 	RDebugPid *pid_info = R_NEW0 (RDebugPid);
-	if (!pid_info) {
-		return NULL;
-	}
-	char *ptr = strstr (info, "State:");
+	const char *ptr = strstr (info, "State:");
 	if (ptr) {
 		switch (*(ptr + 7)) {
 		case 'R':
@@ -838,6 +1158,8 @@ RList *linux_pid_list(int pid, RList *list) {
 		// Unless pid 0 is requested, only add the requested pid and it's child processes
 		if (0 == pid || i == pid || pid_info->ppid == pid) {
 			r_list_append (list, pid_info);
+		} else {
+			r_debug_pid_free (pid_info);
 		}
 	}
 	closedir (dh);
@@ -849,12 +1171,18 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 	char *ptr, buf[PATH_MAX];
 	RDebugPid *pid_info = NULL;
 	ut64 pc = 0;
-	int prev_tid = dbg->tid;
-
-	if (!pid) {
+	if (pid < 1) {
 		r_list_free (list);
 		return NULL;
 	}
+	if (dbg->tid < 1) {
+		dbg->tid = pid;
+		dbg->pid = pid;
+	}
+	int prev_pid = dbg->pid;
+	int prev_tid = dbg->tid;
+	dbg->pid = pid;
+	dbg->tid = pid;
 
 	list->free = (RListFree)&r_debug_pid_free;
 	/* if this process has a task directory, use that */
@@ -863,7 +1191,8 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 		struct dirent *de;
 		DIR *dh = opendir (buf);
 		// Update the process' memory maps to set correct paths
-		dbg->corebind.syncDebugMaps (dbg->corebind.core);
+		dbg->pid = pid;
+		dbg->coreb.syncDebugMaps (dbg->coreb.core);
 		while ((de = readdir (dh))) {
 			if (!strcmp (de->d_name, ".") || !strcmp (de->d_name, "..")) {
 				continue;
@@ -908,7 +1237,7 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 		closedir (dh);
 		// Return to the original thread
 		linux_attach_single_pid (dbg, prev_tid);
-		dbg->pid = pid;
+		dbg->pid = prev_pid;
 		dbg->tid = prev_tid;
 		r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false);
 	} else {
@@ -917,7 +1246,7 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 #define MAXPID 99999
 		/* otherwise, brute force the pids */
 		for (i = pid; i < MAXPID; i++) { // XXX
-			if (procfs_pid_slurp (i, "status", buf, sizeof(buf)) == -1) {
+			if (procfs_pid_slurp (i, "status", buf, sizeof (buf)) == -1) {
 				continue;
 			}
 			int uid = 0;
@@ -935,9 +1264,9 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 					continue;
 				}
 
-				if (procfs_pid_slurp (i, "comm", buf, sizeof(buf)) == -1) {
+				if (procfs_pid_slurp (i, "comm", buf, sizeof (buf)) == -1) {
 					/* fall back to auto-id */
-					snprintf (buf, sizeof(buf), "thread_%d", thid++);
+					snprintf (buf, sizeof (buf), "thread_%d", thid++);
 				}
 				r_list_append (list, r_debug_pid_new (buf, i, uid, 's', 0));
 			}
@@ -946,132 +1275,21 @@ RList *linux_thread_list(RDebug *dbg, int pid, RList *list) {
 	return list;
 }
 
-#define PRINT_FPU(fpregs) \
-	r_cons_printf ("cwd = 0x%04x  ; control   ", (fpregs).cwd);\
-	r_cons_printf ("swd = 0x%04x  ; status\n", (fpregs).swd);\
-	r_cons_printf ("ftw = 0x%04x              ", (fpregs).ftw);\
-	r_cons_printf ("fop = 0x%04x\n", (fpregs).fop);\
-	r_cons_printf ("rip = 0x%016"PFMT64x"  ", (ut64)(fpregs).rip);\
-	r_cons_printf ("rdp = 0x%016"PFMT64x"\n", (ut64)(fpregs).rdp);\
-	r_cons_printf ("mxcsr = 0x%08x        ", (fpregs).mxcsr);\
-	r_cons_printf ("mxcr_mask = 0x%08x\n", (fpregs).mxcr_mask)\
-
-#define PRINT_FPU_NOXMM(fpregs) \
-	r_cons_printf ("cwd = 0x%04lx  ; control   ", (fpregs).cwd);\
-	r_cons_printf ("swd = 0x%04lx  ; status\n", (fpregs).swd);\
-	r_cons_printf ("twd = 0x%04lx              ", (fpregs).twd);\
-	r_cons_printf ("fip = 0x%04lx          \n", (fpregs).fip);\
-	r_cons_printf ("fcs = 0x%04lx              ", (fpregs).fcs);\
-	r_cons_printf ("foo = 0x%04lx          \n", (fpregs).foo);\
-	r_cons_printf ("fos = 0x%04lx              ", (fpregs).fos)
-
-static void print_fpu(void *f){
-#if __x86_64__
-	int i,j;
-	struct user_fpregs_struct fpregs = *(struct user_fpregs_struct *)f;
-#if __ANDROID__
-	PRINT_FPU (fpregs);
-	for (i = 0;i < 8; i++) {
-		ut64 *b = (ut64 *)&fpregs.st_space[i*4];
-		ut32 *c = (ut32*)&fpregs.st_space;
-		float *f = (float *)&fpregs.st_space;
-		c = c + (i * 4);
-		f = f + (i * 4);
-		r_cons_printf ("st%d =%0.3lg (0x%016"PFMT64x") | %0.3f (%08x) | "\
-			"%0.3f (%08x) \n", i,
-			(double)*((double*)&fpregs.st_space[i*4]), *b, (float) f[0],
-			c[0], (float) f[1], c[1]);
-	}
-#else
-	r_cons_printf ("---- x86-64 ----\n");
-	PRINT_FPU (fpregs);
-	r_cons_printf ("size = 0x%08x\n", (ut32)sizeof (fpregs));
-	for (i = 0; i < 16; i++) {
-		ut32 *a = (ut32 *)&fpregs.xmm_space;
-		a = a + (i * 4);
-		r_cons_printf ("xmm%d = %08x %08x %08x %08x   ", i, (int)a[0], (int)a[1],
-					   (int)a[2], (int)a[3] );
-		if (i < 8) {
-			ut64 *st_u64 = (ut64*)&fpregs.st_space[i * 4];
-			ut8 *st_u8 = (ut8 *)&fpregs.st_space[i * 4];
-			long double *st_ld = (long double *)&fpregs.st_space[i * 4];
-			r_cons_printf ("mm%d = 0x%016" PFMT64x " | st%d = ", i, *st_u64, i);
-			// print as hex TBYTE - always little endian
-			for (j = 9; j >= 0; j--) {
-				r_cons_printf ("%02x", st_u8[j]);
-			}
-			// Using %Lf and %Le even though we do not show the extra precision to avoid another cast
-			// %f with (double)*st_ld would also work
-			r_cons_printf (" %Le %Lf\n", *st_ld, *st_ld);
-		} else {
-			r_cons_printf ("\n");
-		}
-	}
-#endif // __ANDROID__
-#elif __i386__
-	int i;
-#if __ANDROID__
-	struct user_fpxregs_struct fpxregs = *(struct user_fpxregs_struct*)f;
-	r_cons_printf ("---- x86-32 ----\n");
-	r_cons_printf ("cwd = 0x%04x  ; control   ", fpxregs.cwd);
-	r_cons_printf ("swd = 0x%04x  ; status\n", fpxregs.swd);
-	r_cons_printf ("twd = 0x%04x ", fpxregs.twd);
-	r_cons_printf ("fop = 0x%04x\n", fpxregs.fop);
-	r_cons_printf ("fip = 0x%08x\n", (ut32)fpxregs.fip);
-	r_cons_printf ("fcs = 0x%08x\n", (ut32)fpxregs.fcs);
-	r_cons_printf ("foo = 0x%08x\n", (ut32)fpxregs.foo);
-	r_cons_printf ("fos = 0x%08x\n", (ut32)fpxregs.fos);
-	r_cons_printf ("mxcsr = 0x%08x\n", (ut32)fpxregs.mxcsr);
-	for(i = 0; i < 8; i++) {
-		ut32 *a = (ut32*)(&fpxregs.xmm_space);
-		ut64 *b = (ut64 *)(&fpxregs.st_space[i * 4]);
-		ut32 *c = (ut32*)&fpxregs.st_space;
-		float *f = (float *)&fpxregs.st_space;
-		a = a + (i * 4);
-		c = c + (i * 4);
-		f = f + (i * 4);
-		r_cons_printf ("xmm%d = %08x %08x %08x %08x   ", i, (int)a[0],
-			(int)a[1], (int)a[2], (int)a[3] );
-		r_cons_printf ("st%d = %0.3lg (0x%016"PFMT64x") | %0.3f (0x%08x) | "\
-			"%0.3f (0x%08x)\n", i,
-			(double)*((double*)(&fpxregs.st_space[i*4])), b[0],
-			f[0], c[0], f[1], c[1]);
-	}
-#else
-	struct user_fpregs_struct fpregs = *(struct user_fpregs_struct *)f;
-	r_cons_printf ("---- x86-32-noxmm ----\n");
-	PRINT_FPU_NOXMM (fpregs);
-	for(i = 0; i < 8; i++) {
-		ut64 *b = (ut64 *)(&fpregs.st_space[i*4]);
-		double *d = (double*)b;
-		ut32 *c = (ut32*)&fpregs.st_space;
-		float *f = (float *)&fpregs.st_space;
-		c = c + (i * 4);
-		f = f + (i * 4);
-		r_cons_printf ("st%d = %0.3lg (0x%016"PFMT64x") | %0.3f (0x%08x) | "\
-			"%0.3f (0x%08x)\n", i, d[0], b[0], f[0], c[0], f[1], c[1]);
-	}
-#endif
-#else
-#warning print_fpu not implemented for this platform
-#endif
-}
-
-int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
-	bool showfpu = false;
+bool linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 	int pid = dbg->tid;
 	if (pid == -1) {
 		if (dbg->pid == -1) {
-			eprintf ("linux_reg_read: Invalid pid %d\n", pid);
-			return 0;
+			R_LOG_ERROR ("Invalid pid %d", pid);
+			return false;
 		}
 		pid = dbg->pid;
 	}
 	int ret = 0;
-	if (type < -1) {
-		showfpu = true;
-		type = -type;
+#if __x86_64__ || __aarch64__ || __arm64__
+	if (type == R_REG_TYPE_FPU || (type >= R_REG_TYPE_VEC64 && type <= R_REG_TYPE_VEC512)) {
+		return linux_vector_regs (dbg, buf, size, false);
 	}
+#endif
 	switch (type) {
 	case R_REG_TYPE_DRX:
 #if __POWERPC__
@@ -1087,8 +1305,8 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 			}
 			long ret = r_debug_ptrace (dbg, PTRACE_PEEKUSER, pid,
 					(void *)r_offsetof (struct user, u_debugreg[i]), 0);
-			if ((i+1) * sizeof (ret) > size) {
-				eprintf ("linux_reg_get: Buffer too small %d\n", size);
+			if ((i + 1) * sizeof (ret) > size) {
+				R_LOG_ERROR ("Buffer of %d is too small for ptrace.peekuser", size);
 				break;
 			}
 			memcpy (buf + (i * sizeof (ret)), &ret, sizeof (ret));
@@ -1102,43 +1320,24 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 #endif
 		return true;
 		break;
+#if !(__x86_64__ || __aarch64__ || __arm64__)
 	case R_REG_TYPE_FPU:
-	case R_REG_TYPE_MMX:
-	case R_REG_TYPE_XMM:
-#if __POWERPC__
-		return false;
-#elif __x86_64__ || __i386__
+	case R_REG_TYPE_VEC64: // MMX
+	case R_REG_TYPE_VEC128: // XMM
 		{
+#if __x86_64__ || __i386__
 		struct user_fpregs_struct fpregs;
 		if (type == R_REG_TYPE_FPU) {
-#if __x86_64__
-			ret = r_debug_ptrace (dbg, PTRACE_GETFPREGS, pid, NULL, &fpregs);
-			if (ret != 0) {
-				r_sys_perror ("PTRACE_GETFPREGS");
-				return false;
-			}
-			if (showfpu) {
-				print_fpu ((void *)&fpregs);
-			}
-			size = R_MIN (sizeof (fpregs), size);
-			memcpy (buf, &fpregs, size);
-			return size;
-#elif __i386__
+#if __i386__
 #if !__ANDROID__
 			struct user_fpxregs_struct fpxregs;
 			ret = r_debug_ptrace (dbg, PTRACE_GETFPXREGS, pid, NULL, &fpxregs);
 			if (ret == 0) {
-				if (showfpu) {
-					print_fpu ((void *)&fpxregs);
-				}
 				size = R_MIN (sizeof (fpxregs), size);
 				memcpy (buf, &fpxregs, size);
 				return size;
 			} else {
 				ret = r_debug_ptrace (dbg, PTRACE_GETFPREGS, pid, NULL, &fpregs);
-				if (showfpu) {
-					print_fpu ((void *)&fpregs);
-				}
 				if (ret != 0) {
 					r_sys_perror ("PTRACE_GETFPREGS");
 					return false;
@@ -1149,9 +1348,6 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 			}
 #else
 			ret = r_debug_ptrace (dbg, PTRACE_GETFPREGS, pid, NULL, &fpregs);
-			if (showfpu) {
-				print_fpu ((void *)&fpregs);
-			}
 			if (ret != 0) {
 				r_sys_perror ("PTRACE_GETFPREGS");
 				return false;
@@ -1162,11 +1358,13 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 #endif // !__ANDROID__
 #endif // __i386__
 		}
-		}
+		return size;
 #else
 	#warning getfpregs not implemented for this platform
 #endif
+		}
 		break;
+#endif
 	case R_REG_TYPE_SEG:
 	case R_REG_TYPE_FLG:
 	case R_REG_TYPE_GPR:
@@ -1179,12 +1377,18 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 				.iov_base = &regs,
 				.iov_len = sizeof (regs)
 			};
-			ret = r_debug_ptrace (dbg, PTRACE_GETREGSET, pid, (size_t)1, &io);
+			ret = r_debug_ptrace (dbg, PTRACE_GETREGSET, pid, (void*)(size_t)1, &io);
 			// ret = ptrace (PTRACE_GETREGSET, pid, (void*)(size_t)(NT_PRSTATUS), NULL); // &io);
-#elif __BSD__ && (__POWERPC__ || __sparc__)
+#elif R2__BSD__ && (__POWERPC__ || __sparc__)
 			ret = r_debug_ptrace (dbg, PTRACE_GETREGS, pid, &regs, NULL);
+#elif __riscv
+			// theres no PTRACE_GETREGS implemented for rv64
+			struct iovec iov;
+			iov.iov_base = &regs;
+			iov.iov_len = sizeof (regs);
+			ret = ptrace (PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov);
 #else
-			/* linux -{arm/mips/riscv/x86/x86_64} */
+			/* linux -{arm/mips/x86/x86_64} */
 			ret = r_debug_ptrace (dbg, PTRACE_GETREGS, pid, NULL, &regs);
 #endif
 			/*
@@ -1199,54 +1403,20 @@ int linux_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 			}
 			size = R_MIN (sizeof (regs), size);
 			memcpy (buf, &regs, size);
+			// r_print_hexdump (NULL, 0, buf, size, 16, 16, 0);
 			return size;
-		}
-		break;
-	case R_REG_TYPE_YMM:
-		{
-#if HAVE_YMM && __x86_64__ && defined(PTRACE_GETREGSET)
-		ut32 ymm_space[128];	// full ymm registers
-		struct _xstate xstate;
-		struct iovec iov = {};
-		iov.iov_base = &xstate;
-		iov.iov_len = sizeof(struct _xstate);
-		ret = r_debug_ptrace (dbg, PTRACE_GETREGSET, pid, (void*)NT_X86_XSTATE, &iov);
-		if (errno == ENODEV) {
-			// ignore ENODEV, it just means this CPU or kernel doesn't support XSTATE
-			ret = 0;
-		} else if (ret != 0) {
-			if (dbg->verbose) {
-				// WSL1 doesnt support retrieving YMM registers, so this call just fails, no need to be noisy
-				r_sys_perror ("PTRACE_GETREGSET");
-			}
-			return false;
-		}
-		// stitch together xstate.fpstate._xmm and xstate.ymmh assuming LE
-		int ri,rj;
-		for (ri = 0; ri < 16; ri++)	{
-			for (rj=0; rj < 4; rj++)	{
-#ifdef __ANDROID__
-				ymm_space[ri*8+rj] = ((struct _libc_fpstate*) &xstate.fpstate)->_xmm[ri].element[rj];
-#else
-				ymm_space[ri*8+rj] = xstate.fpstate._xmm[ri].element[rj];
-#endif
-			}
-			for (rj = 0; rj < 4; rj++)	{
-				ymm_space[ri * 8 + (rj + 4)] = xstate.ymmh.ymmh_space[ri * 4 + rj];
-			}
-		}
-		size = R_MIN (sizeof (ymm_space), size);
-		memcpy (buf, &ymm_space, size);
-		return size;
-#endif
-		return false;
 		}
 		break;
 	}
 	return false;
 }
 
-int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
+bool linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
+#if __x86_64__ || __aarch64__ || __arm64__
+	if (type == R_REG_TYPE_FPU || (type >= R_REG_TYPE_VEC64 && type <= R_REG_TYPE_VEC512)) {
+		return linux_vector_regs (dbg, (ut8 *)buf, size, true);
+	}
+#endif
 	int pid = dbg->tid;
 
 	if (type == R_REG_TYPE_DRX) {
@@ -1259,7 +1429,7 @@ int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 			}
 			if (r_debug_ptrace (dbg, PTRACE_POKEUSER, pid,
 					(void *)r_offsetof (struct user, u_debugreg[i]), (r_ptrace_data_t)val[i])) {
-				eprintf ("ptrace error for dr %d\n", i);
+				R_LOG_ERROR ("ptrace failed for dr %d", i);
 				r_sys_perror ("ptrace POKEUSER");
 			}
 		}
@@ -1269,7 +1439,7 @@ int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 #endif
 	}
 	if (type == R_REG_TYPE_GPR) {
-#if __arm64__ || __aarch64__ || __s390x__
+#if __arm64__ || __aarch64__ || __s390x__ || __riscv
 		struct iovec io = {
 			.iov_base = (void*)buf,
 			.iov_len = sizeof (R_DEBUG_REG_T)
@@ -1291,7 +1461,7 @@ int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 		}
 		return true;
 	}
-	if (type == R_REG_TYPE_FPU) {
+	if (type == R_REG_TYPE_FPU || type == R_REG_TYPE_VEC64 || type == R_REG_TYPE_VEC128) {
 #if __i386__ || __x86_64__
 		int ret = r_debug_ptrace (dbg, PTRACE_SETFPREGS, pid, 0, (void*)buf);
 		return (ret != 0) ? false : true;
@@ -1300,13 +1470,10 @@ int linux_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 	return false;
 }
 
-RList *linux_desc_list (int pid) {
-	RList *ret = NULL;
-	char path[512], file[512], buf[512];
+RList *linux_desc_list(int pid) {
+	char path[512], buf[512];
 	struct dirent *de;
-	RDebugDesc *desc;
 	int type, perm;
-	int len, len2;
 	struct stat st;
 	DIR *dd = NULL;
 
@@ -1315,40 +1482,51 @@ RList *linux_desc_list (int pid) {
 		r_sys_perror ("opendir /proc/x/fd");
 		return NULL;
 	}
-	ret = r_list_new ();
+	RList *ret = r_list_new ();
 	if (!ret) {
 		closedir (dd);
 		return NULL;
 	}
 	ret->free = (RListFree)r_debug_desc_free;
-	while ((de = (struct dirent *)readdir(dd))) {
+	while ((de = (struct dirent *)readdir (dd))) {
 		if (de->d_name[0] == '.') {
 			continue;
 		}
-		len = strlen (path);
-		len2 = strlen (de->d_name);
-		if (len + len2 + 1 >= sizeof(file)) {
+		char *fn = r_str_newf ("/proc/%d/fd/%s", pid, de->d_name);
+		memset (buf, 0, sizeof (buf));
+		if (readlink (fn, buf, sizeof (buf) - 1) == -1) {
 			r_list_free (ret);
 			closedir (dd);
-			eprintf ("Filename is too long");
-			return NULL;
-		}
-		memcpy (file, path, len);
-		memcpy (file + len, de->d_name, len2 + 1);
-		buf[0] = 0;
-		if (readlink (file, buf, sizeof (buf) - 1) == -1) {
+			free (fn);
+			r_sys_perror ("readlink failure");
 			return NULL;
 		}
 		buf[sizeof (buf) - 1] = 0;
 		type = perm = 0;
-		if (stat (file, &st) != -1) {
-			type  = st.st_mode & S_IFIFO  ? 'P':
+
+		// Read file type
+		if (stat (fn, &st) != -1) {
+			bool isfifo = st.st_mode & S_IFIFO;
 #ifdef S_IFSOCK
-				st.st_mode & S_IFSOCK ? 'S':
+			/* Do *not* remove the == here. S_IFSOCK can be multiple
+			 * bits, and we must match all of them. */
+			bool issock = (st.st_mode & S_IFSOCK) == S_IFSOCK;
 #endif
-				st.st_mode & S_IFCHR  ? 'C':'-';
+			bool ischr = st.st_mode & S_IFCHR;
+			if (isfifo) {
+				type = 'P';
+#ifdef S_IFSOCK
+			} else if (issock) {
+				type = 'S';
+#endif
+			} else if (ischr) {
+				type = 'C';
+			} else {
+				type = '-';
+			}
 		}
-		if (lstat(path, &st) != -1) {
+		// Read permissions // TOCTOU
+		if (lstat (fn, &st) != -1) {
 			if (st.st_mode & S_IRUSR) {
 				perm |= R_PERM_R;
 			}
@@ -1356,8 +1534,28 @@ RList *linux_desc_list (int pid) {
 				perm |= R_PERM_W;
 			}
 		}
-		//TODO: Offset
-		desc = r_debug_desc_new (atoi (de->d_name), buf, perm, type, 0);
+		free (fn);
+		// Get offset
+		fn = r_str_newf ("/proc/%d/fdinfo/%s", pid, de->d_name);
+		int f = open (fn, O_RDONLY);
+		char fdinfo[512];
+		fdinfo[0] = 0;
+		if (f >= 0) {
+			if (read (f, fdinfo, sizeof (fdinfo) - 1) < 0) {
+				R_LOG_WARN ("failed to read %s", fn);
+				close (f);
+				r_list_free (ret);
+				closedir (dd);
+				free (fn);
+				return NULL;
+			}
+			fdinfo[sizeof (fdinfo) - 1] = '\0';
+			close (f);
+		}
+		free (fn);
+		/* First line of fdinfo is "pos: [offset]" */
+		ut64 offset = (int) r_num_math (NULL, r_str_trim_head_ro (fdinfo + 4));
+		RDebugDesc *desc = r_debug_desc_new (atoi (de->d_name), buf, perm, type, offset);
 		if (!desc) {
 			break;
 		}

@@ -11,6 +11,7 @@ baddr    0x801
 binsz    38
 bits     8
 canary   false
+injprot  false
 retguard false
 crypto   false
 endian   little
@@ -26,6 +27,7 @@ relocs   false
 sanitize false
 static   true
 stripped false
+uncaps   false
 va       true
 0c08e2079e2032303632000000a941a2ff9dff03cad0faad2408a2ff9dffd7cad0fa6005ffffffffffffffffffffffff
 EOF

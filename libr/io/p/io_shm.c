@@ -1,12 +1,12 @@
-/* radare - LGPL - Copyright 2008-2019 pancake */
+/* radare - LGPL - Copyright 2008-2024 pancake */
 
 #include "r_io.h"
 #include "r_lib.h"
 #include <sys/types.h>
 
 #if __ANDROID__ || EMSCRIPTEN
-#undef __UNIX__
-#define __UNIX__ 0
+#undef R2__UNIX__
+#define R2__UNIX__ 0
 #endif
 
 // linux requires -lrt for this, but still it seems to not work as expected
@@ -14,7 +14,7 @@
 // make this work across all unixes without adding extra depenencies
 #define USE_SHM_OPEN 0
 
-#if __UNIX__ && !defined (__QNX__) && !defined (__HAIKU__)
+#if R2__UNIX__ && !defined (__QNX__) && !defined (__HAIKU__) && !R2_UEFI && !__wasi__
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/mman.h>
@@ -30,7 +30,7 @@ typedef struct {
 #define SHMATSZ 0x9000; // 32*1024*1024; /* 32MB : XXX not used correctly? */
 
 static int shm__write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
-	r_return_val_if_fail (fd && fd->data, -1);
+	R_RETURN_VAL_IF_FAIL (fd && fd->data, -1);
 	RIOShm *shm = fd->data;
 	if (shm->buf) {
 		(void)memcpy (shm->buf + io->off, buf, count);
@@ -40,7 +40,7 @@ static int shm__write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 }
 
 static int shm__read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	r_return_val_if_fail (fd && fd->data, -1);
+	R_RETURN_VAL_IF_FAIL (fd && fd->data, -1);
 	RIOShm *shm = fd->data;
 	if (io->off + count >= shm->size) {
 		if (io->off > shm->size) {
@@ -49,14 +49,14 @@ static int shm__read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 		count = shm->size - io->off;
 	}
 	if (shm->buf) {
-		memcpy (buf, shm->buf+io->off , count);
+		memcpy (buf, shm->buf + io->off , count);
 		return count;
 	}
 	return read (shm->fd, buf, count);
 }
 
 static bool shm__close(RIODesc *fd) {
-	r_return_val_if_fail (fd && fd->data, -1);
+	R_RETURN_VAL_IF_FAIL (fd && fd->data, -1);
 	RIOShm *shm = fd->data;
 	int ret = (shm->buf)
 		? shmdt (((RIOShm*)(fd->data))->buf)
@@ -66,37 +66,47 @@ static bool shm__close(RIODesc *fd) {
 }
 
 static ut64 shm__lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
-	r_return_val_if_fail (fd && fd->data, -1);
+	R_RETURN_VAL_IF_FAIL (fd && fd->data, -1);
 	RIOShm *shm = fd->data;
 	switch (whence) {
-	case SEEK_SET:
-		return io->off = offset;
-	case SEEK_CUR:
+	case R_IO_SEEK_SET:
+		io->off = offset;
+		break;
+	case R_IO_SEEK_CUR:
 		if (io->off + offset > shm->size) {
-			return io->off = shm->size;
+			io->off = shm->size;			//XXX
+		} else {
+			io->off += offset;			//XXX
 		}
-		io->off += offset;
-		return io->off;
-	case SEEK_END:
-		return 0xffffffff;
+		break;
+	case R_IO_SEEK_END:
+		if ((int)shm->size > 0) {
+			io->off = shm->size + (int)offset;	//XXX
+		} else {
+			// UT64_MAX means error
+			io->off = UT64_MAX - 1;			//XXX
+		}
+		break;
 	}
 	return io->off;
 }
 
 static bool shm__plugin_open(RIO *io, const char *pathname, bool many) {
-	return (!strncmp (pathname, "shm://", 6));
+	return r_str_startswith (pathname, "shm://");
 }
 
-static inline int getshmfd (RIOShm *shm) {
+static inline int getshmfd(RIOShm *shm) {
 	return (((int)(size_t)shm->buf) >> 4) & 0xfff;
 }
 
 static RIODesc *shm__open(RIO *io, const char *pathname, int rw, int mode) {
-	if (!strncmp (pathname, "shm://", 6)) {
-		RIOShm *shm = R_NEW0 (RIOShm);
-		if (!shm) {
+	if (r_str_startswith (pathname, "shm://")) {
+		// shared memory is a host-wide IPC resource
+		if (r_sandbox_enable (false)) {
+			R_LOG_ERROR ("Sandbox prevents opening shared memory");
 			return NULL;
 		}
+		RIOShm *shm = R_NEW0 (RIOShm);
 		const char *ptr = pathname + 6;
 		shm->id = atoi (ptr);
 		if (!shm->id) {
@@ -116,20 +126,23 @@ static RIODesc *shm__open(RIO *io, const char *pathname, int rw, int mode) {
 		}
 		shm->size = SHMATSZ;
 		if (shm->fd != -1) {
-			eprintf ("Connected to shared memory 0x%08x\n", shm->id);
+			R_LOG_INFO ("Connected to shared memory 0x%08x", shm->id);
 			return r_io_desc_new (io, &r_io_plugin_shm, pathname, rw, mode, shm);
 		}
-		eprintf ("Cannot connect to shared memory (%d)\n", shm->id);
+		R_LOG_ERROR ("Cannot connect to shared memory (%d)", shm->id);
 		free (shm);
 	}
 	return NULL;
 }
 
 RIOPlugin r_io_plugin_shm = {
-	.name = "shm",
-	.desc = "Shared memory resources plugin",
+	.meta = {
+		.name = "shm",
+		.desc = "Shared memory resources plugin",
+		.license = "LGPL-3.0-only",
+		.author = "pancake",
+	},
 	.uris = "shm://",
-	.license = "MIT",
 	.open = shm__open,
 	.close = shm__close,
 	.read = shm__read,
@@ -140,8 +153,10 @@ RIOPlugin r_io_plugin_shm = {
 
 #else
 RIOPlugin r_io_plugin_shm = {
-	.name = "shm",
-	.desc = "shared memory resources (not for this platform)",
+	.meta = {
+		.name = "shm",
+		.desc = "shared memory resources (not for this platform)",
+	}
 };
 #endif
 

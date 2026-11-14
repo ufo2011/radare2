@@ -1,60 +1,295 @@
-.Dd Mar 31, 2020
+.Dd Jul 10, 2025
 .Dt R2R 1
 .Sh NAME
 .Nm r2r
 .Nd radare2 regression testsuite
 .Sh SYNOPSIS
 .Nm r2r
-.Op Fl h
-.Op Fl i
-.Op Fl n
-.Op Fl q
-.Op Fl v
-.Op Fl V
+.Op Fl 1qvVnLiHh
+.Op Fl C Ar dir
+.Op Fl F Ar dir
+.Op Fl f Ar file
+.Op Fl o Ar file
+.Op Fl s Ar test
+.Op Fl S Ar percent
+.Op Fl t Ar seconds
 .Op Fl j Ar threads
-.Op Fl r Ar r2-path
-.Op Fl m Ar rasm2-pth
-.Op Fl f Ar bin-for-json-tests
-.Op Fl C Ar chdir
-.Op [test-(dir|file) ...]
+.Op Fl u
+.Op Fl g
+.Op Ar test file/dir | @test-type
 .Sh DESCRIPTION
-Run all the radare2-regressions tests matching a specific word in the name.
+r2r is a command-line regression testing framework for Radare2 and its third-party plugins.
 .Pp
-You need radare2 to be available in $PATH.
+It automates the discovery and execution of diverse test suites—including unit tests, JSON validations, fuzz tests, and architecture-specific checks—to ensure that code changes do not introduce regressions.
+.Pp
+r2r supports parallel test execution, interactive failure handling, custom timeouts, and filtering of tests by type or name. It integrates seamlessly into continuous integration workflows or can be used locally, and requires only that Radare2 be installed and available in the system PATH.
 .Sh OPTIONS
 .Bl -tag -width Fl
+.It Fl 1
+Run tests in a single thread (same as -j 1)
+.It Fl C Ar dir
+Chdir before running r2r (default follows executable symlink + test/new)
+.It Fl F Ar dir
+Run fuzz tests (open and default analysis) on all files in the given dir
+.It Fl L
+Log mode (better printing for CI, logfiles, etc.)
+.It Fl V
+Verbose
+.It Fl f Ar file
+File to use for json tests (default is bins/elf/crackme0x00b)
+.It Fl g
+Run the tests specified via '// R2R' comments in modified source files
 .It Fl h
-Show the help/usage message
+Print help message
+.It Fl H
+Display environment variables
 .It Fl i
 Interactive mode
-.It Fl n
-Do not run any test, just load/parse them
-.It Fl q
-Quiet mode (use like this: r2r -qv)
-.It Fl v
-Show version number
-.It Fl V
-Be verbose
 .It Fl j Ar threads
-Specify the number of tasks to run in parallel
-.It Fl r Ar r2-path
-Set path to radare2 executable
-.It Fl n Ar rasm2-path
-Set path to rasm2executable
-.It Fl m Ar rasm2-path
-Set path to rasm2executable
-.It Fl f Ar bin-for-json-tests
-Load the given binary when running the JSON tests
-.It Fl C Ar directory
-Early chdir before running any test
+How many threads to use for running tests concurrently (default is 8)
+.It Fl n
+Do nothing (don't run any test, just load/parse them)
+.It Fl o Ar file
+Output test run information in JSON format to file
+.It Fl q
+Quiet (only show errors; suppress non-error output)
+.It Fl s Ar test
+Set R2R_SKIP_(TEST)=1 to skip running that test type
+.It Fl S Ar percent
+Set R2R_SHALLOW=N to skip a random percentage (0-100) of tests
+.It Fl t Ar seconds
+Timeout per test (default is 3600 seconds)
+.It Fl u
+Do not git pull/clone test/bins (See R2R_OFFLINE)
+.It Fl v
+Show version
+.El
+.Sh ENVIRONMENT
+.Pp
+.Bl -tag -width Fl
+.It Ev R2R_SKIP_ARCHOS
+Do not run the arch-os-specific tests
+.It Ev R2R_SKIP_JSON
+Do not run the JSON tests
+.It Ev R2R_SKIP_FUZZ
+Do not run the fuzz tests
+.It Ev R2R_SKIP_UNIT
+Do not run the unit tests
+.It Ev R2R_SKIP_CMD
+Do not run the cmd tests
+.It Ev R2R_SKIP_ASM
+Do not run the rasm2 tests
+.It Ev R2R_JOBS
+Maximum parallel jobs (default: 8)
+.It Ev R2R_TIMEOUT
+Timeout in seconds (default: 3600 seconds)
+.It Ev R2R_OFFLINE
+Same as passing -u flag
+.It Ev R2R_SHALLOW
+Skip 0-100% random tests
 .El
 .Sh USAGE
 .Pp
-Use the -n flag to dont run any test. Just load them.
+Use the -n flag to not run any test. Just load them.
 .Pp
   $ r2r -n
   [r2r] Loading tests...
 .Pp
+Run the tests contained in a directory interactively, if any of those tests fail to run, prompt the user to autofix, edit the commands, etc.
+.Pp
+  $ r2r -i test/db/cmd/cmd_pdf
+.Pp
+Run specific test types using @ notation:
+.Pp
+  $ r2r @asm       # Run assembly tests
+  $ r2r @json      # Run JSON tests
+  $ r2r @unit      # Run unit tests
+  $ r2r @fuzz      # Run fuzz tests
+  $ r2r @arch      # Run architecture-specific tests
+  $ r2r @cmd       # Run command tests
+.Sh CREATING TESTS
+.Pp
+r2r loads tests from files under
+.Pa test/db
+and infers the test type from the path:
+.Bl -tag -width "test/db/asm/"
+.It Pa test/db/asm/*
+Parsed as ASM tests.
+.It Pa test/db/json/*
+Parsed as JSON tests.
+.It Pa test/db/leak/*
+Parsed as leak tests (command syntax, executed with Valgrind checks).
+.It Other files
+Parsed as command tests.
+.El
+.Pp
+Command-style test files are
+.Dq KEY=VALUE
+records are terminated by
+.Dq RUN
+Every record is validated at load time.
+.Pp
+.Bd -literal
+NAME=example
+FILE=bins/elf/crackme
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+pd 1
+EOF
+EXPECT=<<EOF
+...output...
+EOF
+RUN
+.Ed
+.Pp
+.Dq NORUN
+marks a pending record as incomplete, so it is ignored by the parser. Records are loaded only when terminated by
+.Dq RUN
+and otherwise treated as disabled.
+.Sh TEST RULES
+.Pp
+Accepted command/leak test keys are handled by
+.Li R2R_CMD_TEST_FOREACH_RECORD
+in
+.Pa binr/r2r/r2r.h
+with the following accepted keys:
+.Bl -tag -width "REGEXP_ERR"
+.It Cm NAME
+Optional identifier used for reporting.
+.It Cm FILE
+Optional file input for the r2 command. You can list multiple files on separate lines.
+If omitted, stdin
+.Dq -
+is used.
+.It Cm ARGS
+Extra arguments passed directly to r2 before
+.Dq -Qc
+and the command block.
+.It Cm REQUIRE
+Whitespace-, comma- or semicolon-separated requirement tokens.
+All listed requirements must be available; otherwise the test is skipped.
+Accepted values are:
+.Bl -tag -width "x86.udis"
+.It Cm gas
+GNU assembler
+.Pq Pa as
+is available in
+.Ev PATH .
+.It Cm unix
+The host is Unix-like.
+.It Cm windows
+The host is Windows.
+.It Cm linux
+The host is Linux.
+.It Cm arm
+The host CPU is ARM.
+.It Cm x86
+The host CPU is x86.
+.It Cm little
+The host is little-endian.
+.It Cm gpl
+radare2 was built with GPL plugins enabled.
+.It Cm zydis
+radare2 was built with Zydis support.
+.It Cm arm.v35
+radare2 was built with ARM v35 support.
+.It Cm hexagon
+The selected
+.Nm rasm2
+binary lists the
+.Cm hexagon
+architecture.
+.It Cm network
+Network-dependent tests are enabled by
+.Ev R2R_NETWORK=1 .
+.It Cm x86.udis
+The selected
+.Nm rasm2
+binary lists the
+.Cm x86.udis
+architecture.
+.El
+.It Cm REPEAT
+Numeric repeat count.
+The test command is executed that many times; only the last output is checked.
+.It Cm TIMEOUT
+Numeric timeout override for this test in seconds.
+.It Cm SOURCE
+Parsed and accepted for compatibility; no additional runtime behavior is wired in.
+.It Cm CMDS
+Required command block, passed as
+.Dq -Qc <CMDS>
+Multiline command blocks must use
+.Dq <<EOF
+with the closing token at the beginning of the line.
+Single-line quoted values are not accepted.
+.It Cm EXPECT
+Exact expected stdout match.
+.It Cm EXPECT_ERR
+Exact expected stderr match.
+.It Cm REGEXP_OUT
+Extended-regex match against stdout.
+.It Cm REGEXP_ERR
+Extended-regex match against stderr.
+.It Cm ENV
+Semicolon-separated
+.Dq KEY=VALUE
+environment overrides.
+Tokens missing
+.Dq =
+are ignored.
+.It Cm BROKEN
+Boolean (`0`/`1`) marking the test as expected-failing.
+Failed broken tests are counted as broken instead of failed.
+.It Cm SKIPONASAN
+Boolean (`0`/`1`) to skip this test when built with ASAN.
+.El
+Boolean fields accept only
+.Dq 1
+or
+.Dq 0
+as values.
+.Pp
+A command/leak test is only accepted when:
+.Bl -enum
+.It
+.Cm CMDS
+is present.
+.It
+Either exact-output or regex-output assertions are present:
+.Cm EXPECT
+or
+.Cm EXPECT_ERR
+or
+.Cm REGEXP_OUT
+or
+.Cm REGEXP_ERR
+.El
+Unknown keys cause parser failure.
+.Pp
+JSON tests load one command per non-empty, non-comment line from files under
+.Pa test/db/json/* .
+Empty lines and
+.Dq #
+lines are ignored.
+If a line contains the word
+.Dq BROKEN,
+the test is marked broken.
+.Pp
+ASM tests are parsed line-by-line as
+.Bd -literal
+<modes> "<disassembly text>" <hexbytes>[ <offset>]
+.Ed
+.Dq a
+enables assemble mode,
+.Dq d
+disassemble mode,
+.Dq E
+enables big-endian and
+.Dq B
+marks the case broken.
+The filename selects architecture and optional CPU/bits via
+.Dq arch[_cpu]_bits .
 .Sh SEE ALSO
 .Pp
 .Xr radare2(1)

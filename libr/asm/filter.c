@@ -1,0 +1,702 @@
+/* radare2 - LGPL - Copyright 2009-2025 - pancake */
+
+#include <r_asm.h>
+#include <r_util/r_type.h>
+
+#define isx86separator(x) ( \
+	(x) == ' ' || (x) == '\t' || (x) == '\n' || (x) == '\r' || \
+	(x) == ',' || (x) == ';' || (x) == '[' || (x) == ']' || \
+	(x) == '(' || (x) == ')' || (x) == '{' || (x) == '}' || (x) == '\x1b')
+
+static bool isvalidflag(RFlagItem *flag) {
+	if (flag) {
+		if (flag->space) {
+			if (R_STR_CMP_ANY (flag->space->name, "format", "registers")) {
+				return false;
+			}
+		}
+		const char *flag_name = flag->name;
+		if (strstr (flag_name, "main") || strstr (flag_name, "entry")) {
+			return true;
+		}
+		if (strchr (flag_name, '.')) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static char *replace_number_token(char *data, char *num_start, char *num_end, const char *value) {
+	char old = *num_start;
+	*num_start = 0;
+	char *res = r_str_newf ("%s%s%s", data, value, (num_start != num_end)? num_end: "");
+	if (!res) {
+		*num_start = old;
+	}
+	return res;
+}
+
+static char *replace_enum_hint(RAsm *a, RAnalHint *hint, ut64 off, char *data, char *num_start, char *num_end) {
+	if (R_STR_ISEMPTY (hint->enum_name) || !a || !a->analb.anal || !a->analb.anal->sdb_types) {
+		return NULL;
+	}
+	char *member = r_type_enum_member (a->analb.anal->sdb_types, hint->enum_name, NULL, off);
+	if (!member) {
+		return NULL;
+	}
+	char *ename = r_str_newf ("%s.%s", hint->enum_name, member);
+	free (member);
+	if (!ename) {
+		return NULL;
+	}
+	char *res = replace_number_token (data, num_start, num_end, ename);
+	free (ename);
+	return res;
+}
+
+static char *findNextNumber(char *op) {
+	if (!op) {
+		return NULL;
+	}
+	bool ansi_found = false;
+	char *p = op;
+	const char *o = NULL;
+	while (*p) {
+		if (p[0] == 0x1b && p[1] == '[') {
+			ansi_found = true;
+			p += 2;
+			for (; *p && *p != 'J' && *p != 'm' && *p != 'H'; p++) {
+				;
+			}
+			if (*p) {
+				p++;
+				if (!*p) {
+					break;
+				}
+			}
+			o = p - 1;
+		} else {
+			bool isSpace = ansi_found;
+			ansi_found = false;
+			if (!isSpace) {
+				isSpace = p == op;
+				if (!isSpace && o) {
+					isSpace = (*o == ' ' || *o == ',' || *o == '[');
+				}
+			}
+			if (*p == '[') {
+				p++;
+				if (!*p) {
+					break;
+				}
+				if (!isdigit (*p)) {
+					char *t = p;
+					for (; *t && *t != ']'; t++) {
+						;
+					}
+					if (*t == ']') {
+						continue;
+					}
+					p = t;
+					if (!*p) {
+						break;
+					}
+				}
+			}
+			if (isSpace) {
+				if (*p == '@') {
+					p++;
+					if (*p == '-') {
+						p++;
+					}
+				}
+				if (isdigit (*p)) {
+					return p;
+				}
+				if ((*p == '-') && isdigit (p[1])) {
+					return p + 1;
+				}
+			}
+			o = p++;
+		}
+	}
+	return NULL;
+}
+
+// aliases can be longer than the register names, so s may be reallocated
+static char *__replaceRegisters(RReg *reg, char *s, bool x86) {
+	int i;
+	for (i = 0; s && i < 64; i++) {
+		const char *k = r_reg_alias_getname (reg, i);
+		if (!k || i == R_REG_ALIAS_PC) {
+			continue;
+		}
+		const char *v = r_reg_alias_tostring (i);
+		if (!v) {
+			break;
+		}
+		s = r_str_replace (s, k, v, true);
+		if (s && x86 && *k == 'r') {
+			char *reg32 = strdup (k);
+			*reg32 = 'e';
+			s = r_str_replace (s, reg32, v, true);
+			free (reg32);
+		}
+	}
+	return s;
+}
+
+static char *filter(RAsmPluginSession *aps, ut64 addr, RFlag *f, RAnalHint *hint, const char *data) {
+	RAsm *a = aps->rasm;
+	RParse *p = a->parse;
+	char *hdata = strdup (data); // XXX
+	char *ptr = hdata;
+	const bool big_endian = R_ARCH_CONFIG_IS_BIG_ENDIAN (a->config);
+	char *ptr2, *ptr_backup;
+	RAnalFunction *fcn;
+	RFlagItem *flag;
+	ut64 off;
+	RArchConfig *ac = R_UNWRAP3 (a, analb.anal, config);
+	if (!ac) {
+		R_LOG_ERROR ("no anal bind?");
+		free (hdata);
+		return false;
+	}
+	const int bits = ac->bits;
+	// a->analb.anal->config->bits; /// if we move this api into r_asm, we can use a->config->bits directly
+	const int seggrn = ac->seggrn;
+	// a->analb.anal->config->seggrn;
+	bool x86 = false;
+	bool arm = false;
+	const char *pname = R_UNWRAP4 (a, cur, plugin, meta.name);
+	if (pname) {
+		if (r_str_startswith (pname, "x86")) {
+			x86 = true;
+		} else if (r_str_startswith (pname, "m68k")) {
+			x86 = true; /// w t f? trick or wat
+		} else if (r_str_startswith (pname, "arm")) {
+			arm = true;
+		}
+	}
+	if (!data || !p) {
+		free (hdata);
+		return 0;
+	}
+	if (p->subreg) {
+		hdata = __replaceRegisters (a->analb.anal->reg, hdata, false);
+		if (x86) {
+			hdata = __replaceRegisters (a->analb.anal->reg, hdata, true);
+		}
+		if (!hdata) {
+			return NULL;
+		}
+		ptr = hdata;
+	}
+	ptr2 = NULL;
+	// remove "dword" 2
+	char *nptr;
+	int count = 0;
+	for (count = 0; (nptr = findNextNumber (ptr)); count++) {
+		ptr = nptr;
+		if (x86) {
+			for (ptr2 = ptr; *ptr2 && !isx86separator (*ptr2); ptr2++) {
+				;
+			}
+		} else {
+			for (ptr2 = ptr; *ptr2 && (*ptr2 != ']' && (*ptr2 != '\x1b') && !IS_SEPARATOR (*ptr2)); ptr2++) {
+				;
+			}
+		}
+		char *colon = strstr (ptr, ":");
+		bool size_suffix = false;
+		if (colon && ! (x86 && bits == 16)) {
+			char *s = colon + 1;
+			if (s && isdigit ((ut8)*s)) {
+				char *e = s;
+				e = r_str_trim_head_digits (e);
+				if (!*e || IS_SEPARATOR (*e) || *e == '\x1b') {
+					size_suffix = true;
+				}
+			}
+		}
+		if (x86 && bits == 16 && colon) {
+			*colon = '\0';
+			ut64 s = r_num_get (NULL, ptr);
+			ut64 o = r_num_get (NULL, colon + 1);
+			off = (s << seggrn) + o;
+			*colon = ':';
+		} else if (size_suffix && colon) {
+			if (ptr2 > colon) {
+				ptr2 = colon;
+			}
+			*colon = '\0';
+			off = r_num_get (NULL, ptr);
+			*colon = ':';
+		} else {
+			off = r_num_get (NULL, ptr);
+		}
+		if (off >= p->minval) {
+			fcn = a->analb.get_fcn_in (a->analb.anal, off, 0);
+			if (fcn && fcn->addr == off) {
+				if (ptr > hdata && ptr[-1] == '@') {
+					ptr--;
+				}
+				*ptr = 0;
+				// hack to realign pointer for colours
+				if (ptr2 > ptr) {
+					ptr2--;
+					if (*ptr2 != 0x1b) {
+						ptr2++;
+					}
+				}
+				const char *name = fcn->name;
+				// TODO: implement realname with flags, because functions dont hold this yet
+				if (f->realnames) {
+					flag = p->flag_get (f, false, off);
+					if (flag && flag->realname) {
+						name = flag->realname;
+					}
+				}
+				const char *suffix = (ptr != ptr2)? ptr2: "";
+				char *spaced_suffix = NULL;
+				if (size_suffix && colon) {
+					spaced_suffix = r_str_newf (" %s", colon);
+					suffix = spaced_suffix;
+				}
+				char *res = r_str_newf ("%s%s%s", hdata, name, suffix);
+				free (spaced_suffix);
+				free (hdata);
+				return res;
+			}
+			if (f) {
+				RFlagItem *flag2;
+				bool lea = x86 && r_str_startswith (hdata, "lea") && (hdata[3] == ' ' || hdata[3] == 0x1b);
+				bool remove_brackets = false;
+				flag = p->flag_get (f, false, off);
+				const char *bracket = x86? strchr (hdata, '['): NULL;
+				const bool memory_operand = bracket && bracket < ptr && strchr (ptr, ']');
+				if ((!flag || arm) && p->subrel_addr && (!x86 || memory_operand)) {
+					remove_brackets = lea || (arm && p->subrel_addr);
+					flag2 = p->flag_get (f, false, p->subrel_addr);
+					if (!flag || arm) {
+						flag = flag2;
+					}
+				}
+				if (flag && r_str_startswith (flag->name, "section.")) {
+					flag = r_flag_get_in (f, off);
+				}
+				const char *label = fcn? p->label_get (fcn, off): NULL;
+				if (label || isvalidflag (flag)) {
+					if (flag) {
+						if (p->notin_flagspace) {
+							if (p->flagspace == flag->space) {
+								continue;
+							}
+						} else if (p->flagspace && (p->flagspace != flag->space)) {
+							ptr = ptr2;
+							continue;
+						}
+					}
+					// hack to realign pointer for colours
+					if (ptr2 > ptr) {
+						ptr2--;
+						if (*ptr2 != 0x1b) {
+							ptr2++;
+						}
+					}
+					ptr_backup = ptr;
+					if (remove_brackets && ptr != ptr2 && *ptr) {
+						if (*ptr2 == ']') {
+							ptr2++;
+							for (ptr--; ptr > hdata && *ptr != '['; ptr--) {
+								;
+							}
+							if (ptr == hdata) {
+								ptr = ptr_backup;
+							}
+						}
+					}
+					if (ptr > hdata && ptr[-1] == '@') {
+						ptr--;
+					}
+					*ptr = 0;
+					char *flagname = label
+						? r_str_newf (".%s", label)
+						: strdup (f->realnames? flag->realname: flag->name);
+					size_t flag_len = strlen (flagname);
+					int maxflagname = p->maxflagnamelen;
+					if (maxflagname > 0 && flag_len > maxflagname) {
+						char *doublelower = (char *)r_str_rstr (flagname, "__");
+						char *doublecolon = (char *)r_str_rstr (flagname, "::");
+						char *token = NULL;
+						if (doublelower && doublecolon) {
+							token = R_MAX (doublelower, doublecolon);
+						} else {
+							token = doublelower? doublelower: doublecolon;
+						}
+						if (token) {
+							const char *mod = doublecolon? "(cxx)": "(...)";
+							char *newstr = r_str_newf ("%s%s", mod, token);
+							free (flagname);
+							flagname = newstr;
+						} else {
+							const char *lower = r_str_rstr (flagname, "_");
+							char *newstr = lower
+								? r_str_newf ("..%s", lower + 1)
+								: r_str_newf ("..%s", flagname + (flag_len - maxflagname));
+							free (flagname);
+							flagname = newstr;
+						}
+						flag_len = strlen (flagname);
+					}
+					const char *suffix = (ptr != ptr2)? ptr2: "";
+					char *spaced_suffix = NULL;
+					if (size_suffix && colon) {
+						spaced_suffix = r_str_newf (" %s", colon);
+						suffix = spaced_suffix;
+					}
+					char *str = r_str_newf ("%s%s%s", hdata, flagname, suffix);
+					free (spaced_suffix);
+					free (flagname);
+					bool banned = false;
+					{
+						const char *p = strchr (str, '[');
+						const char *a = strchr (str, '+');
+						const char *m = strchr (str, '*');
+						if (p && (a || m)) {
+							banned = true;
+						}
+					}
+					if (p->subrel_addr && !banned && lea) { // TODO: use remove_brackets
+						char *ptr_end = str + strlen (hdata) + flag_len - 1;
+						char *ptr_right = ptr_end + 1, *ptr_left, *ptr_esc;
+						bool ansi_found = false;
+						if (!*ptr_end) {
+							free (hdata);
+							return str;
+						}
+						while (*ptr_right) {
+							if (*ptr_right == 0x1b) {
+								while (*ptr_right && *ptr_right != 'm') {
+									ptr_right++;
+								}
+								if (*ptr_right) {
+									ptr_right++;
+								}
+								ansi_found = true;
+								continue;
+							}
+							if (*ptr_right == ']') {
+								ptr_left = ptr_esc = ptr_end - flag_len;
+								while (ptr_left >= str) {
+									if (*ptr_left == '[' &&
+										(ptr_left == str || *(ptr_left - 1) != 0x1b)) {
+										break;
+									}
+									ptr_left--;
+								}
+								if (ptr_left < str) {
+									break;
+								}
+								for (; ptr_esc >= str && *ptr_esc != 0x1b; ptr_esc--) {
+									;
+								}
+								if (ptr_esc < str) {
+									ptr_esc = ptr_end - flag_len + 1;
+								}
+								int copied_len = ptr_end - ptr_esc + 1;
+								if (copied_len < 1) {
+									break;
+								}
+								memmove (ptr_left, ptr_esc, copied_len);
+								char *dptr_left = strcpy (ptr_left + copied_len,
+									(ansi_found && ptr_right - ptr_end + 1 >= 4)? Color_RESET: "");
+								int dlen = strlen (dptr_left);
+								dptr_left += dlen;
+								char *dptr_end = ptr_right + 1;
+								while (*dptr_end) {
+									dptr_end++;
+								}
+								int llen = dptr_end - (ptr_right + 1);
+								memmove (dptr_left, ptr_right + 1, llen);
+								dptr_left[llen] = 0;
+							}
+							break;
+						}
+					}
+					free (hdata);
+					return str;
+				}
+				if (p->subtail && off != UT64_MAX) {
+					ut64 tail = (off == addr)? 0: r_num_tail_base (NULL, addr, off);
+					if (tail != UT64_MAX) {
+						char *num = (off == addr)? strdup ("$$"): r_str_newf ("..%" PFMT64x, tail);
+						const size_t at = ptr - hdata;
+						char *res = replace_number_token (hdata, ptr, ptr2, num);
+						if (res) {
+							free (hdata);
+							hdata = res;
+							ptr = hdata + at;
+							ptr2 = ptr + strlen (num);
+						}
+						free (num);
+					}
+				}
+			}
+		}
+		if (hint) {
+			char *num_start = ptr;
+			char *num_end = ptr2;
+			const int nw = hint->nword;
+			if (count != nw) {
+				ptr = ptr2;
+				continue;
+			}
+			int pnumleft, immbase = hint->immbase;
+			char num[256] = { 0 }, *pnum, *tmp;
+			bool is_hex = false;
+			int tmp_count;
+			if (hint->offset) {
+				char *res = replace_number_token (hdata, num_start, num_end, hint->offset);
+				free (hdata);
+				return res;
+			}
+			char *enum_res = replace_enum_hint (a, hint, off, hdata, num_start, num_end);
+			if (enum_res) {
+				free (hdata);
+				return enum_res;
+			}
+			r_str_ncpy (num, num_start, sizeof (num) - 1);
+			pnum = num;
+			if (r_str_startswith (pnum, "0x")) {
+				is_hex = true;
+				pnum += 2;
+			}
+			for (; *pnum; pnum++) {
+				if ((is_hex && IS_HEXCHAR (*pnum)) || isdigit (*pnum)) {
+					continue;
+				}
+				break;
+			}
+			if (bits == 16 && x86 && *pnum == ':') {
+				pnum++;
+				is_hex = false;
+				if (r_str_startswith (pnum, "0x")) {
+					is_hex = true;
+					pnum += 2;
+				}
+				for (; *pnum; pnum++) {
+					if ((is_hex && IS_HEXCHAR (*pnum)) || isdigit (*pnum)) {
+						continue;
+					}
+					break;
+				}
+			}
+			*pnum = 0;
+			switch (immbase) {
+			case 0:
+				// do nothing
+				break;
+			case 1: // hack for ascii
+				tmp_count = 0;
+				for (tmp = hdata; tmp < ptr; tmp++) {
+					if (*tmp == 0x1b) {
+						while (tmp < ptr - 1 && *tmp != 'm') {
+							tmp++;
+						}
+						continue;
+					} else if (*tmp == '[') {
+						tmp_count++;
+					} else if (*tmp == ']') {
+						tmp_count--;
+					}
+				}
+				if (tmp_count > 0) {
+					ptr = ptr2;
+					continue;
+				}
+				memset (num, 0, sizeof (num));
+				pnum = num;
+				*pnum++ = '\'';
+				pnumleft = sizeof (num) - 2;
+				// Convert *off* to ascii string, byte by byte.
+				// Since *num* is 256 bytes long, we can omit
+				// overflow checks.
+				while (off) {
+					ut8 ch;
+					if (big_endian) {
+						ch = off & 0xff;
+						off >>= 8;
+					} else {
+						ch = off >> (8 *(sizeof (off) - 1));
+						off <<= 8;
+					}
+
+					// Skip first '\x00' bytes
+					if (num[1] == '\0' && ch == '\0') {
+						continue;
+					}
+					if (IS_PRINTABLE (ch)) {
+						*pnum++ = ch;
+						pnumleft--;
+					} else {
+						int sz = snprintf (pnum, pnumleft, "\\x%2.2x", ch);
+						if (sz < 0) {
+							break;
+						}
+						pnum += sz;
+						pnumleft -= sz;
+					}
+				}
+				*pnum++ = '\'';
+				*pnum = '\0';
+				break;
+			case 2:
+				r_num_to_bits (num, off);
+				strcat (num, "b");
+				break;
+			case 3:
+				{
+					ut64 swap = 0;
+					if (big_endian) {
+						swap = off & 0xffff;
+					} else {
+						if (off >> 32) {
+							r_mem_swapendian ((ut8 *)&swap, (const ut8 *)&off, sizeof (off));
+						} else if (off >> 16) {
+							ut32 port = 0;
+							r_mem_swapendian ((ut8 *)&port, (const ut8 *)&off, sizeof (port));
+							swap = port;
+						} else {
+							ut16 port = 0;
+							r_mem_swapendian ((ut8 *)&port, (const ut8 *)&off, sizeof (port));
+							swap = port;
+						}
+					}
+					snprintf (num, sizeof (num), "htons (%d)", (int) (swap & 0xFFFF));
+				}
+				break;
+			case 8:
+				snprintf (num, sizeof (num), "0%o", (int)off);
+				break;
+			case 10:
+				{
+					RList *regs = r_reg_get_list (a->analb.anal->reg, R_REG_TYPE_GPR);
+					RRegItem *reg;
+					RListIter *iter;
+					bool imm32 = false;
+					r_list_foreach (regs, iter, reg) {
+					if (reg->size == 32 && r_str_casestr (hdata, reg->name)) {
+							imm32 = true;
+							break;
+						}
+					}
+					if (imm32) {
+						snprintf (num, sizeof (num), "%" PFMT32d, (st32)off);
+						break;
+					}
+					snprintf (num, sizeof (num), "%" PFMT64d, (st64)off);
+				}
+				break;
+			case 11:
+				snprintf (num, sizeof (num), "%" PFMT64u, off);
+				break;
+			case 31: // small integer
+				snprintf (num, sizeof (num), "0x%x", (ut32) (off >> 1));
+				break;
+			case 32:
+				{
+					ut8 ip[4] = { off & 0xff, (off >> 8) & 0xff, (off >> 16) & 0xff, (off >> 24) & 0xff };
+					snprintf (num, sizeof (num), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+				}
+				break;
+			case 36:
+				{
+					char b36str[16];
+					b36_fromnum (b36str, off);
+					r_str_ncpy (num, b36str, sizeof (num));
+				}
+				break;
+			case 80:
+				if (a && a->analb.anal && a->analb.anal->syscall) {
+					RSyscallItem *si = r_syscall_get (a->analb.anal->syscall, off, -1);
+					if (si) {
+						snprintf (num, sizeof (num), "%s()", si->name);
+					} else {
+						snprintf (num, sizeof (num), "unknown()");
+					}
+					r_syscall_item_free (si);
+				}
+				break;
+			case 16:
+				/* do nothing */
+			default:
+				snprintf (num, sizeof (num), "0x%" PFMT64x, (ut64)off);
+				break;
+			}
+			char *res = replace_number_token (hdata, num_start, num_end, num);
+			free (hdata);
+			return res;
+		}
+		ptr = ptr2;
+	}
+	return hdata;
+}
+
+static char *apply_camel_syntax(const char *str) {
+	const char *p = r_str_trim_head_ro (str);
+	const char *mnem_start = p;
+	// find first non-space.. maybe just strchr can be enough
+	while (*p && *p != ' ' && *p != '\t' && *p != '\x1b') {
+		p++;
+	}
+	size_t mnem_len = p - mnem_start;
+	if (mnem_len == 0) {
+		return NULL;
+	}
+	char *mnem = r_str_ndup (mnem_start, mnem_len);
+	char *camel_mnem = r_str_snake_to_camel (mnem);
+	free (mnem);
+	if (!camel_mnem) {
+		return NULL;
+	}
+	size_t prefix_len = mnem_start - str;
+	char *result = r_str_newf ("%.*s%s%s", (int)prefix_len, str, camel_mnem, p);
+	free (camel_mnem);
+	return result;
+}
+
+R_API char *r_asm_parse_filter(RAsm *a, ut64 addr, RFlag *f, RAnalHint *hint, const char *data) {
+	RAsmPluginSession *aps = a->cur;
+	char *str = filter (aps, addr, f, hint, data);
+	if (!str) {
+		str = strdup (data);
+	}
+	if (a->config && a->config->syntax == R_ARCH_SYNTAX_CAMEL) {
+		char *camel = apply_camel_syntax (str);
+		if (camel) {
+			free (str);
+			str = camel;
+		}
+	}
+	// Handle immediate base conversion
+	if (hint && hint->immbase && a->config) {
+		// Use r_asm_parse_immbase for standard bases (8, 10, 16)
+		if (hint->immbase == 8 || hint->immbase == 10 || hint->immbase == 16) {
+			char *res = r_asm_parse_immbase (a, str, hint->immbase);
+			if (res) {
+				free (str);
+				str = res;
+			}
+		}
+	}
+	RAsmPlugin *ap = R_UNWRAP3 (a, cur, plugin);
+	if (ap && ap->filter) {
+		char *res = ap->filter (aps, addr, f, str);
+		if (res) {
+			free (str);
+			str = res;
+		}
+	}
+	return str;
+}

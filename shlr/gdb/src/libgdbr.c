@@ -1,9 +1,9 @@
-/* libgdbr - LGPL - Copyright 2014 - defragger */
+/* libgdbr - LGPL - Copyright 2014-2023 - defragger */
 
 #include "libgdbr.h"
 #include "arch.h"
-
-#include <stdio.h>
+#include "gdbr_common.h"
+#include <r_util.h>
 
 int gdbr_init(libgdbr_t *g, bool is_server) {
 	if (!g) {
@@ -14,6 +14,8 @@ int gdbr_init(libgdbr_t *g, bool is_server) {
 	g->stub_features.extended_mode = -1;
 	g->stub_features.pkt_sz = 64;
 	g->stub_features.P = true;
+	g->caps.g = GDBR_CAP_UNKNOWN;
+	g->caps.p = GDBR_CAP_UNKNOWN;
 	g->remote_file_fd = -1;
 	g->is_server = is_server;
 	g->send_max = 2500;
@@ -56,12 +58,13 @@ bool gdbr_set_architecture(libgdbr_t *g, int arch, int bits) {
 		return true;
 	}
 
-	const char *regprofile = gdbr_get_reg_profile (arch, bits);
+	char *regprofile = gdbr_get_reg_profile (arch, bits);
 	if (!regprofile) {
-		eprintf ("cannot find gdb reg_profile\n");
+		R_LOG_ERROR ("%s: cannot find gdb reg_profile", __func__);
 		return false;
 	}
 	if (!gdbr_set_reg_profile (g, regprofile)) {
+		free (regprofile);
 		return false;
 	}
 	g->target.arch = arch;
@@ -71,7 +74,7 @@ bool gdbr_set_architecture(libgdbr_t *g, int arch, int bits) {
 	return true;
 }
 
-const char *gdbr_get_reg_profile(int arch, int bits) {
+char *gdbr_get_reg_profile(int arch, int bits) {
 	switch (arch) {
 	case R_SYS_ARCH_X86:
 		if (bits == 32) {
@@ -79,7 +82,7 @@ const char *gdbr_get_reg_profile(int arch, int bits) {
 		} else if (bits == 64) {
 #include "reg/x86_64.h"
 		} else {
-			eprintf ("%s: unsupported x86 bits: %d\n", __func__, bits);
+			R_LOG_ERROR ("%s: unsupported x86 bits: %d", __func__, bits);
 			return NULL;
 		}
 		break;
@@ -89,7 +92,7 @@ const char *gdbr_get_reg_profile(int arch, int bits) {
 		} else if (bits == 64) {
 #include "reg/arm64.h"
 		} else {
-			eprintf ("%s: unsupported arm bits: %d\n", __func__, bits);
+			R_LOG_ERROR ("%s: unsupported arm bits: %d", __func__, bits);
 			return NULL;
 		}
 		break;
@@ -111,6 +114,13 @@ const char *gdbr_get_reg_profile(int arch, int bits) {
 	case R_SYS_ARCH_V850:
 #include "reg/v850.h"
 		break;
+	case R_SYS_ARCH_BPF:
+	case R_SYS_ARCH_SBPF:
+#include "reg/bpf.h"
+		break;
+	default:
+		R_LOG_ERROR ("gdbr_get_reg_profile: unsupported arch %d", arch);
+		break;
 	}
 	return NULL;
 }
@@ -119,27 +129,53 @@ int gdbr_set_reg_profile(libgdbr_t *g, const char *str) {
 	if (!g || !str) {
 		return -1;
 	}
+	if (g->registers && g->target.regprofile && !strcmp (g->target.regprofile, str)) {
+		// the same layout: the registers read since the thread last ran still hold
+		return 0;
+	}
 	gdb_reg_t *registers = arch_parse_reg_profile (str);
 	if (!registers) {
-		eprintf ("cannot parse reg profile\n");
+		R_LOG_ERROR ("%s: cannot parse reg profile", __func__);
 		return -1;
 	}
 	if (g->target.regprofile) {
 		free (g->target.regprofile);
 	}
 	g->target.regprofile = strdup (str);
-	if (g->registers) {
-		free (g->registers);
-	}
-	g->registers = arch_parse_reg_profile (str);
-
+	free (g->registers);
+	g->registers = registers;
+	gdbr_regs_invalidate (g);
 	return 0;
+}
+
+void gdbr_stop_reason_fini(libgdbr_stop_reason_t *reason) {
+	if (!reason) {
+		return;
+	}
+	R_FREE (reason->exec.path);
+	reason->exec.present = false;
+}
+
+void gdbr_stop_reason_reset(libgdbr_stop_reason_t *reason) {
+	if (!reason) {
+		return;
+	}
+	gdbr_stop_reason_fini (reason);
+	memset (reason, 0, sizeof (*reason));
 }
 
 int gdbr_cleanup(libgdbr_t *g) {
 	if (!g) {
 		return -1;
 	}
+	gdbr_stop_reason_reset (&g->stop_reason);
+	R_FREE (g->regs.buf);
+	R_FREE (g->regs.known);
+	g->regs.cap = 0;
+	gdbr_regs_invalidate (g);
+	R_FREE (g->registers);
+	R_FREE (g->target.regprofile);
+	g->target.valid = false;
 	R_FREE (g->data);
 	g->send_len = 0;
 	R_FREE (g->send_buff);

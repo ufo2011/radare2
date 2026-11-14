@@ -1,55 +1,57 @@
-/* radare - LGPL - Copyright 2016 - Oscar Salvador */
+/* radare - LGPL - Copyright 2016-2025 - Oscar Salvador */
 
 #include <r_util.h>
-#include <r_types.h>
-
 #include "bflt.h"
 
-#define READ(x, i) r_read_be32 ((x) + (i)); (i) += 4;
-
-RBinAddr *r_bflt_get_entry(struct r_bin_bflt_obj *bin) {
-        RBinAddr *addr = R_NEW0 (RBinAddr);
-        if (addr && bin && bin->hdr) {
-        	addr->paddr = bin->hdr->entry;
-        }
-        return addr;
+static inline ut32 rd32(const ut8 *buf, int *i) {
+	ut32 v = r_read_be32 (buf + *i);
+	*i += 4;
+	return v;
 }
 
-static int bflt_init_hdr (struct r_bin_bflt_obj *bin) {
-	struct bflt_hdr *p_hdr;
-	ut8 bhdr[BFLT_HDR_SIZE] = {0};
-	int len, i = 0;
-	
-	len = r_buf_read_at (bin->b, 0, bhdr, BFLT_HDR_SIZE);
-	if (len < 1) {
-		eprintf ("Warning: read bFLT hdr failed\n");
+R_IPI RBinAddr *r_bflt_get_entry(struct r_bin_bflt_obj *bin) {
+	if (!bin || !bin->hdr) {
+		return NULL;
+	}
+	RBinAddr *addr = R_NEW0 (RBinAddr);
+	addr->paddr = bin->hdr->entry;
+	return addr;
+}
+
+static int bflt_init_hdr(struct r_bin_bflt_obj *bin) {
+	ut8 bhdr[BFLT_HDR_SIZE] = { 0 };
+
+	int len = r_buf_read_at (bin->b, 0, bhdr, BFLT_HDR_SIZE);
+	if (len < BFLT_HDR_SIZE) {
+		R_LOG_WARN ("read bFLT hdr failed: expected %" PFMTSZu " bytes, got %d", BFLT_HDR_SIZE, len);
 		goto fail;
 	}
-	
+
 	if (strncmp ((const char *)bhdr, "bFLT", 4)) {
-		eprintf ("Warning: wrong magic number in bFLT file\n");
+		R_LOG_WARN ("wrong magic number in bFLT file");
 		goto fail;
 	}
-	p_hdr = R_NEW0 (struct bflt_hdr);
-	if (!p_hdr) {
-		eprintf ("Warning: couldn't allocate memory\n");
-		goto fail;
+
+	struct bflt_hdr *p_hdr = R_NEW0 (struct bflt_hdr);
+	int i = 4;
+	p_hdr->rev = rd32 (bhdr, &i);
+	p_hdr->entry = rd32 (bhdr, &i);
+	p_hdr->data_start = rd32 (bhdr, &i);
+	p_hdr->data_end = rd32 (bhdr, &i);
+	p_hdr->bss_end = rd32 (bhdr, &i);
+	p_hdr->stack_size = rd32 (bhdr, &i);
+	p_hdr->reloc_start = rd32 (bhdr, &i);
+	p_hdr->reloc_count = rd32 (bhdr, &i);
+	p_hdr->flags = rd32 (bhdr, &i);
+	p_hdr->build_date = rd32 (bhdr, &i);
+	/* cpu_type may be stored in filler[5] by some toolchains, read it separately */
+	bin->cpu_type = r_read_be32 (bhdr + 60); /* offset 60 = filler[5] */
+	if (bin->cpu_type == 0 || bin->cpu_type > 0x100) {
+		bin->cpu_type = BFLT_CPU_ARM; /* default to ARM if invalid */
 	}
-	
-	i += 4;
-	p_hdr->rev = READ (bhdr, i);
-	p_hdr->entry = READ (bhdr, i);
-	p_hdr->data_start = READ (bhdr, i);
-	p_hdr->data_end = READ (bhdr, i);
-	p_hdr->bss_end = READ (bhdr, i);
-	p_hdr->stack_size = READ (bhdr, i);
-	p_hdr->reloc_start = READ (bhdr, i);
-	p_hdr->reloc_count = READ (bhdr, i);
-	p_hdr->flags = READ (bhdr, i);
-	p_hdr->build_date = READ (bhdr, i);
 
 	if (p_hdr->rev != FLAT_VERSION) {
-		eprintf ("Warning: only v4 is supported!\n");
+		R_LOG_WARN ("only v4 is supported!");
 		R_FREE (p_hdr);
 		goto fail;
 	}
@@ -59,33 +61,37 @@ fail:
 	return false;
 }
 
-static int r_bin_bflt_init(struct r_bin_bflt_obj *obj, RBuffer *buf) {
-	obj->b = r_buf_ref (buf);
+static bool r_bin_bflt_init(RBinBfltObj *obj, RBuffer *buf) {
+	obj->b = r_ref (buf);
 	obj->size = r_buf_size (buf);
 	obj->endian = false;
 	obj->reloc_table = NULL;
 	obj->got_table = NULL;
 	obj->n_got = 0;
 	obj->hdr = NULL;
+
 	if (!bflt_init_hdr (obj)) {
 		return false;
 	}
 	return true;
 }
 
-struct r_bin_bflt_obj *r_bin_bflt_new_buf(RBuffer *buf) {
-	struct r_bin_bflt_obj *bin = R_NEW0 (struct r_bin_bflt_obj);
-	if (bin && r_bin_bflt_init (bin, buf)) {
-		return bin;
+R_IPI void r_bin_bflt_free(RBinBfltObj *o) {
+	if (o) {
+		R_FREE (o->reloc_table);
+		R_FREE (o->got_table);
+		R_FREE (o->hdr);
+		r_unref (o->b);
+		free (o);
 	}
-	r_bin_bflt_free (bin);
-	return NULL;
 }
 
-void r_bin_bflt_free(struct r_bin_bflt_obj *obj) {
-	if (obj) {
-		R_FREE (obj->hdr);
-		r_buf_free (obj->b);
-		R_FREE (obj);
+R_IPI RBinBfltObj *r_bin_bflt_new_buf(RBuffer *buf) {
+	R_RETURN_VAL_IF_FAIL (buf, NULL);
+	RBinBfltObj *o = R_NEW0 (RBinBfltObj);
+	if (r_bin_bflt_init (o, buf)) {
+		return o;
 	}
+	r_bin_bflt_free (o);
+	return NULL;
 }

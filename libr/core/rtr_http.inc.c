@@ -1,0 +1,821 @@
+// included from rtr.c
+
+#define WEBCONFIG 1
+
+// Return values for r_core_rtr_http_run
+typedef enum {
+	HTTP_RUN_ERROR = 0,   // Error occurred, stop server
+	HTTP_RUN_SUCCESS = 1, // Clean exit, stop server
+	HTTP_RUN_RESTART = 2  // Restart the server (used for =h* command)
+} HttpRunResult;
+
+typedef struct {
+	const char *ext;
+	const char *type;
+} ExtAndType;
+
+static const ExtAndType eat[] = {
+	{ ".js", "application/javascript" },
+	{ ".png", "image/png" },
+	{ ".jpg", "image/jpg" },
+	{ ".jpeg", "image/jpeg" },
+	{ ".gif", "image/gif" },
+	{ ".mp4", "video/mp4" },
+	{ ".sh", "application/x-sh" },
+	{ ".json", "application/json" },
+	{ ".ttf", "font/ttf" },
+	{ ".woff", "font/woff" },
+	{ ".gz", "application/gzip" },
+	{ ".zip", "application/zip" },
+	{ ".pdf", "application/pdf" },
+	{ ".txt", "text/plain" },
+	{ ".md", "text/plain" },
+	{ ".css", "text/css" },
+	{ ".html", "text/html" },
+	{NULL, NULL}
+};
+
+static char * R_NONNULL guess_filetype(const char *path) {
+	const char *lastdot = r_str_lchr (path, '.');
+	if (lastdot) {
+		const ExtAndType *neat = eat;
+		while (neat->ext) {
+			if (!strcmp (neat->ext, lastdot)) {
+				return r_str_newf ("Content-Type: %s\n", neat->type);
+			}
+			neat++;
+		}
+	}
+	// binary by default, but never NULL
+	return strdup ("Content-Type: application/octet-stream\n");
+}
+
+typedef struct {
+	RCore *core;
+	const char *cmd;
+	bool capture;
+} HttpCommand;
+
+static void *http_command_run(void *user) {
+	HttpCommand *request = user;
+	RCore *core = request->core;
+	char *out = NULL;
+	RConsContext *ctx = r_core_get_cons (core)->context;
+	ctx->noflush = false;
+#if WEBCONFIG
+	const bool orig_scr_html = r_config_get_b (core->config, "scr.html");
+	const int orig_scr_color = r_config_get_i (core->config, "scr.color");
+	const bool orig_scr_interactive = r_config_get_b (core->config, "scr.interactive");
+	r_config_set_i (core->config, "scr.color", COLOR_MODE_DISABLED);
+	r_config_set_b (core->config, "asm.bytes", false);
+	r_config_set_b (core->config, "scr.interactive", false);
+#endif
+	if (request->capture) {
+		out = r_core_cmd_str_pipe (core, request->cmd);
+	} else {
+		r_core_cmd0 (core, request->cmd);
+	}
+#if WEBCONFIG
+	/* refresh settings - run callbacks */
+	r_config_set_b (core->config, "scr.html", orig_scr_html);
+	r_config_set_i (core->config, "scr.color", orig_scr_color);
+	r_config_set_b (core->config, "scr.interactive", orig_scr_interactive);
+#endif
+	return out;
+}
+
+static void policy_fini(HttpSandboxPolicy *policy) {
+	free (policy->expression);
+	free (policy->projectdir);
+}
+
+static char *cmdstr(RCore *core, const char *cmd, bool capture, const HttpSandboxPolicy *policy) {
+	HttpCommand request = { core, cmd, capture };
+	return policy->enabled? r_sandbox_run_path (policy->grain, policy->projectdir, http_command_run, &request): http_command_run (&request);
+}
+
+static void rtr_http_request_free(RSocketHTTPRequest *rs) {
+	if (rs) {
+		r_socket_http_close (rs);
+		r_socket_http_free (rs);
+	}
+}
+
+// http.referer: the referer must start with the accepted origin, not just contain it
+static bool http_referer_ok(RCore *core, const char *port, const char *referer) {
+	const char *httpref = r_config_get (core->config, "http.referer");
+	if (R_STR_ISEMPTY (httpref)) {
+		return true;
+	}
+	if (!referer) {
+		return false;
+	}
+	char *origin = strstr (httpref, "http")? strdup (httpref): r_str_newf ("http://localhost:%d/", atoi (port));
+	bool ok = false;
+	if (origin && r_str_startswith (referer, origin)) {
+		const char next = referer[strlen (origin)];
+		ok = r_str_endswith (origin, "/") || !next || next == '/' || next == '?' || next == '#';
+	}
+	free (origin);
+	return ok;
+}
+
+static HttpRunResult r_core_rtr_http_run(RCore *core, int launch, int browse, const char *path, const HttpSandboxPolicy *policy) {
+	if (!path) {
+		return HTTP_RUN_ERROR;
+	}
+	RCorePriv *priv = core->priv;
+	RCons *cons = r_core_get_cons (core);
+	RConfig *newcfg = NULL, *origcfg = NULL;
+	char headers[128] = {0};
+	RSocketHTTPRequest *rs;
+	char buf[32];
+	HttpRunResult ret = HTTP_RUN_SUCCESS;
+	RSocket *s;
+	RSocketHTTPOptions so;
+	char *dir;
+	int iport;
+	const char *host = r_config_get (core->config, "http.bind");
+	const char *index = r_config_get (core->config, "http.index");
+	const char *root = r_config_get (core->config, "http.root");
+	const char *homeroot = r_config_get (core->config, "http.homeroot");
+	const char *port = r_config_get (core->config, "http.port");
+	const char *allow = r_config_get (core->config, "http.allow");
+	const char *basepath = r_config_get (core->config, "http.basepath");
+	const char *httpui = r_config_get (core->config, "http.ui");
+	const char *httpauthfile = r_config_get (core->config, "http.authfile");
+	const bool sandbox = policy->enabled;
+	char *pfile = NULL;
+
+	if (!r_file_is_directory (root)) {
+		if (!r_file_is_directory (homeroot)) {
+			R_LOG_ERROR ("Cannot find http.root or http.homeroot");
+		}
+	}
+	const char *arg = strchr (path, ' ');
+	if (arg) {
+		path = arg + 1;
+	}
+	if (path && atoi (path)) {
+		port = path;
+		r_config_set (core->config, "http.port", port);
+		path = NULL;
+	} else {
+		if (core->io->desc && (!path || !*path)) {
+			path = httpui;
+		}
+	}
+
+	if (!strcmp (port, "0")) {
+		r_num_irand ();
+		iport = 1024 + r_num_rand (45256);
+		snprintf (buf, sizeof (buf), "%d", iport);
+		port = buf;
+	}
+	s = r_socket_new (false);
+	s->local = true;
+	if (R_STR_ISNOTEMPTY (host)) {
+		if (!strcmp (host, "local")) {
+			r_config_set (core->config, "http.bind", "localhost");
+		} else if (R_STR_ISEMPTY (host) || !strcmp (host, "public")) {
+			// public
+			host = "127.0.0.1";
+			r_config_set (core->config, "http.bind", "0.0.0.0");
+			s->local = false;
+		}
+	}
+	memset (&so, 0, sizeof (so));
+	so.accept_timeout = 1;
+	if (!r_socket_listen (s, port, NULL)) {
+		r_socket_free (s);
+		R_LOG_ERROR ("Cannot listen on http.port");
+		return HTTP_RUN_ERROR;
+	}
+
+	if (browse == 'H') {
+		const char *browser = r_config_get (core->config, "http.browser");
+		char *url = r_str_newf ("http://%s:%d/%s", host, atoi (port), r_str_get (path));
+		if (!r_sys_open (url, browser, true)) {
+			R_LOG_WARN ("Cannot launch a browser");
+		}
+		free (url);
+	}
+
+	so.httpauth = r_config_get_i (core->config, "http.auth");
+
+	if (so.httpauth) {
+		if (!httpauthfile) {
+			r_socket_free (s);
+			R_LOG_ERROR ("No user list set for HTTP Authentication");
+			return HTTP_RUN_ERROR;
+		}
+		pfile = r_file_slurp (httpauthfile, NULL);
+		if (pfile) {
+			so.authtokens = r_str_split_list (pfile, "\n", 0);
+		} else {
+			r_socket_free (s);
+			R_LOG_ERROR ("Empty list of HTTP users");
+			return HTTP_RUN_ERROR;
+		}
+		so.accept_timeout = 1;
+	}
+	so.timeout = r_config_get_i (core->config, "http.timeout");
+
+	origcfg = core->config;
+	newcfg = r_config_clone (core->config);
+	core->config = newcfg;
+	r_config_set_b (newcfg, "http.sandbox", policy->configured);
+	r_config_set (newcfg, "http.sandbox.grain", policy->expression);
+	r_config_readonly (newcfg, "http.sandbox");
+	r_config_readonly (newcfg, "http.sandbox.grain");
+	if (sandbox) {
+		r_config_readonly (newcfg, "dir.projects");
+		r_config_readonly (newcfg, "cfg.sandbox");
+		r_config_readonly (newcfg, "cfg.sandbox.grain");
+	}
+	eprintf ("Starting http server...\n");
+	eprintf ("open http://%s:%s/\n", host, port);
+	eprintf ("r2 -C http://%s:%s/cmd/\n", host, port);
+	eprintf ("r2 r2web://%s:%s/cmd/\n", host, port);
+	core->http_up = true;
+	priv->listenport = port;
+
+	/* Register this HTTP session so r2agent -L can discover it */
+	r_core_session_register (core, "r2web", atoi (port));
+
+	ut64 newoff = core->addr, origoff = core->addr;
+	int newblksz = core->blocksize, origblksz = core->blocksize;
+	ut8 *newblk, *origblk = core->block;
+
+	newblk = malloc (core->blocksize + 1);
+	if (!newblk) {
+		r_socket_free (s);
+		r_list_free (so.authtokens);
+		free (pfile);
+		return HTTP_RUN_ERROR;
+	}
+	memcpy (newblk, core->block, core->blocksize + 1);
+
+	core->block = newblk;
+// TODO: handle mutex lock/unlock here
+	r_cons_break_push (cons, (RConsBreak)r_core_rtr_http_stop, core);
+	while (!r_cons_is_breaked (cons) && core->http_up) {
+		// Restore shell state only after using the HTTP context.
+		if (core->config == newcfg) {
+			newoff = core->addr;
+			newblk = core->block;
+			newblksz = core->blocksize;
+			core->addr = origoff;
+			core->block = origblk;
+			core->blocksize = origblksz;
+			core->config = origcfg;
+#if WEBCONFIG
+			r_config_set_b (origcfg, "scr.html", r_config_get_b (origcfg, "scr.html"));
+			r_config_set_i (origcfg, "scr.color", r_config_get_i (origcfg, "scr.color"));
+			r_config_set_b (origcfg, "scr.interactive", r_config_get_b (origcfg, "scr.interactive"));
+#endif
+		}
+
+		// backup and restore offset and blocksize
+		/* this is blocking */
+		activateDieTime (core);
+
+		void *bed = r_cons_sleep_begin (cons);
+		rs = r_socket_http_accept (s, &so);
+		r_cons_sleep_end (cons, bed);
+		if (!core->http_up) {
+			rtr_http_request_free (rs);
+			break;
+		}
+
+		if (!rs) {
+			bed = r_cons_sleep_begin (cons);
+			r_sys_usleep (100);
+			r_cons_sleep_end (cons, bed);
+			continue;
+		}
+
+		if (r_config_get_b (core->config, "http.channel")) {
+			// start a new thread with
+			// char *res = r_core_cmd_str_r (core, cmd);
+			r_socket_http_response (rs, 200, "TODO", 0, headers);
+			rtr_http_request_free (rs);
+			continue;
+		}
+
+		if (*basepath && strcmp (basepath, "/")) {
+			if (R_STR_ISEMPTY (rs->path) || !strcmp (rs->path, "/")) {
+				char *res = r_str_newf ("Location: %s/\n%s", basepath, headers);
+				r_socket_http_response (rs, 302, NULL, 0, res);
+				rtr_http_request_free (rs);
+				free (res);
+				continue;
+			}
+			if (r_str_startswith (rs->path, basepath)) {
+				char *p = strdup (rs->path + strlen (basepath));
+				free (rs->path);
+				rs->path = p;
+			}
+		}
+
+		origoff = core->addr;
+		origblk = core->block;
+		origblksz = core->blocksize;
+		core->addr = newoff;
+		core->block = newblk;
+		core->blocksize = newblksz;
+		/* set environment */
+		// backup and restore offset and blocksize
+		core->config = newcfg;
+#if WEBCONFIG
+		r_config_set_b (newcfg, "scr.html", r_config_get_b (newcfg, "scr.html"));
+		r_config_set_i (newcfg, "scr.color", r_config_get_i (newcfg, "scr.color"));
+		r_config_set_b (newcfg, "scr.interactive", r_config_get_b (newcfg, "scr.interactive"));
+#endif
+		if (R_STR_ISNOTEMPTY (allow)) {
+			bool accepted = false;
+			const char *allows_host;
+			char *p, *peer = r_socket_tostring (rs->s);
+			char *allows = strdup (allow);
+			//eprintf ("Firewall (%s)\n", allows);
+			int i, count = r_str_split (allows, ',');
+			p = strchr (peer, ':');
+			if (p) {
+				*p = 0;
+			}
+			for (i = 0; i < count; i++) {
+				allows_host = r_str_word_get0 (allows, i);
+				//eprintf ("--- (%s) (%s)\n", host, peer);
+				if (!strcmp (allows_host, peer)) {
+					accepted = true;
+					break;
+				}
+			}
+			free (peer);
+			free (allows);
+			if (!accepted) {
+				rtr_http_request_free (rs);
+				continue;
+			}
+		}
+		if (!rs->method || !rs->path) {
+			http_logf (core, "Invalid http headers received from client\n");
+			rtr_http_request_free (rs);
+			continue;
+		}
+		dir = NULL;
+
+		if (!rs->auth) {
+			r_socket_http_response (rs, 401, "", 0, NULL);
+			rtr_http_request_free (rs);
+			continue;
+		}
+		if (r_config_get_b (core->config, "http.verbose")) {
+			char *peer = r_socket_tostring (rs->s);
+			http_logf (core, "[HTTP] %s %s\n", peer, rs->path);
+			free (peer);
+		}
+		if (r_config_get_b (core->config, "http.dirlist")) {
+			if (r_file_is_directory (rs->path)) {
+				dir = strdup (rs->path);
+			}
+		}
+		if (r_config_get_b (core->config, "http.cors")) {
+			r_str_ncpy (headers,
+				"Access-Control-Allow-Origin: *\n"
+				"Access-Control-Allow-Headers: Origin, "
+				"X-Requested-With, Content-Type, Accept\n",
+				sizeof (headers));
+		} else {
+			headers[0] = 0;
+		}
+		const bool runs_cmd = !strcmp (rs->method, "POST") || r_str_startswith (rs->path, "/cmd/");
+		if (!strcmp (rs->method, "OPTIONS")) {
+			r_socket_http_response (rs, 200, "", 0, headers);
+		} else if (runs_cmd && !http_referer_ok (core, port, rs->referer)) {
+			r_socket_http_response (rs, 503, "", 0, headers);
+		} else if (!strcmp (rs->method, "GET")) {
+			if (r_str_startswith (rs->path, "/up/")) {
+				if (r_config_get_i (core->config, "http.upget")) {
+					const char *uproot = r_config_get (core->config, "http.uproot");
+					if (!rs->path[3] || (rs->path[3] == '/' && !rs->path[4])) {
+						char *ptr = rtr_dir_files (uproot);
+						r_socket_http_response (rs, 200, ptr, 0, headers);
+						free (ptr);
+					} else {
+						char *path = r_file_root (uproot, rs->path + 4);
+						if (r_file_exists (path)) {
+							size_t sz = 0;
+							char *f = r_file_slurp (path, &sz);
+							if (f) {
+								r_socket_http_response (rs, 200, f, (int)sz, headers);
+								free (f);
+							} else {
+								r_socket_http_response (rs, 403, "Permission denied", 0, headers);
+								http_logf (core, "http: Cannot open '%s'\n", path);
+							}
+						} else {
+							if (dir) {
+								char *resp = rtr_dir_files (dir);
+								r_socket_http_response (rs, 404, resp, 0, headers);
+								free (resp);
+							} else {
+								http_logf (core, "File '%s' not found\n", path);
+								r_socket_http_response (rs, 404, "File not found\n", 0, headers);
+							}
+						}
+						free (path);
+					}
+				} else {
+					r_socket_http_response (rs, 403, "", 0, NULL);
+				}
+			} else if (r_str_startswith (rs->path, "/cmd/")) {
+				const bool colon = r_config_get_b (core->config, "http.colon");
+				if (colon && rs->path[5] != ':') {
+					r_socket_http_response (rs, 403, "Permission denied", 0, headers);
+				} else {
+					char *cmd = rs->path + 5;
+					const char *httpcmd = r_config_get (core->config, "http.uri");
+					while (*cmd == '/') {
+						cmd++;
+					}
+					if (R_STR_ISNOTEMPTY (httpcmd)) {
+						int len; // do remote http query and proxy response
+						char *res, *bar = r_str_newf ("%s/%s", httpcmd, cmd);
+						bed = r_cons_sleep_begin (cons);
+						res = r_socket_http_get (bar, NULL, NULL, &len);
+						r_cons_sleep_end (cons, bed);
+						if (res) {
+							res[len] = 0;
+							r_cons_println (cons, res);
+						}
+						free (bar);
+					} else {
+						char *out, *cmd = rs->path + 5;
+						r_str_uri_decode (cmd);
+						// r_config_set_b (core->config, "scr.interactive", false);
+
+						// the request sandbox scope only exists inside cmdstr, so check its grain here
+						const bool can_control = (policy->grain & R_SANDBOX_GRAIN_EXEC) && r_sandbox_check (R_SANDBOX_GRAIN_EXEC);
+						if (can_control && (!strcmp (cmd, "=h*") || !strcmp (cmd, "=h--"))) {
+							out = NULL;
+						} else if (*cmd == ':') {
+							/* commands in /cmd/: starting with : do not show any output */
+							out = cmdstr (core, cmd + 1, false, policy);
+						} else {
+							out = cmdstr (core, cmd, true, policy);
+						}
+
+						if (out) {
+							char *res = r_str_uri_encode (out);
+							char *newheaders = r_str_newf ("Content-Type: text/plain\n%s", headers);
+							r_socket_http_response (rs, 200, out, 0, newheaders);
+							free (out);
+							free (newheaders);
+							free (res);
+						} else {
+							r_socket_http_response (rs, 200, "", 0, headers);
+						}
+
+						if (can_control) {
+							if (!strcmp (cmd, "=h*")) {
+								/* do stuff */
+								rtr_http_request_free (rs);
+								free (dir);
+								ret = HTTP_RUN_RESTART;
+								goto the_end;
+							} else if (!strcmp (cmd, "=h--")) {
+								rtr_http_request_free (rs);
+								free (dir);
+								ret = HTTP_RUN_SUCCESS;
+								goto the_end;
+							}
+						}
+					}
+				}
+			} else {
+				const char *root = r_config_get (core->config, "http.root");
+				const char *homeroot = r_config_get (core->config, "http.homeroot");
+				char *path = NULL;
+				if (!strcmp (rs->path, "/")) {
+					free (rs->path);
+					if (*index == '/') {
+						rs->path = strdup (index);
+						path = strdup (index);
+					} else {
+						rs->path = r_str_newf ("/%s", index);
+						path = r_file_root (root, rs->path);
+					}
+				} else if (homeroot && *homeroot) {
+					char *homepath = r_file_abspath (homeroot);
+					path = r_file_root (homepath, rs->path);
+					free (homepath);
+					if (!r_file_exists (path) && !r_file_is_directory (path)) {
+						free (path);
+						path = r_file_root (root, rs->path);
+					}
+				} else {
+					if (*index == '/') {
+						path = strdup (index);
+					} else {
+						path = r_file_root (root, rs->path);
+					}
+				}
+				// FD IS OK HERE
+				if (rs->path [strlen (rs->path) - 1] == '/') {
+					if (*index == '/') {
+						free (path);
+						path = strdup (index);
+					} else {
+						path = r_str_append (path, index);
+					}
+				} else {
+					//snprintf (path, sizeof (path), "%s/%s", root, rs->path);
+					if (r_file_is_directory (path)) {
+						char *res = r_str_newf ("Location: %s/\n%s", rs->path, headers);
+						r_socket_http_response (rs, 302, NULL, 0, res);
+						rtr_http_request_free (rs);
+						free (path);
+						free (res);
+						R_FREE (dir);
+						continue;
+					}
+				}
+				if (r_file_exists (path)) {
+					size_t sz = 0;
+					char *f = r_file_slurp (path, &sz);
+					if (f) {
+						char *ct = guess_filetype (path);
+						// no-cache avoids serving stale webuis from the browser cache after an upgrade
+						char *hdr = r_str_newf ("%sCache-Control: no-cache\n%s", ct, headers);
+						r_socket_http_response (rs, 200, f, (int)sz, hdr);
+						free (hdr);
+						free (f);
+						free (ct);
+					} else {
+						r_socket_http_response (rs, 403, "Permission denied", 0, headers);
+						http_logf (core, "http: Cannot open '%s'\n", path);
+					}
+				} else {
+					if (dir) {
+						char *resp = rtr_dir_files (dir);
+						http_logf (core, "Dirlisting %s\n", dir);
+						r_socket_http_response (rs, 404, resp, 0, headers);
+						free (resp);
+					} else {
+						http_logf (core, "File '%s' not found\n", path);
+						r_socket_http_response (rs, 404, "File not found\n", 0, headers);
+					}
+				}
+				free (path);
+			}
+		} else if (!strcmp (rs->method, "POST")) {
+			ut8 *ret;
+			int retlen;
+			char buf[128];
+			if (r_str_startswith (rs->path, "/cmd")) {
+				char *out = NULL;
+				char *prefix = r_str_startswith (rs->path, "/cmd/")? rs->path + 5: NULL;
+				if (prefix) {
+					r_str_uri_decode (prefix);
+				}
+				const char *data = rs->data && rs->data_length > 0? (const char *)rs->data: "";
+				char *cmd = r_str_newf ("%s%s%s", prefix? prefix: "", prefix && *prefix && *data? " ": "", data);
+				if (!cmd) {
+					r_socket_http_response (rs, 500, "Cannot allocate command", 0, headers);
+					rtr_http_request_free (rs);
+					free (dir);
+					continue;
+				}
+				if (r_config_get_b (core->config, "http.colon") && *cmd != ':') {
+					r_socket_http_response (rs, 403, "Permission denied", 0, headers);
+					rtr_http_request_free (rs);
+					free (cmd);
+					free (dir);
+					continue;
+				}
+				if (*cmd == ':') {
+					out = cmdstr (core, cmd + 1, false, policy);
+				} else if (*cmd) {
+					out = cmdstr (core, cmd, true, policy);
+				}
+				free (cmd);
+				if (out) {
+					char *res = r_str_uri_encode (out);
+					char *newheaders = r_str_newf ("Content-Type: text/plain\n%s", headers);
+					r_socket_http_response (rs, 200, out, 0, newheaders);
+					// eprintf ("(%s)->(%s)\n", cmd, out);
+					free (out);
+					free (newheaders);
+					free (res);
+				} else {
+					r_socket_http_response (rs, 200, "", 0, headers);
+				}
+			} else if (r_str_startswith (rs->path, "/up/") && rs->path[4] && r_config_get_b (core->config, "http.upload")) {
+				ret = r_socket_http_handle_upload (rs->data, rs->data_length, &retlen);
+				if (ret) {
+					ut64 size = r_config_get_i (core->config, "http.maxsize");
+					if (size && retlen > size) {
+						r_socket_http_response (rs, 403, "403 File too big\n", 0, headers);
+					} else {
+						char *filename = r_file_root (
+							r_config_get (core->config, "http.uproot"),
+							rs->path + 4);
+						http_logf (core, "UPLOADED '%s'\n", filename);
+						r_file_dump (filename, ret, retlen, 0);
+						free (filename);
+						snprintf (buf, sizeof (buf),
+							"<html><body><h2>uploaded %d byte(s). Thanks</h2>\n", retlen);
+							r_socket_http_response (rs, 200, buf, 0, headers);
+					}
+					free (ret);
+				}
+			} else {
+				r_socket_http_response (rs, 403, "403 Forbidden\n", 0, headers);
+			}
+		} else {
+			r_socket_http_response (rs, 404, "Invalid protocol", 0, headers);
+		}
+		rtr_http_request_free (rs);
+		free (dir);
+	}
+the_end:
+	{
+		if (core->config == newcfg) {
+			newoff = core->addr;
+			newblk = core->block;
+			core->addr = origoff;
+			core->block = origblk;
+			core->blocksize = origblksz;
+		}
+		int timeout = r_config_get_i (core->config, "http.timeout");
+		const char *host = r_config_get (core->config, "http.bind");
+		const char *port = r_config_get (core->config, "http.port");
+		const char *cors = r_config_get (core->config, "http.cors");
+		const char *allow = r_config_get (core->config, "http.allow");
+		const char *httpui = r_config_get (core->config, "http.ui");
+		core->config = origcfg;
+		r_config_set_i (core->config, "http.timeout", timeout);
+		r_config_set (core->config, "http.bind", host);
+		r_config_set (core->config, "http.port", port);
+		r_config_set (core->config, "http.cors", cors);
+		r_config_set (core->config, "http.allow", allow);
+		r_config_set (core->config, "http.ui", httpui);
+	}
+	r_cons_break_pop (cons);
+	core->http_up = false;
+	priv->listenport = NULL;
+	r_list_free (so.authtokens);
+	free (pfile);
+	r_socket_free (s);
+	// Config callbacks may borrow strings owned by the HTTP session.
+#define HTTP_REBIND_CONFIG(field, key) do { \
+	RConfigNode *node = r_config_node_get (newcfg, key); \
+	if (node && (field) == node->value) { \
+		node = r_config_node_get (origcfg, key); \
+		(field) = node? node->value: NULL; \
+	} \
+} while (0)
+	HTTP_REBIND_CONFIG (core->anal->opt.defprefix, "anal.prefix.default");
+	HTTP_REBIND_CONFIG (core->anal->opt.prefix_marker, "anal.prefix.marker");
+	HTTP_REBIND_CONFIG (core->cmdtimes, "cmd.times");
+	HTTP_REBIND_CONFIG (core->print->cfmt, "cmd.hexcursor");
+	HTTP_REBIND_CONFIG (core->cons->teefile, "file.output");
+	HTTP_REBIND_CONFIG (core->cons->teefile, "scr.tee");
+	HTTP_REBIND_CONFIG (core->dbg->options.malloc, "dbg.malloc");
+#undef HTTP_REBIND_CONFIG
+	// bin.prefix keeps its own copy, so recompute it from the operator config
+	RConfigNode *prefix_node = r_config_node_get (origcfg, "bin.prefix");
+	if (prefix_node && prefix_node->setter) {
+		prefix_node->setter (core, prefix_node);
+	}
+	r_config_free (newcfg);
+	if (newblk != origblk) {
+		free (newblk);
+	}
+	/* Unregister this HTTP session */
+	r_core_session_unregister (core);
+	return ret;
+}
+
+#define USE_HTTP_THREADS 1
+
+#if USE_HTTP_THREADS
+static RThreadFunctionRet r_core_rtr_http_thread(RThread *th) {
+	if (!th) {
+		return false;
+	}
+	HttpThread *ht = th->user;
+	if (!ht || !ht->core) {
+		return false;
+	}
+	HttpRunResult ret = r_core_rtr_http_run (ht->core, ht->launch, ht->browse, ht->path, &ht->policy);
+	if (ret != HTTP_RUN_RESTART) {
+		R_FREE (ht->path);
+		policy_fini (&ht->policy);
+		free (ht);
+	}
+	return ret == HTTP_RUN_RESTART? R_TH_REPEAT: R_TH_STOP;
+}
+#endif
+
+R_API int r_core_rtr_http(RCore *core, int launch, int browse, const char *path) {
+	RCorePriv *priv = core->priv;
+	HttpRunResult ret;
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_NETWORK)) {
+		R_LOG_ERROR ("sandbox: connect is not permitted");
+		return 1;
+	}
+	if (launch == '-') {
+		if (r_sandbox_enable (false)) {
+			R_LOG_ERROR ("Stopping HTTP threads is disabled in sandbox mode");
+			return 1;
+		}
+		if (priv->httpthread) {
+			r_core_rtr_http_stop (core);
+			r_th_wait (priv->httpthread);
+			r_th_free (priv->httpthread);
+			priv->httpthread = NULL;
+		} else {
+			R_LOG_ERROR ("No webserver running");
+		}
+		return 0;
+	}
+	if (core->http_up) {
+		R_LOG_ERROR ("http server is already running");
+		return 1;
+	}
+	HttpSandboxPolicy policy = {
+		.configured = r_config_get_b (core->config, "http.sandbox"),
+		.grain = R_SANDBOX_GRAIN_ALL
+	};
+	const char *expression = r_config_get (core->config, "http.sandbox.grain");
+	const bool local_sandbox = r_sandbox_enable (false);
+	policy.enabled = policy.configured || local_sandbox;
+	if (policy.enabled) {
+		if (policy.configured && !r_sandbox_grain_parse (expression, &policy.grain)) {
+			R_LOG_ERROR ("Invalid HTTP sandbox permissions");
+			return 1;
+		}
+		ut32 permission;
+		for (permission = 1; permission; permission <<= 1) {
+			if ((policy.grain & permission) && !r_sandbox_check (permission)) {
+				policy.grain &= ~permission;
+			}
+		}
+	}
+	policy.expression = strdup (expression);
+	if (!policy.expression) {
+		return 1;
+	}
+	if (policy.enabled && !local_sandbox) {
+		const char *projectdir = r_config_get (core->config, "dir.projects");
+		if (R_STR_ISNOTEMPTY (projectdir) && r_sys_mkdirp (projectdir)) {
+			policy.projectdir = r_file_abspath (projectdir);
+		}
+	}
+	if (launch == '&') {
+#if USE_HTTP_THREADS
+		if (priv->httpthread) {
+			R_LOG_INFO ("The HTTP Thread is already running");
+			R_LOG_INFO ("This is experimental and probably buggy. Use at your own risk");
+			R_LOG_TODO ("Use different eval environ for scr. for the web");
+			R_LOG_TODO ("Visual mode should be enabled on local");
+			policy_fini (&policy);
+		} else {
+			const char *tpath = r_str_trim_head_ro (path + 1);
+			HttpThread *ht = R_NEW0 (HttpThread);
+			ht->core = core;
+			ht->launch = launch;
+			ht->browse = browse;
+			ht->path = strdup (tpath);
+			ht->policy = policy;
+			if (ht->path) {
+				priv->httpthread = r_th_new (r_core_rtr_http_thread, ht, false);
+			}
+			if (!priv->httpthread || !r_th_start (priv->httpthread)) {
+				r_th_free (priv->httpthread);
+				priv->httpthread = NULL;
+				free (ht->path);
+				policy_fini (&ht->policy);
+				free (ht);
+				return 1;
+			}
+			r_th_setname (priv->httpthread, "httpthread");
+			R_LOG_INFO ("Background http server started");
+		}
+		return 0;
+#else
+		policy_fini (&policy);
+		while (*path == '&') {
+			path++;
+		}
+		return r_core_cmdf (core, "& =h%s", path);
+#endif
+	}
+	do {
+		ret = r_core_rtr_http_run (core, launch, browse, path, &policy);
+	} while (ret == HTTP_RUN_RESTART);
+	policy_fini (&policy);
+	return (ret == HTTP_RUN_ERROR) ? 1 : 0;
+}

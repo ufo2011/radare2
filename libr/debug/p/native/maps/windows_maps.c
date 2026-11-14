@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2019-2021 - gustavo */
+/* radare - LGPL - Copyright 2019-2024 - gustavo */
 
 #include "windows_maps.h"
 #include "../windows/windows_debug.h"
@@ -9,27 +9,36 @@ typedef struct {
 	int sect_count;
 } RWinModInfo;
 
-static char *get_map_type(MEMORY_BASIC_INFORMATION *mbi) {
-	char *type;
-	switch (mbi->Type) {
-	case MEM_IMAGE:
-		type = "IMAGE";
-		break;
-	case MEM_MAPPED:
-		type = "MAPPED";
-		break;
-	case MEM_PRIVATE:
-		type = "PRIVATE";
-		break;
-	default:
-		type = "UNKNOWN";
+static const char *get_map_type(MEMORY_BASIC_INFORMATION *mbi) {
+	const char *type = NULL;
+	if (mbi) {
+		switch (mbi->Type) {
+		case MEM_IMAGE:
+			type = "IMAGE";
+			break;
+		case MEM_MAPPED:
+			type = "MAPPED";
+			break;
+		case MEM_PRIVATE:
+			type = "PRIVATE";
+			break;
+		default:
+			type = "UNKNOWN";
+			break;
+		}
 	}
 	return type;
 }
 
 static RDebugMap *add_map(RList *list, const char *name, ut64 addr, ut64 len, MEMORY_BASIC_INFORMATION *mbi) {
 	int perm;
-	char *map_type = get_map_type (mbi);
+	const char *map_type = get_map_type (mbi);
+	if (!map_type) {
+		map_type = NULL;
+	}
+	if (!name) {
+		name = "";
+	}
 
 	switch (mbi->Protect) {
 	case PAGE_EXECUTE:
@@ -56,7 +65,7 @@ static RDebugMap *add_map(RList *list, const char *name, ut64 addr, ut64 len, ME
 	default:
 		perm = 0;
 	}
-	char *map_name = r_str_newf ("%-8s %s", map_type, name);
+	char *map_name = name? r_str_newf ("%s %s", map_type, name): strdup (map_type);
 	if (!map_name) {
 		return NULL;
 	}
@@ -78,14 +87,21 @@ R_API RList *r_w32_dbg_modules(RDebug *dbg) {
 	}
 	MODULEENTRY32 me;
 	RList *list = r_list_newf ((RListFree)r_debug_map_free);
-	DWORD flags = TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32;
+	// TH32CS_SNAPMODULE32 only means something for wow64 processes; pre-vista
+	// kernels (xp, reactos) hand back a useless snapshot when it is requested
+	DWORD flags = TH32CS_SNAPMODULE;
+#ifdef _WIN64
+	flags |= TH32CS_SNAPMODULE32;
+#endif
 	HANDLE h_mod_snap = CreateToolhelp32Snapshot (flags, dbg->pid);
 
-	if (h_mod_snap == INVALID_HANDLE_VALUE) {
+	// some implementations return NULL instead of INVALID_HANDLE_VALUE
+	if (!h_mod_snap || h_mod_snap == INVALID_HANDLE_VALUE) {
 		// Suppress if process is still initializing
 		if (GetLastError () != ERROR_PARTIAL_COPY || r_list_length (dbg->threads) > 1) {
 			r_sys_perror ("r_w32_dbg_modules/CreateToolhelp32Snapshot");
 		}
+		h_mod_snap = NULL;
 		goto err_w32_dbg_modules;
 	}
 	me.dwSize = sizeof (MODULEENTRY32);
@@ -153,7 +169,7 @@ static int set_mod_inf(HANDLE h_proc, RDebugMap *map, RWinModInfo *mod) {
 				memcpy (mod->sect_hdr, sect_hdr, sizeof (IMAGE_SECTION_HEADER) * mod->sect_count);
 				mod_inf_fill = 0;
 			} else {
-				perror ("malloc set_mod_inf()");
+				r_sys_perror ("malloc set_mod_inf()");
 			}
 		}
 	}
@@ -202,7 +218,7 @@ static void proc_mem_img(HANDLE h_proc, RList *map_list, RList *mod_list, RWinMo
 			if (sect_found) {
 				char *map_name = r_str_newf ("%s | %.8s", mod->map->name, sect_hdr->Name);
 				if (!map_name) {
-					perror ("r_str_newf");
+					r_sys_perror ("r_str_newf");
 					return;
 				}
 				if (sect_found == 1) {
@@ -223,7 +239,10 @@ static void proc_mem_img(HANDLE h_proc, RList *map_list, RList *mod_list, RWinMo
 }
 
 static void proc_mem_map(HANDLE h_proc, RList *map_list, MEMORY_BASIC_INFORMATION *mbi) {
-	TCHAR f_name[MAX_PATH + 1];
+	TCHAR *f_name = calloc (MAX_PATH + 1, 2); // [MAX_PATH + 1];
+	if (!f_name) {
+		return;
+	}
 	DWORD len = r_w32_GetMappedFileName (h_proc, mbi->BaseAddress, f_name, MAX_PATH);
 	if (len > 0) {
 		char *f_name_ = r_sys_conv_win_to_utf8 (f_name);
@@ -235,21 +254,21 @@ static void proc_mem_map(HANDLE h_proc, RList *map_list, MEMORY_BASIC_INFORMATIO
 }
 
 R_API RList *r_w32_dbg_maps(RDebug *dbg) {
-	r_return_val_if_fail (dbg, NULL);
+	R_RETURN_VAL_IF_FAIL (dbg, NULL);
 	if (dbg->pid == -1) {
 		return NULL;
 	}
 	SYSTEM_INFO si = {0};
 	LPVOID cur_addr;
-	MEMORY_BASIC_INFORMATION mbi;
+	MEMORY_BASIC_INFORMATION mbi = {0};
 	RWinModInfo mod_inf = {0};
-	RList *map_list = r_list_newf ((RListFree)r_debug_map_free), *mod_list = NULL;
+	RList *map_list = r_list_newf ((RListFree)r_debug_map_free);
 	RW32Dw *wrap = dbg->user;
 
 	GetSystemInfo (&si);
 	cur_addr = si.lpMinimumApplicationAddress;
 	/* get process modules list */
-	mod_list = r_w32_dbg_modules (dbg);
+	RList *mod_list = r_w32_dbg_modules (dbg);
 	/* process memory map */
 	while (cur_addr < si.lpMaximumApplicationAddress &&
 		VirtualQueryEx (wrap->pi.hProcess, cur_addr, &mbi, sizeof (mbi)) != 0) {

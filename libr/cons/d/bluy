@@ -1,45 +1,72 @@
-ec comment rgb:ffc41f
-ec fname rgb:ffc41f
-ec fline rgb:ff941a
-ec flag rgb:ffc41f
-ec label rgb:ffc41f
+ecd
+ec comment rgb:cff
+ec usrcmt rgb:cff
+ec fname rgb:aaa
+ec fline rgb:aaa
+ec flag rgb:3af
+ec label rgb:3af
+ec floc white
 # help messages
-ec help rgb:33ccff
-ec args rgb:0099ff
-ec flow rgb:e07010
-ec prompt rgb:0099ff
-ec offset rgb:606060
-ec input rgb:234
-ec invalid rgb:ef3444
-ec other rgb:0099ff
-ec b0x00 rgb:999cab
+ec help rgb:3cf
+ec args rgb:09f
+ec flow white
+ec flow2 rgb:6af
+ec prompt rgb:09f
+ec addr rgb:666
+ec input rgb:cff
+ec invalid blue
+ec other rgb:09f
+ec b0x00 rgb:99a
 ec b0x7f rgb:09f
-ec b0xff rgb:224
-ec btext rgb:33ccff
-ec math rgb:0099ff
+ec b0xff rgb:555
+ec btext rgb:3cf
+ec math rgb:09f
 ec bin rgb:99a
-ec push rgb:09f
+ec push rgb:999
 ec pop rgb:09f
-ec crypto rgb:f5f5f6
-ec jmp rgb:e07010
-ec cjmp rgb:e07010
-ec call rgb:fc1 rgb:333
-ec nop rgb:7c5
-ec ret rgb:e34
-ec trap rgb:e34
-ec swi rgb:e34
-ec cmp rgb:09f
-ec reg rgb:33ccff
+ec crypto rgb:fff
+ec jmp white
+ec ujmp white
+ec cjmp white
+ec call rgb:6af
+ec ucall rgb:6af
+ec nop rgb:33a
+ec ret white
+ec trap blue
+ec swi white . bold
+ec cmp rgb:aaa
+ec reg rgb:3cf
 ec creg rgb:09f
-ec num rgb:fc1
+ec num rgb:09f
 ec mov rgb:99a
-ec ai.read rgb:e34
-ec ai.write rgb:234
-ec ai.exec rgb:213
+ec ai.read rgb:e33
+ec ai.write rgb:33e
+ec ai.exec rgb:3cf
 ec ai.seq rgb:09f
-ec ai.ascii rgb:fff
+ec str rgb:fff
 ec gui.cflow rgb:09f
 ec gui.dataoffset rgb:99a
 ec gui.background rgb:7c5
-ec gui.alt_background rgb:e34
-ec gui.border rgb:234
+ec gui.background2 rgb:e34
+ec gui.border rgb:23f
+
+ec graph.current rgb:aaf
+ec graph.false white
+ec graph.true rgb:9ff
+ec graph.trufae rgb:4aa
+ec graph.box white
+ec graph.box2 rgb:07f
+ec graph.box4 white
+ec diff.match white
+
+ec var rgb:555
+ec var.name rgb:09f
+ec var.type rgb:99a
+ec var.addr rgb:666
+
+ec widget.bg white rgb:07f
+ec widget.sel rgb:ccffff rgb:223355
+
+# ec graph.box4=white
+# ""e graph.gv.node=fillcolor="#303030" color=lightgray bgcolor=red fontcolor=white penwidth=2 style=filled fontname="Courier Bold" fontsize=14 shape=box
+# e graph.gv.graph=bgcolor=black

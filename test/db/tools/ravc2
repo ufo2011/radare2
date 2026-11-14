@@ -3,7 +3,7 @@ FILE=-
 CMDS=<<EOF
 mkdir ravc2_init_test
 cd ravc2_init_test
-!!ravc2 init
+!!ravc2 init rvc
 lr
 !!ravc2 status
 cd ../
@@ -23,10 +23,10 @@ NAME=ravc2 commit
 CMDS=<<EOF
 mkdir ravc2_commit_test
 cd ravc2_commit_test
-!!ravc2 init
+!!ravc2 init rvc
 echo hello > hello
 !!ravc2 commit "hello world!" hello
-!!ravc2 log~!author,time,hash
+!!ravc2 log~!author~!time~!hash
 cd ../
 rmrf ravc2_commit_test
 EOF
@@ -42,7 +42,7 @@ NAME=ravc2 branch
 CMDS=<<EOF
 mkdir ravc2_branch_test
 cd ravc2_branch_test
-!!ravc2 init
+!!ravc2 init rvc
 !!ravc2 branch hello
 echo hello > hello
 !!ravc2 commit "hello world!" hello
@@ -64,10 +64,10 @@ NAME=ravc2 log
 CMDS=<<EOF
 mkdir ravc2_log_test
 cd ravc2_log_test
-!!ravc2 init
+!!ravc2 init rvc
 echo hello > hello
 !!ravc2 commit "hello world!" hello
-!!ravc2 log ~!hash,author,time
+!!ravc2 log~!hash~!author~!time
 cd ../
 rmrf ravc2_log_test
 EOF
@@ -77,4 +77,13 @@ message=hello world!
 /hello=5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03
 ****
 EOF
+RUN
+
+NAME=ravc2 -H RAVC2_USER
+FILE=-
+CMDS=%RAVC2_USER=test;!ravc2 -H RAVC2_USER
+EXPECT=<<EOF
+test
+EOF
+EXPECT_ERR=
 RUN

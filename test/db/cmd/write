@@ -59,9 +59,44 @@ hello # world
 EOF
 RUN
 
+NAME=w escaped quote literal and empty
+FILE=malloc://8
+CMDS=<<EOF
+w \"
+p8 8
+s 1
+w ""
+s 0
+p8 8
+s 2
+w "a"
+s 0
+p8 8
+s 3
+w '"'
+s 0
+p8 8
+s 4
+w \'
+s 0
+p8 8
+s 5
+w '\''
+s 0
+p8 8
+EOF
+EXPECT=<<EOF
+2200000000000000
+2200000000000000
+2200610000000000
+2200612200000000
+2200612227000000
+2200612227270000
+EOF
+RUN
+
 NAME=labels replacements (common prefix)
 FILE=malloc://1024
-BROKEN=1
 CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=32
@@ -70,6 +105,30 @@ p8 7@0
 EOF
 EXPECT=<<EOF
 9090e8fbffffff
+EOF
+RUN
+
+NAME=assembler equates match complete identifiers in expressions
+FILE=malloc://1024
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+"wa .equ value=1;.equ valueA=2;.equ Avalue=3;.equ value_=4;.equ value.part=5;.equ value1=6;mov eax,valueA;mov ebx,Avalue;mov ecx,value_;mov edx,value.part;mov esi,value1;mov edi,value+valueA"
+p8 30
+EOF
+EXPECT=<<EOF
+b802000000bb03000000b904000000ba05000000be06000000bf03000000
+EOF
+RUN
+
+NAME=assembler equates preserve alias expansion
+FILE=malloc://1024
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+"wa .equ foo=1+bar;.equ bar=2;mov eax,foo"
+p8 5
+EOF
+EXPECT=<<EOF
+b803000000
 EOF
 RUN
 
@@ -119,6 +178,31 @@ and rsp, 0xfffffffffffffff0
 nop
 nop
 mov r9, rdx
+EOF
+RUN
+
+NAME=wao whitespace before address (x86)
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 31ed4989d1
+wao nop@..2
+p8 5
+wx 31ed4989d1
+wao nop @..2
+p8 5
+wx 31ed4989d1
+wao   nop   @..2
+p8 5
+wx 31ed4989d1
+wao trap @ 2
+p8 5
+EOF
+EXPECT=<<EOF
+31ed909090
+31ed909090
+31ed909090
+31edcc89d1
 EOF
 RUN
 
@@ -201,6 +285,141 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=wx preserves wildcard bytes
+FILE=malloc://10
+CMDS=<<EOF
+wx aabbcc
+wx 31..88
+p8 3
+wx aabbcc
+wx 31??88
+p8 3
+/x 31??88
+wx 00010203040506070809
+b 4
+wx aa..cc....ff..112233
+p8 10
+EOF
+EXPECT=<<EOF
+31bb88
+31bb88
+0x00000000 hit0_0 31bb88
+aa01cc0304ff06112233
+EOF
+RUN
+
+NAME=wx preserves wildcard nibbles and odd final nibble
+FILE=malloc://5
+CMDS=<<EOF
+wx abcdef9876
+wx 3. .5 ?8 9? .
+p8 5
+wx .? ?? .. ??.
+p8 5
+wx abcdef
+wx 31.8a
+p8 3
+wx .
+wx ?
+p8 3
+wx a
+p8 3
+EOF
+EXPECT=<<EOF
+3bc5e89876
+3bc5e89876
+31c8af
+31c8af
+a1c8af
+EOF
+RUN
+
+NAME=wx wildcard nibbles with hex prefixes
+FILE=malloc://3
+CMDS=<<EOF
+wx abcdef
+wx 0x3. 0x?5 0x88
+p8 3
+/x 0x3. 0x?5 0x88
+EOF
+EXPECT=<<EOF
+3bc588
+0x00000000 hit0_0 3bc588
+EOF
+RUN
+
+NAME=wx wildcard writes use current cached bytes
+FILE=malloc://3
+CMDS=<<EOF
+e io.cache=true
+wx abcdef
+wx 3. .5 ?8
+p8 3
+wx .2 7? ..
+p8 3
+EOF
+EXPECT=<<EOF
+3bc5e8
+3275e8
+EOF
+RUN
+
+NAME=wx wildcard writes preserve seek behavior
+FILE=malloc://10
+CMDS=<<EOF
+wx 00010203040506070809
+s 2
+wx+ aa..bb
+?vi $$
+p8 10 @ 0
+wx 3? @ 8
+?vi $$
+e cfg.wseek=true
+wx ?f
+?vi $$
+p8 10 @ 0
+EOF
+EXPECT=<<EOF
+5
+0001aa03bb0506070809
+5
+6
+0001aa03bb0f06073809
+EOF
+RUN
+
+NAME=wx invalid wildcard input leaves bytes unchanged
+FILE=malloc://3
+CMDS=<<EOF
+wx abcdef
+wx 31..gg
+wx ?z
+p8 3
+EOF
+EXPECT=<<EOF
+abcdef
+EOF
+EXPECT_ERR=<<EOF
+ERROR: invalid hexpair string
+ERROR: invalid hexpair string
+EOF
+RUN
+
+NAME=wx incomplete read leaves masked write unchanged
+FILE=malloc://3
+CMDS=<<EOF
+wx abcdef
+wx 31..88 @ 1
+p8 3
+EOF
+EXPECT=<<EOF
+abcdef
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot read bytes to preserve masked nibbles
+EOF
+RUN
+
 ## "wxf" - write hex pairs from file
 
 NAME=wxf
@@ -248,7 +467,7 @@ EXPECT=<<EOF
 1024
 EOF
 EXPECT_ERR=<<EOF
-Dumped 1024 bytes from 0x00000000 into a_piece_of_ls_saved_to_PWD
+INFO: Dumped 1024 bytes from 0x00000000 into a_piece_of_ls_saved_to_PWD
 EOF
 RUN
 
@@ -284,9 +503,8 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=wx 0x should behave like wv? imho nope
+NAME=wx 0x writes hex bytes without endianness conversion
 FILE=malloc://1024
-BROKEN=1
 CMDS=<<EOF
 e cfg.bigendian=false
 wx 0x1234
@@ -295,28 +513,27 @@ wx 0x12345678
 p8 4
 EOF
 EXPECT=<<EOF
-3412
-78563412
+1234
+12345678
 EOF
 RUN
 
 NAME=wci should commit the changes to the file
 FILE=malloc://1024
-BROKEN=1
 CMDS=<<EOF
-!rm -rf .tmp
-mkdir .tmp
-cp -f bins/pe/b.exe .tmp/.b.exe.orig
-cp -f bins/pe/b.exe .tmp/.b.exe.new
+rm -rf .tmp-wci
+mkdir .tmp-wci
+cp bins/pe/b.exe .tmp-wci/.b.exe.orig
+cp bins/pe/b.exe .tmp-wci/.b.exe.new
 e io.cache=true
-o+ .tmp/.b.exe.new
+o+ .tmp-wci/.b.exe.new
 wx ff
 wci
-e.src.null=true
-!!radiff2 .tmp/.b.exe.orig .tmp/.b.exe.new
+!!radiff2 .tmp-wci/.b.exe.orig .tmp-wci/.b.exe.new
+rm -rf .tmp-wci
 EOF
 EXPECT=<<EOF
-File size
+0x00000680 55 => ff 0x00000680
 EOF
 RUN
 
@@ -333,6 +550,102 @@ EXPECT=<<EOF
 idx=0 addr=0x00000000 size=3 000000 -> 909090 (written)
 idx=1 addr=0x00000003 size=3 000000 -> 909090 (written)
 idx=2 addr=0x00000006 size=3 000000 -> 909090 (written)
+EOF
+RUN
+
+NAME=wcx shows before and after without committing cached writes
+FILE=malloc://64
+CMDS=<<EOF
+wx 4142434445464748 @ 0x10
+e io.cache=true
+wcx
+wx 4142714445467848 @ 0x10
+wcx
+p8 8 @ 0x10
+wcr
+wcx
+p8 8 @ 0x10
+EOF
+EXPECT=<<EOF
+0x00000010 4142434445464748 ABCDEFGH ! 0x00000010 4142714445467848 ABqDEFxH
+4142714445467848
+4142434445464748
+EOF
+RUN
+
+NAME=wcx shows all cache layers
+FILE=malloc://64
+CMDS=<<EOF
+wx 41424344 @ 0x10
+e io.cache=true
+wx 61626364 @ 0x10
+wc++
+wx 45 @ 0x20
+wcx
+wc--
+wcx
+EOF
+EXPECT=<<EOF
+0x00000010 41424344 ABCD ! 0x00000010 61626364 abcd
+0x00000020 00 . ! 0x00000020 45 E
+0x00000010 41424344 ABCD ! 0x00000010 61626364 abcd
+EOF
+RUN
+
+NAME=wcx includes equal rows and partial final rows
+FILE=malloc://64
+CMDS=<<EOF
+wx 4142434445464748494a4b4c4d4e4f5051 @ 0x20
+e io.cache=true
+wx 4142434445464748494a4b4c4d4e4f505a @ 0x20
+wcx
+EOF
+EXPECT=<<EOF
+0x00000020 4142434445464748494a4b4c4d4e4f50 ABCDEFGHIJKLMNOP | 0x00000020 4142434445464748494a4b4c4d4e4f50 ABCDEFGHIJKLMNOP
+0x00000030 51 Q ! 0x00000030 5a Z
+EOF
+RUN
+
+NAME=wcu should undo last change
+FILE=malloc://512
+CMDS=<<EOF
+e io.cache=true
+wx 11
+s+ 1
+wx 22
+s+ 1
+wx 33
+wcu
+wc
+EOF
+EXPECT=<<EOF
+idx=0 addr=0x00000000 size=1 00 -> 11 (not written)
+idx=1 addr=0x00000001 size=1 00 -> 22 (not written)
+EOF
+RUN
+
+NAME=wcf should commit all the changes to a file
+FILE=bins/lua/hello.lua
+CMDS=<<EOF
+e io.cache=true
+rm .tmp_file
+s 0x0000002B
+wx 7272
+wcf .tmp_file
+cat .tmp_file
+rm .tmp_file
+EOF
+EXPECT=<<EOF
+local c = 0
+
+function hello(msg)
+	print("Herro "..msg)
+	c = c + 1
+end
+
+hello("World")
+hello(c)
+hello(c)
 EOF
 RUN
 
@@ -382,7 +695,7 @@ RUN
 NAME=wen
 FILE=malloc://4
 CMDS=<<EOF
-
+omt 1
 wx 01020304
 wen 2 @ 1
 wen 1 @ 6
@@ -410,12 +723,12 @@ EXPECT=<<EOF
 EOF
 RUN
 
-## wxs: write hex and seek
+## wx+: write hex and seek
 
 FILE=malloc://1024
-NAME=data written after multiple wxs
+NAME=data written after multiple wx+
 CMDS=<<EOF
-2 wxs 9090 @ 8
+2 wx+ 9090 @ 8
 x 16 @ 0
 EOF
 EXPECT=<<EOF
@@ -425,9 +738,9 @@ EOF
 RUN
 
 FILE=malloc://1024
-NAME=address after wxs at tmpseek
+NAME=address after wx+ at tmpseek
 CMDS=<<EOF
-2 wxs 9090 @ 8
+2 wx+ 9090 @ 8
 ?vi $$
 EOF
 EXPECT=<<EOF
@@ -449,179 +762,74 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=Automatically reanalyze function control flow after a write
+NAME=wao recj on arm64
 FILE=-
-ARGS=-a x86 -b 64 -e anal.detectwrites=true
+ARGS=-a arm -b64
 CMDS=<<EOF
-wa jne 6 @ 2
-wa ret @ 8
-af
-pdr
-wa jne 8 @ 4
-pdr
-wa mov rax, [rbp-4]
-pdr
-afvn test var_4h
-wa jne 0 @ 4
-pdr
-wx 00000000
-afv # check var was deleted
+e io.cache=true
+wx+e01c0034
+wx+4c000054
+s 0
+pd 2
+wao recj @ 0
+wao recj @ 4
+?e --
+pd 2
 EOF
 EXPECT=<<EOF
-/ 9: fcn.00000000 ();
-| 0x00000000      0000           add byte [rax], al
-| 0x00000002      7502           jne 6
-| // true: 0x00000006  false: 0x00000004
-| 0x00000004      0000           add byte [rax], al
-| // true: 0x00000006
-| 0x00000006      0000           add byte [rax], al
-\ 0x00000008      c3             ret
-
-/ 9: fcn.00000000 ();
-| 0x00000000      0000           add byte [rax], al
-| 0x00000002      7502           jne 6
-| // true: 0x00000006  false: 0x00000004
-| 0x00000004      7502           jne 8
-| // true: 0x00000008  false: 0x00000006
-| 0x00000006      0000           add byte [rax], al
-| // true: 0x00000008
-\ 0x00000008      c3             ret
-
-/ 9: fcn.00000000 ();
-| ; var int64_t var_4h @ rbp-0x4
-| 0x00000000      488b45fc       mov rax, qword [var_4h]
-| 0x00000004      7502           jne 8
-| // true: 0x00000008  false: 0x00000006
-| 0x00000006      0000           add byte [rax], al
-| // true: 0x00000008
-\ 0x00000008      c3             ret
-
-/ 9: fcn.00000000 ();
-| ; var int64_t test @ rbp-0x4
-| 0x00000000      488b45fc       mov rax, qword [test]
-| 0x00000004      75fa           jne fcn.00000000
-| // true: 0x00000000  false: 0x00000006
-| 0x00000006      0000           add byte [rax], al
-\ 0x00000008      c3             ret
-
+        ,=< 0x00000000      e01c0034       cbz w0, 0x39c
+       ,==< 0x00000004      4c000054       b.gt 0xc
+--
+        ,=< 0x00000000      e01c0035       cbnz w0, 0x39c
+       ,==< 0x00000004      4d000054       b.le 0xc
 EOF
 RUN
 
-NAME=Write misaligns jump instruction, control flow is reanalyzed
+NAME=wao+
 FILE=-
-ARGS=-a x86 -b 64 -e anal.detectwrites=true
+ARGS=-a x86 -b 32
 CMDS=<<EOF
-wx e80200000075020000c3
-af
-pdr
-wa jne 9
-pdr
-wx e802
-pdr
+3wao+nop
+s 0
+pi 3@0
 EOF
 EXPECT=<<EOF
-/ 10: fcn.00000000 ();
-| 0x00000000      e802000000     call 7
-| 0x00000005      7502           jne 9
-| // true: 0x00000009  false: 0x00000007
-| ; CALL XREF from fcn.00000000 @ 
-| 0x00000007      0000           add byte [rax], al
-| // true: 0x00000009
-\ 0x00000009      c3             ret
-
-/ 10: fcn.00000000 (int64_t arg_2h);
-| ; arg int64_t arg_2h @ rbp+0x2
-| 0x00000000      7507           jne 9
-| // true: 0x00000009  false: 0x00000002
-| 0x00000002      0000           add byte [rax], al
-| 0x00000004      007502         add byte [arg_2h], dh
-| ; CALL XREF from fcn.00000000 @ 
-| 0x00000007      0000           add byte [rax], al
-| // true: 0x00000009
-\ 0x00000009      c3             ret
-
-/ 10: fcn.00000000 (int64_t arg_2h);
-| ; arg int64_t arg_2h @ rbp+0x2
-| 0x00000000      e802000000     call 7
-| 0x00000005      7502           jne 9
-| // true: 0x00000009  false: 0x00000007
-| ; CALL XREF from fcn.00000000 @ 
-| 0x00000007      0000           add byte [rax], al
-| // true: 0x00000009
-\ 0x00000009      c3             ret
-
+nop
+nop
+nop
 EOF
 RUN
 
-NAME=Write reanalysis keeps already unreachable block
+NAME=wao+2
+# BROKEN=1
 FILE=-
-ARGS=-a x86 -b 64 -e anal.detectwrites=true
+ARGS=-a x86 -b 32
 CMDS=<<EOF
-wx 0000c300c3
-af
-afb+ 0 4 1
-pdr
-wa add byte [rax], bl
-pdr
+3(;wao+nop)()
+pi 3@0
 EOF
 EXPECT=<<EOF
-/ 4: fcn.00000000 ();
-| 0x00000000      0000           add byte [rax], al
-| 0x00000002      c3             ret
-
-\ 0x00000004      c3             ret
-
-/ 4: fcn.00000000 ();
-| 0x00000000      0018           add byte [rax], bl
-| 0x00000002      c3             ret
-
-\ 0x00000004      c3             ret
-
+nop
+nop
+nop
 EOF
 RUN
 
-NAME=Write reanalysis of child of non-modified block
+NAME=wao+3
 FILE=-
-ARGS=-a x86 -b 64 -e anal.detectwrites=true
+ARGS=-a x86 -b 32
 CMDS=<<EOF
-wx eb020000000075fac3
-af
-wx eb04eb02
-pdr
-af-
-wx eb020000eb020000000075fac3
-af
-wx eb040000eb02 @ 4
-pdr
+3wao+nop
+s
+pi 6@0
 EOF
 EXPECT=<<EOF
-/ 7: fcn.00000000 ();
-| 0x00000000      eb04           jmp 6
-| // true: 0x00000006
-| 0x00000002      eb02           jmp 6
-| // true: 0x00000006
-| ; CODE XREFS from fcn.00000000 @ , 0x2
-| 0x00000006      75fa           jne 2
-| // true: 0x00000002  false: 0x00000008
-\ 0x00000008      c3             ret
-
-/ 11: fcn.00000000 ();
-| 0x00000000      eb02           jmp 4
-| // true: 0x00000004
-| ; CODE XREF from fcn.00000000 @ 
-| 0x00000004      eb04           jmp 0xa
-| // true: 0x0000000a
-| ; CODE XREF from fcn.00000000 @ 
-| ; CODE XREF from fcn.00000000 @ +0x2
-| 0x00000006      0000           add byte [rax], al
-| ; CODE XREF from fcn.00000000 @ 0x4
-| 0x00000008      eb02           jmp 0xc
-| // true: 0x0000000c
-| ; CODE XREF from fcn.00000000 @ 0x4
-| 0x0000000a      75fa           jne 6
-| // true: 0x00000006  false: 0x0000000c
-| ; CODE XREF from fcn.00000000 @ 0x8
-\ 0x0000000c      c3             ret
-
+0x6
+nop
+nop
+nop
+nop
+nop
+nop
 EOF
 RUN

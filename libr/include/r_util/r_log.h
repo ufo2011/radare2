@@ -2,84 +2,121 @@
 #define R_LOG_H
 
 #include <r_userconf.h>
-
-#if __MINGW32__ || (defined(_WIN32) || defined(_WIN64)) && !defined(__GNUC__)
-#define MACRO_LOG_FUNC __FUNCTION__
-#define MACRO_WEAK_SYM
-// TODO: Windows weak symbols?
-#elif defined(__EMSCRIPTEN__) // TODO: test upon Emscripten's version once it supports weak symbols
-#define MACRO_LOG_FUNC __func__
-#define MACRO_WEAK_SYM
-#else
-#define MACRO_LOG_FUNC __func__
-#define MACRO_WEAK_SYM __attribute__ ((weak))
-#endif
-
-typedef enum r_log_level {
-	R_LOGLVL_SILLY = 0,
-	R_LOGLVL_DEBUG = 1,
-	R_LOGLVL_VERBOSE = 2,
-	R_LOGLVL_INFO = 3,
-	R_LOGLVL_WARN = 4,
-	R_LOGLVL_ERROR = 5,
-	R_LOGLVL_FATAL = 6, // This will call r_sys_breakpoint() and trap the process for debugging!
-	R_LOGLVL_NONE = 0xFF
-} RLogLevel;
-
-#if R_CHECKS_LEVEL >= 2
-#define R_DEFAULT_LOGLVL R_LOGLVL_WARN
-#else
-#define R_DEFAULT_LOGLVL R_LOGLVL_ERROR
-#endif
-
-typedef void (*RLogCallback) (const char *output, const char *funcname, const char *filename,
-	ut32 lineno, RLogLevel level, const char *tag, const char *fmtstr, ...) R_PRINTF_CHECK(7, 8);
-
-#define R_VLOG(lvl, tag, fmtstr, args) r_vlog (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, lvl, tag, fmtstr, args);
-
-#define R_LOG(lvl, tag, fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, lvl, tag, fmtstr, ##__VA_ARGS__);
-#define R_LOG_SILLY(fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, R_LOGLVL_SILLY, NULL, fmtstr, ##__VA_ARGS__);
-#define R_LOG_DEBUG(fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, R_LOGLVL_DEBUG, NULL, fmtstr, ##__VA_ARGS__);
-#define R_LOG_VERBOSE(fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, R_LOGLVL_VERBOSE, NULL, fmtstr, ##__VA_ARGS__);
-#define R_LOG_INFO(fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, R_LOGLVL_INFO, NULL, fmtstr, ##__VA_ARGS__);
-#define R_LOG_WARN(fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, R_LOGLVL_WARN, NULL, fmtstr, ##__VA_ARGS__);
-#define R_LOG_ERROR(fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, R_LOGLVL_ERROR, NULL, fmtstr, ##__VA_ARGS__);
-#define R_LOG_FATAL(fmtstr, ...) r_log (MACRO_LOG_FUNC, __FILE__, \
-	__LINE__, R_LOGLVL_FATAL, NULL, fmtstr, ##__VA_ARGS__);
+#include <r_list.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Called by r_core to set the configuration variables
-R_API void r_log_set_level(RLogLevel level);
-R_API void r_log_set_file(const char *filename);
-R_API void r_log_set_srcinfo(bool show_info);
+#ifndef R_LOG_ORIGIN
+// log.origin = module or function name
+#define R_LOG_ORIGIN __FUNCTION__
+#endif
+#ifndef R_LOG_SOURCE
+// log.source = file:line
+#define R_LOG_SOURCE __FILE__
+#endif
+
+#ifndef R_LOG_DISABLE
+#define R_LOG_DISABLE 0
+#endif
+
+// unused, but could be a good replacement for eprintf when fully transitioned?
+#define etrace(m) eprintf ("--> %s:%d : %s\n", __FUNCTION__, __LINE__, m)
+
+#define R_LOG_LEVEL_DEFAULT R_LOG_LEVEL_TODO
+
+typedef enum r_log_level {
+	R_LOG_LEVEL_FATAL = 0, // May this trap?
+	R_LOG_LEVEL_ERROR = 1,
+	R_LOG_LEVEL_INFO = 2,
+	R_LOG_LEVEL_WARN = 3,
+	R_LOG_LEVEL_HINT = 4, // best-practice hint, also gated by log.hints
+	R_LOG_LEVEL_TODO = 5,
+	R_LOG_LEVEL_DEBUG = 6,
+	R_LOG_LEVEL_TRACE = 7,
+	R_LOG_LEVEL_LAST = 8,
+} RLogLevel;
+
+typedef bool (*RLogCallback)(void *user, int type, const char *origin, const char *msg);
+
+R_VEC_TYPE_FORWARD (RVecRLogCallbackUser);
+
+typedef struct r_log_t {
+	int level; // skip messages lower than this level
+	int traplevel; // skip messages lower than this level
+	void *user;
+	char *file;
+	char *filter;
+	bool color; // colorize depending on msg level
+	bool hints; // show R_LOG_HINT best-practice messages
+	bool quiet; // be quiet in the console
+	bool show_origin;
+	bool show_source;
+	bool show_ts;
+	bool iterating; // true while iterating cbs, prevents modification
+	RVecRLogCallbackUser *cbs;
+	PrintfCallback cb_printf;
+} RLog;
+
+typedef struct r_log_source_t {
+	const char *file;
+	ut32 lineno;
+	const char *source;
+} RLogSource;
+
+R_API bool r_log_init(void);
+R_API void r_log_fini(void);
+R_API bool r_log_match(int level, const char *origin);
+R_API void r_log_message(RLogLevel level, const char *origin, const char *func, int line, const char *fmt, ...) R_PRINTF_CHECK(5, 6);
+R_API void r_log_vmessage(RLogLevel level, const char *origin, const char *func, int line, const char *fmt, va_list ap) R_PRINTF_CHECK(5, 0);
+R_API void r_log_add_callback(RLogCallback cb, void *user);
+R_API void r_log_del_callback(RLogCallback cb);
+
+#if R_LOG_DISABLE
+#define R_LOG(f,...) do {} while(0)
+#define R_LOG_FATAL(f,...) do {} while(0)
+#define R_LOG_ERROR(f,...) do {} while(0)
+#define R_LOG_INFO(f,...) do {} while(0)
+#define R_LOG_TODO(f,...) do {} while(0)
+#define R_LOG_WARN(f,...) do {} while(0)
+#define R_LOG_HINT(f,...) do {} while(0)
+#define R_LOG_DEBUG(f,...) do {} while(0)
+#else
+#define R_LOG(f,...) if (r_log_match (R_LOG_LEVEL_INFO, R_LOG_ORIGIN)) {r_log_message (R_LOG_LEVEL_INFO, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#define R_LOG_FATAL(f,...) if (r_log_match (R_LOG_LEVEL_FATAL, R_LOG_ORIGIN)) {r_log_message (R_LOG_LEVEL_FATAL, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#define R_LOG_ERROR(f,...) if (r_log_match (R_LOG_LEVEL_ERROR, R_LOG_ORIGIN)) {r_log_message (R_LOG_LEVEL_ERROR, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#define R_LOG_INFO(f,...) if (r_log_match (R_LOG_LEVEL_INFO, R_LOG_ORIGIN)) {r_log_message (R_LOG_LEVEL_INFO, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#define R_LOG_TODO(f,...) if (r_log_match (R_LOG_LEVEL_TODO, R_LOG_ORIGIN)) {r_log_message(R_LOG_LEVEL_TODO, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#define R_LOG_WARN(f,...) if (r_log_match (R_LOG_LEVEL_WARN, R_LOG_ORIGIN)) {r_log_message (R_LOG_LEVEL_WARN, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#define R_LOG_HINT(f,...) if (r_log_match (R_LOG_LEVEL_HINT, R_LOG_ORIGIN)) {r_log_message (R_LOG_LEVEL_HINT, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#if WANT_DEBUGSTUFF
+#define R_LOG_DEBUG(f,...) if (r_log_match (R_LOG_LEVEL_DEBUG, R_LOG_ORIGIN)) {r_log_message (R_LOG_LEVEL_DEBUG, R_LOG_ORIGIN, __FILE__, __LINE__, f, ##__VA_ARGS__);}
+#else
+#define R_LOG_DEBUG(f,...) do {} while(0)
+#endif
+#endif
+
+R_API void r_log_set_file(const char *expr);
+R_API void r_log_set_filter(const char *expr);
 R_API void r_log_set_colors(bool show_colors);
+R_API void r_log_show_origin(bool show_origin);
+R_API void r_log_show_source(bool show_source);
+R_API void r_log_set_quiet(bool be_quiet);
+R_API void r_log_set_hints(bool show_hints);
+R_API bool r_log_hints(void);
+R_API void r_log_set_level(RLogLevel level);
+R_API void r_log_show_ts(bool ts);
+R_API RLogLevel r_log_get_level(void);
+R_API RLogLevel r_log_get_traplevel(void);
 R_API void r_log_set_traplevel(RLogLevel level);
-// TODO: r_log_set_options(enum RLogOptions)
+R_API void r_log_set_callback(RLogCallback cbfunc);
+R_API const char *r_log_level_tostring(int i);
+R_API int r_log_level_fromstring(const char *);
+R_API const char *r_log_level_tocolor(int i);
 
-// Functions for adding log callbacks
-R_API void r_log_add_callback(RLogCallback cbfunc);
-R_API void r_log_del_callback(RLogCallback cbfunc);
-// TODO: r_log_get_callbacks()
-
-/* Define r_log as weak so it can be 'overwritten' externally
-   This allows another method of output redirection on POSIX (Windows?)
-   You can override this function to handle all logging logic / output yourself */
-R_API MACRO_WEAK_SYM void r_log(const char *funcname, const char *filename,
-	ut32 lineno, RLogLevel level, const char *tag, const char *fmtstr, ...) R_PRINTF_CHECK(6, 7);
-
-R_API MACRO_WEAK_SYM void r_vlog(const char *funcname, const char *filename,
-	ut32 lineno, RLogLevel level, const char *tag, const char *fmtstr, va_list args);
+R_API void r_log(const char *funcname, const char *filename, ut32 lineno, RLogLevel level, const char *tag, const char *fmtstr, ...) R_PRINTF_CHECK(6, 7);
+R_API void r_vlog(const char *funcname, const char *filename, ut32 lineno, RLogLevel level, const char *tag, const char *fmtstr, va_list args) R_PRINTF_CHECK(6, 0);
 
 #ifdef __cplusplus
 }

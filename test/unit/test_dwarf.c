@@ -6,32 +6,87 @@
 
 #define MODE 2
 
-#define check_abbrev_code(expected_code) \
-	mu_assert_eq (da->decls[i].code, expected_code, "Wrong abbrev code");
+// Global test context to prevent leaks on early returns
+static RBin *bin = NULL;
+static RIO *io = NULL;
 
-#define check_abbrev_tag(expected_tag) \
-	mu_assert_eq (da->decls[i].tag, expected_tag, "Incorrect abbreviation tag")
+static bool setup(void) {
+	bin = r_bin_new ();
+	io = r_io_new ();
+	if (!bin || !io) {
+		r_bin_free (bin);
+		r_io_free (io);
+		return false;
+	}
+	r_io_bind (io, &bin->iob);
+	return true;
+}
 
-#define check_abbrev_count(expected_count) \
-	mu_assert_eq (da->decls[i].count, expected_count, "Incorrect abbreviation count")
+static bool teardown(void) {
+	r_bin_free (bin);
+	r_io_free (io);
+	bin = NULL;
+	io = NULL;
+	return true;
+}
 
-#define check_abbrev_children(expected_children) \
-	mu_assert_eq (da->decls[i].has_children, expected_children, "Incorrect children flag")
+// Helper macros for accessing abbreviation declarations with better error messages
+#define ABBREV_DECL(idx) (RVecDwarfAbbrevDecl_at(da, idx))
+#define ABBREV_ATTR_DEF(decl, attr_idx) (RVecDwarfAttrDef_at((decl)->defs, attr_idx))
 
-#define check_abbrev_attr_name(expected_name) \
-	mu_assert_eq (da->decls[i].defs[j].attr_name, expected_name, "Incorrect children flag");
+// Improved check macros with clear naming and better assertions
+#define check_abbrev_code(expected_code) do { \
+	RBinDwarfAbbrevDecl *decl = ABBREV_DECL(i); \
+	mu_assert_notnull(decl, "Abbrev declaration at index is NULL"); \
+	mu_assert_eq(decl->code, expected_code, "Wrong abbrev code"); \
+} while (0)
 
-#define check_abbrev_attr_form(expected_form) \
-	mu_assert_eq (da->decls[i].defs[j].attr_form, expected_form, "Incorrect children flag");
+#define check_abbrev_tag(expected_tag) do { \
+	RBinDwarfAbbrevDecl *decl = ABBREV_DECL(i); \
+	mu_assert_notnull(decl, "Abbrev declaration at index is NULL"); \
+	mu_assert_eq(decl->tag, expected_tag, "Incorrect abbreviation tag"); \
+} while (0)
+
+#define check_abbrev_count(expected_count) do { \
+	RBinDwarfAbbrevDecl *decl = ABBREV_DECL(i); \
+	mu_assert_notnull(decl, "Abbrev declaration at index is NULL"); \
+	mu_assert_notnull(decl->defs, "Attribute definitions vector is NULL"); \
+	ut64 count = RVecDwarfAttrDef_length(decl->defs); \
+	mu_assert_eq(count, expected_count, "Incorrect abbreviation count"); \
+} while (0)
+
+#define check_abbrev_children(expected_children) do { \
+	RBinDwarfAbbrevDecl *decl = ABBREV_DECL(i); \
+	mu_assert_notnull(decl, "Abbrev declaration at index is NULL"); \
+	mu_assert_eq(decl->has_children, expected_children, "Incorrect children flag"); \
+} while (0)
+
+#define check_abbrev_attr_name(expected_name) do { \
+	RBinDwarfAbbrevDecl *decl = ABBREV_DECL(i); \
+	mu_assert_notnull(decl, "Abbrev declaration at index is NULL"); \
+	mu_assert_notnull(decl->defs, "Attribute definitions vector is NULL"); \
+	RBinDwarfAttrDef *attr = ABBREV_ATTR_DEF(decl, j); \
+	mu_assert_notnull(attr, "Attribute definition is NULL"); \
+	mu_assert_eq(attr->attr_name, expected_name, "Incorrect attribute name"); \
+} while (0)
+
+#define check_abbrev_attr_form(expected_form) do { \
+	RBinDwarfAbbrevDecl *decl = ABBREV_DECL(i); \
+	mu_assert_notnull(decl, "Abbrev declaration at index is NULL"); \
+	mu_assert_notnull(decl->defs, "Attribute definitions vector is NULL"); \
+	RBinDwarfAttrDef *attr = ABBREV_ATTR_DEF(decl, j); \
+	mu_assert_notnull(attr, "Attribute definition is NULL"); \
+	mu_assert_eq(attr->attr_form, expected_form, "Incorrect attribute form"); \
+} while (0)
 
 /**
- * @brief Comparator to sort list of line statements by address(collection of DwarfRows)
+ * @brief Comparator to sort list of line statements by address(collection of DbgItem)
  */
 int row_comparator(const void *a, const void *b){
-	const RBinDwarfRow *left = a;
-	const RBinDwarfRow *right = b;
+	const RBinAddrline *left = a;
+	const RBinAddrline *right = b;
 
-	return (left->address >= right->address) ? 1 : -1;
+	return (left->addr >= right->addr) ? 1 : -1;
 }
 
 int int_compare(const void *a, const void *b){
@@ -43,21 +98,16 @@ int int_compare(const void *a, const void *b){
 /**
  * @brief Tests correct parsing of abbreviations and line information of DWARF3 C binary
  */
-bool test_dwarf3_c_basic(void) { // this should work for dwarf2 aswell
-	RBin *bin = r_bin_new ();
-	RIO *io = r_io_new ();
-	r_io_bind (io, &bin->iob);
-
-	RBinFileOptions opt = { 0 };
+static bool test_dwarf3_c_basic(void) { // this should work for dwarf2 as well
+	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/dwarf3_c.elf", &opt);
 	mu_assert ("couldn't open file", res);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Failed to get current bin file");
 
-	RBinDwarfDebugAbbrev *da = NULL;
-	// mode = 0, calls
-	// static void dump_r_bin_dwarf_debug_abbrev(FILE *f, RBinDwarfDebugAbbrev *da)
-	// which prints out all the abbreviation
-	da = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert_eq (da->count, 7, "Incorrect number of abbreviation");
+	RVecDwarfAbbrevDecl *da = r_bin_dwarf_parse_abbrev (bf);
+	mu_assert_notnull (da, "Failed to parse abbreviations");
+	mu_assert_eq (RVecDwarfAbbrevDecl_length(da), 7, "Incorrect number of abbreviations");
 
 	// order matters
 	// I nest scopes to make it more readable, (hopefully)
@@ -128,10 +178,10 @@ bool test_dwarf3_c_basic(void) { // this should work for dwarf2 aswell
 	}
 	i++;
 
-	RList *line_list = r_bin_dwarf_parse_line (bin, MODE);
+	RList *line_list = r_bin_dwarf_parse_line (bf, MODE, NULL);
 	mu_assert_eq (r_list_length (line_list), 8, "Amount of line information parse doesn't match");
 
-	RBinDwarfRow *row;
+	RBinAddrline *row;
 	RListIter *iter;
 
 	// sort it so it can be more consistently tested?
@@ -150,41 +200,28 @@ bool test_dwarf3_c_basic(void) { // this should work for dwarf2 aswell
 	};
 	i = 0;
 	r_list_foreach (line_list, iter, row) {
-		mu_assert_eq (row->address, test_addresses[i++], "Line number statement address doesn't match");
+		mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
 	}
 
 	r_list_free (line_list);
-	r_bin_dwarf_free_debug_abbrev (da);
-	r_bin_free (bin);
-	r_io_free (io);
+	RVecDwarfAbbrevDecl_free (da);
 	mu_end;
 }
 
 /**
  * @brief Tests correct parsing of abbreviations and line information of DWARF3 C++ binary
- * 
- * 
- * 
- * 
  */
-bool test_dwarf3_cpp_basic(void) { // this should work for dwarf2 aswell
-	RBin *bin = r_bin_new ();
-	RIO *io = r_io_new ();
-	r_io_bind (io, &bin->iob);
+static bool test_dwarf3_cpp_basic(void) { // this should work for dwarf2 as well
 
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/dwarf3_cpp.elf", &opt);
 	mu_assert ("couldn't open file", res);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Failed to get current bin file");
 
-	// this is probably ugly, but I didn't know how to
-	// tell core  what bin to open so I did it myself
-
-	RBinDwarfDebugAbbrev *da = NULL;
-	// mode = 0, calls
-	// static void dump_r_bin_dwarf_debug_abbrev(FILE *f, RBinDwarfDebugAbbrev *da)
-	// which prints out all the abbreviation
-	da = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert ("Incorrect number of abbreviation", da->count == 32);
+	RVecDwarfAbbrevDecl *da = r_bin_dwarf_parse_abbrev (bf);
+	mu_assert_notnull (da, "Failed to parse abbreviations");
+	mu_assert_eq (RVecDwarfAbbrevDecl_length(da), 32, "Incorrect number of abbreviations");
 
 	// order matters
 	// I nest scopes to make it more readable, (hopefully)
@@ -479,14 +516,10 @@ bool test_dwarf3_cpp_basic(void) { // this should work for dwarf2 aswell
 		check_abbrev_count (8);
 	}
 
-	// r_bin_dwarf_parse_info (da, core->bin, mode); Information not stored anywhere, not testable now?
-
-	// r_bin_dwarf_parse_aranges (core->bin, MODE); Information not stored anywhere, not testable now?
-
-	RList *line_list = r_bin_dwarf_parse_line (bin, MODE);
+	RList *line_list = r_bin_dwarf_parse_line (bf, MODE, NULL);
 	mu_assert_eq (r_list_length (line_list), 60, "Amount of line information parse doesn't match");
 
-	RBinDwarfRow *row;
+	RBinAddrline *row;
 	RListIter *iter;
 
 	// sort it so it can be more consistently tested?
@@ -559,30 +592,25 @@ bool test_dwarf3_cpp_basic(void) { // this should work for dwarf2 aswell
 	i = 0;
 
 	r_list_foreach (line_list, iter, row) {
-		mu_assert_eq (row->address, test_addresses[i++], "Line number statement address doesn't match");
+		mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
 	}
 
 	r_list_free (line_list);
-	r_bin_dwarf_free_debug_abbrev (da);
-	r_bin_free (bin);
-	r_io_free (io);
+	RVecDwarfAbbrevDecl_free (da);
 	mu_end;
 }
-bool test_dwarf3_cpp_many_comp_units(void) {
-	RBin *bin = r_bin_new ();
-	RIO *io = r_io_new ();
-	r_io_bind (io, &bin->iob);
 
-	RBinFileOptions opt = { 0 };
+static bool test_dwarf3_cpp_many_comp_units(void) {
+
+	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/dwarf3_many_comp_units.elf", &opt);
 	mu_assert ("couldn't open file", res);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Failed to get current bin file");
 
-	RBinDwarfDebugAbbrev *da = NULL;
-	// mode = 0, calls
-	// static void dump_r_bin_dwarf_debug_abbrev(FILE *f, RBinDwarfDebugAbbrev *da)
-	// which prints out all the abbreviation
-	da = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert_eq (da->count, 58, "Incorrect number of abbreviation");
+	RVecDwarfAbbrevDecl *da = r_bin_dwarf_parse_abbrev (bf);
+	mu_assert_notnull (da, "Failed to parse abbreviations");
+	mu_assert_eq (RVecDwarfAbbrevDecl_length(da), 58, "Incorrect number of abbreviations");
 	int i = 18;
 
 	check_abbrev_tag (DW_TAG_formal_parameter);
@@ -595,10 +623,10 @@ bool test_dwarf3_cpp_many_comp_units(void) {
 	check_abbrev_children (false);
 	check_abbrev_code (18);
 
-	RList *line_list = r_bin_dwarf_parse_line (bin, MODE);
-	mu_assert_eq (r_list_length (line_list), 64, "Amount of line information parse doesn't match");
+	RList *line_list = r_bin_dwarf_parse_line (bf, MODE, NULL);
+	mu_assert_eq (r_list_length (line_list), 67, "Amount of line information parse doesn't match");
 
-	RBinDwarfRow *row;
+	RBinAddrline *row;
 	RListIter *iter;
 
 	// sort it so it can be more consistently tested?
@@ -606,106 +634,111 @@ bool test_dwarf3_cpp_many_comp_units(void) {
 	r_list_sort (line_list, row_comparator);
 
 	int test_addresses[] = {
-		0x0000118a,
-		0x00001196,
-		0x000011a4,
-		0x000011a8,
-		0x000011b8,
-		0x000011d8,
-		0x000011e4,
-		0x000011e9,
-		0x000011eb,
-		0x000011f7,
-		0x00001206,
-		0x00001212,
-		0x00001228,
-		0x00001234,
-		0x00001239,
-		0x0000123b,
-		0x00001248,
-		0x0000125d,
-		0x00001261,
-		0x00001276,
-		0x0000127a,
-		0x00001281,
-		0x0000128f,
-		0x00001298,
-		0x0000129b,
-		0x000012a9,
-		0x000012b2,
-		0x000012b5,
-		0x000012ba,
-		0x000012bf,
-		0x000012c6,
-		0x000012d2,
-		0x000012e0,
-		0x000012e3,
-		0x000012e4,
-		0x000012f4,
-		0x0000130e,
-		0x00001311,
-		0x00001312,
-		0x00001322,
-		0x0000133c,
-		0x0000133f,
-		0x00001340,
-		0x00001350,
-		0x0000136f,
-		0x00001370,
-		0x0000137c,
-		0x00001381,
-		0x00001383,
-		0x00001384,
-		0x00001390,
-		0x0000139e,
-		0x000013a1,
-		0x000013a2,
-		0x000013ae,
-		0x000013bc,
-		0x000013bf,
-		0x000013c0,
-		0x000013d0,
-		0x000013ef,
-		0x000013f0,
-		0x000013fc,
-		0x00001401,
-		0x00001403,
+			0x0000118a,
+	0x00001196,
+	0x000011a4,
+	0x000011a8,
+	0x000011b8,
+	0x000011d8,
+	0x000011e4,
+	0x000011e9,
+	0x000011eb,
+	0x000011f7,
+	0x00001206,
+	0x00001212,
+	0x00001228,
+	0x00001228,
+	0x00001234,
+	0x00001239,
+	0x0000123b,
+	0x0000123b,
+	0x00001248,
+	0x0000125d,
+	0x00001261,
+	0x00001276,
+	0x0000127a,
+	0x00001281,
+	0x0000128f,
+	0x00001298,
+	0x0000129b,
+	0x000012a9,
+	0x000012b2,
+	0x000012b5,
+	0x000012ba,
+	0x000012bf,
+	0x000012c6,
+	0x000012c6,
+	0x000012d2,
+	0x000012e0,
+	0x000012e3,
+	0x000012e4,
+	0x000012f4,
+	0x0000130e,
+	0x00001311,
+	0x00001312,
+	0x00001322,
+	0x0000133c,
+	0x0000133f,
+	0x00001340,
+	0x00001350,
+	0x0000136f,
+	0x00001370,
+	0x0000137c,
+	0x00001381,
+	0x00001383,
+	0x00001384,
+	0x00001390,
+	0x0000139e,
+	0x000013a1,
+	0x000013a2,
+	0x000013ae,
+	0x000013bc,
+	0x000013bf,
+	0x000013c0,
+	0x000013d0,
+	0x000013ef,
+	0x000013f0,
+	0x000013fc,
+	0x00001401,
+	0x00001403,
 	};
 	// qsort(test_addresses, 64, sizeof(int), int_compare); // already sorted
-	i = 0;
-
+#if 0
+	printf (" const int test_addresses[] = {\n");
 	r_list_foreach (line_list, iter, row) {
-		mu_assert_eq (row->address, test_addresses[i++], "Line number statement address doesn't match");
+		printf ("\t0x%08x,\n", row->addr);
+		// mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
+		i++;
+	}
+	printf ("}\n");
+#endif
+	i = 0;
+	r_list_foreach (line_list, iter, row) {
+		mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
 	}
 
 	r_list_free (line_list);
-	r_bin_dwarf_free_debug_abbrev (da);
-	r_bin_free (bin);
-	r_io_free (io);
+	RVecDwarfAbbrevDecl_free (da);
 	mu_end;
 }
 
-bool test_dwarf_cpp_empty_line_info(void) { // this should work for dwarf2 aswell
-	RBin *bin = r_bin_new ();
-	RIO *io = r_io_new ();
-	r_io_bind (io, &bin->iob);
+static bool test_dwarf_cpp_empty_line_info(void) { // this should work for dwarf2 as well
 
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/pe/hello_world_not_stripped.exe", &opt);
 	mu_assert ("couldn't open file", res);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Failed to get current bin file");
 
-	RBinDwarfDebugAbbrev *da = NULL;
-	// mode = 0, calls
-	// static void dump_r_bin_dwarf_debug_abbrev(FILE *f, RBinDwarfDebugAbbrev *da)
-	// which prints out all the abbreviation
-	da = r_bin_dwarf_parse_abbrev (bin, MODE);
+	RVecDwarfAbbrevDecl *da = r_bin_dwarf_parse_abbrev (bf);
+	mu_assert_notnull (da, "Failed to parse abbreviations");
 	// not ignoring null entries -> 755 abbrevs
-	mu_assert_eq (da->count, 731, "Incorrect number of abbreviation");
+	mu_assert_eq (RVecDwarfAbbrevDecl_length(da), 731, "Incorrect number of abbreviations");
 
-	RList *line_list = r_bin_dwarf_parse_line (bin, MODE);
-	mu_assert_eq (r_list_length (line_list), 771, "Amount of line information parse doesn't match");
+	RList *line_list = r_bin_dwarf_parse_line (bf, MODE, NULL);
+	mu_assert_eq (r_list_length (line_list), 1159, "Amount of line information parse doesn't match");
 
-	RBinDwarfRow *row;
+	RBinAddrline *row;
 	RListIter *iter;
 
 	// sort it so it can be more consistently tested?
@@ -713,6 +746,14 @@ bool test_dwarf_cpp_empty_line_info(void) { // this should work for dwarf2 aswel
 
 	const int test_addresses[] = {
 		0x00401000,
+		0x00401000,
+		0x00401010,
+		0x00401010,
+		0x00401010,
+		0x00401010,
+		0x00401010,
+		0x00401010,
+		0x00401010,
 		0x00401010,
 		0x00401013,
 		0x00401015,
@@ -721,52 +762,40 @@ bool test_dwarf_cpp_empty_line_info(void) { // this should work for dwarf2 aswel
 		0x00401032,
 		0x0040103c,
 		0x00401046,
+		0x00401046,
+		0x00401046,
 		0x00401048,
 		0x0040104e,
 		0x00401058,
 		0x0040105e,
 		0x00401060,
-		0x00401065,
-		0x0040106e,
-		0x0040107a,
-		0x00401086,
-		0x0040108c,
-		0x00401091,
-		0x00401096,
-		0x0040109d,
-		0x004010a2,
 	};
 
 	int i = 0;
 
 	r_list_foreach (line_list, iter, row) {
-		mu_assert_eq (row->address, test_addresses[i++], "Line number statement address doesn't match");
-		if (i == 23)
+		mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
+		if (i == 23) {
 			break;
+		}
 	}
 
 	r_list_free (line_list);
-	r_bin_dwarf_free_debug_abbrev (da);
-	r_io_free (io);
-	r_bin_free (bin);
+	RVecDwarfAbbrevDecl_free (da);
 	mu_end;
 }
 
 bool test_dwarf2_cpp_many_comp_units(void) {
-	RBin *bin = r_bin_new ();
-	RIO *io = r_io_new ();
-	r_io_bind (io, &bin->iob);
 
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/dwarf2_many_comp_units.elf", &opt);
 	mu_assert ("couldn't open file", res);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Failed to get current bin file");
 
-	RBinDwarfDebugAbbrev *da = NULL;
-	// mode = 0, calls
-	// static void dump_r_bin_dwarf_debug_abbrev(FILE *f, RBinDwarfDebugAbbrev *da)
-	// which prints out all the abbreviation
-	da = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert_eq (da->count, 58, "Incorrect number of abbreviation");
+	RVecDwarfAbbrevDecl *da = r_bin_dwarf_parse_abbrev (bf);
+	mu_assert_notnull (da, "Failed to parse abbreviations");
+	mu_assert_eq (RVecDwarfAbbrevDecl_length(da), 58, "Incorrect number of abbreviations");
 
 	int i = 18;
 
@@ -780,10 +809,10 @@ bool test_dwarf2_cpp_many_comp_units(void) {
 	check_abbrev_children (false);
 	check_abbrev_code (18);
 
-	RList *line_list = r_bin_dwarf_parse_line (bin, MODE);
-	mu_assert_eq (r_list_length (line_list), 64, "Amount of line information parse doesn't match");
+	RList *line_list = r_bin_dwarf_parse_line (bf, MODE, NULL);
+	mu_assert_eq (r_list_length (line_list), 67, "Amount of line information parse doesn't match");
 
-	RBinDwarfRow *row;
+	RBinAddrline *row;
 	RListIter *iter;
 
 	r_list_sort (line_list, row_comparator);
@@ -802,8 +831,10 @@ bool test_dwarf2_cpp_many_comp_units(void) {
 		0x00001206,
 		0x00001212,
 		0x00001228,
+		0x00001228,
 		0x00001234,
 		0x00001239,
+		0x0000123b,
 		0x0000123b,
 		0x00001248,
 		0x0000125d,
@@ -819,6 +850,7 @@ bool test_dwarf2_cpp_many_comp_units(void) {
 		0x000012b5,
 		0x000012ba,
 		0x000012bf,
+		0x000012c6,
 		0x000012c6,
 		0x000012d2,
 		0x000012e0,
@@ -856,33 +888,37 @@ bool test_dwarf2_cpp_many_comp_units(void) {
 	};
 
 	i = 0;
+#if 0
+	printf (" const int test_addresses[] = {\n");
 	r_list_foreach (line_list, iter, row) {
-		mu_assert_eq (row->address, test_addresses[i++], "Line number statement address doesn't match");
+	printf ("\t0x%08x,\n", row->addr);
+		// mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
+	}
+	printf ("}\n");
+#endif
+	i = 0;
+	r_list_foreach (line_list, iter, row) {
+		mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
 	}
 
 	// add line information check
 	r_list_free (line_list);
-	r_bin_dwarf_free_debug_abbrev (da);
-	r_bin_free (bin);
-	r_io_free (io);
+	RVecDwarfAbbrevDecl_free (da);
 	mu_end;
 }
 
 bool test_dwarf4_cpp_many_comp_units(void) {
-	RBin *bin = r_bin_new ();
-	RIO *io = r_io_new ();
-	r_io_bind (io, &bin->iob);
 
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/dwarf4_many_comp_units.elf", &opt);
 	mu_assert ("couldn't open file", res);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Failed to get current bin file");
 
-	// TODO add abbrev checks
-
-	RList *line_list = r_bin_dwarf_parse_line (bin, MODE);
+	RList *line_list = r_bin_dwarf_parse_line (bf, MODE, NULL);
 	mu_assert_eq (r_list_length (line_list), 75, "Amount of line information parse doesn't match");
 
-	RBinDwarfRow *row;
+	RBinAddrline *row;
 	RListIter *iter;
 
 	r_list_sort (line_list, row_comparator);
@@ -967,28 +1003,25 @@ bool test_dwarf4_cpp_many_comp_units(void) {
 
 	int i = 0;
 	r_list_foreach (line_list, iter, row) {
-		mu_assert_eq (row->address, test_addresses[i++], "Line number statement address doesn't match");
+		mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
 	}
 
 	r_list_free (line_list);
-	r_bin_free (bin);
-	r_io_free (io);
 	mu_end;
 }
 
 bool test_big_endian_dwarf2(void) {
-	RBin *bin = r_bin_new ();
-	RIO *io = r_io_new ();
-	r_io_bind (io, &bin->iob);
 
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt = {0};
 	bool res = r_bin_open (bin, "bins/elf/ppc64_sudoku_dwarf", &opt);
 	mu_assert ("couldn't open file", res);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Failed to get current bin file");
 
-	RList *line_list = r_bin_dwarf_parse_line (bin, MODE);
-	mu_assert_eq (r_list_length (line_list), 273, "Amount of line information parse doesn't match");
+	RList *line_list = r_bin_dwarf_parse_line (bf, MODE, NULL);
+	mu_assert_eq (r_list_length (line_list), 395, "Amount of line information parse doesn't match");
 
-	RBinDwarfRow *row;
+	RBinAddrline *row;
 	RListIter *iter;
 
 	r_list_sort (line_list, row_comparator);
@@ -1002,36 +1035,58 @@ bool test_big_endian_dwarf2(void) {
 		0x10000f34,
 		0x10000f38,
 		0x10000f44,
+		0x10000f44,
+		0x10000f44,
 		0x10000f5c,
+		0x10000f60,
+		0x10000f60,
 		0x10000f60,
 		0x10000f78,
 		0x10000f80,
 		0x10000f90,
 		0x10000f98,
 		0x10000fa0,
+		0x10000fa0,
 		0x10000fa4,
 		0x10000fb4,
 		0x10000fc0,
 		0x10000fcc,
+		0x10000fcc,
+		0x10000fcc,
+		0x10000fe4,
+		0x10000fe4,
 		0x10000fe4,
 		0x10000ffc,
 		0x10001008,
+		0x10001014,
+		0x10001014,
 		0x10001014,
 		0x1000102c,
 		0x10001030,
 		0x1000103c,
 		0x10001048,
+		0x10001048,
+		0x10001048,
 		0x10001060,
 		0x10001074,
 		0x10001080,
 		0x1000108c,
+		0x1000108c,
+		0x1000108c,
 		0x100010a4,
+		0x100010a8,
+		0x100010a8,
 		0x100010a8,
 		0x100010c0,
 		0x100010c4,
+		0x100010c4,
+		0x100010c4,
 		0x100010dc,
 		0x100010e0,
+		0x100010e0,
+		0x100010e0,
 		0x100010f8,
+		0x100010fc,
 		0x100010fc,
 		0x10001108,
 		0x10001114,
@@ -1042,7 +1097,9 @@ bool test_big_endian_dwarf2(void) {
 		0x10001144,
 		0x10001154,
 		0x1000115c,
+		0x1000115c,
 		0x10001164,
+		0x10001178,
 		0x10001178,
 		0x1000117c,
 		0x10001180,
@@ -1051,6 +1108,7 @@ bool test_big_endian_dwarf2(void) {
 		0x100011c0,
 		0x100011c4,
 		0x100011e0,
+		0x100011e4,
 		0x100011e4,
 		0x100011f0,
 		0x100011fc,
@@ -1066,6 +1124,8 @@ bool test_big_endian_dwarf2(void) {
 		0x10001264,
 		0x10001268,
 		0x100012bc,
+		0x100012bc,
+		0x100012bc,
 		0x100012c4,
 		0x100012c8,
 		0x100012d4,
@@ -1077,40 +1137,64 @@ bool test_big_endian_dwarf2(void) {
 		0x10001308,
 		0x10001314,
 		0x10001334,
+		0x10001334,
+		0x10001334,
 		0x10001338,
 		0x10001348,
 		0x10001350,
 		0x1000136c,
 		0x10001374,
+		0x10001374,
+		0x10001374,
 		0x10001378,
 		0x10001388,
 		0x10001390,
 		0x100013a8,
+		0x100013a8,
+		0x100013a8,
+		0x100013ac,
 		0x100013ac,
 		0x100013b4,
+		0x100013bc,
+		0x100013bc,
 		0x100013bc,
 		0x100013c0,
 		0x100013d0,
 		0x100013d8,
 		0x100013e8,
+		0x100013e8,
+		0x100013e8,
 		0x100013ec,
 		0x100013fc,
 		0x10001404,
+		0x10001420,
+		0x10001420,
+		0x10001420,
+		0x10001420,
 		0x10001420,
 		0x10001430,
 		0x10001440,
 		0x10001444,
 		0x10001450,
 		0x1000145c,
+		0x1000145c,
 		0x10001460,
+		0x10001474,
+		0x10001474,
+		0x10001474,
+		0x10001474,
 		0x10001474,
 		0x10001480,
 		0x10001490,
 		0x10001498,
 		0x100014a4,
 		0x100014b0,
+		0x100014b0,
 		0x100014b4,
 		0x100014c8,
+		0x100014cc,
+		0x100014cc,
+		0x100014cc,
 		0x100014cc,
 		0x100014d0,
 		0x100014d8,
@@ -1119,8 +1203,13 @@ bool test_big_endian_dwarf2(void) {
 		0x100014f4,
 		0x10001500,
 		0x1000150c,
+		0x1000150c,
+		0x1000150c,
+		0x10001514,
 		0x10001514,
 		0x10001528,
+		0x10001528,
+		0x10001534,
 		0x10001534,
 		0x10001540,
 		0x1000154c,
@@ -1129,8 +1218,13 @@ bool test_big_endian_dwarf2(void) {
 		0x10001568,
 		0x10001574,
 		0x10001580,
+		0x10001580,
+		0x10001580,
+		0x10001588,
 		0x10001588,
 		0x1000159c,
+		0x1000159c,
+		0x100015a8,
 		0x100015a8,
 		0x100015b4,
 		0x100015c0,
@@ -1139,8 +1233,13 @@ bool test_big_endian_dwarf2(void) {
 		0x100015dc,
 		0x100015e8,
 		0x100015f4,
+		0x100015f4,
+		0x100015f4,
+		0x100015fc,
 		0x100015fc,
 		0x10001610,
+		0x10001610,
+		0x1000161c,
 		0x1000161c,
 		0x10001628,
 		0x10001634,
@@ -1151,8 +1250,13 @@ bool test_big_endian_dwarf2(void) {
 		0x1000165c,
 		0x10001668,
 		0x10001674,
+		0x10001674,
+		0x10001674,
+		0x1000167c,
 		0x1000167c,
 		0x10001690,
+		0x10001690,
+		0x1000169c,
 		0x1000169c,
 		0x100016a8,
 		0x100016b4,
@@ -1161,8 +1265,13 @@ bool test_big_endian_dwarf2(void) {
 		0x100016d0,
 		0x100016dc,
 		0x100016e8,
+		0x100016e8,
+		0x100016e8,
+		0x100016f0,
 		0x100016f0,
 		0x10001704,
+		0x10001704,
+		0x10001710,
 		0x10001710,
 		0x1000171c,
 		0x10001728,
@@ -1171,8 +1280,13 @@ bool test_big_endian_dwarf2(void) {
 		0x10001744,
 		0x10001750,
 		0x1000175c,
+		0x1000175c,
+		0x1000175c,
+		0x10001764,
 		0x10001764,
 		0x10001778,
+		0x10001778,
+		0x10001784,
 		0x10001784,
 		0x10001790,
 		0x1000179c,
@@ -1183,8 +1297,13 @@ bool test_big_endian_dwarf2(void) {
 		0x100017c4,
 		0x100017d0,
 		0x100017dc,
+		0x100017dc,
+		0x100017dc,
+		0x100017e4,
 		0x100017e4,
 		0x100017f8,
+		0x100017f8,
+		0x10001804,
 		0x10001804,
 		0x10001810,
 		0x1000181c,
@@ -1193,8 +1312,13 @@ bool test_big_endian_dwarf2(void) {
 		0x10001838,
 		0x10001844,
 		0x10001850,
+		0x10001850,
+		0x10001850,
+		0x10001858,
 		0x10001858,
 		0x1000186c,
+		0x1000186c,
+		0x10001878,
 		0x10001878,
 		0x10001884,
 		0x10001890,
@@ -1203,11 +1327,17 @@ bool test_big_endian_dwarf2(void) {
 		0x100018ac,
 		0x100018b8,
 		0x100018c4,
+		0x100018c4,
+		0x100018c4,
+		0x100018cc,
 		0x100018cc,
 		0x100018e0,
+		0x100018e0,
+		0x100018ec,
 		0x100018ec,
 		0x100018f8,
 		0x10001904,
+		0x1000190c,
 		0x1000190c,
 		0x1000191c,
 		0x1000194c,
@@ -1225,25 +1355,43 @@ bool test_big_endian_dwarf2(void) {
 		0x100019b4,
 		0x100019c4,
 		0x100019cc,
+		0x100019cc,
 		0x100019f4,
+		0x10001a0c,
+		0x10001a0c,
 		0x10001a0c,
 		0x10001a10,
 		0x10001a1c,
 		0x10001a30,
+		0x10001a30,
+		0x10001a30,
 		0x10001a34,
 		0x10001a40,
+		0x10001a54,
+		0x10001a54,
+		0x10001a54,
 		0x10001a54,
 		0x10001a58,
 		0x10001a64,
 		0x10001a6c,
+		0x10001a6c,
+		0x10001a7c,
+		0x10001a7c,
+		0x10001a7c,
 		0x10001a7c,
 		0x10001a80,
 		0x10001a8c,
 		0x10001a94,
+		0x10001a94,
+		0x10001aa4,
+		0x10001aa4,
 		0x10001aa4,
 		0x10001aa8,
 		0x10001ab4,
 		0x10001ac8,
+		0x10001ae4,
+		0x10001ae4,
+		0x10001ae4,
 		0x10001ae4,
 		0x10001aec,
 		0x10001af8,
@@ -1252,16 +1400,23 @@ bool test_big_endian_dwarf2(void) {
 		0x10001b28,
 		0x10001b3c,
 		0x10001b44,
+		0x10001b44,
+		0x10001b44,
 		0x10001b50,
 		0x10001b54,
 		0x10001b68,
+		0x10001b68,
+		0x10001b68,
 		0x10001b6c,
+		0x10001b78,
+		0x10001b78,
 		0x10001b78,
 		0x10001b7c,
 		0x10001b88,
 		0x10001b94,
 		0x10001ba0,
 		0x10001bb4,
+		0x10001bb8,
 		0x10001bb8,
 		0x10001be0,
 		0x10001bf8,
@@ -1271,27 +1426,118 @@ bool test_big_endian_dwarf2(void) {
 
 	int i = 0;
 	r_list_foreach (line_list, iter, row) {
-		mu_assert_eq (row->address, test_addresses[i++], "Line number statement address doesn't match");
+		mu_assert_eq (row->addr, test_addresses[i++], "Line number statement address doesn't match");
 	}
 
 	r_list_free (line_list);
-	r_bin_free (bin);
-	r_io_free (io);
 	mu_end;
 }
 
+static bool test_dwarf5_line_header_bounds(void) {
+	RBinFileOptions opt = { 0 };
+	mu_assert ("Could not open DWARF fixture", r_bin_open (bin, "bins/elf/dwarf3_c.elf", &opt));
+	RBinFile *bf = r_bin_cur (bin);
+	RVecRBinSection *sections = r_bin_file_get_sections_vec (bf);
+	RBinSection *section, *line_section = NULL;
+	R_VEC_FOREACH (sections, section) {
+		if (!strcmp (section->name, ".debug_line")) {
+			line_section = section;
+			break;
+		}
+	}
+	mu_assert_notnull (line_section, "Missing .debug_line section");
+	static const struct {
+		ut8 type;
+		ut8 form;
+		ut8 size;
+	} cases[] = {
+		{ DW_LNCT_timestamp, DW_FORM_data1, 1 },
+		{ DW_LNCT_timestamp, DW_FORM_data2, 2 },
+		{ DW_LNCT_timestamp, DW_FORM_data4, 4 },
+		{ DW_LNCT_timestamp, DW_FORM_data8, 8 },
+		{ DW_LNCT_timestamp, DW_FORM_udata, 1 },
+		{ DW_LNCT_MD5, DW_FORM_data16, 16 },
+		{ DW_LNCT_path, DW_FORM_string, 2 },
+		{ DW_LNCT_path, DW_FORM_strp, 4 },
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (cases); i++) {
+		ut8 line[64] = { 0 };
+		r_write_le16 (line + 4, 5);
+		line[6] = 8;
+		static const ut8 fields[] = { 1, 1, 1, 0, 1, 1, 1, DW_LNCT_path, DW_FORM_string, 0 };
+		memcpy (line + 12, fields, sizeof (fields));
+		size_t offset = 12 + sizeof (fields);
+		bool path = cases[i].type == DW_LNCT_path;
+		line[offset++] = path? 1: 2;
+		if (!path) {
+			line[offset++] = DW_LNCT_path;
+			line[offset++] = DW_FORM_string;
+		}
+		line[offset++] = cases[i].type;
+		line[offset++] = cases[i].form;
+		line[offset++] = 1;
+		if (!path) {
+			line[offset++] = 'f';
+			line[offset++] = 0;
+		}
+		if (cases[i].form == DW_FORM_string) {
+			line[offset] = 'f';
+		} else if (cases[i].form == DW_FORM_udata) {
+			line[offset] = 0x7f;
+		} else if (!path) {
+			memset (line + offset, 0xff, cases[i].size);
+		}
+		offset += cases[i].size;
+		r_write_le32 (line, offset + 8 - 4);
+		r_write_le32 (line + 8, offset - 12);
+		line_section->bytes = r_slice (line, offset + 8);
+		RList *files = r_bin_dwarf_parse_line_files (bf);
+		mu_assert_notnull (files, "Could not parse line files");
+		mu_assert_eq (r_list_length (files), 1, "Value ending exactly at the header boundary must be accepted");
+		if (cases[i].form != DW_FORM_strp) {
+			mu_assert_streq (r_list_first (files), "f", "Wrong line file name");
+		}
+		r_list_free (files);
 
-bool all_tests() {
-	mu_run_test (test_dwarf_cpp_empty_line_info);
-	mu_run_test (test_dwarf2_cpp_many_comp_units);
-	mu_run_test (test_dwarf3_c_basic);
-	mu_run_test (test_dwarf3_cpp_basic);
-	mu_run_test (test_dwarf3_cpp_many_comp_units);
-	mu_run_test (test_dwarf4_cpp_many_comp_units);
-	mu_run_test (test_big_endian_dwarf2);
+		r_write_le32 (line + 8, offset - 13);
+		files = r_bin_dwarf_parse_line_files (bf);
+		mu_assert_notnull (files, "Could not parse truncated line files");
+		mu_assert_eq (r_list_length (files), 0, "Truncated value must not consume opcode bytes");
+		r_list_free (files);
+
+		r_write_le32 (line + 8, offset - 12);
+		r_write_le32 (line, offset - 5);
+		files = r_bin_dwarf_parse_line_files (bf);
+		mu_assert_notnull (files, "Could not parse truncated line unit");
+		mu_assert_eq (r_list_length (files), 0, "Header must not extend past its unit");
+		r_list_free (files);
+	}
+	line_section->bytes = r_slice (NULL, 0);
+	mu_end;
+}
+
+#define run_test_with_setup(test_func) do { \
+	if (!setup()) { \
+		printf("Setup failed for " #test_func "\n"); \
+		return 1; \
+	} \
+	mu_run_test(test_func); \
+	teardown(); \
+} while (0)
+
+bool all_tests(void) {
+	run_test_with_setup(test_dwarf5_line_header_bounds);
+	run_test_with_setup(test_dwarf_cpp_empty_line_info);
+	run_test_with_setup(test_dwarf2_cpp_many_comp_units);
+	run_test_with_setup(test_dwarf3_c_basic);
+	run_test_with_setup(test_dwarf3_cpp_basic);
+	run_test_with_setup(test_dwarf3_cpp_many_comp_units);
+	run_test_with_setup(test_dwarf4_cpp_many_comp_units);
+	run_test_with_setup(test_big_endian_dwarf2);
 	return tests_passed != tests_run;
 }
 
 int main(int argc, char **argv) {
-	return all_tests ();
+	return all_tests();
 }

@@ -17,13 +17,13 @@ R_LIB_VERSION_HEADER(r_sign);
 
 typedef enum {
 	R_SIGN_BYTES = 'b', // bytes pattern
-	R_SIGN_BYTES_MASK = 'm', // bytes pattern
-	R_SIGN_BYTES_SIZE = 's', // bytes pattern
 	R_SIGN_ANAL = 'a', // bytes pattern, input only, creates mask from byte analysis
 	R_SIGN_COMMENT = 'c', // comment
 	R_SIGN_GRAPH = 'g', // graph metrics
 	R_SIGN_OFFSET = 'o', // addr
 	R_SIGN_NAME = 'n', // real name
+	R_SIGN_RAWNAME = 'R', // raw name (base64 in radare script)
+	R_SIGN_DEMANGLED = 'd', // demangled name (base64 in radare script)
 	R_SIGN_REFS = 'r', // references
 	R_SIGN_XREFS = 'x', // xrefs
 	R_SIGN_VARS = 'v', // variables
@@ -33,7 +33,7 @@ typedef enum {
 	R_SIGN_BBHASH = 'h', // basic block hash
 	R_SIGN_END = '\x00', // used for sentenal value
 } RSignType;
-#define R_SIGN_TYPEMAX 16
+#define R_SIGN_TYPEMAX 18
 
 typedef struct r_sign_graph_t {
 	int cc;
@@ -54,8 +54,11 @@ typedef struct r_sign_hash_t {
 } RSignHash;
 
 typedef struct r_sign_item_t {
+	// use RBinName maybe?
 	char *name;
 	char *realname;
+	char *rawname;
+	char *demangled;
 	char *next;
 	char *comment;
 	char *types;
@@ -64,10 +67,10 @@ typedef struct r_sign_item_t {
 	RSignBytes *bytes;
 	RSignGraph *graph;
 	ut64 addr;
-	RList *refs;
-	RList *xrefs;
-	RList *vars;
-	RList *collisions;
+	RList /*<char>*/ *refs;
+	RList /*<char>*/ *xrefs;
+	char *collisions; // "b:name,g:name", sorted by type and then name
+	RList /*<RAnalVarProt>*/ *vars;
 	RSignHash *hash;
 } RSignItem;
 
@@ -108,8 +111,8 @@ typedef struct {
 } RSignCloseMatch;
 
 #ifdef R_API
-R_API bool r_sign_add_bytes(RAnal *a, const char *name, ut64 size, const ut8 *bytes, const ut8 *mask);
-R_API bool r_sign_add_anal(RAnal *a, const char *name, ut64 size, const ut8 *bytes, ut64 at);
+R_API bool r_sign_add_bytes(RAnal *a, const char *name, const char *val);
+R_API bool r_sign_add_anal(RAnal *a, const char *name, const char *val);
 R_API bool r_sign_add_graph(RAnal *a, const char *name, RSignGraph graph);
 R_API int r_sign_all_functions(RAnal *a, bool merge);
 R_API bool r_sign_add_func(RAnal *a, RAnalFunction *fcn, const char *name);
@@ -120,9 +123,9 @@ R_API bool r_sign_add_comment(RAnal *a, const char *name, const char *comment);
 R_API bool r_sign_add_types(RAnal *a, const char *name, const char *types);
 R_API bool r_sign_add_refs(RAnal *a, const char *name, RList *refs);
 R_API bool r_sign_add_xrefs(RAnal *a, const char *name, RList *xrefs);
-R_API bool r_sign_add_vars(RAnal *a, const char *name, RList *vars);
+R_API bool r_sign_add_vars(RAnal *a, const char *name, const char *vars);
 R_API bool r_sign_delete(RAnal *a, const char *name);
-R_API void r_sign_list(RAnal *a, int format);
+R_API char *r_sign_list(RAnal *a, int format);
 R_API RList *r_sign_get_list(RAnal *a);
 R_API bool r_sign_add_hash(RAnal *a, const char *name, int type, const char *val, int len);
 R_API bool r_sign_add_bb_hash(RAnal *a, RAnalFunction *fcn, const char *name);
@@ -158,14 +161,14 @@ R_API RList *r_sign_fcn_xrefs(RAnal *a, RAnalFunction *fcn);
 R_API RList *r_sign_fcn_vars(RAnal *a, RAnalFunction *fcn);
 
 R_API int r_sign_is_flirt(RBuffer *buf);
-R_API void r_sign_flirt_dump(const RAnal *anal, const char *flirt_file);
+R_API char *r_sign_flirt_dump(const RAnal *anal, const char *flirt_file);
 R_API void r_sign_flirt_scan(RAnal *anal, const char *flirt_file);
 
 R_API RList *r_sign_find_closest_sig(RAnal *a, RSignItem *it, int count, double score_threshold);
 R_API RList *r_sign_find_closest_fcn(RAnal *a, RSignItem *it, int count, double score_threshold);
 R_API void r_sign_close_match_free(RSignCloseMatch *match);
-R_API bool r_sign_diff(RAnal *a, RSignOptions *options, const char *other_space_name);
-R_API bool r_sign_diff_by_name(RAnal *a, RSignOptions *options, const char *other_space_name, bool not_matching);
+R_API char *r_sign_diff(RAnal *a, RSignOptions *options, const char *other_space_name);
+R_API char *r_sign_diff_by_name(RAnal *a, RSignOptions *options, const char *other_space_name, bool not_matching);
 
 R_API RSignOptions *r_sign_options_new(const char *bytes_thresh, const char *graph_thresh);
 R_API void r_sign_options_free(RSignOptions *options);

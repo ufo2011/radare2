@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2011-2019 - ninjahacker */
+/* radare - LGPL - Copyright 2011-2025 - ninjahacker */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -7,21 +7,30 @@
 #include "zimg/zimg.h"
 
 static Sdb *get_sdb(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o, false);
-	struct r_bin_zimg_obj_t *bin = (struct r_bin_zimg_obj_t *) bf->o->bin_obj;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, false);
+	struct r_bin_zimg_obj_t *bin = (struct r_bin_zimg_obj_t *) bf->bo->bin_obj;
 	return bin? bin->kv: NULL;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb){
-	*bin_obj = r_bin_zimg_new_buf (b);
-	return *bin_obj != NULL;
+static bool load(RBinFile *bf, RBuffer *b, ut64 loadaddr) {
+	bf->bo->bin_obj = r_bin_zimg_new_buf (b);
+	return bf->bo->bin_obj != NULL;
+}
+
+
+static void destroy(RBinFile *bf) {
+	struct r_bin_zimg_obj_t *obj = bf->bo->bin_obj;
+	if (obj) {
+		r_unref (obj->b);
+		free (obj);
+	}
 }
 
 static ut64 baddr(RBinFile *bf) {
 	return 0;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 zimghdr[8];
 	if (r_buf_read_at (b, 0, zimghdr, sizeof (zimghdr))) {
 		// Checking ARM zImage kernel
@@ -34,9 +43,6 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 
 static RBinInfo *info(RBinFile *bf) {
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
 	ret->file = bf->file? strdup (bf->file): NULL;
 	ret->type = strdup ("Linux zImage Kernel");
 	ret->has_va = false;
@@ -54,12 +60,16 @@ static RBinInfo *info(RBinFile *bf) {
 }
 
 RBinPlugin r_bin_plugin_zimg = {
-	.name = "zimg",
-	.desc = "zimg format bin plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "zimg",
+		.author = "ninjahacker",
+		.desc = "Compressed Linux Kernel Image",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.load = &load,
+	.destroy = &destroy,
+	.check = &check,
 	.baddr = &baddr,
 	.info = &info,
 };

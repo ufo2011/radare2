@@ -1,21 +1,19 @@
-/* radare - LGPL - Copyright 2021 pancake */
+/* radare - LGPL - Copyright 2021-2022 pancake */
 
-#include "r_lib.h"
-#include "r_core.h"
-#include "r_lang.h"
+#include <r_lang.h>
 
-static const char *r2go_sym = "entry";
+static const char *const r2go_sym = "entry";
 
-static bool lang_go_file(RLang *lang, const char *file);
+static bool lang_go_file(RLangSession *lang, const char *file);
 
-static const char *r2go_head = \
+static const char *const r2go_head = \
 	"package main\n"
 	"\n"
 	"// #cgo pkg-config: r_core\n"
 	"// char *r_core_cmd_str(void *p, const char *cmd);\n"
 	"import \"C\"\n";
 
-static const char *r2go_body = \
+static const char *const r2go_body = \
 	"import \"unsafe\"\n"
 	"\n"
 	"func r2cmd(core unsafe.Pointer, c string) string {\n"
@@ -30,8 +28,10 @@ typedef struct GOParse {
 } GOParse;
 
 static void gocode_fini(GOParse *p) {
-	r_strbuf_free (p->head);
-	r_strbuf_free (p->body);
+	if (p) {
+		r_strbuf_free (p->head);
+		r_strbuf_free (p->body);
+	}
 }
 
 static GOParse gocode_parse(const char *code) {
@@ -70,25 +70,26 @@ static GOParse gocode_parse(const char *code) {
 }
 
 static void gorunlib(void *user, const char *lib) {
-	void *vl = r_lib_dl_open (lib);
+	void *vl = r_lib_dl_open (lib, false);
 	if (vl) {
 		void (*fcn)(RCore *, int argc, const char **argv);
 		fcn = r_lib_dl_sym (vl, r2go_sym);
 		if (fcn) {
 			fcn (user, 0, NULL);
 		} else {
-			eprintf ("Cannot find '%s' symbol in library.\n", r2go_sym);
+			R_LOG_ERROR ("Cannot find '%s' symbol in library", r2go_sym);
 		}
 		// dlclosing causes a crash, this is a know issue by Golang
 		// https://github.com/golang/go/issues/32497
 		// https://github.com/golang/go/issues/11100
 	// 	r_lib_dl_close (vl);
 	} else {
-		eprintf ("Cannot open '%s' library.\n", lib);
+		R_LOG_ERROR ("Cannot open '%s' library", lib);
 	}
 }
 
-static bool __gorun(RLang *lang, const char *code, int len) {
+static bool __gorun(RLangSession *session, const char *code, int len) {
+	RLang *lang = session->lang;
 	// r_file_rm ("tmp.go");
 	FILE *fd = r_sandbox_fopen ("tmp.go", "w");
 	if (fd) {
@@ -108,19 +109,19 @@ static bool __gorun(RLang *lang, const char *code, int len) {
 		}
 		fclose (fd);
 		// system ("cat tmp.go");
-		lang_go_file (lang, "tmp.go");
+		lang_go_file (session, "tmp.go");
 		gorunlib (lang->user, "tmp."R_LIB_EXT);
 		r_file_rm ("tmp.go");
 		r_file_rm ("tmp."R_LIB_EXT);
 		gocode_fini (&gocode);
 		return true;
 	}
-	eprintf ("Cannot open tmp.go\n");
+	R_LOG_ERROR ("Cannot open tmp.go");
 	return false;
 }
 
-static bool lang_go_file(RLang *lang, const char *file) {
-	if (!lang || R_STR_ISEMPTY (file)) {
+static bool lang_go_file(RLangSession *session, const char *file) {
+	if (!session || R_STR_ISEMPTY (file)) {
 		return false;
 	}
 	if (!r_str_endswith (file, ".go")) {
@@ -128,7 +129,7 @@ static bool lang_go_file(RLang *lang, const char *file) {
 	}
 	if (strcmp (file, "tmp.go")) {
 		char *code = r_file_slurp (file, NULL);
-		bool r = __gorun (lang, code, -1);
+		bool r = __gorun (session, code, -1);
 		free (code);
 		return r;
 	}
@@ -151,8 +152,15 @@ static bool lang_go_file(RLang *lang, const char *file) {
 	return 0;
 }
 
-static bool lang_go_run(RLang *lang, const char *code, int len) {
-	return __gorun (lang, code, len);
+static bool lang_go_init(RLangSession *s) {
+	char *go = r_file_path ("go");
+	bool found = go != NULL;
+	free (go);
+	return found;
+}
+
+static bool lang_go_run(RLangSession *session, const char *code, int len) {
+	return __gorun (session, code, len);
 }
 
 #define r_lang_go_example ""\
@@ -161,20 +169,22 @@ static bool lang_go_run(RLang *lang, const char *code, int len) {
 	"}\n"
 
 static RLangPlugin r_lang_plugin_go = {
-	.name = "go",
+	.meta = {
+		.name = "go",
+		.author = "pancake",
+		.desc = "GO language extension",
+		.license = "MIT",
+	},
 	.ext = "go",
 	.example = r_lang_go_example,
-	.desc = "GO language extension",
-	.license = "MIT",
+	.init = lang_go_init,
 	.run = lang_go_run,
 	.run_file = (void*)lang_go_file,
 };
 
-/*
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_LANG,
 	.data = &r_lang_plugin_go,
 };
 #endif
-*/

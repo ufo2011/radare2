@@ -1,7 +1,7 @@
 BIN=rahash2
 
 BINDEPS=r_main
-
+ 
 include ../rules.mk
 
 ifeq ($(OSTYPE),android)
@@ -15,6 +15,5 @@ include ../../shlr/gdb/deps.mk
 include ../../shlr/bochs/deps.mk
 include ../../shlr/qnx/deps.mk
 include ../../shlr/zip/deps.mk
-include ../../shlr/ar/deps.mk
 
 LDFLAGS+=$(LINK)

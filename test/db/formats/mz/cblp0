@@ -3,7 +3,7 @@ FILE=bins/mz/cblp0.exe
 ARGS=-A
 CMDS=afl
 EXPECT=<<EOF
-0x00000000    1 512          entry0
+0x00000000    1    512 entry0
 EOF
 RUN
 
@@ -15,12 +15,12 @@ pi 1
 iS*
 EOF
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00000000 paddr=0x00000200 haddr=-1 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00000200 0x00000000 ---------- ---------- program
 xor al, al
 fs sections
-"f section.seg_000 1 0x00000000"
+'f section..mzhdr 1 0x00000000
+'f section..text 1 0x00000000
 EOF
 RUN

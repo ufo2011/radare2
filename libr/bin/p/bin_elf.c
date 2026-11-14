@@ -1,9 +1,10 @@
-/* radare2 - LGPL - Copyright 2009-2020 - pancake, nibble, dso */
+/* radare2 - LGPL - Copyright 2009-2025 - pancake, nibble, dso */
 
-#include "bin_elf.inc"
+#include "bin_elf.inc.c"
 
-static void headers32(RBinFile *bf) {
-#define p bf->rbin->cb_printf
+static char *headers32(RBinFile *bf, int mode) {
+	RStrBuf *sb = r_strbuf_new ("");
+#define p(f,...) r_strbuf_appendf (sb, f, ##__VA_ARGS__)
 	p ("0x00000000  ELF MAGIC   0x%08x\n", r_buf_read_le32_at (bf->buf, 0));
 	p ("0x00000010  Type        0x%04x\n", r_buf_read_le16_at (bf->buf, 0x10));
 	p ("0x00000012  Machine     0x%04x\n", r_buf_read_le16_at (bf->buf, 0x12));
@@ -18,19 +19,21 @@ static void headers32(RBinFile *bf) {
 	p ("0x0000002e  ShentSize   %d\n", r_buf_read_le16_at (bf->buf, 0x2e));
 	p ("0x00000030  ShNum       %d\n", r_buf_read_le16_at (bf->buf, 0x30));
 	p ("0x00000032  ShrStrndx   %d\n", r_buf_read_le16_at (bf->buf, 0x32));
+#undef p
+	return r_strbuf_drain (sb);
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *buf) {
+static bool check(RBinFile *bf, RBuffer *buf) {
 	ut8 b[5] = {0};
 	r_buf_read_at (buf, 0, b, sizeof (b));
 	return !memcmp (b, ELFMAG, SELFMAG) && b[4] != 2;
 }
 
-extern struct r_bin_dbginfo_t r_bin_dbginfo_elf;
+// extern struct r_bin_dbginfo_t r_bin_dbginfo_elf;
 extern struct r_bin_write_t r_bin_write_elf;
 
 static RBuffer* create(RBin* bin, const ut8 *code, int codelen, const ut8 *data, int datalen, RBinArchOptions *opt) {
-	r_return_val_if_fail (bin && opt && opt->arch, NULL);
+	R_RETURN_VAL_IF_FAIL (bin && opt && opt->arch, NULL);
 
 	ut32 filesize, code_va, code_pa, phoff;
 	ut32 p_start, p_phoff, p_phdr;
@@ -117,29 +120,32 @@ static RBuffer* create(RBin* bin, const ut8 *code, int codelen, const ut8 *data,
 	B (code, codelen);
 
 	if (data && datalen > 0) {
-		//ut32 data_section = buf->length;
-		eprintf ("Warning: DATA section not support for ELF yet\n");
+		R_LOG_WARN ("DATA section not support for ELF yet");
 		B (data, datalen);
 	}
 	return buf;
 }
 
 RBinPlugin r_bin_plugin_elf = {
-	.name = "elf",
-	.desc = "ELF format r2 plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "elf",
+		.author = "nibble",
+		.desc = "Executable and Link Format (ELF) for 32 bit",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
-	.boffset = &boffset,
 	.binsym = &binsym,
 	.entries = &entries,
-	.sections = &sections,
-	.symbols = &symbols,
+	.load_resources = &load_resources,
+	.sections_vec = &sections_vec,
+	.classes = &swift_classes,
+	.symbols_vec = symbols_vec,
 	.minstrlen = 4,
-	.imports = &imports,
+	.imports_vec = &imports_vec,
 	.info = &info,
 	.fields = &fields,
 	.header = &headers32,
@@ -147,10 +153,10 @@ RBinPlugin r_bin_plugin_elf = {
 	.libs = &libs,
 	.relocs = &relocs,
 	.patch_relocs = &patch_relocs,
-	.dbginfo = &r_bin_dbginfo_elf,
+	.trycatch = &trycatch,
+	// .dbginfo = &r_bin_dbginfo_elf,
 	.create = &create,
 	.write = &r_bin_write_elf,
-	.file_type = &get_file_type,
 	.regstate = &regstate,
 	.maps = &maps,
 };

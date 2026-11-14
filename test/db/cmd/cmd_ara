@@ -45,8 +45,8 @@ ara+
 ara~?
 EOF
 EXPECT=<<EOF
-16
-24
+20
+30
 EOF
 RUN
 
@@ -66,11 +66,11 @@ ara-
 ara~?
 EOF
 EXPECT=<<EOF
-16
-24
-16
-8
-8
+20
+30
+20
+10
+10
 EOF
 RUN
 
@@ -92,15 +92,51 @@ EOF
 EXPECT=<<EOF
 amd64
 amd64syscall
+dlang
+golang
+golang_abi0
 ms
+p9
 reg
 swift
 r0 reg(r0, r1, r2, r3)
-rdi reg(rdi, rsi, rdx, rcx)
+rax reg(rdi, rsi, rdx, rcx, r8, r9, r10, r11)
 amd64
 amd64syscall
+dlang
+golang
+golang_abi0
 ms
+p9
 reg
 swift
+EOF
+RUN
+
+NAME=aras keeps borrowed arena bytes alive across ara- and arw
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+ar rax=0x1234
+aras
+ara+
+aras
+ara-
+ara-
+ar*~r15,rax
+aras
+ara+
+aras
+ara-
+arw 41414141
+aras
+ar*~r15,rax
+EOF
+EXPECT=<<EOF
+f rax 8 0x00000000
+f r15 8 0x00000000
+f rax 8 0x00000000
+f r15 8 0x41414141
 EOF
 RUN

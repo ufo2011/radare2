@@ -8,8 +8,11 @@ F+= linux-x86-32
 F+= linux-x86-64
 F+= linux-arm-32
 F+= linux-arm-64
+F+= pebble-arm-16
 F+= s110-arm-16
 F+= linux-mips-32
+F+= linux-ppc-32
+F+= linux-ppc-64
 F+= linux-sparc-32
 F+= darwin-x86-32
 F+= darwin-x86-64
@@ -27,14 +30,10 @@ HOST_CC?=gcc
 
 F_SDB=$(addsuffix .sdb,$F)
 
-SDBPATH=$(LTOP)/../shlr/sdb/
-ifeq ($(BUILD_OS),windows)
-BUILD_EXT_EXE=.exe
+ifeq (1,1)
+all:
+	$(SDB) -r -r $(shell pwd)
 else
-BUILD_EXT_EXE=
-endif
-SDB=$(SDBPATH)/sdb${BUILD_EXT_EXE}
-
 all: ${SDB}
 	@$(MAKE) compile
 
@@ -51,20 +50,15 @@ else
 endif
 	test -f $@
 	${SDB} -t -C $@
-	$(CC) $(CFLAGS) -c `echo $@ | sed -e s,sdb,c,`
-
-clean:
-	rm -f *.sdb
+	$(CC) $(CFLAGS) $(PIC_CFLAGS) -c `echo $@ | sed -e s,sdb,c,`
 
 ${SDB}:
 	@echo "Cannot find ${SDB}"
 	@false
+endif
 
-#	cp -rf "$(SDBPATH)/src" "$(SDBPATH)/src-native"
-#	cd "$(SDBPATH)/src-native" && CFLAGS="-w ${CPPFLAGS}" \
-#		$(MAKE) -j 1 ARCH=xxx CC=${HOST_CC} clean sdb
-#	cp -f "$(SDBPATH)/src-native/sdb" "$(SDBPATH)/sdb"
-#	rm -rf "$(SDBPATH)/src-native"
+clean:
+	rm -f *.sdb *.tmp *.d *.o *.c
 
 .PHONY: all clean install install-symlink symstall
 

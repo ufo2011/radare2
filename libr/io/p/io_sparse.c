@@ -1,31 +1,19 @@
-/* radare - LGPL - Copyright 2015-2016 - pancake */
+/* radare - LGPL - Copyright 2015-2026 - pancake */
 
-#include "r_io.h"
-#include "r_lib.h"
-#include "r_util.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
+#include <r_io.h>
 
 typedef struct {
-	int fd;
 	RBuffer *buf;
 	ut64 offset;
 } RIOSparse;
 
-#define RIOSPARSE_FD(x) (((RIOSparse*)(x)->data)->fd)
 #define RIOSPARSE_BUF(x) (((RIOSparse*)(x)->data)->buf)
 #define RIOSPARSE_OFF(x) (((RIOSparse*)(x)->data)->offset)
 
 static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
-	ut64 o;
-	RBuffer *b;
-	if (!fd || !fd->data) {
-		return -1;
-	}
-	b = RIOSPARSE_BUF(fd);
-	o = RIOSPARSE_OFF(fd);
-	int r = r_buf_write_at (b, o, buf, count);
+	R_RETURN_VAL_IF_FAIL (io && fd && fd->data && buf, -1);
+	RBuffer *b = RIOSPARSE_BUF (fd);
+	int r = r_buf_write_at (b, RIOSPARSE_OFF (fd), buf, count);
 	if (r >= 0) {
 		r_buf_seek (b, r, R_BUF_CUR);
 	}
@@ -33,84 +21,69 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 }
 
 static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	ut64 o;
-	RBuffer *b;
-	if (!fd || !fd->data) {
-		return -1;
-	}
-	b = RIOSPARSE_BUF(fd);
-	o = RIOSPARSE_OFF(fd);
-	int r = r_buf_read_at (b, o, buf, count);
+	R_RETURN_VAL_IF_FAIL (io && fd && fd->data && buf, -1);
+	RBuffer *b = RIOSPARSE_BUF (fd);
+	int r = r_buf_read_at (b, RIOSPARSE_OFF (fd), buf, count);
 	if (r >= 0) {
-		r_buf_seek (b, count, R_BUF_CUR);
+		r_buf_seek (b, r, R_BUF_CUR);
 	}
-	return count;
+	return r;
 }
 
 static bool __close(RIODesc *fd) {
-	RIOSparse *riom;
-	if (!fd || !fd->data) {
-		return false;
-	}
-	riom = fd->data;
-	R_FREE (riom->buf);
+	R_RETURN_VAL_IF_FAIL (fd && fd->data, false);
+	RIOSparse *riom = fd->data;
+	r_unref (riom->buf);
 	R_FREE (fd->data);
 	return true;
 }
 
-static ut64 __lseek(RIO* io, RIODesc *fd, ut64 offset, int whence) {
-	RBuffer *b;
-	ut64 r_offset = offset;
+static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 	if (!fd->data) {
 		return offset;
 	}
-	b = RIOSPARSE_BUF(fd);
-	r_offset = r_buf_seek (b, offset, whence);
-	//if (r_offset != UT64_MAX)
+	ut64 r_offset = r_buf_seek (RIOSPARSE_BUF (fd), offset, whence);
 	RIOSPARSE_OFF (fd) = r_offset;
 	return r_offset;
 }
 
-static bool __plugin_open(struct r_io_t *io, const char *pathname, bool many) {
-	return (!strncmp (pathname, "sparse://", 9));
+static bool __plugin_open(RIO *io, const char *pathname, bool many) {
+	return r_str_startswith (pathname, "sparse://");
 }
 
 static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
-	if (__plugin_open (io, pathname,0)) {
-		RIOSparse *mal = R_NEW0 (RIOSparse);
-		int size = (int)r_num_math (NULL, pathname + 9);
-		mal->buf = r_buf_new_sparse (io->Oxff);
-		if (!mal->buf) {
-			free (mal);
-			return NULL;
-		}
-		if (size > 0) {
-			ut8 *data = malloc (size);
-			if (!data) {
-				eprintf ("Cannot allocate (%s) %d byte(s)\n",
-					pathname+9, size);
-				mal->offset = 0;
-			} else {
-				memset (data, 0x00, size);
-				r_buf_write_at (mal->buf, 0, data, size);
-				free (data);
-			}
-		}
-		if (mal->buf) {
-			return r_io_desc_new (io, &r_io_plugin_sparse,
-				pathname, rw, mode, mal);
-		}
-		r_buf_free (mal->buf);
-		free (mal);
+	if (!__plugin_open (io, pathname, 0)) {
+		return NULL;
 	}
-	return NULL;
+	int size = (int)r_num_math (NULL, pathname + 9);
+	if (size < 1) {
+		R_LOG_ERROR ("Invalid size. Use sparse://<number>");
+		return NULL;
+	}
+	RIOSparse *mal = R_NEW0 (RIOSparse);
+	mal->buf = r_buf_new_sparse (io->Oxff);
+	if (!mal->buf) {
+		free (mal);
+		return NULL;
+	}
+	ut8 *data = calloc (1, size);
+	if (data) {
+		r_buf_write_at (mal->buf, 0, data, size);
+		free (data);
+	} else {
+		R_LOG_ERROR ("Cannot allocate %d bytes", size);
+	}
+	return r_io_desc_new (io, &r_io_plugin_sparse, pathname, rw, mode, mal);
 }
 
 RIOPlugin r_io_plugin_sparse = {
-	.name = "sparse",
-	.desc = "Sparse buffer allocation plugin",
+	.meta = {
+		.name = "sparse",
+		.author = "pancake",
+		.desc = "Sparse buffer allocation plugin",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "sparse://",
-	.license = "LGPL3",
 	.open = __open,
 	.close = __close,
 	.read = __read,

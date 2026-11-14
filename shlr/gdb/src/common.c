@@ -5,15 +5,17 @@
 #include "packet.h"
 #include "utils.h"
 #include "r_util/r_str.h"
+#include "r_util/r_log.h"
 
 int handle_qSupported(libgdbr_t *g) {
 	char *tok = NULL;
+	char *save_ptr = NULL;
 	// Catch no data received
 	if (!*g->data) {
 		return -1;
 	}
 	// TODO handle the message correct and set all infos like packetsize, thread stuff and features
-	tok = strtok (g->data, ";");
+	tok = r_str_tok_r (g->data, ";", &save_ptr);
 	while (tok) {
 		if (r_str_startswith (tok, "PacketSize=")) {
 			// Largest packet size we support is 2048
@@ -22,7 +24,7 @@ int handle_qSupported(libgdbr_t *g) {
 			g->stub_features.pkt_sz = R_MAX (g->stub_features.pkt_sz, 64);
 		} else if (r_str_startswith (tok, "qXfer:")) {
 			if (!tok[6]) {
-				tok = strtok (NULL, ";");
+				tok = r_str_tok_r (NULL, ";", &save_ptr);
 				continue;
 			}
 			char *p = tok + 6;
@@ -66,7 +68,7 @@ int handle_qSupported(libgdbr_t *g) {
 		} else if (tok[0] == 'Q') {
 			if (r_str_startswith (tok, "Qbtrace")) {
 				if (!tok[strlen ("Qbtrace")]) {
-					tok = strtok (NULL, ";");
+					tok = r_str_tok_r (NULL, ";", &save_ptr);
 					continue;
 				}
 				char *p = tok + 7;
@@ -119,7 +121,7 @@ int handle_qSupported(libgdbr_t *g) {
 			g->stub_features.ReverseContinue = (tok[strlen ("ReverseContinue")] == '+');
 		}
 		// TODO
-		tok = strtok (NULL, ";");
+		tok = r_str_tok_r (NULL, ";", &save_ptr);
 	}
 	return send_ack (g);
 }
@@ -135,9 +137,7 @@ int send_ack(libgdbr_t *g) {
 		if (r_socket_write (g->sock, "+", 1) < 0) {
 			return -1;
 		}
-		if (g->server_debug) {
-			eprintf ("[sent ack]\n");
-		}
+		R_LOG_DEBUG ("[sent ack]");
 		return 0;
 	}
 	return -1;

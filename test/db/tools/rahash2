@@ -1,3 +1,21 @@
+NAME=rahash2 standalone ignores an inherited console pointer
+FILE=-
+CMDS=<<EOF
+env R2CONS=1
+!rahash2 -q -a md5 -s abc
+rahash2 -q -a md5 -s abc
+!rahash2 -q -a md5 -s abc
+?e after
+EOF
+EXPECT=<<EOF
+900150983cd24fb0d6963f7d28e17f72
+900150983cd24fb0d6963f7d28e17f72
+900150983cd24fb0d6963f7d28e17f72
+after
+EOF
+EXPECT_ERR=
+RUN
+
 NAME=rahash2 -a entropy
 FILE=-
 CMDS=!rahash2 -a entropy bins/elf/analysis/hello-linux-x86_64
@@ -6,11 +24,41 @@ bins/elf/analysis/hello-linux-x86_64: 0x00000000-0x00001a35 entropy: 3.27819072
 EOF
 RUN
 
+NAME=rahash2 entropy output modes
+FILE=-
+CMDS=<<EOF
+!rahash2 -qq -a entropy bins/elf/analysis/hello-linux-x86_64
+!rahash2 -j -a entropy bins/elf/analysis/hello-linux-x86_64
+!rahash2 -r -a entropy bins/elf/analysis/hello-linux-x86_64
+!rahash2 -j -a md5,entropy -s 123456789
+!rahash2 -J -a md5,entropy -s 123456789
+EOF
+EXPECT=<<EOF
+3.27819072
+[{"name":"entropy","hash":"3.27819072"}]
+bins/elf/analysis/hello-linux-x86_64: CC file entropy:3.27819072
+[{"name":"md5","hash":"25f9e794323b453885f5181f1b624d0b"},{"name":"entropy","hash":"3.16992500"}]
+{"md5":"25f9e794323b453885f5181f1b624d0b","entropy":"3.16992500"}
+EOF
+RUN
+
 NAME=rahash2 -a ssdeep
 FILE=-
 CMDS=!rahash2 -a ssdeep bins/elf/analysis/hello-linux-x86_64
 EXPECT=<<EOF
-bins/elf/analysis/hello-linux-x86_64: 0x00000000-0x00001a35 ssdeep: 96:aPsZ7JSRX4hHmfSz/XWwZpxI9LGr5lar87cZGbbgb:aPeJiam6zWQpxKLElZE
+bins/elf/analysis/hello-linux-x86_64: 0x00000000-0x00001a35 ssdeep: 96:Gy7im/6GjuA9fuF/lsSULxe2RELk3MgmEof7EEa4BIUdoBU:GyXfk/lsSU8LkaEofDOeom
+EOF
+RUN
+
+NAME=rahash2 -a ssdeep small input
+FILE=-
+CMDS=<<EOF
+!rahash2 -a ssdeep -s 123456789
+!rahash2 -j -a md5,ssdeep -s 123456789
+EOF
+EXPECT=<<EOF
+0x00000000-0x00000008 ssdeep: 3:OWS:OWS
+[{"name":"md5","hash":"25f9e794323b453885f5181f1b624d0b"},{"name":"ssdeep","hash":"3:OWS:OWS"}]
 EOF
 RUN
 
@@ -74,11 +122,30 @@ bins/elf/analysis/hello-linux-x86_64: CC file sha256:7bdbf25324af1946ec0b16dbf92
 EOF
 RUN
 
+NAME=rahash2 -a md5,sha1,sha256 -R
+FILE=-
+CMDS=!rahash2 -a md5,sha1,sha256 -R bins/elf/analysis/hello-linux-x86_64
+EXPECT=<<EOF
+bins/elf/analysis/hello-linux-x86_64: k file.md5=c957bd5bd6204470256bc15248ccafd4
+bins/elf/analysis/hello-linux-x86_64: k file.sha1=687c82d13cb27f0600d8e57edc784282c1732f56
+bins/elf/analysis/hello-linux-x86_64: k file.sha256=7bdbf25324af1946ec0b16dbf928875a588a786f7c279cd115729c5a3a297a55
+EOF
+RUN
+
+NAME=rahash2 -R -B rejected
+FILE=-
+CMDS=!rahash2 -a md5 -R -B bins/elf/analysis/hello-linux-x86_64
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Option -R incompatible with -B (per-block hashing)
+EOF
+RUN
+
 NAME=rahash2 -h
 FILE=-
 CMDS=!rahash2~Usage
 EXPECT=<<EOF
-Usage: rahash2 [-BhjkLqrv] [-b S] [-a A] [-c H] [-E A] [-s S] [-f O] [-t O] [file] ...
+Usage: rahash2 [-BehjkLqRrvX] [-b S] [-a A] [-c H] [-E A] [-s S] [-f O] [-t O] [file] ...
 EOF
 RUN
 
@@ -136,10 +203,9 @@ RUN
 NAME=rahash2 -a md5 -x "61646d696e" -s "admin"
 FILE=-
 CMDS=!rahash2 -a md5 -x "61646d696e" -s "admin"
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-Hashstring already defined
+WARN: Hashstring already defined
 EOF
 RUN
 
@@ -163,66 +229,57 @@ NAME=rahash2 -L
 FILE=-
 CMDS=!rahash2 -L
 EXPECT=<<EOF
-h  md5
-h  sha1
-h  sha256
-h  sha384
-h  sha512
-h  md4
-h  xor
-h  xorpair
-h  parity
-h  entropy
-h  hamdist
-h  pcprint
-h  mod255
-h  xxhash
-h  adler32
-h  luhn
-h  ssdeep
-h  crc8smbus
-h  crc15can
-h  crc16
-h  crc16hdlc
-h  crc16usb
-h  crc16citt
-h  crc24
-h  crc32
-h  crc32c
-h  crc32ecma267
-h  crc32bzip2
-h  crc32d
-h  crc32mpeg2
-h  crc32posix
-h  crc32q
-h  crc32jamcrc
-h  crc32xfer
-h  crc64
-h  crc64ecma
-h  crc64we
-h  crc64xz
-h  crc64iso
-h  fletcher8
-h  fletcher16
-h  fletcher32
-h  fletcher64
-e  base64
-e  base91
-e  punycode
-c  rc2
-c  rc4
-c  rc6
-c  aes-ecb
-c  aes-cbc
-c  aes-wrap
-c  ror
-c  rol
-c  rot
-c  blowfish
-c  cps2
-c  des-ecb
-c  xor
-c  serpent-ecb
+hash          add  Add checksum used by Tar (sum all bytes into ut32)
+cryp      aes-ecb  Rijndael block cipher with Electronic Code Book mode
+cryp      aes-cbc  Rijndael block cipher with Cipher Block Chaining mode
+cryp     aes-wrap  Rijndael block cipher with Key Wrap Algorithm (RFC 3394)
+cryp       base64  Binary to text encoding scheme using 64 ascii characters
+base       base91  Binary to text encoding scheme using 91 ascii characters
+base       bech32  
+cryp     blowfish  Bruce Schneier's symetric-key block cipher
+char   arabic.iso  arabic ISO stub
+char   arabic.win  arabic Windows stub
+char        ascii  ASCII character set encoding/decoding
+char   ascii.ansi  ASCII ANSI stub
+char    ascii.oem  ASCII OEM stub
+char         big5  Big5 stub
+char cyrillic.iso  Cyrillic ISO stub
+char cyrillic.win  Windows-1251 (partial)
+char     ebcdic37  EBCDIC CP37 charset
+char    greek.iso  Greek ISO stub
+char    greek.win  Windows-1253 (partial)
+char   hebrew.iso  Hebrew ISO stub
+char   hebrew.win  Hebrew Windows stub
+char     hiragana  Hiragana stub
+char    iso8859_1  ISO-8859-1 charset
+char      iso_646  ISO 646 (IRV)
+char         jis7  JIS 7-bit Roman (ASCII-like)
+char     katakana  Katakana mapping (legacy-compatible)
+char    macintosh  Macintosh Roman (partial)
+char      pokemon  Transcode from/to Pokémon charset used in Gen 1 games
+char      pokered  Pokemon Red charset
+char        seven  7-bit character set encoding/decoding
+cryp         cps2  Capcom Play System 2
+hash          crc  CRC8/CRC15/CRC16/CRC24/CRC32/CRC64 hash algorithms (implements: crc8smbus,crc15can,crc16,crc16hdlc,crc16usb,crc16citt,crc24,crc32,crc32c,crc32ecma267,crc32bzip2,crc32d,crc32mpeg2,crc32posix,crc32q,crc32jamcrc,crc32xfer,crc64,crc64ecma,crc64we,crc64xz,crc64iso)
+cryp      des-ecb  DES with with Electronic Code Book mode
+sign      ed25519  Elliptic curve pubkey cryptographic algorithm used for signing and verification
+hash      entropy  Shannon entropy
+hash     fletcher  Fletcher hash algorithms (implements: fletcher8,fletcher16,fletcher32,fletcher64)
+hash          md4  MD4 hash
+hash          md5  MD5 hash
+hash         null  mutate nothing
+char     punycode  Unicoded represented in plain ascii
+cryp           rc  Rivest Cipher (implements: rc2,rc4,rc6)
+cryp          rot  Rotate algorithms (rot13, rol, ror) (implements: rot,rol,ror)
+cryp  serpent-ecb  Serpent block cipher with Electronic Code Book mode
+hash          sha  Secure Hash Algorithm (SHA) (implements: sha1,sha256,sha384,sha512)
+hash   simplehash  Simple hash algorithms (xorpair, parity, hamdist, pcprint, mod255, adler32, luhn, elf) (implements: xorpair,parity,hamdist,pcprint,mod255,adler32,luhn,elf)
+hash          sip  SipHash-2-4
+cryp      sm4-ecb  ShāngMì4 block cipher with Electronic Code Book mode
+hash       ssdeep  ssdeep fuzzy hash
+hash      strhash  String hash using a modified DJB2 xor
+cryp          xor  Byte level Exclusive Or
+hash       xxhash  xxHash fast hash algorithm
 EOF
 RUN
 
@@ -362,6 +419,20 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=rahash2 -Bb 1 -a md5 admin.txt
+FILE=bins/other/admin.txt
+CMDS=!rahash2 -Bb 1 -a md5 bins/other/admin.txt
+EXPECT=<<EOF
+0x00000000-0x00000000 md5: 0cc175b9c0f1b6a831c399e269772661
+0x00000001-0x00000001 md5: 0cc175b9c0f1b6a831c399e269772661
+0x00000002-0x00000002 md5: 8277e0910d750195b448797616e091ad
+0x00000003-0x00000003 md5: 6f8f57715090da2632453988d9a1501b
+0x00000004-0x00000004 md5: 865c0c0b4ab0e063e5caa3387c1a8741
+0x00000005-0x00000005 md5: 7b8b965ad4bca0e41ab51de7b31363a1
+0x00000006-0x00000006 md5: 0cc175b9c0f1b6a831c399e269772661
+EOF
+RUN
+
 NAME=rahash2 -v~commit?"
 FILE=-
 CMDS=!!rahash2 -v~commit?
@@ -402,12 +473,38 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=rahash2 empty file
+FILE=-
+CMDS=<<EOF
+!rahash2 -a md5,sha256,xxhash,ssdeep /dev/null
+!rahash2 -qa md5 -t 0 /dev/null
+EOF
+EXPECT=<<EOF
+/dev/null: 0x00000000-0x00000000 md5: d41d8cd98f00b204e9800998ecf8427e
+/dev/null: 0x00000000-0x00000000 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+/dev/null: 0x00000000-0x00000000 xxhash: 055dcc02
+/dev/null: 0x00000000-0x00000000 ssdeep: 3::
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Invalid file size
+EOF
+RUN
+
+NAME=rahash2 empty stdin
+FILE=-
+CMDS=!rahash2 -a md5 - < /dev/null
+EXPECT=<<EOF
+-: 0x00000000-0x00000000 md5: d41d8cd98f00b204e9800998ecf8427e
+EOF
+EXPECT_ERR=<<EOF
+EOF
+RUN
+
 NAME=rahash2 -c with correct expected hash
 FILE=-
 CMDS=!rahash2 -a md5 -s "admin" -c 21232f297a57a5a743894a0e4a801fc3
 EXPECT=<<EOF
 0x00000000-0x00000004 md5: 21232f297a57a5a743894a0e4a801fc3
-rahash2: Computed hash matches the expected one.
 EOF
 RUN
 
@@ -418,7 +515,7 @@ EXPECT=<<EOF
 0x00000000-0x00000004 md5: 21232f297a57a5a743894a0e4a801fc3
 EOF
 EXPECT_ERR=<<EOF
-rahash2: Computed hash doesn't match the expected one.
+WARN: Computed hash doesn't match the expected one
 EOF
 RUN
 
@@ -427,87 +524,78 @@ FILE=-
 CMDS=!rahash2 -q -a md5 -s "admin" -c 21232f297a57a5a743894a0e4a801fc3
 EXPECT=<<EOF
 21232f297a57a5a743894a0e4a801fc3
-rahash2: Computed hash matches the expected one.
 EOF
 RUN
 
 NAME=rahash2 -c with missing nibble
 FILE=-
 CMDS=!rahash2 -a md5 -s "admin" -c 21232f297a57a5a743894a0e4a801fc
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Invalid -c hex hash
+ERROR: Invalid -c hex hash
 EOF
 RUN
 
 NAME=rahash2 -c with incorrect md5 hash length
 FILE=-
 CMDS=!rahash2 -a md5 -s "admin" -c 21232f297a57a5a743894a0e4a801f
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Given -c hash has 15 byte(s) but the selected algorithm returns 16 byte(s).
+ERROR: Given -c hash has 15 byte(s) but the selected algorithm returns 16 byte(s)
 EOF
 RUN
 
 NAME=rahash2 -c with incorrect sha1 hash length
 FILE=-
 CMDS=!rahash2 -a sha1 -s "admin" -c 21232f297a57a5a743894a0e4a801f
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Given -c hash has 15 byte(s) but the selected algorithm returns 20 byte(s).
+ERROR: Given -c hash has 15 byte(s) but the selected algorithm returns 20 byte(s)
 EOF
 RUN
 
 NAME=rahash2 -c with 2 hash algorithms
 FILE=-
 CMDS=!rahash2 -a md5,sha1 -s "admin" -c 21232f297a57a5a743894a0e4a801f
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Option -c incompatible with multiple algorithms in -a.
+ERROR: Option -c incompatible with multiple algorithms in -a
 EOF
 RUN
 
 NAME=rahash2 -c with all hash algorithms
 FILE=-
 CMDS=!rahash2 -a all -s "admin" -c 21232f297a57a5a743894a0e4a801f
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Option -c incompatible with multiple algorithms in -a.
+ERROR: Option -c incompatible with multiple algorithms in -a
 EOF
 RUN
 
 NAME=rahash2 -c with custom block size and per-block hash
 FILE=-
 CMDS=!rahash2 -b 1 -B -s "admin" -c 21232f297a57a5a743894a0e4a801f
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Option -c incompatible with -b and -B options.
+ERROR: Option -c incompatible with -b and -B options
 EOF
 RUN
 
 NAME=rahash2 -c with base64 encoding
 FILE=-
 CMDS=!rahash2 -E base64 -s "admin" -c 21232f297a57a5a743894a0e4a801f
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Option -c incompatible with -E base64, -E base91, -D base64 or -D base91 options.
+ERROR: Option -c incompatible with -E base64, -E base91, -D base64 or -D base91 options
 EOF
 RUN
 
 NAME=rahash2 -c with base64 decoding
 FILE=-
 CMDS=!rahash2 -D base64 -s "admin" -c 21232f297a57a5a743894a0e4a801f
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-rahash2: Option -c incompatible with -E base64, -E base91, -D base64 or -D base91 options.
+ERROR: Option -c incompatible with -E base64, -E base91, -D base64 or -D base91 options
 EOF
 RUN
 
@@ -805,6 +893,26 @@ CMDS=!rahash2 -E base91 -s "hello world" | rahash2 -D base91 -s -
 EXPECT=hello world
 RUN
 
+NAME=rahash2 -E bech32
+FILE=-
+CMDS=!rahash2 -E bech32 -S s:bc -x "00010203040506070809"
+EXPECT=bc1qpzry9x8gfaur95s
+RUN
+
+NAME=rahash2 -D bech32
+FILE=-
+CMDS=!rahash2 -D bech32 -s bc1qpzry9x8gfaur95s | rax2 -S
+EXPECT=<<EOF
+00010203040506070809
+EOF
+RUN
+
+NAME=rahash2 -D bech32 with a long hrp
+FILE=-
+CMDS=!rahash2 -D bech32 -s aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1qqqqqq
+EXPECT=
+RUN
+
 NAME=rahash2 -E rc2
 FILE=-
 CMDS=!rahash2 -E rc2 -S key -s "helloworld123456" | rax2 -S 
@@ -1013,6 +1121,29 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=rahash2 -E sm4-ecb
+FILE=-
+CMDS=!rahash2 -E sm4-ecb -S "0123456789abcdeffedcba9876543210" -x "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffffaaaaaaaabbbbbbbb" | rax2 -S
+EXPECT=<<EOF
+5ec8143de509cff7b5179f8f474b86192f1d305a7fb17df985f81c8482192304
+EOF
+RUN
+
+NAME=rahash2 -E sm4-ecb pads a partial block
+FILE=-
+CMDS=!rahash2 -E sm4-ecb -S "0123456789abcdeffedcba9876543210" -x "0123456789abcdeffedcba987654321000" | rax2 -S
+EXPECT=<<EOF
+681edf34d206965e86b3e94f536e42462677f46b09c122cc975533105bd4a22a
+EOF
+RUN
+
+NAME=rahash2 -D sm4-ecb rejects a partial block
+FILE=-
+CMDS=!rahash2 -D sm4-ecb -S "0123456789abcdeffedcba9876543210" -x "681edf34d206965e86b3e94f536e424600" | rax2 -S
+EXPECT=<<EOF
+EOF
+RUN
+
 NAME=rahash2 -a fletcher8 -s hello-world
 FILE=-
 CMDS=!rahash2 -a fletcher8 -s hello-world
@@ -1041,7 +1172,7 @@ NAME=rahash2 -a fletcher64 -s hello-world
 FILE=-
 CMDS=!rahash2 -a fletcher64 -s hello-world
 EXPECT=<<EOF
-0x00000000-0x0000000a fletcher64: 49ff47dc88f79724
+0x00000000-0x0000000a fletcher64: 49ff47dc8af79724
 EOF
 RUN
 
@@ -1049,7 +1180,7 @@ NAME=rahash2 empty single path
 FILE=-
 CMDS=!rahash2 -a md5 ""
 EXPECT_ERR=<<EOF
-Cannot open empty path
+ERROR: Cannot open empty path
 EOF
 RUN
 
@@ -1060,7 +1191,7 @@ EXPECT=<<EOF
 bins/elf/analysis/hello-linux-x86_64: 0x00000000-0x00001a35 md5: c957bd5bd6204470256bc15248ccafd4
 EOF
 EXPECT_ERR=<<EOF
-Cannot open empty path
+ERROR: Cannot open empty path
 EOF
 RUN
 
@@ -1068,7 +1199,42 @@ NAME=rahash2 empty first file
 FILE=-
 CMDS=!rahash2 -a md5 "" bins/elf/analysis/hello-linux-x86_64
 EXPECT_ERR=<<EOF
-Cannot open empty path
+ERROR: Cannot open empty path
+EOF
+RUN
+
+NAME=rahash2 -f -t every file
+FILE=-
+CMDS=!rahash2 -a md5 -f 0 -t 3 bins/elf/analysis/hello-linux-x86_64 bins/elf/analysis/hello-linux-x86_64
+EXPECT=<<EOF
+bins/elf/analysis/hello-linux-x86_64: 0x00000000-0x00000003 md5: d1531b1622de54fe3a0187c3344600e9
+bins/elf/analysis/hello-linux-x86_64: 0x00000000-0x00000003 md5: d1531b1622de54fe3a0187c3344600e9
+EOF
+RUN
+
+NAME=rahash2 -t past the end of the file
+FILE=-
+CMDS=!rahash2 -a md5 -f 0x10 -t 0x100000 bins/elf/analysis/hello-linux-x86_64
+EXPECT=<<EOF
+bins/elf/analysis/hello-linux-x86_64: 0x00000010-0x00001a35 md5: 2f4f88b1d8e6ea41c8b4c5c2544c3fd8
+EOF
+RUN
+
+NAME=rahash2 -B -f -t ends the last block at -t
+FILE=-
+CMDS=!rahash2 -a md5 -B -b 4 -f 0x10 -t 0x19 bins/elf/analysis/hello-linux-x86_64
+EXPECT=<<EOF
+0x00000010-0x00000013 md5: d4b0a4b122e47cd9e7b3581a6a28290c
+0x00000014-0x00000017 md5: 4352d88a78aa39750bf70cd6f27bcaa5
+0x00000018-0x00000019 md5: 0ba4067c95d8d92744702afdd1697107
+EOF
+RUN
+
+NAME=rahash2 -b -f -t hashes the exact range
+FILE=-
+CMDS=!rahash2 -a md5 -b 4 -f 0x10 -t 0x19 bins/elf/analysis/hello-linux-x86_64
+EXPECT=<<EOF
+bins/elf/analysis/hello-linux-x86_64: 0x00000010-0x00000019 md5: b2751074461e5fbd1f65e5fd7b6af994
 EOF
 RUN
 
@@ -1077,6 +1243,26 @@ FILE=-
 CMDS=!rahash2 -j -a md4,md5 bins/elf/analysis/hello-linux-x86_64
 EXPECT=<<EOF
 [{"name":"md5","hash":"c957bd5bd6204470256bc15248ccafd4"},{"name":"md4","hash":"d4d61472a12d59be3a85e07ff9065658"}]
+EOF
+RUN
+
+NAME=rahash2 -j file ssdeep
+FILE=-
+CMDS=!rahash2 -j -a ssdeep bins/elf/analysis/hello-linux-x86_64
+EXPECT=<<EOF
+[{"name":"ssdeep","hash":"96:Gy7im/6GjuA9fuF/lsSULxe2RELk3MgmEof7EEa4BIUdoBU:GyXfk/lsSU8LkaEofDOeom"}]
+EOF
+RUN
+
+NAME=rahash2 -J file
+FILE=-
+CMDS=<<EOF
+!rahash2 -J -a md4,md5 bins/elf/analysis/hello-linux-x86_64
+!rahash2 -jj -a md5 bins/elf/analysis/hello-linux-x86_64
+EOF
+EXPECT=<<EOF
+{"md5":"c957bd5bd6204470256bc15248ccafd4","md4":"d4d61472a12d59be3a85e07ff9065658"}
+{"md5":"c957bd5bd6204470256bc15248ccafd4"}
 EOF
 RUN
 

@@ -1,81 +1,101 @@
-/* radare - LGPL - Copyright 2007-2020 - pancake */
+/* radare - LGPL - Copyright 2007-2026 - pancake */
 
-#include "r_types.h"
-#include "r_util.h"
-#include <stdio.h>
-#include <ctype.h>
+#include <r_util.h>
 
-/* int c; ret = hex_to_byte(&c, 'c'); */
+static const char abc[] = "0123456789abcdef";
+
+static int hex_digit_value(ut8 c) {
+	if (isdigit (c)) {
+		return c - '0';
+	}
+	const int lc = tolower (c);
+	if (lc >= 'a' && lc <= 'f') {
+		return lc - 'a' + 10;
+	}
+	return -1;
+}
+
 R_API bool r_hex_to_byte(ut8 *val, ut8 c) {
-	if (IS_DIGIT (c)) {
-		*val = (ut8)(*val) * 16 + (c - '0');
-	} else if (c >= 'A' && c <= 'F') {
-		*val = (ut8)(*val) * 16 + (c - 'A' + 10);
-	} else if (c >= 'a' && c <= 'f') {
-		*val = (ut8)(*val) * 16 + (c - 'a' + 10);
-	} else {
+	R_RETURN_VAL_IF_FAIL (val, false);
+	int v = hex_digit_value (c);
+	if (v != -1) {
+		*val <<= 4;
+		*val |= v & 0xf;
 		return true;
 	}
 	return false;
 }
 
+// takes 'c' byte and fills 2 bytes in the val string
+R_API void r_hex_from_byte(char *val, ut8 c) {
+	val[0] = abc[(c >> 4) & 0xf];
+	val[1] = abc[c & 0xf];
+	// val[2] = 0
+}
+
 R_API char *r_hex_from_py_str(char *out, const char *code) {
-	if (!strncmp (code, "'''", 3)) {
+	if (r_str_startswith (code, "'''")) {
 		const char *s = code + 2;
 		return r_hex_from_c_str (out, &s);
 	}
 	return r_hex_from_c_str (out, &code);
 }
 
+typedef const char *(*SkipCommentFunc)(const char *);
+
 static const char *skip_comment_py(const char *code) {
 	if (*code != '#') {
 		return code;
 	}
-	char *end = strchr (code, '\n');
-	if (end) {
-		code = end;
-	}
-	return code + 1;
+	const char *end = strchr (code, '\n');
+	return end ? end + 1 : code + 1;
 }
 
-R_API char *r_hex_from_py_array(char *out, const char *code) {
-	const char abc[] = "0123456789abcdef";
-	if (*code != '[' || !strchr (code, ']')) {
+static char *hex_from_array(char *out, const char *code, char open, char close, SkipCommentFunc skip_comment) {
+	R_RETURN_VAL_IF_FAIL (out && code, NULL);
+	if (*code != open || !strchr (code, close)) {
 		return NULL;
 	}
 	code++;
 	for (; *code; code++) {
-		char *comma = strchr (code, ',');
+		const char *comma = strchr (code, ',');
 		if (!comma) {
-			comma = strchr (code, ']');
+			comma = strchr (code, close);
 		}
 		if (!comma) {
 			break;
 		}
-		char * _word = r_str_ndup (code, comma - code);
+		char *_word = r_str_ndup (code, comma - code);
 		const char *word = _word;
+		if (skip_comment) {
+			word = skip_comment (word);
+		}
 		while (*word == ' ' || *word == '\t' || *word == '\n') {
 			word++;
-			word = skip_comment_py (word);
+			if (skip_comment) {
+				word = skip_comment (word);
+			}
 		}
-		if (IS_DIGIT (*word)) {
+		if (isdigit ((ut8)*word)) {
 			ut8 n = (ut8)r_num_math (NULL, word);
 			*out++ = abc[(n >> 4) & 0xf];
 			*out++ = abc[n & 0xf];
 		}
 		free (_word);
 		code = comma;
-		if (*code == ']') {
+		if (*code == close) {
 			break;
 		}
 	}
 	return out;
 }
 
+R_API char *r_hex_from_py_array(char *out, const char *code) {
+	return hex_from_array (out, code, '[', ']', skip_comment_py);
+}
+
 R_API char* r_hex_from_py(const char *code) {
-	if (!code) {
-		return NULL;
-	}
+	R_RETURN_VAL_IF_FAIL (code, NULL);
 	char * const ret = malloc (strlen (code) * 3);
 	if (!ret) {
 		return NULL;
@@ -89,6 +109,9 @@ R_API char* r_hex_from_py(const char *code) {
 	for (; *code && *code != '[' && *code != '\''
 	  && *code != '"'; code++) {
 		code = skip_comment_py (code);
+		if (!*code) {
+			break;
+		}
 	}
 	if (*code == '[') {
 		out = r_hex_from_py_array (out, code);
@@ -104,7 +127,7 @@ R_API char* r_hex_from_py(const char *code) {
 }
 
 R_API char *r_hex_from_c_str(char *out, const char **code) {
-	const char abc[] = "0123456789abcdefABCDEF";
+	R_RETURN_VAL_IF_FAIL (out && code, NULL);
 	const char *iter = *code;
 	if (*iter != '\'' && *iter != '"') {
 		return NULL;
@@ -112,89 +135,67 @@ R_API char *r_hex_from_c_str(char *out, const char **code) {
 	const char end_char = *iter;
 	iter++;
 	for (; *iter && *iter != end_char; iter++) {
-		if (*iter == '\\') {
+		const ut8 it0 = (ut8)*iter;
+		if (it0 == '\\') {
 			iter++;
 			switch (iter[0]) {
-			case 'e': *out++='1';*out++='b';break;
-			case 'r': *out++='0';*out++='d';break;
-			case 'n': *out++='0';*out++='a';break;
+			case 'e': *out++ = '1'; *out++ = 'b'; break;
+			case 'r': *out++ = '0'; *out++ = 'd'; break;
+			case 'n': *out++ = '0'; *out++ = 'a'; break;
 			case 'x': {
 				ut8 c1 = iter[1];
-				ut8 c2 = iter[2];
-				iter += 2;
-				if (c1 == '\0' || c2 == '\0') {
-					return NULL;
-				} else if (strchr (abc, c1) && strchr (abc, c2)) {
-					*out++ = tolower (c1);
-					*out++ = tolower (c2);
-				} else {
+				if (!c1) {
 					return NULL;
 				}
+				ut8 c2 = iter[2];
+				if (!c2) {
+					return NULL;
+				}
+				int n1 = hex_digit_value (c1);
+				int n2 = hex_digit_value (c2);
+				if (n1 < 0 || n2 < 0) {
+					return NULL;
+				}
+				*out++ = abc[n1];
+				*out++ = abc[n2];
+				iter += 2;
 				break;
 			  }
 			default:
 				if (iter[0] == end_char) {
-					*out++ = abc[*iter >> 4];
-					*out++ = abc[*iter & 0xf];
+					const ut8 escaped = (ut8)*iter;
+					*out++ = abc[escaped >> 4];
+					*out++ = abc[escaped & 0xf];
 				}
 				return NULL;
 			}
 		} else {
-			*out++ = abc[*iter >> 4];
-			*out++ = abc[*iter & 0xf];
+			*out++ = abc[it0 >> 4];
+			*out++ = abc[it0 & 0xf];
 		}
 	}
 	*code = iter;
 	return out;
 }
 
-const char *skip_comment_c(const char *code) {
-	if (!strncmp (code, "/*", 2)) {
-		char *end = strstr (code, "*/");
+static const char *skip_comment_c(const char *code) {
+	if (r_str_startswith (code, "/*")) {
+		const char *end = strstr (code, "*/");
 		if (end) {
-			code = end + 2;
-		} else {
-			eprintf ("Missing closing comment\n");
+			return end + 2;
 		}
-	} else if (!strncmp (code, "//", 2)) {
-		char *end = strchr (code, '\n');
+		R_LOG_ERROR ("Missing closing comment");
+	} else if (r_str_startswith (code, "//")) {
+		const char *end = strchr (code, '\n');
 		if (end) {
-			code = end + 2;
+			return end + 1;
 		}
 	}
 	return code;
 }
 
 R_API char *r_hex_from_c_array(char *out, const char *code) {
-	const char abc[] = "0123456789abcdef";
-	if (*code != '{' || !strchr(code, '}')) {
-		return NULL;
-	}
-	code++;
-	for (; *code; code++) {
-		const char *comma = strchr (code, ',');
-		if (!comma) {
-			comma = strchr (code, '}');
-		}
-		char * _word = r_str_ndup (code, comma - code);
-		const char *word = _word;
-		word = skip_comment_c (word);
-		while (*word == ' ' || *word == '\t' || *word == '\n') {
-			word++;
-			word = skip_comment_c (word);
-		}
-		if (IS_DIGIT (*word)) {
-			ut8 n = (ut8)r_num_math (NULL, word);
-			*out++ = abc[(n >> 4) & 0xf];
-			*out++ = abc[n & 0xf];
-		}
-		free (_word);
-		code = comma;
-		if (*code == '}') {
-			break;
-		}
-	}
-	return out;
+	return hex_from_array (out, code, '{', '}', skip_comment_c);
 }
 
 /* convert:
@@ -203,9 +204,7 @@ R_API char *r_hex_from_c_array(char *out, const char *code) {
  *    4123421b
  */
 R_API char *r_hex_from_c(const char *code) {
-	if (!code) {
-		return NULL;
-	}
+	R_RETURN_VAL_IF_FAIL (code, NULL);
 	char * const ret = malloc (strlen (code) * 3);
 	if (!ret) {
 		return NULL;
@@ -218,6 +217,9 @@ R_API char *r_hex_from_c(const char *code) {
 	}
 	for (; *code != '\0' && *code != '{' && *code != '"'; code++) {
 		code = skip_comment_c (code);
+		if (!*code) {
+			break;
+		}
 	}
 	if (*code == '{') {
 		out = r_hex_from_c_array (out, code);
@@ -227,7 +229,7 @@ R_API char *r_hex_from_c(const char *code) {
 		do {
 			code = s1;
 			out = r_hex_from_c_str (out, &code);
-			if (!out) {
+			if (!out || !*code) {
 				break;
 			}
 			s1 = strchr (code + 1, '"');
@@ -242,17 +244,18 @@ R_API char *r_hex_from_c(const char *code) {
 	return ret;
 }
 
-
 R_API char *r_hex_from_js(const char *code) {
-	char * s1 = strchr (code, '\'');
-	char * s2 = strchr (code, '"');
+	R_RETURN_VAL_IF_FAIL (code, NULL);
+	const char *s1 = strchr (code, '\'');
+	const char *s2 = strchr (code, '"');
 
 	/* there are no strings in the input */
-	if (!(s1 || s2)) {
+	if (!s1 || !s2) {
 		return NULL;
 	}
 
-	char * start, * end;
+	const char *start;
+	const char *end;
 	if (s1 < s2) {
 		start = s1;
 		end = strchr (start + 1, '\'');
@@ -266,36 +269,24 @@ R_API char *r_hex_from_js(const char *code) {
 		return NULL;
 	}
 
-	char * str = r_str_ndup (start + 1, end - start - 1);
+	size_t slen = end - start;
+	char *str = r_str_ndup (start + 1, slen - 1);
 
 	/* assuming base64 input, output will always be shorter */
-	ut8 *b64d = malloc (end - start);
+	ut8 *b64d = malloc (slen);
 	if (!b64d) {
 		free (str);
 		return NULL;
 	}
 
-	r_base64_decode (b64d, str, end - start - 1);
-	if (!b64d) {
-		free (str);
-		free (b64d);
-		return NULL;
-	}
-
-	// TODO: use r_str_bin2hex
-	int i, len = strlen ((const char *)b64d);
-	char * out = malloc (len * 2 + 1);
-	if (!out) {
-		free (str);
-		free (b64d);
-		return NULL;
-	}
-	for (i = 0; i < len; i++) {
-		sprintf (&out[i * 2], "%02x", b64d[i]);
-	}
-	out[len * 2] = '\0';
-
+	int olen = r_base64_decode (b64d, str, slen - 1, true);
 	free (str);
+	if (olen < 1) {
+		free (b64d);
+		return NULL;
+	}
+
+	char *out = r_hex_bin2strdup (b64d, olen);
 	free (b64d);
 	return out;
 }
@@ -307,9 +298,7 @@ R_API char *r_hex_from_js(const char *code) {
  * 4123421b4123421b
  */
 R_API char *r_hex_no_code(const char *code) {
-	if (!code) {
-		return NULL;
-	}
+	R_RETURN_VAL_IF_FAIL (code, NULL);
 	char * const ret = calloc (1, strlen (code) * 3);
 	if (!ret) {
 		return NULL;
@@ -317,21 +306,22 @@ R_API char *r_hex_no_code(const char *code) {
 	*ret = '\0';
 	char *out = ret;
 	out = r_hex_from_c_str (out, &code);
-	code = strchr (code + 1, '"');
 	if (!out) {
 		free (ret);
 		return NULL;
 	}
+	code = *code? strchr (code + 1, '"'): NULL;
 	*out = '\0';
 	while (out && code) {
 		*out = '\0';
 		out = r_hex_from_c_str (out, &code);
-		code = strchr (code + 1, '"');
+		code = *code? strchr (code + 1, '"'): NULL;
 	}
 	return ret;
 }
 
 R_API char *r_hex_from_code(const char *code) {
+	R_RETURN_VAL_IF_FAIL (code, NULL);
 	if (!strchr (code, '=')) {
 		return r_hex_no_code (code);
 	}
@@ -343,24 +333,24 @@ R_API char *r_hex_from_code(const char *code) {
 	if (strstr (code, "var")) {
 		return r_hex_from_js (code);
 	}
-        /* Python */
+	/* Python */
 	return r_hex_from_py (code);
 }
 
 /* int byte = r_hex_pair2bin("A0"); */
 // (0A) => 10 || -1 (on error)
 R_API int r_hex_pair2bin(const char *arg) {
+	R_RETURN_VAL_IF_FAIL (arg, 0);
 	ut8 *ptr, c = 0, d = 0;
 	ut32 j = 0;
 
 	for (ptr = (ut8*)arg; ;ptr = ptr + 1) {
-		if (!*ptr || *ptr==' ' || j==2) {
+		if (!*ptr || *ptr == ' ' || j == 2) {
 			break;
 		}
 		d = c;
-		if (*ptr != '.' && r_hex_to_byte (&c, *ptr)) {
-			eprintf ("Invalid hexa string at char '%c' (%s).\n",
-				*ptr, arg);
+		if (*ptr != '.' && !r_hex_to_byte (&c, *ptr)) {
+			R_LOG_ERROR ("Invalid hexa string at char '%c' (%s)", *ptr, arg);
 			return -1;
 		}
 		c |= d;
@@ -372,13 +362,11 @@ R_API int r_hex_pair2bin(const char *arg) {
 }
 
 R_API int r_hex_bin2str(const ut8 *in, int len, char *out) {
+	R_RETURN_VAL_IF_FAIL ((in || len == 0) && len >= 0 && out, 0);
 	int i, idx;
 	char tmp[8];
-	if (len < 0) {
-		return 0;
-	}
 	for (idx = i = 0; i < len; i++, idx += 2)  {
-		snprintf (tmp, sizeof (tmp), "%02x", in[i]);
+		r_hex_from_byte (tmp, in[i]);
 		memcpy (out + idx, tmp, 2);
 	}
 	out[idx] = 0;
@@ -386,25 +374,42 @@ R_API int r_hex_bin2str(const ut8 *in, int len, char *out) {
 }
 
 R_API char *r_hex_bin2strdup(const ut8 *in, int len) {
-	int i, idx;
-	char tmp[5], *out;
+	R_RETURN_VAL_IF_FAIL ((in || len == 0) && len >= 0, NULL);
+	size_t outlen = 1;
+	if (r_mul_overflow ((size_t)len, (size_t)2, &outlen)
+			|| r_add_overflow (outlen, (size_t)1, &outlen)) {
+		return NULL;
+	}
+	char *out = malloc (outlen);
+	if (out) {
+		r_hex_bin2str (in, len, out);
+	}
+	return out;
+}
 
-	if ((len + 1) * 2 < len) {
-		return NULL;
+R_API ut8 *r_hex_str2bin_dup(const char *in, size_t *len) {
+	R_RETURN_VAL_IF_FAIL (in, NULL);
+	int res = 0;
+	ut8 *out = NULL;
+	size_t inlen = strlen (in);
+	if (inlen > 0) {
+		out = malloc ((inlen + 1) / 2);
+		if (out) {
+			res = r_hex_str2bin (in, out);
+			if (res < 1) {
+				res = 0;
+				R_FREE (out);
+			}
+		}
 	}
-	out = malloc ((len + 1) * 2);
-	if (!out) {
-		return NULL;
+	if (len) {
+		*len = res;
 	}
-	for (i = idx = 0; i < len; i++, idx += 2)  {
-		snprintf (tmp, sizeof (tmp), "%02x", in[i]);
-		memcpy (out+idx, tmp, 2);
-	}
-	out[idx] = 0;
 	return out;
 }
 
 R_API int r_hex_str2bin(const char *in, ut8 *out) {
+	R_RETURN_VAL_IF_FAIL (in, 0);
 	long nibbles = 0;
 
 	while (in && *in) {
@@ -414,9 +419,14 @@ R_API int r_hex_str2bin(const char *in, ut8 *out) {
 			in += 2;
 		}
 		/* read hex digits */
-		while (!r_hex_to_byte (out ? &out[nibbles/2] : &tmp, *in)) {
+		while (r_hex_to_byte (out ? &out[nibbles/2] : &tmp, *in)) {
 			nibbles++;
 			in++;
+		}
+		if (*in == '\\' && in[1] == 'x'
+				&& IS_HEXCHAR (in[2]) && IS_HEXCHAR (in[3])) {
+			in += 2;
+			continue;
 		}
 		if (*in == '\0') {
 			break;
@@ -444,42 +454,90 @@ R_API int r_hex_str2bin(const char *in, ut8 *out) {
 		if (out) {
 			r_hex_to_byte (&out[nibbles / 2], '0');
 		}
-		return -(nibbles+1) / 2;
+		return -((nibbles + 1) / 2);
 	}
 
 	return nibbles / 2;
 }
 
-R_API int r_hex_str2binmask(const char *in, ut8 *out, ut8 *mask) {
-	ut8 *ptr;
-	int len, ilen = strlen (in)+1;
-	int has_nibble = 0;
-	memcpy (out, in, ilen);
-	for (ptr = out; *ptr; ptr++) {
-		if (*ptr == '.') {
-			*ptr = '0';
-		}
+// get the hex chars from start of string, until first non-hex char, as a heap
+// allocated ut8* buffer
+R_API int r_hex_str2bin_until_new(const char *in, ut8 **out) {
+	R_RETURN_VAL_IF_FAIL (in && out, -1);
+	size_t len = strlen (in);
+	if (len <= 1) {
+		return 0;
 	}
-	len = r_hex_str2bin ((char*)out, out);
-	if (len<0) { has_nibble = 1; len = -(len+1); }
-	if (len != -1) {
-		memcpy (mask, in, ilen);
-		if (has_nibble) {
-			memcpy (mask + ilen, "f0", 3);
+	len = (len + 1) / 2;
+
+	int ret = -1;
+	size_t nibbles = 0;
+	ut8 *buf = calloc (1, len);
+	if (buf) {
+		while (r_hex_to_byte (buf + (nibbles / 2), *in)) {
+			nibbles++;
+			in++;
 		}
-		for (ptr = mask; *ptr; ptr++) {
-			if (IS_HEXCHAR (*ptr)) {
-				*ptr = 'f';
-			} else if (*ptr == '.') {
-				*ptr = '0';
+
+		if (!nibbles || nibbles % 2) {
+			ret = 0;
+		} else {
+			ret = nibbles / 2;
+			*out = (ut8*)realloc (buf, ret);
+			if (!*out) {
+				ret = -1;
 			}
 		}
-		len = r_hex_str2bin ((char*)mask, mask);
-		if (len < 0) {
-			len++;
+
+		if (ret <= 0) {
+			free (buf);
 		}
 	}
-	return len;
+	return ret;
+}
+
+R_API int r_hex_str2binmask(const char *in, ut8 *out, ut8 *mask) {
+	R_RETURN_VAL_IF_FAIL (in && out && mask, 0);
+	char *kw = strdup (in);
+	char *ms = strdup (in);
+	if (!kw || !ms) {
+		free (kw);
+		free (ms);
+		return 0;
+	}
+	char *k, *m;
+	for (k = kw, m = ms; *k; k++, m++) {
+		if (*k == '.' || *k == '?') {
+			*k = '0';
+			*m = '0';
+		} else if (*k == '0' && k[1] == 'x') {
+			k++;
+			m++;
+		} else if (IS_HEXCHAR (*k)) {
+			*m = 'f';
+		}
+	}
+	int klen = r_hex_str2bin (kw, out);
+	int mlen = r_hex_str2bin (ms, mask);
+	free (kw);
+	free (ms);
+	bool has_nibble = (klen < 0);
+	if (klen < 0) {
+		klen = -klen;
+	}
+	if (mlen < 0) {
+		mlen = -mlen;
+	}
+	if (klen > 0) {
+		if (mlen < klen) {
+			memset (mask + mlen, 0xff, klen - mlen);
+		}
+		if (has_nibble) {
+			return -klen;
+		}
+		return klen;
+	}
+	return 0;
 }
 
 R_API st64 r_hex_bin_truncate(ut64 in, int n) {
@@ -505,11 +563,11 @@ R_API st64 r_hex_bin_truncate(ut64 in, int n) {
 	return in;
 }
 
-// Check if str contains only hexadecimal characters and return length of bytes
+// Check if str contains only hexadecimal characters and return length of bytes or -1
 R_API int r_hex_str_is_valid(const char* str) {
-	int i;
-	int len = 0;
-	if (!strncmp (str, "0x", 2)) {
+	R_RETURN_VAL_IF_FAIL (str, -1);
+	int i, len = 0;
+	if (r_str_startswith (str, "0x")) {
 		str += 2;
 	}
 	for (i = 0; str[i] != '\0'; i++) {

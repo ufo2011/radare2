@@ -88,7 +88,6 @@ typedef struct libgdbr_stub_features_t {
 	bool BreakpointCommands;
 	// lldb-specific features
 	struct {
-		bool g;
 		bool QThreadSuffixSupported;
 		bool QListThreadsInStopReply;
 		bool qEcho;
@@ -151,6 +150,30 @@ typedef struct libgdbr_stop_reason {
 	} thread, fork, vfork;
 } libgdbr_stop_reason_t;
 
+#define GDBR_CAP_UNKNOWN (-1)
+
+/*!
+ * What the stub answers, learnt from its replies rather than assumed from its flavor
+ */
+typedef struct libgdbr_caps_t {
+	int g; // 'g' reads the register block; GDBR_CAP_UNKNOWN until the first read
+	int p; // 'p' reads one register; GDBR_CAP_UNKNOWN until 'g' is refused
+	bool thread_suffix; // QThreadSuffixSupported was accepted: register packets name their thread
+} libgdbr_caps_t;
+
+/*!
+ * Register values the stub stated since the thread last ran
+ */
+typedef struct libgdbr_regs_t {
+	ut8 *buf; // register block, laid out by the profile or by the 'g' reply
+	ut8 *known; // one flag per byte of buf: the stub stated it
+	size_t len; // bytes of the block, 0 while nothing is known
+	size_t count; // registers of the profile the block is laid out by, 0 for a 'g' block
+	size_t cap; // bytes allocated for buf and known
+	bool valid; // buf holds the whole block
+	bool refused; // the stub refused the registers, and answers the same until the thread runs
+} libgdbr_regs_t;
+
 /*!
  * Core "object" that saves
  * the instance of the lib
@@ -177,6 +200,8 @@ typedef struct libgdbr_t {
 	int page_size; // page size for target (useful for qemu)
 	bool attached; // Remote server attached to process or created
 	libgdbr_stub_features_t stub_features;
+	libgdbr_caps_t caps;
+	libgdbr_regs_t regs;
 
 	int remote_file_fd; // For remote file I/O
 	int num_retries; // number of retries for packet reading
@@ -184,7 +209,6 @@ typedef struct libgdbr_t {
 	int remote_type;
 	bool no_ack;
 	bool is_server;
-	bool server_debug;
 	bool get_baddr;
 	libgdbr_stop_reason_t stop_reason;
 
@@ -219,7 +243,7 @@ bool gdbr_set_architecture(libgdbr_t *g, int arch, int bits);
  * \param architecture and bit size.
  * \returns a failure code
  */
-const char *gdbr_get_reg_profile(int arch, int bits);
+char *gdbr_get_reg_profile(int arch, int bits);
 
 /*!
  * \brief Function set the gdbr internal registers profile
@@ -227,6 +251,9 @@ const char *gdbr_get_reg_profile(int arch, int bits);
  * \returns a failure code
  */
 int gdbr_set_reg_profile(libgdbr_t *g, const char *str);
+
+void gdbr_stop_reason_fini(libgdbr_stop_reason_t *reason);
+void gdbr_stop_reason_reset(libgdbr_stop_reason_t *reason);
 
 /*!
  * \brief frees all buffers and cleans the libgdbr instance stuff

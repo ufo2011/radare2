@@ -1,0 +1,40 @@
+# Should not be run on Windows
+# NAME=utf8 (possibly malformed) filenames with non-printable chars
+# BROKEN=1
+# FILE=-
+# CMDS=<<EOF
+# cd `e dir.tmp`
+# e io.cache=true
+# "(show_fname fname; wz $0; wtf `prz`; o `prz`; i~file; ij; rm `prz`)"
+# .(show_fname A\x1b¢\302\200€𝄞\363\240\201\201\\.bin)
+# .(show_fname B\x1b¢\302\200€𝄞\363\240\201\201\\.bin)
+# # INVALID FILENAME .(show_fname B\x1b¢\302\200\200€𝄞\363\240\201\201\\.bin)
+# EOF
+# EXPECT=<<EOF
+# file     A\x1b¢€𝄞󠁁\.bin
+# {"core":{"type":"","file":"A\u001b¢\u0080€𝄞\udb40\udc41\\.bin","fd":4,"size":256,"humansz":"256","iorw":true,"mode":"r-x","minopsz":1,"maxopsz":16,"block":256,"format":"null"}}
+# file     B\x1b¢€𝄞󠁁\.bin
+# {"core":{"type":"","file":"B\u001b¢\u0080€𝄞\udb40\udc41\\.bin","fd":5,"size":256,"humansz":"256","iorw":true,"mode":"r-x","minopsz":1,"maxopsz":16,"block":256,"format":"null"}}
+# EOF
+# RUN
+
+# Should not be run on Windows
+NAME=utf8 two (possibly malformed) filenames with non-printable chars
+# Backtick substitution doubles backslashes for legacy wtf/o argument parsing.
+BROKEN=1
+FILE=--
+CMDS=<<EOF
+cd `e dir.tmp`
+e io.cache=true
+"(show_fname fname; wz $0; wtf `prz`; o `prz`; i~file; ij; rm `prz`)"
+.(show_fname A\x1b¢\302\200€𝄞\363\240\201\201\\.bin)
+.(show_fname B\x1b¢\302\200€𝄞\363\240\201\201\\.bin)
+# INVALID FILENAME .(show_fname B\x1b¢\302\200\200€𝄞\363\240\201\201\\.bin)
+EOF
+EXPECT=<<EOF
+file     A\x1b¢\u0080€𝄞\U000e0041\.bin
+{"core":{"type":"","file":"A\u001b¢\u0080€𝄞\udb40\udc41\\.bin","fd":3,"size":256,"humansz":"256","iorw":true,"mode":"r-x","block":256,"format":"null"}}
+file     B\x1b¢\u0080€𝄞\U000e0041\.bin
+{"core":{"type":"","file":"B\u001b¢\u0080€𝄞\udb40\udc41\\.bin","fd":4,"size":256,"humansz":"256","iorw":true,"mode":"r-x","block":256,"format":"null"}}
+EOF
+RUN

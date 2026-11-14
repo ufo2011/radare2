@@ -1,0 +1,148 @@
+# Run with make -C test r2k on Linux; all driver operations are mocked.
+NAME=r2k backend and write protection
+FILE=r2k://
+ARGS=-n
+CMDS=<<EOF
+:e r2k.io
+:dp 0x7b
+:e r2k.io=1
+p8 1
+:dp
+:b 2
+p8 1
+:e r2k.io
+:dp
+:b   1   0x7b
+:e r2k.io
+:dp
+:e r2k.wp
+:W 0
+:e r2k.wp
+:e r2k.wp=1
+EOF
+EXPECT=<<EOF
+0
+123
+1
+7e
+123
+05
+2
+0
+1
+123
+true
+false
+true
+EOF
+RUN
+
+NAME=r2k process and register aliases
+FILE=r2k://
+ARGS=-n
+CMDS=<<EOF
+:p 123~pid =
+:dm 0x7b~pid =
+:b 1 123
+:dm~pid =
+:p* 123
+:R~0x1[-1]
+:dr~0x1[-1]
+:Rp~^ [0]:0
+:dR~^ [0]:0
+:b 0
+:M~start_addr
+:dm~start_addr
+EOF
+EXPECT=<<EOF
+pid = 123
+pid = 123
+pid = 123
+'f pid.123.test.0.start=0x1000
+'f pid.123.test.0.end=0x2000
+'f pid.123.task_struct = 0x00abcdef
+0x1
+0x1
+[*]
+[*]
+start_addr: 0x1000
+start_addr: 0x1000
+EOF
+RUN
+
+NAME=r2k native width reads and writes
+FILE=r2k://
+ARGS=-n
+CMDS=<<EOF
+:rl 0xffffffff81234000 4~[1,2]:1
+:rp 123 0xffffffff81234000 4~[1,2]:1
+:rP 0xffffffff81234000 4~[1,2]:1
+:wlx 0xffffffff81234000 41424344
+:rl 0xffffffff81234000 4~[1,2]:1
+:wpx 123 0xffffffff81234000 45464748
+:rp 123 0xffffffff81234000 4~[1,2]:1
+:wPx 0xffffffff81234000 494a4b4c
+:rP 0xffffffff81234000 4~[1,2]:1
+:wl 0x1000 a b
+:rl 0x1000 3~[1,2]:1
+:wp 123 0x1000 c d
+:rp 123 0x1000 3~[1,2]:1
+:wP 0x1000 e f
+:rP 0x1000 3~[1,2]:1
+EOF
+EXPECT=<<EOF
+0000 0000
+7d7d 7d7d
+0404 0404
+4142 4344
+4546 4748
+494a 4b4c
+6120 62
+6320 64
+6520 66
+EOF
+RUN
+
+NAME=r2k rejects malformed and overflowing inputs without changing state
+FILE=r2k://
+ARGS=-n
+CMDS=<<EOF
+:dp 123
+:b 1 123
+:e r2k.io=2junk~nomatch
+:e r2k.io=-1~nomatch
+:e r2k.io=3~nomatch
+:e r2k.io=1 0~nomatch
+:e r2k.wp=2~nomatch
+:e r2k.wp=bad~nomatch
+:b 1~nomatch
+:b 1 2147483648~nomatch
+:dp -1~nomatch
+:dp 18446744073709551616~nomatch
+:dp
+:e r2k.io
+:e r2k.wp
+:rl~nomatch
+:rl 0x1000~nomatch
+:rl 0x1000 0~nomatch
+:rl 0x1000 -1~nomatch
+:rl 0x1000 2147483648~nomatch
+:rl 0x1000 4x~nomatch
+:rl 0xffffffffffffffff 2~nomatch
+:rp bad 0x1000 4~nomatch
+:wlx 0x1000 zz~nomatch
+:wlx 0x1000 123~nomatch
+:wpx 123 0x1000~nomatch
+:wPx 18446744073709551616 00~nomatch
+:e r2k.io
+:dp
+EOF
+EXPECT=<<EOF
+123
+123
+1
+true
+1
+123
+EOF
+RUN

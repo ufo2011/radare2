@@ -1,3 +1,37 @@
+NAME=ESIL counted stepping follows calls and returns
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx e805000000b82a000000ffc3c3 @0x100
+ar rip=0x100
+ar rsp=0x1e0
+ar rbx=0
+aes 3
+ar rip
+ar rsp
+ar rbx
+EOF
+EXPECT=<<EOF
+0x00000105
+0x000001e0
+0x00000001
+EOF
+RUN
+
+NAME=ESIL single stepping can retain self loops
+FILE=malloc://16
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx ebfe
+e esil.skipself=false
+3aes
+ar rip
+EOF
+EXPECT=<<EOF
+0x00000000
+EOF
+RUN
+
 NAME=aes help changing seek
 FILE=-
 CMDS=<<EOF
@@ -49,11 +83,8 @@ aepc $$
 aep test @ 5
 aep
 aes
-aes
 EOF
-EXPECT=<<EOF
-aep test @ 0x5
-test
+EXPECT_ERR=<<EOF
 EOF
 RUN
 
@@ -72,7 +103,344 @@ aes
 aes
 EOF
 EXPECT=<<EOF
-aep test @ 0x5
+'aep ret0=dr R0=0;aexa ret
+'@0x5'aep test
+'aep memcpy=wf `dr?A1` `dr?A2` @ `dr?A0`;aexa ret
+'aep strlen=dr R0=`pszl@r:A0`;aexa ret
+'aep puts=psz@r:A0; aexa ret
 test
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Missing file argument. Use 'test -[v]fdx [file]'
+EOF
+RUN
+
+NAME=emulate imports
+FILE=bins/mach0/hello-puts
+CMDS=<<EOF
+s main
+aepc $$
+aeim
+aaep
+aep
+aecs
+EOF
+EXPECT=<<EOF
+'aep ret0=dr R0=0;aexa ret
+'@0x1040'aep ret0
+'aep memcpy=wf `dr?A1` `dr?A2` @ `dr?A0`;aexa ret
+'aep strlen=dr R0=`pszl@r:A0`;aexa ret
+'aep puts=psz@r:A0; aexa ret
+'@0x1050'aep puts
+Hello World
+EOF
+RUN
+
+NAME=esil plugins
+FILE=malloc://128
+CMDS=<<EOF
+aeim
+aeL
+?e --
+aeL dummy
+?e --
+ae dummy_op
+EOF
+EXPECT=<<EOF
+dummy
+forth
+null
+--
+--
+EOF
+EXPECT_ERR=<<EOF
+INFO: esil.dummy: Activated
+INFO: Dummy: Operation executed
+EOF
+RUN
+
+NAME=esil soft pin deleting the function
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 554889e5c3
+af
+aep soft.delete=af-*
+aep soft.delete @ 1
+pd 3
+afl
+EOF
+EXPECT=<<EOF
+/ 5: fcn.00000000 ();
+|           0x00000000      55             push rbp
+|           0x00000001      4889e5         mov rbp, rsp                ; [aep: soft.delete]
+
+            0x00000004      c3             ret
+EOF
+RUN
+
+NAME=esil soft pin resizing the disassembly block
+FILE=-
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 90909090c3c3
+aep soft.resize=b 4096
+aep soft.resize @ 2
+pd 5;b;?v $b;s;p8 6
+EOF
+EXPECT=<<EOF
+            0x00000000      90             nop
+            0x00000001      90             nop
+            0x00000002      90             nop                         ; [aep: soft.resize]
+
+            0x00000003      90             nop
+            0x00000004      c3             ret
+0x100
+0x100
+0x0
+90909090c3c3
+EOF
+RUN
+
+NAME=esil soft pins
+FILE=bins/elf/ls
+ARGS=-e bin.relocs.apply=true -e asm.lines=0 -e asm.bytes=0 -e asm.cmt.col=40
+CMDS=<<EOF
+'aep soft.dr9=dr?r9
+aep hard.rbp=dr?rbp
+pd 3
+aep hard.rbp @ 0x5ae4
+aep soft.dr9 @ 0x5ae6
+e emu.str=1
+dr r9=0x666
+pd 3
+aeim
+dr PC=$$
+3ds
+dr?rbp
+EOF
+EXPECT=<<EOF
+;-- entry0:
+0x00005ae0      endbr64
+0x00005ae4      xor ebp, ebp
+0x00005ae6      mov r9, rdx
+;-- entry0:
+0x00005ae0      endbr64
+0x00005ae4      xor ebp, ebp            ; [aep: hard.rbp]
+0x00005ae6      mov r9, rdx             ; [aep: soft.dr9]
+0x00000666
+
+0x00178000
+0x00178000
+EOF
+RUN
+
+NAME=aeso steps over direct call until return
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx e803000000909090b878560000c3
+s 0
+aei
+aeim
+aeip
+aeso
+?e pc=`dr rip`
+?e eax=`dr eax`
+EOF
+EXPECT=<<EOF
+pc=0x00000005
+eax=0x00005678
+EOF
+RUN
+
+NAME=aeso steps over indirect call until return
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx ffd0909090909090bb34120000c3
+s 0
+aei
+aeim
+aeip
+dr rax=8
+aeso
+?e pc=`dr rip`
+?e ebx=`dr ebx`
+EOF
+EXPECT=<<EOF
+pc=0x00000002
+ebx=0x00001234
+EOF
+RUN
+
+NAME=aeso executes plain jump
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx eb0390909090
+s 0
+aei
+aeim
+aeip
+aeso
+?e pc=`dr rip`
+EOF
+EXPECT=<<EOF
+pc=0x00000005
+EOF
+RUN
+
+NAME=aeso executes ret
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx c390
+s 0
+aei
+aeim 0x1000 0x100
+aeip
+dr rsp=0x1000
+wx 2301000000000000 @ 0x1000
+aeso
+?e pc=`dr rip`
+EOF
+EXPECT=<<EOF
+pc=0x00000123
+EOF
+RUN
+
+NAME=aeso strict stops on maxsteps before call returns
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e esil.maxsteps=3
+wx e80300000090909090ebfd
+s 0
+aei
+aeim
+aeip
+aeso
+?e pc=`dr rip`
+EOF
+EXPECT=<<EOF
+pc=0x00000008
+EOF
+EXPECT_ERR=<<EOF
+WARN: ESIL step-over stopped at 0x00000008 before return to 0x00000005: maximum steps exceeded
+EOF
+RUN
+
+NAME=aeso force recovers from maxsteps before call returns
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e esil.maxsteps=3
+e esil.stepover.force=true
+wx e80300000090909090ebfd
+s 0
+aei
+aeim
+aeip
+aeso
+?e pc=`dr rip`
+EOF
+EXPECT=<<EOF
+pc=0x00000005
+EOF
+EXPECT_ERR=<<EOF
+WARN: ESIL step-over stopped at 0x00000008 before return to 0x00000005: maximum steps exceeded
+WARN: ESIL step-over forced PC to 0x00000005 (see e??esil.stepover.force)
+EOF
+RUN
+
+NAME=aeso force respects breakpoint in call
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e esil.stepover.force=true
+wx e803000000909090b878560000c3
+db 0x8
+s 0
+aei
+aeim
+aeip
+aeso
+?e pc=`dr rip`
+EOF
+EXPECT=<<EOF
+pc=0x00000008
+EOF
+EXPECT_ERR=<<EOF
+WARN: ESIL step-over stopped at 0x00000008 before return to 0x00000005: breakpoint hit
+EOF
+RUN
+
+NAME=aeso strict stops on invalid instruction in call
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx e80300000090909006c3
+s 0
+aei
+aeim
+aeip
+aeso
+?e pc=`dr rip`
+EOF
+EXPECT=<<EOF
+pc=0x00000008
+EOF
+EXPECT_ERR=<<EOF
+WARN: ESIL step-over stopped at 0x00000008 before return to 0x00000005: invalid instruction
+EOF
+RUN
+
+NAME=aeso force recovers from iotrap in call
+FILE=malloc://4096
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e esil.stepover.force=true
+wx e8030000009090908b00c3
+s 0
+aei
+aeim
+aeip
+dr rax=0xdeadbeef
+aeso
+?e pc=`dr rip`
+EOF
+EXPECT=<<EOF
+pc=0x00000005
+EOF
+EXPECT_ERR=<<EOF
+WARN: ESIL step-over stopped at 0x00000008 before return to 0x00000005: I/O trap
+WARN: ESIL trap 'read-err' (0) at 0x00000008
+WARN: ESIL fault address 0xdeadbeef
+WARN: ESIL step-over forced PC to 0x00000005 (see e??esil.stepover.force)
+EOF
+RUN
+
+NAME=aes without an arch session
+FILE=bins/elf/analysis/main
+CMDS=<<EOF
+aeip
+e asm.arch=nope
+aes
+aeso
+aec
+?e ok
+EOF
+EXPECT=<<EOF
+ok
+EOF
+EXPECT_ERR=<<EOF
+ERROR: asm.arch: cannot find 'nope'
+ERROR: Cannot step without an arch plugin session
+ERROR: ESIL stopped at 0x00400410: step error
+ERROR: Cannot step without an arch plugin session
+ERROR: ESIL stopped at 0x00400410: step error
+ERROR: Cannot step without an arch plugin session
+ERROR: ESIL stopped at 0x00400410: step error
 EOF
 RUN

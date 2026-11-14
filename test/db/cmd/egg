@@ -12,38 +12,108 @@ RUN
 NAME=egg: darwin-x86-64 syscall close 
 FILE=malloc://1024
 CMDS=<<EOF
-e asm.arch=x86
 e asm.bits=64
+e asm.assembler=x86.nz
+e asm.arch=x86
 e asm.os=darwin
 gs close 3
 EOF
 EXPECT=<<EOF
-48c7c00300000050488b3c2448c7c0060000020f054883c408ccc3
+554889e54881ec0008000048c7c00300000050488b3c2448c7c0060000020f054883c408cc4881c4000800005dc3
 EOF
 RUN
 
 NAME=egg: linux-x86-64 syscall close 
 FILE=malloc://1024
 CMDS=<<EOF
-e asm.arch=x86
 e asm.bits=64
+e asm.assembler=x86.nz
+e asm.arch=x86
 e asm.os=linux
 gs close 3
 EOF
 EXPECT=<<EOF
-48c7c00300000050488b3c2448c7c0030000000f054883c408ccc3
+554889e54881ec0008000048c7c00300000050488b3c2448c7c0030000000f054883c408cc4881c4000800005dc3
 EOF
 RUN
 
 NAME=egg: linux-x86-32 syscall close 
 FILE=malloc://1024
 CMDS=<<EOF
-e asm.arch=x86
 e asm.bits=32
+e asm.assembler=x86.nz
+e asm.arch=x86
 e asm.os=linux
 gs close 3
 EOF
 EXPECT=<<EOF
-6a038b1c24b806000000cd8083c404ccc3
+5589e581ec000800006a038b1c24b806000000cd8083c404cc81c4000800005dc3
+EOF
+RUN
+
+
+NAME=egg: linux-x86-64 exec payload
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.bits=64
+e asm.assembler=x86.nz
+e asm.arch=x86
+e asm.os=linux
+gi exec
+g
+EOF
+EXPECT=<<EOF
+31c048bbd19d9691d08c97ff48f7db53545f995257545eb03b0f05
+EOF
+RUN
+
+NAME=egg: darwin-x86-64 exec payload ignores commented bytes
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.bits=64
+e asm.assembler=x86.nz
+e asm.arch=x86
+e asm.os=darwin
+gi exec
+g
+EOF
+EXPECT=<<EOF
+41b00249c1e0184983c817eb125f4983c0244c89c04831d252574889e60f05e8e9ffffff2f62696e2f7368
+EOF
+RUN
+
+NAME=egg: inline calling itself
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.bits=64
+e asm.assembler=x86.nz
+e asm.arch=x86
+e asm.os=linux
+gi exec
+'g  z@inline(){ z(); } main@global(){ z(); }
+EOF
+EXPECT=<<EOF
+31c048bbd19d9691d08c97ff48f7db53545f995257545eb03b0f05c3
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Recursive expansion of inline 'z'
+EOF
+RUN
+
+NAME=egg: inlines calling each other
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.bits=64
+e asm.assembler=x86.nz
+e asm.arch=x86
+e asm.os=linux
+gi exec
+'g  y@inline(){ z(); } z@inline(){ y(); } main@global(){ z(); }
+EOF
+EXPECT=<<EOF
+31c048bbd19d9691d08c97ff48f7db53545f995257545eb03b0f05c3
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Recursive expansion of inline 'z'
 EOF
 RUN

@@ -14,18 +14,18 @@ EXPECT=<<EOF
  5 - r-x 0x000382b4 zip://bins/dex/mobipwn-nores.apk//classes2.dex
  6 - r-x 0x000343a8 zip://bins/dex/mobipwn-nores.apk//classes3.dex
  7 * r-x 0x00045d30 zip://bins/dex/mobipwn-nores.apk//classes4.dex
-- 0 3 dalvik-64 ba:0x00000000 sz:2736 ?
-- 1 4 dalvik-32 ba:0x00005560 sz:285464 ?
-- 2 5 dalvik-32 ba:0x0004fb90 sz:230068 ?
-- 3 6 dalvik-32 ba:0x0008c0f8 sz:213928 ?
-* 4 7 dalvik-32 ba:0x000c4848 sz:286000 ?
-1383
-* 0 3 dalvik-64 ba:0x00000000 sz:2736 ?
-* 1 4 dalvik-32 ba:0x00005560 sz:285464 ?
-* 2 5 dalvik-32 ba:0x0004fb90 sz:230068 ?
-* 3 6 dalvik-32 ba:0x0008c0f8 sz:213928 ?
-* 4 7 dalvik-32 ba:0x000c4848 sz:286000 ?
-5363
+- 0 3 dalvik-32 ba:0x00000000 sz:2736
+- 1 4 dalvik-32 ba:0x00005560 sz:285464
+- 2 5 dalvik-32 ba:0x0004fb90 sz:230068
+- 3 6 dalvik-32 ba:0x0008c0f8 sz:213928
+* 4 7 dalvik-32 ba:0x000c4848 sz:286000
+2652
+* 0 3 dalvik-32 ba:0x00000000 sz:2736
+* 1 4 dalvik-32 ba:0x00005560 sz:285464
+* 2 5 dalvik-32 ba:0x0004fb90 sz:230068
+* 3 6 dalvik-32 ba:0x0008c0f8 sz:213928
+* 4 7 dalvik-32 ba:0x000c4848 sz:286000
+9784
 EOF
 RUN
 
@@ -45,27 +45,30 @@ EXPECT=<<EOF
  5 - r-x 0x000382b4 zip://bins/dex/mobipwn-nores.apk//classes2.dex
  6 - r-x 0x000343a8 zip://bins/dex/mobipwn-nores.apk//classes3.dex
  7 * r-x 0x00045d30 zip://bins/dex/mobipwn-nores.apk//classes4.dex
-- 0 3 dalvik-64 ba:0x00000000 sz:2736 ?
-- 1 4 dalvik-32 ba:0x00005560 sz:285464 ?
-- 2 5 dalvik-32 ba:0x0004fb90 sz:230068 ?
-- 3 6 dalvik-32 ba:0x0008c0f8 sz:213928 ?
-* 4 7 dalvik-32 ba:0x000c4848 sz:286000 ?
-1383
-* 0 3 dalvik-64 ba:0x00000000 sz:2736 ?
-* 1 4 dalvik-32 ba:0x00005560 sz:285464 ?
-* 2 5 dalvik-32 ba:0x0004fb90 sz:230068 ?
-* 3 6 dalvik-32 ba:0x0008c0f8 sz:213928 ?
-* 4 7 dalvik-32 ba:0x000c4848 sz:286000 ?
-5363
+- 0 3 dalvik-32 ba:0x00000000 sz:2736
+- 1 4 dalvik-32 ba:0x00005560 sz:285464
+- 2 5 dalvik-32 ba:0x0004fb90 sz:230068
+- 3 6 dalvik-32 ba:0x0008c0f8 sz:213928
+* 4 7 dalvik-32 ba:0x000c4848 sz:286000
+2652
+* 0 3 dalvik-32 ba:0x00000000 sz:2736
+* 1 4 dalvik-32 ba:0x00005560 sz:285464
+* 2 5 dalvik-32 ba:0x0004fb90 sz:230068
+* 3 6 dalvik-32 ba:0x0008c0f8 sz:213928
+* 4 7 dalvik-32 ba:0x000c4848 sz:286000
+9784
 EOF
 RUN
 
-NAME=io-zip
+NAME=io-zip requires a member
 FILE=zip://bins/java/example.zip
-BROKEN=1
 CMDS=q
-EXPECT=<<EOF
-0 research_data/experiment/decompiler/dumped_jar_dec/c.class
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: ZIP member required: use zip://archive.zip//path or zip://archive.zip::index
+INFO: List files with: rafs2 -t zip -l / archive.zip
+INFO: Use zipall://archive.zip to open all files or zip0://archive.zip to open the first
+ERROR: Cannot open 'zip://bins/java/example.zip'
 EOF
 RUN
 
@@ -99,11 +102,124 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=io-zip hello.apk
+NAME=io-zip apk requires a member
 FILE=zip://bins/dex/Hello.apk
-BROKEN=1
 CMDS=ieq
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: ZIP member required: use zip://archive.zip//path or zip://archive.zip::index
+INFO: List files with: rafs2 -t zip -l / archive.zip
+INFO: Use zipall://archive.zip to open all files or zip0://archive.zip to open the first
+ERROR: Cannot open 'zip://bins/dex/Hello.apk'
+EOF
+RUN
+
+NAME=io-zip failed member selection preserves the current descriptor
+FILE=malloc://1
+CMDS=<<EOF
+o~*[4]
+o zip://bins/dex/Hello.apk
+o jar://bins/dex/Hello.apk
+o zip://bins/dex/Hello.apk::999
+o zip://bins/dex/Hello.apk::nonsense
+o zip://bins/dex/Hello.apk::0junk
+o zip://bins/dex/mobipwn-nores.apk::1junk
+o zip://bins/dex/Hello.apk::4294967296
+o zip://bins/dex/Hello.apk::18446744073709551616
+o zip://bins/dex/Hello.apk::-0
+o zip://bins/dex/Hello.apk::+0
+o~*[4]
+EOF
 EXPECT=<<EOF
-0 classes.dex
+malloc://1
+malloc://1
+EOF
+EXPECT_ERR=<<EOF
+ERROR: ZIP member required: use zip://archive.zip//path or zip://archive.zip::index
+INFO: List files with: rafs2 -t zip -l / archive.zip
+INFO: Use zipall://archive.zip to open all files or zip0://archive.zip to open the first
+ERROR: Cannot open file zip://bins/dex/Hello.apk
+ERROR: ZIP member required: use zip://archive.zip//path or zip://archive.zip::index
+INFO: List files with: rafs2 -t zip -l / archive.zip
+INFO: Use zipall://archive.zip to open all files or zip0://archive.zip to open the first
+ERROR: Cannot open file jar://bins/dex/Hello.apk
+ERROR: Cannot open ZIP member at index '999'
+ERROR: Cannot open file zip://bins/dex/Hello.apk::999
+ERROR: Cannot open ZIP member at index 'nonsense'
+ERROR: Cannot open file zip://bins/dex/Hello.apk::nonsense
+ERROR: Cannot open ZIP member at index '0junk'
+ERROR: Cannot open file zip://bins/dex/Hello.apk::0junk
+ERROR: Cannot open ZIP member at index '1junk'
+ERROR: Cannot open file zip://bins/dex/mobipwn-nores.apk::1junk
+ERROR: Cannot open ZIP member at index '4294967296'
+ERROR: Cannot open file zip://bins/dex/Hello.apk::4294967296
+ERROR: Cannot open ZIP member at index '18446744073709551616'
+ERROR: Cannot open file zip://bins/dex/Hello.apk::18446744073709551616
+ERROR: Cannot open ZIP member at index '-0'
+ERROR: Cannot open file zip://bins/dex/Hello.apk::-0
+ERROR: Cannot open ZIP member at index '+0'
+ERROR: Cannot open file zip://bins/dex/Hello.apk::+0
+EOF
+RUN
+
+NAME=io-zip accepts decimal member indices with leading zeros
+FILE=zip://bins/dex/mobipwn-nores.apk::00031
+ARGS=-n
+CMDS=o~*[4]
+EXPECT=<<EOF
+zip://bins/dex/mobipwn-nores.apk//classes.dex
+EOF
+RUN
+
+NAME=io-zipall opens archive members
+FILE=zipall://bins/dex/Hello.apk
+CMDS=o~*[4]
+EXPECT=<<EOF
+zip://bins/dex/Hello.apk//classes.dex
+EOF
+RUN
+
+NAME=io-zip0 opens only the first archive member
+FILE=zip0://bins/dex/mobipwn-nores.apk
+ARGS=-n
+CMDS=o~[4]
+EXPECT=<<EOF
+zip://bins/dex/mobipwn-nores.apk//AndroidManifest.xml
+EOF
+RUN
+
+NAME=apk:// dex import xrefs
+FILE=apk://bins/dex/org.radare.radare2installer.apk
+CMDS=<<EOF
+ob 1
+aa
+axtq @ sym.imp.Ljava_io_File.method.getAbsolutePath__Ljava_lang_String_
+EOF
+EXPECT=<<EOF
+0x14c2a
+0x18eb2
+0x1a4fc
+0x1a592
+0x1a5b6
+0x1a606
+0x1a62a
+0x1a67a
+0x1a69e
+0x1a6ee
+0x1a712
+0x2407c
+EOF
+RUN
+
+NAME=io-zip reopen entry opened by index
+FILE=zip://bins/java/example.zip::0
+CMDS=<<EOF
+o~*[4]
+oo
+o~*[4]
+EOF
+EXPECT=<<EOF
+zip://bins/java/example.zip//research_data/experiment/decompiler/dumped_jar_dec/c.class
+zip://bins/java/example.zip//research_data/experiment/decompiler/dumped_jar_dec/c.class
 EOF
 RUN

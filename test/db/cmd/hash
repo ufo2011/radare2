@@ -1,3 +1,145 @@
+NAME=t/md5sha1
+FILE=-
+CMDS=<<EOF
+b 100
+ph md5 64
+ph md5 99
+w hello world
+ph md5 11
+ph md5 @!11
+ph sha1 11
+ph pcprint
+EOF
+EXPECT=<<EOF
+3b5d3c7d207e37dceeedd301e35e2e58
+fa8715078d45101200a6e2bf7321aa04
+5eb63bbbe01eeed093cb22bb8f5acdc3
+5eb63bbbe01eeed093cb22bb8f5acdc3
+2aae6c35c94fcfb415dbe95f408b9ce91ee846ed
+0b
+EOF
+RUN
+
+NAME=ph crc32
+FILE=-
+CMDS=<<EOF
+b 12
+w hello world
+!rahash2 -qa crc16 -s "hello world"
+ph crc16 11
+!rahash2 -qa crc32 -s "hello world"
+ph crc32 11
+EOF
+EXPECT=<<EOF
+39c1
+39c1
+0d4a1185
+0d4a1185
+EOF
+RUN
+
+NAME=ph strhash
+FILE=-
+CMDS=<<EOF
+b 9
+w 123456789
+ph strhash 9
+EOF
+EXPECT=<<EOF
+abee47e0
+EOF
+RUN
+
+NAME=ph sip
+FILE=-
+CMDS=<<EOF
+w radare2
+ph sip 7
+EOF
+EXPECT=<<EOF
+9298f8d38e8f1b10
+EOF
+RUN
+
+NAME=ph entropy
+FILE=-
+CMDS=<<EOF
+w "hello world Shannon entropy"
+ph entropy 0x1b
+EOF
+EXPECT=<<EOF
+3.58785880
+EOF
+RUN
+
+NAME=ph elf
+FILE=-
+CMDS=<<EOF
+w syscall
+ph elf 7
+EOF
+EXPECT=<<EOF
+0b09985c
+EOF
+RUN
+
+NAME=ph adler32 prints the same hexpairs as rahash2
+FILE=-
+CMDS=<<EOF
+w 123456789
+ph adler32 9
+EOF
+EXPECT=<<EOF
+de011e09
+EOF
+RUN
+
+NAME=ph fletcher64 sums modulo 2^32-1
+FILE=-
+CMDS=<<EOF
+w hello-world
+ph fletcher64 11
+EOF
+EXPECT=<<EOF
+2497f78adc47ff49
+EOF
+RUN
+
+NAME=crca 'hello world'
+FILE=-
+CMDS=<<EOF
+b 12
+w hello world
+!rahash2 -qa rahash2 -a crc8smbus,crc15can,crc16hdlc,crc16usb,crc16citt,crc24,crc32c,crc32ecma267 -s "hello world"
+ph crc8smbus 11
+ph crc15can 11
+ph crc16hdlc 11
+ph crc16usb 11
+ph crc16citt 11
+ph crc24 11
+ph crc32c 11
+ph crc32ecma267 11
+EOF
+EXPECT=<<EOF
+a8
+727a
+ae06
+2238
+efeb
+b03cb7
+c99465aa
+ac86f845
+a8
+727a
+ae06
+2238
+efeb
+b03cb7
+c99465aa
+ac86f845
+EOF
+RUN
+
 NAME=search count
 FILE=bins/elf/analysis/x86-helloworld-gcc
 CMDS=<<EOF
@@ -6,17 +148,15 @@ ph crc32 @ $$+10
 EOF
 EXPECT=<<EOF
 83618b8a
-f hash.crc32.83618b8a = 0x804830a
+0x804830a: crc32.83618b8a : 83618b8a
 EOF
 RUN
 
-NAME=cmd.hit for /h
+NAME=cmd.hit for /h*
 FILE=malloc://1024
-BROKEN=1
 CMDS=<<EOF
-e cmd.hit = p8 1
-e search.in =raw
-/h md5 348a9791dc41b89796ec3808b5b5262f
+e cmd.hit=p8 1
+/h* md5 348a9791dc41b89796ec3808b5b5262f
 EOF
 EXPECT=<<EOF
 f hash.md5.348a9791dc41b89796ec3808b5b5262f = 0x0
@@ -24,14 +164,87 @@ f hash.md5.348a9791dc41b89796ec3808b5b5262f = 0x0
 EOF
 RUN
 
-NAME=cmd.hit for /h sha256
+NAME=hit for /h*
+FILE=malloc://1024
+CMDS=<<EOF
+/h* md5 348a9791dc41b89796ec3808b5b5262f
+EOF
+EXPECT=<<EOF
+f hash.md5.348a9791dc41b89796ec3808b5b5262f = 0x0
+EOF
+RUN
+
+NAME=hash hit commands seek to the hit and restore the original address
+FILE=malloc://32
+CMDS=<<EOF
+wx 41424344 @ 8
+"e cmd.hit=p8 4;s 24"
+s 16
+/h* md5 cb08ca4a7bb5f9683c19133a84872ca7 4
+?v $$
+s 8
+/h md5 cb08ca4a7bb5f9683c19133a84872ca7 4
+?v $$
+/h* md5 d41d8cd98f00b204e9800998ecf8427e 4
+?v $$
+EOF
+EXPECT=<<EOF
+f hash.md5.cb08ca4a7bb5f9683c19133a84872ca7 = 0x8
+41424344
+0x10
+0x8: md5.cb08ca4a : cb08ca4a7bb5f9683c19133a84872ca7
+41424344
+0x8
+0x8
+EOF
+RUN
+
+NAME=hit for /h sha256
 FILE=bins/firmware/main.bin
 CMDS=<<EOF
-e cmd.hit = p8 1
 e search.in =raw
 /h sha256 83264abaf298b9238ca63cb2fd9ff0f41a7a1520ee2a17c56df459fc806de1d6 512
 EOF
 EXPECT=<<EOF
-f hash.sha256.83264abaf298b9238ca63cb2fd9ff0f41a7a1520ee2a17c56df459fc806de1d6 = 0x64
+0x64: sha256.83264aba : 83264abaf298b9238ca63cb2fd9ff0f41a7a1520ee2a17c56df459fc806de1d6
+EOF
+RUN
+
+NAME=hit for /h sip
+FILE=bins/elf/true
+CMDS=<<EOF
+/h sip 0e227c61e887f956 500
+f~sip
+EOF
+EXPECT=<<EOF
+0x21fe: sip.0e227c61 : 0e227c61e887f956
+0x000021fe 500 sip.0e227c61
+EOF
+RUN
+
+
+NAME=phj
+FILE=-
+CMDS=<<EOF
+phj
+EOF
+EXPECT=<<EOF
+[{"name":"add","type":"hash","implements":["add"],"name":"add","desc":"Add checksum used by Tar (sum all bytes into ut32)","author":"pancake","license":"MIT"},{"name":"aes-ecb","type":"crypto","implements":["aes-ecb"],"name":"aes-ecb","desc":"Rijndael block cipher with Electronic Code Book mode","author":"pancake","license":"MIT"},{"name":"aes-cbc","type":"crypto","implements":["aes-cbc"],"name":"aes-cbc","desc":"Rijndael block cipher with Cipher Block Chaining mode","author":"pancake","license":"LGPL-3.0-only"},{"name":"aes-wrap","type":"crypto","implements":["aes-wrap"],"name":"aes-wrap","desc":"Rijndael block cipher with Key Wrap Algorithm (RFC 3394)","author":"Sylvain Pelissier","license":"LGPL-3.0-only"},{"name":"base64","type":"crypto","implements":["base64"],"name":"base64","desc":"Binary to text encoding scheme using 64 ascii characters","author":"rakholiyajenish.07","license":"LGPL-3.0-only"},{"name":"base91","type":"base","implements":["base91"],"name":"base91","desc":"Binary to text encoding scheme using 91 ascii characters","author":"rakholiyajenish.07","license":"MIT"},{"name":"bech32","type":"base","implements":["bech32"],"name":"bech32","author":"W0nda","license":"BSD-3-Clause"},{"name":"blowfish","type":"crypto","implements":["blowfish"],"name":"blowfish","desc":"Bruce Schneier's symetric-key block cipher","author":"pancake","license":"LGPL-3.0-only"},{"name":"arabic.iso","type":"charset","implements":["arabic.iso"],"name":"arabic.iso","desc":"arabic ISO stub","license":"MIT"},{"name":"arabic.win","type":"charset","implements":["arabic.win"],"name":"arabic.win","desc":"arabic Windows stub","license":"MIT"},{"name":"ascii","type":"charset","implements":["ascii"],"name":"ascii","desc":"ASCII character set encoding/decoding","license":"MIT"},{"name":"ascii.ansi","type":"charset","implements":["ascii.ansi"],"name":"ascii.ansi","desc":"ASCII ANSI stub","license":"MIT"},{"name":"ascii.oem","type":"charset","implements":["ascii.oem"],"name":"ascii.oem","desc":"ASCII OEM stub","license":"MIT"},{"name":"big5","type":"charset","implements":["big5"],"name":"big5","desc":"Big5 stub","license":"MIT"},{"name":"cyrillic.iso","type":"charset","implements":["cyrillic.iso"],"name":"cyrillic.iso","desc":"Cyrillic ISO stub","license":"MIT"},{"name":"cyrillic.win","type":"charset","implements":["cyrillic.win"],"name":"cyrillic.win","desc":"Windows-1251 (partial)","license":"MIT"},{"name":"ebcdic37","type":"charset","implements":["ebcdic37"],"name":"ebcdic37","desc":"EBCDIC CP37 charset","license":"MIT"},{"name":"greek.iso","type":"charset","implements":["greek.iso"],"name":"greek.iso","desc":"Greek ISO stub","license":"MIT"},{"name":"greek.win","type":"charset","implements":["greek.win"],"name":"greek.win","desc":"Windows-1253 (partial)","license":"MIT"},{"name":"hebrew.iso","type":"charset","implements":["hebrew.iso"],"name":"hebrew.iso","desc":"Hebrew ISO stub","license":"MIT"},{"name":"hebrew.win","type":"charset","implements":["hebrew.win"],"name":"hebrew.win","desc":"Hebrew Windows stub","license":"MIT"},{"name":"hiragana","type":"charset","implements":["hiragana"],"name":"hiragana","desc":"Hiragana stub","license":"MIT"},{"name":"iso8859_1","type":"charset","implements":["iso8859_1"],"name":"iso8859_1","desc":"ISO-8859-1 charset","license":"MIT"},{"name":"iso_646","type":"charset","implements":["iso_646"],"name":"iso_646","desc":"ISO 646 (IRV)","license":"MIT"},{"name":"jis7","type":"charset","implements":["jis7"],"name":"jis7","desc":"JIS 7-bit Roman (ASCII-like)","license":"MIT"},{"name":"katakana","type":"charset","implements":["katakana"],"name":"katakana","desc":"Katakana mapping (legacy-compatible)","license":"MIT"},{"name":"macintosh","type":"charset","implements":["macintosh"],"name":"macintosh","desc":"Macintosh Roman (partial)","license":"MIT"},{"name":"pokemon","type":"charset","implements":["pokemon"],"name":"pokemon","desc":"Transcode from/to Pokémon charset used in Gen 1 games","license":"MIT"},{"name":"pokered","type":"charset","implements":["pokered"],"name":"pokered","desc":"Pokemon Red charset","license":"MIT"},{"name":"seven","type":"charset","implements":["7bit"],"name":"seven","desc":"7-bit character set encoding/decoding","license":"MIT"},{"name":"cps2","type":"crypto","implements":["cps2"],"name":"cps2","desc":"Capcom Play System 2","author":"pof,esanfelix","license":"LGPL-3.0-only"},{"name":"crc","type":"hash","implements":["crc8smbus","crc15can","crc16","crc16hdlc","crc16usb","crc16citt","crc24","crc32","crc32c","crc32ecma267","crc32bzip2","crc32d","crc32mpeg2","crc32posix","crc32q","crc32jamcrc","crc32xfer","crc64","crc64ecma","crc64we","crc64xz","crc64iso"],"name":"crc","desc":"CRC8/CRC15/CRC16/CRC24/CRC32/CRC64 hash algorithms","author":"pancake","license":"MIT"},{"name":"des-ecb","type":"crypto","implements":["des-ecb"],"name":"des-ecb","desc":"DES with with Electronic Code Book mode","author":"deroad","license":"LGPL-3.0-only"},{"name":"ed25519","type":"sign","implements":["ed25519"],"name":"ed25519","desc":"Elliptic curve pubkey cryptographic algorithm used for signing and verification","author":"Sylvain Pelissier","license":"Zlib"},{"name":"entropy","type":"hash","implements":["entropy"],"name":"entropy","desc":"Shannon entropy","author":"pancake","license":"MIT"},{"name":"fletcher","type":"hash","implements":["fletcher8","fletcher16","fletcher32","fletcher64"],"name":"fletcher","desc":"Fletcher hash algorithms","author":"pancake","license":"MIT"},{"name":"md4","type":"hash","implements":["md4"],"name":"md4","desc":"MD4 hash","author":"Andrew Tridgell","license":"GPL-2.0-or-later"},{"name":"md5","type":"hash","implements":["md5"],"name":"md5","desc":"MD5 hash","author":"pancake","license":"RSA-MD"},{"name":"null","type":"hash","name":"null","desc":"mutate nothing","author":"pancake","license":"MIT"},{"name":"punycode","type":"charset","implements":["punycode"],"name":"punycode","desc":"Unicoded represented in plain ascii","author":"pancake","license":"LGPL-3.0-only"},{"name":"rc","type":"crypto","implements":["rc2","rc4","rc6"],"name":"rc","desc":"Rivest Cipher","author":"pancake","license":"LGPL-3.0-only"},{"name":"rot","type":"crypto","implements":["rot","rol","ror"],"name":"rot","desc":"Rotate algorithms (rot13, rol, ror)","author":"pancake","license":"MIT"},{"name":"serpent-ecb","type":"crypto","implements":["serpent"],"name":"serpent-ecb","desc":"Serpent block cipher with Electronic Code Book mode","author":"pancake","license":"LGPL-3.0-only"},{"name":"sha","type":"hash","implements":["sha1","sha256","sha384","sha512"],"name":"sha","desc":"Secure Hash Algorithm (SHA)","author":"pancake","license":"BSD-3-Clause AND (MPL-1.1 OR GPL-2.0-or-later)"},{"name":"simplehash","type":"hash","implements":["xorpair","parity","hamdist","pcprint","mod255","adler32","luhn","elf"],"name":"simplehash","desc":"Simple hash algorithms (xorpair, parity, hamdist, pcprint, mod255, adler32, luhn, elf)","author":"pancake","license":"LGPL-3.0-only"},{"name":"sip","type":"hash","implements":["sip"],"name":"sip","desc":"SipHash-2-4","author":"pancake","license":"MIT"},{"name":"sm4-ecb","type":"crypto","implements":["sm4-ecb"],"name":"sm4-ecb","desc":"ShāngMì4 block cipher with Electronic Code Book mode","author":"Sylvain Pelissier","license":"LGPL-3.0-only"},{"name":"ssdeep","type":"hash","implements":["ssdeep"],"name":"ssdeep","desc":"ssdeep fuzzy hash","author":"pancake","license":"MIT"},{"name":"strhash","type":"hash","implements":["strhash"],"name":"strhash","desc":"String hash using a modified DJB2 xor","author":"pancake","license":"MIT"},{"name":"xor","type":"crypto","implements":["xor"],"name":"xor","desc":"Byte level Exclusive Or","author":"pancake","license":"MIT"},{"name":"xxhash","type":"hash","implements":["xxhash"],"name":"xxhash","desc":"xxHash fast hash algorithm","author":"Yann Collet","license":"BSD-2-Clause"}]
+EOF
+RUN
+
+NAME=ph adler32 keeps exact sums across 5552-byte blocks
+FILE=malloc://20000
+CMDS=<<EOF
+wow ff @!256 @ 490
+wx ef @ 5397
+wow ff @!5553 @ 5553
+ph adler32 11106
+wow ff @!20000
+ph adler32 20000
+EOF
+EXPECT=<<EOF
+899cc662
+64d6519f
 EOF
 RUN

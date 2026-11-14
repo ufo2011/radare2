@@ -1,0 +1,1064 @@
+NAME=jump table for swift on arm64
+FILE=bins/mach0/MASTestApp
+CMDS=<<EOF
+e asm.bytes=false
+e asm.lines=false
+0x100004000;af
+pdr
+EOF
+EXPECT=<<EOF
+  ;-- section.0.__TEXT.__text:
+  ; DATA XREF from sym.func.100004000 @ 0x100004040(r)
+276: sym.func.100004000 (int64_t arg1, int64_t arg2, int64_t arg3, int64_t arg4, int64_t arg5, int64_t arg6);
+`- args(x0, x1, x3, x4, x5, x6) vars(14:sp[0x8..0x80])
+0x100004000      sub sp, sp, 0x80                                      ; [00] -r-x section size 13240 named 0.__TEXT.__text
+0x100004004      str x28, [var_20h]
+0x100004008      stp x27, x26, [var_30h]
+0x10000400c      stp x25, x24, [var_40h]
+0x100004010      stp x23, x22, [var_50h]
+0x100004014      stp x20, x19, [var_60h]
+0x100004018      stp x29, x30, [var_70h]
+0x10000401c      add x29, sp, 0x70
+0x100004020      mov x20, x8
+0x100004024      lsr x8, x4, 0x3e                                      ; arg4
+0x100004028      mov x19, x21
+0x10000402c      mov x24, x6                                           ; arg6
+0x100004030      mov x26, x5                                           ; arg5
+0x100004034      mov x22, x1                                           ; arg2
+0x100004038      mov x23, x0                                           ; arg1
+0x10000403c      mov x25, 0
+0x100004040      adrp x9, sym.func.100004000                           ; 0x100004000
+0x100004044      add x9, x9, 0x114
+0x100004048      adr x10, 0x100004048
+0x10000404c      ldrsw x11, [x9, x8, lsl 2]
+0x100004050      add x10, x10, x11
+;-- switch:
+0x100004054      br x10                                                ; switch table (4 cases) at 0x100004114
+
+;-- case 0:                                                            ; from 0x100004054
+; CODE XREF from sym.func.100004000 @ 0x100004054(x)
+0x100004058      ubfx x25, x4, 0x30, 8                                 ; arg4
+0x10000405c      b case.0x100004054.3
+| // true: 0x100004080
+;-- case 1:                                                            ; from 0x100004054
+; CODE XREF from sym.func.100004000 @ 0x100004054(x)
+0x100004060      lsr x8, x3, 0x20                                      ; arg3
+0x100004064      subs w8, w8, w3                                       ; arg3
+0x100004068      b.vs 0x10000410c
+| // true: 0x10000410c  false: 0x10000406c
+0x10000406c      sxtw x25, w8
+0x100004070      b case.0x100004054.3
+| // true: 0x100004080
+;-- case 2:                                                            ; from 0x100004054
+; CODE XREF from sym.func.100004000 @ 0x100004054(x)
+0x100004074      ldp x9, x8, [x3, 0x10]                                ; arg3
+0x100004078      subs x25, x8, x9
+0x10000407c      b.vs 0x100004110
+| // true: 0x100004110  false: 0x100004080
+;-- case 3:                                                            ; from 0x100004054
+; CODE XREFS from sym.func.100004000 @ 0x100004054(x), 0x10000405c(x), 0x100004070(x)
+0x100004080      ldr x28, [x26]
+0x100004084      ldr x27, [x28, 0x10]
+0x100004088      mov x0, x28
+0x10000408c      bl sym.imp.swift_isUniquelyReferenced_nonNull_native
+0x100004090      str x28, [x26]
+0x100004094      tbnz w0, 0, 0x1000040b0
+| // true: 0x1000040b0  false: 0x100004098
+0x100004098      mov w0, 0
+0x10000409c      mov x1, x27
+0x1000040a0      mov w2, 0
+0x1000040a4      mov x3, x28
+0x1000040a8      bl sym.func.1000045dc
+0x1000040ac      mov x28, x0
+| // true: 0x1000040b0
+0x1000040b0      str x28, [x26]
+0x1000040b4      add x8, x28, 0x20
+0x1000040b8      stp x27, x24, [var_8h]
+0x1000040bc      str x8, [sp]
+0x1000040c0      mov w0, 0
+0x1000040c4      mov w1, 2
+0x1000040c8      mov w2, 1
+0x1000040cc      mov x3, x23
+0x1000040d0      mov w4, 0x18
+0x1000040d4      mov x5, 0
+0x1000040d8      mov x6, x22
+0x1000040dc      mov x7, x25
+0x1000040e0      bl sym.imp.CCCrypt
+0x1000040e4      str w0, [x20]
+0x1000040e8      mov x21, x19
+0x1000040ec      ldp x29, x30, [var_70h]
+0x1000040f0      ldp x20, x19, [var_60h]
+0x1000040f4      ldp x23, x22, [var_50h]
+0x1000040f8      ldp x25, x24, [var_40h]
+0x1000040fc      ldp x27, x26, [var_30h]
+0x100004100      ldr x28, [var_20h]
+0x100004104      add sp, sp, 0x80
+0x100004108      ret
+
+0x10000410c      brk 1
+
+0x100004110      brk 1
+
+EOF
+RUN
+
+NAME=peheap large bb
+FILE=bins/fuzzed/peheap
+CMDS=<<EOF
+aaaa
+afl
+EOF
+EXPECT=<<EOF
+0x004012a2    1     78 entry0
+0x004012a1    1      1 fcn.004012a1
+0x0040ac48    3      7 fcn.0040ac48
+0x0040b874   15    256 fcn.0040b874
+0x0040b484   10    291 fcn.0040b484
+0x0040b974    7     77 fcn.0040b974
+0x0040b444    3     54 fcn.0040b444
+0x0040bfdc    1      6 fcn.0040bfdc
+0x0040b224   17    266 fcn.0040b224
+0x00409ab4   22    568 fcn.00409ab4
+0x0040b9c4   15    355 fcn.0040b9c4
+0x0040b374    6    203 fcn.0040b374
+0x0040b344    3     41 fcn.0040b344
+0x0040bf24    1      6 fcn.0040bf24
+0x0040697c    8     95 fcn.0040697c
+0x004027d0    3     24 fcn.004027d0
+0x0040687c    1      7 fcn.0040687c
+0x0040ac60    1      8 fcn.0040ac60
+0x0040ac58   17    245 fcn.0040ac58
+0x0040ac50    2     10 fcn.0040ac50
+0x0040684c    1      2 fcn.0040684c
+0x0040682c    1      9 fcn.0040682c
+0x0040ac40    2     14 fcn.0040ac40
+0x004013d4   21    888 fcn.004013d4
+0x0040ac39    1      3 fcn.0040ac39
+0x004027cb    1     12 fcn.004027cb
+0x00401174    8    290 fcn.00401174
+0x004027d8    1      4 fcn.004027d8
+0x004027e0    1     13 fcn.004027e0
+0x004026e8    1      2 fcn.004026e8
+0x004026f0    2     20 fcn.004026f0
+0x004026f8    1      4 fcn.004026f8
+0x004027f0    1      2 fcn.004027f0
+0x00402820    1      9 fcn.00402820
+0x00402898    2      8 int.00402898
+0x004027e8    2      8 fcn.004027e8
+0x0040ac68  120   2178 fcn.0040ac68
+0x00408748   51   2334 fcn.00408748
+0x00402758    5     60 fcn.00402758
+0x004027f8    1      3 fcn.004027f8
+0x00402708    1      7 fcn.00402708
+0x00402710    1      8 fcn.00402710
+0x00402718    1      5 fcn.00402718
+0x004027a8    1     16 fcn.004027a8
+0x00402728    1      8 fcn.00402728
+0x0040ac70   47    835 fcn.0040ac70
+0x00402730    1     24 fcn.00402730
+0x00402738    3     19 fcn.00402738
+0x00402740    1     13 fcn.00402740
+0x00402748    1      5 fcn.00402748
+0x00402780    1     20 fcn.00402780
+0x00402800    1      6 fcn.00402800
+0x00402808    2      6 fcn.00402808
+0x00402810    8     65 fcn.00402810
+0x00402850    1     10 fcn.00402850
+0x00402818    2     24 fcn.00402818
+0x00402828    1      2 fcn.00402828
+0x00402830    3     32 fcn.00402830
+0x00402838    2     34 fcn.00402838
+0x00402878    2      9 fcn.00402878
+0x00402860    1      2 fcn.00402860
+0x00402858    1      8 fcn.00402858
+0x00402870    1      9 fcn.00402870
+0x00402880    1      8 fcn.00402880
+0x00402840    1      2 fcn.00402840
+0x004018f6    4    237 fcn.004018f6
+0x00402848    1      8 fcn.00402848
+0x00402750   16    429 fcn.00402750
+0x00402760    1      2 fcn.00402760
+0x00402868    1      9 fcn.00402868
+0x00402888    1      8 int.00402888
+0x00402890    1      5 int.00402890
+0x004026e0    2      8 fcn.004026e0
+0x00402768    2     17 fcn.00402768
+0x00402770    1      1 fcn.00402770
+0x004019e3   16   2641 fcn.004019e3
+0x00402778    1      8 fcn.00402778
+0x00402788    1      2 fcn.00402788
+0x00402798    1      8 fcn.00402798
+0x004027a0    2     48 fcn.004027a0
+0x0040174c   16    426 fcn.0040174c
+0x00403a7c    1      6 fcn.00403a7c
+0x00407a68    9     83 fcn.00407a68
+0x00407ac8    3     27 fcn.00407ac8
+0x00403a74    1      6 fcn.00403a74
+0x00403984    1      6 fcn.00403984
+0x0040398c    1      6 fcn.0040398c
+0x00403994    1      6 fcn.00403994
+0x00403a8c    1      6 fcn.00403a8c
+0x00403abc    1      6 fcn.00403abc
+0x00403b34    1      6 fcn.00403b34
+0x00403a84    1      6 fcn.00403a84
+0x0040bf04    1      6 fcn.0040bf04
+0x004099e4    1     43 fcn.004099e4
+0x004081e4    3    160 fcn.004081e4
+0x0040399c    1      6 fcn.0040399c
+0x004039f4    1      6 fcn.004039f4
+0x00403a94    1      6 fcn.00403a94
+0x004039a4    1      6 fcn.004039a4
+0x004039ac    1      6 fcn.004039ac
+0x004039b4    1      6 fcn.004039b4
+0x004039bc    1      6 fcn.004039bc
+0x00403a44    1      6 fcn.00403a44
+0x004039c4    1      6 fcn.004039c4
+0x0040bf0c    1      6 fcn.0040bf0c
+0x004039cc    1      6 fcn.004039cc
+0x004039d4    1      6 fcn.004039d4
+0x004039dc    1      6 fcn.004039dc
+0x004039e4    1      6 fcn.004039e4
+0x00403a1c    1      6 fcn.00403a1c
+0x00403a9c    1      6 fcn.00403a9c
+0x00403aa4    1      6 fcn.00403aa4
+0x00403aac    1      6 fcn.00403aac
+0x00403aec    1      6 fcn.00403aec
+0x00403ab4    1      6 fcn.00403ab4
+0x00403ac4    1      6 fcn.00403ac4
+0x00403acc    1      6 fcn.00403acc
+0x00403ad4    1      6 fcn.00403ad4
+0x00403b14    1      6 fcn.00403b14
+0x00403afc    1      6 fcn.00403afc
+0x00403af4    1      6 fcn.00403af4
+0x00403b0c    1      6 fcn.00403b0c
+0x00403b1c    1      6 fcn.00403b1c
+0x00403adc    1      6 fcn.00403adc
+0x00402b92    4    237 fcn.00402b92
+0x00403ae4    1      6 fcn.00403ae4
+0x004039ec    1      6 fcn.004039ec
+0x004039fc    1      6 fcn.004039fc
+0x00403b04    1      6 fcn.00403b04
+0x00403b24    1      6 fcn.00403b24
+0x00403b2c    1      6 fcn.00403b2c
+0x0040397c    1      6 fcn.0040397c
+0x00403a04    1      6 fcn.00403a04
+0x00403a0c    1      6 fcn.00403a0c
+0x00402c7f    1     65 fcn.00402c7f
+0x00403a14    1      6 fcn.00403a14
+0x00403a24    1      6 fcn.00403a24
+0x00403a2c    1      6 fcn.00403a2c
+0x00403a34    1      6 fcn.00403a34
+0x00403a3c    1      6 fcn.00403a3c
+0x004029e8   16    426 fcn.004029e8
+0x00403a4c    1      6 fcn.00403a4c
+0x00403a54    1      6 fcn.00403a54
+0x00403a5c    1      6 fcn.00403a5c
+0x00403b9c   10     87 fcn.00403b9c
+0x00403b3c    3     30 fcn.00403b3c
+0x00403f60    8     55 fcn.00403f60
+0x00403ff0   22    258 fcn.00403ff0
+0x00404d2c   42    403 fcn.00404d2c
+0x00404bf0   26    310 fcn.00404bf0
+0x00404ed0   30    334 fcn.00404ed0
+0x00403cd4   11    101 fcn.00403cd4
+0x004040fc   51    798 fcn.004040fc
+0x00404430   12    118 fcn.00404430
+0x00405028   18    225 fcn.00405028
+0x004059b8    9    134 fcn.004059b8
+0x00403c4c   11    132 fcn.00403c4c
+0x00405114   68    838 fcn.00405114
+0x00403d3c   46    426 fcn.00403d3c
+0x00404b10   18    219 fcn.00404b10
+0x00405470   74    832 fcn.00405470
+0x00403bf4   11     86 fcn.00403bf4
+0x0040bf4c    1      6 fcn.0040bf4c
+0x0040bf1c    1      6 fcn.0040bf1c
+0x00405ed8   23    302 fcn.00405ed8
+0x00406330    5     59 fcn.00406330
+0x0040764c    3     38 fcn.0040764c
+0x00406008   37    778 fcn.00406008
+0x00405c40   33    650 fcn.00405c40
+0x00405ba0    8    157 fcn.00405ba0
+0x00403ef0    4    110 fcn.00403ef0
+0x00405b0c    8    145 fcn.00405b0c
+0x0040771c   13    366 fcn.0040771c
+0x00407894   10    170 fcn.00407894
+0x00407944   10    238 fcn.00407944
+0x0040bf54    1      6 fcn.0040bf54
+0x00408038    3     49 fcn.00408038
+0x00407258   31    625 fcn.00407258
+0x0040bf5c    1      6 fcn.0040bf5c
+0x00402580    1     32 fcn.00402580
+0x0040bf84    1      6 fcn.0040bf84
+0x0040bf6c    1      6 fcn.0040bf6c
+0x0040bf74    1      6 fcn.0040bf74
+0x0040bfcc    1      6 fcn.0040bfcc
+0x0040bf7c    1      6 fcn.0040bf7c
+0x0040bf8c    1      6 fcn.0040bf8c
+0x0040bf94    1      6 fcn.0040bf94
+0x0040bf9c    1      6 fcn.0040bf9c
+0x0040bfc4    1      6 fcn.0040bfc4
+0x0040bfa4    1      6 fcn.0040bfa4
+0x0040bfac    1      6 fcn.0040bfac
+0x0040bfb4    1      6 fcn.0040bfb4
+0x0040bfbc    1      6 fcn.0040bfbc
+0x0040bfd4    1      6 fcn.0040bfd4
+0x00409cf4    3     82 fcn.00409cf4
+0x00403194    8    288 case.0x409d32.0
+0x004033c8    2    776 case.0x409d32.1
+0x0040bf64    1      6 fcn.0040bf64
+0x00408164    5    126 fcn.00408164
+0x0040c024    1      6 fcn.0040c024
+0x00408074   10    224 fcn.00408074
+0x00409a94    1     32 fcn.00409a94
+0x00409a14    4     60 fcn.00409a14
+0x0040be84    8     68 fcn.0040be84
+0x00409a54    6     60 fcn.00409a54
+0x0040bb34   11    305 fcn.0040bb34
+0x0040b5b4    1     33 fcn.0040b5b4
+0x0040b764   18    257 fcn.0040b764
+0x0040b5e4   17    375 fcn.0040b5e4
+0x0040bdb4   14    199 fcn.0040bdb4
+0x0040bffc    1      6 fcn.0040bffc
+0x0040bff4    1      6 fcn.0040bff4
+0x0040bfec    1      6 fcn.0040bfec
+0x0040bfe4    1      6 fcn.0040bfe4
+0x004025a0    6    132 fcn.004025a0
+0x00407ec4    1     63 fcn.00407ec4
+0x0040bf14    1      6 fcn.0040bf14
+0x0040c318    5     77 fcn.0040c318
+0x00407c50    1      6 fcn.00407c50
+0x0040c26c   15     87 fcn.0040c26c
+0x0040c06c   12    102 fcn.0040c06c
+0x0040c0d8    5     86 fcn.0040c0d8
+0x00407c40    1      6 fcn.00407c40
+0x00407c48    1      6 fcn.00407c48
+0x0040c42c    2     24 fcn.0040c42c
+0x0040c4cc    1     21 fcn.0040c4cc
+0x00407c78    1      6 fcn.00407c78
+0x00407d0c    3     73 fcn.00407d0c
+0x00407c38    1      6 fcn.00407c38
+0x0040bf34    1      6 fcn.0040bf34
+0x0040750c   25    313 fcn.0040750c
+0x0040bf3c    1      6 fcn.0040bf3c
+0x0040bf44    1      6 fcn.0040bf44
+0x0040c878    3     59 fcn.0040c878
+EOF
+RUN
+
+NAME=ccccrypt argument values from esil
+FILE=bins/mach0/MASTestApp
+CMDS=<<EOF
+e asm.bytes=false
+e asm.lines=false
+e emu.str=true
+s 0x1000040c0
+aaa
+pd 10
+EOF
+EXPECT=<<EOF
+;-- pc:
+0x1000040c0      mov w0, 0                                             ; CCOperation op
+0x1000040c4      mov w1, 2                                             ; CCAlgorithm alg
+0x1000040c8      mov w2, 1                                             ; int32_t options
+0x1000040cc      mov x3, x23
+0x1000040d0      mov w4, 0x18
+0x1000040d4      mov x5, 0
+0x1000040d8      mov x6, x22
+0x1000040dc      mov x7, x25
+0x1000040e0      bl sym.imp.CCCrypt                                    ; CCCryptorStatus CCCrypt(CCOperation op, CCAlgorithm alg, int32_t options, const void *key, uint32_t keyLength, const void *iv, const void *dataIn, uint32_t dataInLength, void *dataOut, uint32_t dataOutAvailable, uint32_t *dataOutMoved)
+                                                                       ; CCCryptorStatus CCCrypt(0, 2, 1, 0, 24, 0, 0, 0, 0, 0, 0)
+0x1000040e4      str w0, [x20]
+EOF
+RUN
+
+NAME=jump table for swift on arm64 again
+FILE=bins/mach0/MASTestApp
+CMDS=<<EOF
+e asm.bytes=false
+e asm.lines=false
+0x100004124 
+af
+pdr
+EOF
+EXPECT=<<EOF
+904: sym.func.100004124 (int64_t arg1, int64_t arg2);
+`- args(x0, x1) vars(36:sp[0x8..0x140])
+0x100004124      sub sp, sp, 0x140
+0x100004128      str x28, [var_e0h]
+0x10000412c      stp x27, x26, [var_f0h]
+0x100004130      stp x25, x24, [var_100h]
+0x100004134      stp x23, x22, [var_110h]
+0x100004138      stp x20, x19, [var_120h]
+0x10000413c      stp x29, x30, [var_130h]
+0x100004140      add x29, sp, 0x130
+0x100004144      adrp x8, reloc.Foundation.__DataStorage.bytes.allocator_...itcfc_ ; 0x10000c000
+0x100004148      ldr x8, [x8, 0x390]                                   ; [0x10000c390:8]=0x8010000000000071
+0x10000414c      ldr x8, [x8]
+0x100004150      stur x8, [var_60h]
+0x100004154      str x1, [var_80h]                                     ; arg2
+0x100004158      lsr x25, x1, 0x3e                                     ; arg2
+0x10000415c      adrp x24, reloc.Foundation.__DataStorage.bytes.allocator_...itcfc_ ; 0x10000c000
+0x100004160      ldr x24, [x24, 0x398]                                 ; [0x10000c398:8]=0x8010000000000072
+0x100004164      mov x19, x21
+0x100004168      adrp x8, sym.func.100004000                           ; 0x100004000
+0x10000416c      add x8, x8, 0x4ac
+0x100004170      adr x9, 0x100004170
+0x100004174      ldrsw x10, [x8, x25, lsl 2]
+0x100004178      add x9, x9, x10
+;-- switch:
+0x10000417c      br x9                                                 ; switch table (4 cases) at 0x1000044ac
+
+;-- case 0:                                                            ; from 0x10000417c
+; CODE XREF from sym.func.100004124 @ 0x10000417c(x)
+0x100004180      ldr x8, [var_80h]
+0x100004184      ubfx x26, x8, 0x30, 8
+0x100004188      b 0x1000041ac
+| // true: 0x1000041ac
+;-- case 1:                                                            ; from 0x10000417c
+; CODE XREF from sym.func.100004124 @ 0x10000417c(x)
+0x10000418c      lsr x8, x0, 0x20                                      ; arg1
+0x100004190      subs w8, w8, w0                                       ; arg1
+0x100004194      b.vs 0x100004498
+| // true: 0x100004498  false: 0x100004198
+0x100004198      sxtw x26, w8
+0x10000419c      b 0x1000041ac
+| // true: 0x1000041ac
+;-- case 2:                                                            ; from 0x10000417c
+; CODE XREF from sym.func.100004124 @ 0x10000417c(x)
+0x1000041a0      ldp x9, x8, [x0, 0x10]                                ; arg1
+0x1000041a4      subs x26, x8, x9
+0x1000041a8      b.vs 0x10000449c
+| // true: 0x10000449c  false: 0x1000041ac
+; CODE XREFS from sym.func.100004124 @ 0x100004188(x), 0x10000419c(x)
+0x1000041ac      adrp x24, reloc.Foundation.__DataStorage.bytes.allocator_...itcfc_ ; 0x10000c000
+0x1000041b0      ldr x24, [x24, 0x398]                                 ; [0x10000c398:8]=0x8010000000000072
+0x1000041b4      cbz x26, case.0x10000417c.3
+| // true: 0x100004438  false: 0x1000041b8
+0x1000041b8      stur x24, [var_68h]
+0x1000041bc      cmp x26, 0
+0x1000041c0      csel x1, x26, xzr, gt
+0x1000041c4      str x0, [var_88h]                                     ; arg1
+0x1000041c8      sub x20, x29, 0x68
+0x1000041cc      mov w0, 0
+0x1000041d0      mov w2, 0
+0x1000041d4      bl sym.func.1000044bc
+0x1000041d8      ldr x22, [var_88h]
+0x1000041dc      sxtw x8, w22
+0x1000041e0      str x8, [var_78h]
+0x1000041e4      str x19, [sp]
+0x1000041e8      cbz w25, 0x1000041fc
+| // true: 0x1000041fc  false: 0x1000041ec
+0x1000041ec      cmp w25, 1
+0x1000041f0      b.ne 0x100004204
+| // true: 0x100004204  false: 0x1000041f4
+0x1000041f4      ldr x23, [var_78h]
+0x1000041f8      b 0x100004208
+| // true: 0x100004208
+0x1000041fc      mov w23, w25
+0x100004200      b 0x100004208
+| // true: 0x100004208
+0x100004204      ldr x23, [x22, 0x10]
+| // true: 0x100004208
+; CODE XREFS from sym.func.100004124 @ 0x1000041f8(x), 0x100004200(x)
+0x100004208      tbnz x26, 0x3f, 0x100004494
+| // true: 0x100004494  false: 0x10000420c
+0x10000420c      ldur x24, [var_68h]
+0x100004210      asr x10, x22, 0x20
+0x100004214      ldr x9, [var_80h]
+0x100004218      and x20, x9, 0x3fffffffffffffff
+0x10000421c      ubfx x8, x9, 0x30, 8
+0x100004220      stp x10, x8, [var_sp_68h]
+0x100004224      lsr x10, x22, 8
+0x100004228      lsr x8, x22, 0x10
+0x10000422c      stp x8, x10, [var_58h]
+0x100004230      lsr x10, x22, 0x18
+0x100004234      lsr x8, x22, 0x20
+0x100004238      stp x8, x10, [var_48h]
+0x10000423c      lsr x10, x22, 0x28
+0x100004240      lsr x8, x22, 0x30
+0x100004244      stp x8, x10, [var_38h]
+0x100004248      lsr x10, x22, 0x38
+0x10000424c      lsr x8, x9, 8
+0x100004250      stp x8, x10, [var_28h]
+0x100004254      lsr x8, x9, 0x10
+0x100004258      str x8, [var_20h]
+0x10000425c      adrp x8, 0x100007000
+0x100004260      ldr q0, [x8, 0x800]                                   ; [0x100007800:8]=1
+                                                                       ; section.2.__TEXT.__const
+                                                                       [02] -r-x section size 324 named 2.__TEXT.__const
+0x100004264      str q0, [var_90h]
+0x100004268      lsr x10, x9, 0x18
+0x10000426c      lsr x8, x9, 0x20
+0x100004270      stp x8, x10, [var_10h]
+0x100004274      lsr x8, x9, 0x28
+0x100004278      str x8, [var_8h]
+0x10000427c      stp x25, x20, [var_bp_88h]
+| // true: 0x100004280
+0x100004280      cbz x26, 0x100004478
+| // true: 0x100004478  false: 0x100004284
+0x100004284      cbz w25, 0x1000042c4
+| // true: 0x1000042c4  false: 0x100004288
+0x100004288      cmp w25, 1
+0x10000428c      b.ne 0x100004348
+| // true: 0x100004348  false: 0x100004290
+0x100004290      ldr x8, [var_78h]
+0x100004294      cmp x23, x8
+0x100004298      b.lt 0x10000447c
+| // true: 0x10000447c  false: 0x10000429c
+0x10000429c      ldr x8, [var_sp_68h]
+0x1000042a0      cmp x23, x8
+0x1000042a4      b.ge 0x10000447c
+| // true: 0x10000447c  false: 0x1000042a8
+0x1000042a8      bl sym.imp.Foundation.__DataStorage._bytes.allocator__UnsafeMutableRawPointer______.Sgvg ; Foundation.__DataStorage._bytes.allocator__UnsafeMutableRawPointer -> ().Sgvg
+0x1000042ac      cbz x0, 0x1000044a0
+| // true: 0x1000044a0  false: 0x1000042b0
+0x1000042b0      mov x19, x0
+0x1000042b4      bl sym.imp.getter_Foundation.__DataStorage._offset.allocator__Swift.Int______:_allocator_offsetallocatorS_...vg_ ; getter Foundation.__DataStorage._offset.allocator__Swift.Int -> (): allocator_offsetallocatorS(...vg)
+0x1000042b8      subs x8, x23, x0
+0x1000042bc      b.vc 0x100004378
+| // true: 0x100004378  false: 0x1000042c0
+0x1000042c0      b 0x100004488
+| // true: 0x100004488
+0x1000042c4      ldr x8, [var_70h]
+0x1000042c8      cmp x23, x8
+0x1000042cc      b.ge 0x100004480
+| // true: 0x100004480  false: 0x1000042d0
+0x1000042d0      sturb w22, [var_bp_78h]
+0x1000042d4      ldr x8, [var_sp_60h]
+0x1000042d8      sturb w8, [var_bp_78h]
+0x1000042dc      ldr x8, [var_58h]
+0x1000042e0      sturb w8, [var_bp_78h]
+0x1000042e4      ldr x8, [var_50h]
+0x1000042e8      sturb w8, [var_bp_78h]
+0x1000042ec      ldr x8, [var_48h]
+0x1000042f0      sturb w8, [var_bp_78h]
+0x1000042f4      ldr x8, [var_40h]
+0x1000042f8      sturb w8, [var_bp_78h]
+0x1000042fc      ldr x8, [var_38h]
+0x100004300      sturb w8, [var_bp_78h]
+0x100004304      ldr x8, [var_30h]
+0x100004308      sturb w8, [var_bp_78h]
+0x10000430c      ldr x8, [var_80h]
+0x100004310      sturb w8, [var_bp_70h]
+0x100004314      ldr x8, [var_28h]
+0x100004318      sturb w8, [var_bp_70h]
+0x10000431c      ldr x8, [var_20h]
+0x100004320      sturb w8, [var_bp_70h]
+0x100004324      ldr x8, [var_18h]
+0x100004328      sturb w8, [var_bp_70h]
+0x10000432c      ldr x8, [var_10h]
+0x100004330      sturb w8, [var_bp_70h]
+0x100004334      ldr x8, [var_8h]
+0x100004338      sturb w8, [var_bp_70h]
+0x10000433c      sub x8, x29, 0x78
+0x100004340      ldrb w19, [x8, x23]
+0x100004344      b 0x100004380
+| // true: 0x100004380
+0x100004348      ldr x8, [x22, 0x10]
+0x10000434c      cmp x23, x8
+0x100004350      b.lt 0x100004484
+| // true: 0x100004484  false: 0x100004354
+0x100004354      ldr x8, [x22, 0x18]
+0x100004358      cmp x23, x8
+0x10000435c      b.ge 0x10000448c
+| // true: 0x10000448c  false: 0x100004360
+0x100004360      bl sym.imp.Foundation.__DataStorage._bytes.allocator__UnsafeMutableRawPointer______.Sgvg ; Foundation.__DataStorage._bytes.allocator__UnsafeMutableRawPointer -> ().Sgvg
+0x100004364      cbz x0, 0x1000044a4
+| // true: 0x1000044a4  false: 0x100004368
+0x100004368      mov x19, x0
+0x10000436c      bl sym.imp.getter_Foundation.__DataStorage._offset.allocator__Swift.Int______:_allocator_offsetallocatorS_...vg_ ; getter Foundation.__DataStorage._offset.allocator__Swift.Int -> (): allocator_offsetallocatorS(...vg)
+0x100004370      subs x8, x23, x0
+0x100004374      b.vs 0x100004490
+| // true: 0x100004490  false: 0x100004378
+0x100004378      ldrb w19, [x19, x8]
+0x10000437c      ldr x22, [var_88h]
+| // true: 0x100004380
+; CODE XREF from sym.func.100004124 @ 0x100004344(x)
+0x100004380      adrp x0, segment.__DATA                               ; 0x100010000
+0x100004384      add x0, x0, 0xc0
+0x100004388      bl sym.func.10000524c
+0x10000438c      mov w1, 0x48                                          ; 'H'
+0x100004390      mov w2, 7
+0x100004394      bl sym.imp.swift_allocObject
+0x100004398      mov x2, x0
+0x10000439c      ldr q0, [var_90h]
+0x1000043a0      str q0, [x0, 0x10]
+0x1000043a4      adrp x8, reloc.Foundation.__DataStorage.bytes.allocator_...itcfc_ ; 0x10000c000
+0x1000043a8      ldr x8, [x8, 0x360]                                   ; [0x10000c360:8]=0x801000000000006b
+0x1000043ac      str x8, [x0, 0x38]
+0x1000043b0      adrp x8, reloc.Foundation.__DataStorage.bytes.allocator_...itcfc_ ; 0x10000c000
+0x1000043b4      ldr x8, [x8, 0x368]                                   ; [0x10000c368:8]=0x801000000000006c
+0x1000043b8      str x8, [x0, 0x40]
+0x1000043bc      strb w19, [x0, 0x20]
+0x1000043c0      mov x0, 0x3025                                        ; '%0'
+0x1000043c4      movk x0, 0x6832, lsl 16                               ; '2h'
+0x1000043c8      movk x0, 0x7868, lsl 32                               ; 'hx'
+0x1000043cc      mov x1, -0x1a00000000000000
+0x1000043d0      bl sym.imp.FoundationCVarArg_...dtcfC_                ; FoundationCVarArg(...dtcfC)
+0x1000043d4      mov x27, x0
+0x1000043d8      mov x28, x1
+0x1000043dc      stur x24, [var_68h]
+0x1000043e0      ldp x25, x8, [x24, 0x10]
+0x1000043e4      add x19, x25, 1
+0x1000043e8      cmp x25, x8, lsr 1
+0x1000043ec      b.hs 0x100004410
+| // true: 0x100004410  false: 0x1000043f0
+; CODE XREF from sym.func.100004124 @ 0x100004430(x)
+0x1000043f0      str x19, [x24, 0x10]
+0x1000043f4      add x8, x24, x25, lsl 4
+0x1000043f8      stp x27, x28, [x8, 0x20]
+0x1000043fc      add x23, x23, 1
+0x100004400      subs x26, x26, 1
+0x100004404      ldp x25, x20, [var_bp_88h]
+0x100004408      b.ne 0x100004280
+| // true: 0x100004280  false: 0x10000440c
+0x10000440c      b 0x100004434
+| // true: 0x100004434
+0x100004410      cmp x8, 1
+0x100004414      cset w0, hi
+0x100004418      sub x20, x29, 0x68
+0x10000441c      mov x1, x19
+0x100004420      mov w2, 1
+0x100004424      bl sym.func.1000044bc
+0x100004428      ldr x22, [var_88h]
+0x10000442c      ldur x24, [var_68h]
+0x100004430      b 0x1000043f0
+| // true: 0x1000043f0
+; CODE XREF from sym.func.100004124 @ 0x10000440c(x)
+0x100004434      ldr x19, [sp]
+| // true: 0x100004438
+;-- case 3:                                                            ; from 0x10000417c
+; CODE XREF from sym.func.100004124 @ 0x10000417c(x)
+0x100004438      ldur x8, [var_60h]
+0x10000443c      adrp x9, reloc.Foundation.__DataStorage.bytes.allocator_...itcfc_ ; 0x10000c000
+0x100004440      ldr x9, [x9, 0x390]                                   ; [0x10000c390:8]=0x8010000000000071
+0x100004444      ldr x9, [x9]
+0x100004448      cmp x9, x8
+0x10000444c      b.ne 0x1000044a8
+| // true: 0x1000044a8  false: 0x100004450
+0x100004450      mov x0, x24
+0x100004454      mov x21, x19
+0x100004458      ldp x29, x30, [var_130h]
+0x10000445c      ldp x20, x19, [var_120h]
+0x100004460      ldp x23, x22, [var_110h]
+0x100004464      ldp x25, x24, [var_100h]
+0x100004468      ldp x27, x26, [var_f0h]
+0x10000446c      ldr x28, [var_e0h]
+0x100004470      add sp, sp, 0x140
+0x100004474      ret
+
+0x100004478      brk 1
+
+0x10000447c      brk 1
+
+0x100004480      brk 1
+
+0x100004484      brk 1
+
+; CODE XREF from sym.func.100004124 @ 0x1000042c0(x)
+0x100004488      brk 1
+
+0x10000448c      brk 1
+
+0x100004490      brk 1
+
+0x100004494      brk 1
+
+0x100004498      brk 1
+
+0x10000449c      brk 1
+
+0x1000044a0      brk 1
+
+0x1000044a4      brk 1
+
+0x1000044a8      bl sym.imp.__stack_chk_fail
+
+EOF
+RUN
+
+NAME=arm64 jmptbl with multiple adrp before adds
+FILE=bins/elf/libarm64.so
+CMDS=<<EOF
+aaa
+CC.@0x00005bf4
+CC.@0x0000aab0
+CC.@0x0000b630
+CC.@0x0000baf0
+EOF
+EXPECT=<<EOF
+switch table (7 cases) at 0xe080
+switch table (7 cases) at 0xe09c
+switch table (15 cases) at 0xe100
+switch table (31 cases) at 0xe13c
+EOF
+RUN
+
+NAME=afbt manual jmptbl reconstruction
+FILE=bins/jmptbl/test_gcc_5.5.0_64.out
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+s 0x59d
+af+ 0x580 main
+afb+ 0x580 0x580 0xd 0x58d 0x622
+afb+ 0x580 0x58d 0x12
+afbt 0x844 4 14 0x844
+f~switch
+f~case.
+?e --
+C~Cd 4
+?e --
+ah~immbase
+?e --
+afb 0x580
+EOF
+EXPECT=<<EOF
+0x0000059d 1 switch.0x0000059d
+0x0000059f 1 case.0x59d.13
+0x000005b2 1 case.0x59d.1
+0x000005c0 1 case.0x59d.2
+0x000005c0 1 case.0x59d.3
+0x000005c0 1 case.0x59d.4
+0x000005ce 1 case.0x59d.5
+0x000005dc 1 case.0x59d.6
+0x000005ea 1 case.0x59d.7
+0x000005f8 1 case.0x59d.9
+0x00000606 1 case.0x59d.11
+0x00000614 1 case.0x59d.12
+0x00000622 1 case.0x59d.0
+0x00000622 1 case.0x59d.8
+0x00000622 1 case.0x59d.10
+0x00000622 1 case.default.0x59d
+--
+0x00000844 data Cd 4
+0x00000848 data Cd 4
+0x0000084c data Cd 4
+0x00000850 data Cd 4
+0x00000854 data Cd 4
+0x00000858 data Cd 4
+0x0000085c data Cd 4
+0x00000860 data Cd 4
+0x00000864 data Cd 4
+0x00000868 data Cd 4
+0x0000086c data Cd 4
+0x00000870 data Cd 4
+0x00000874 data Cd 4
+0x00000878 data Cd 4
+--
+ 0x00000844 => immbase=10
+ 0x00000848 => immbase=10
+ 0x0000084c => immbase=10
+ 0x00000850 => immbase=10
+ 0x00000854 => immbase=10
+ 0x00000858 => immbase=10
+ 0x0000085c => immbase=10
+ 0x00000860 => immbase=10
+ 0x00000864 => immbase=10
+ 0x00000868 => immbase=10
+ 0x0000086c => immbase=10
+ 0x00000870 => immbase=10
+ 0x00000874 => immbase=10
+ 0x00000878 => immbase=10
+--
+0x00000580 0x0000058d 00:0000 13 j 0x0000058d f 0x00000622
+0x0000058d 0x0000059f 00:0000 18 s 0x00000622 s 0x000005b2 s 0x000005c0 s 0x000005ce s 0x000005dc s 0x000005ea s 0x000005f8 s 0x00000606 s 0x00000614 s 0x0000059f
+0x0000059f 0x000005ab 00:0000 12 j 0x000005ab
+0x000005ab 0x000005b2 00:0000 7
+0x000005b2 0x000005c0 00:0000 14 j 0x000005ab
+0x000005c0 0x000005ce 00:0000 14 j 0x000005ab
+0x000005ce 0x000005dc 00:0000 14 j 0x000005ab
+0x000005dc 0x000005ea 00:0000 14 j 0x000005ab
+0x000005ea 0x000005f8 00:0000 14 j 0x000005ab
+0x000005f8 0x00000606 00:0000 14 j 0x000005ab
+0x00000606 0x00000614 00:0000 14 j 0x000005ab
+0x00000614 0x00000622 00:0000 14 j 0x000005ab
+0x00000622 0x00000633 00:0000 17 j 0x000005ab
+EOF
+RUN
+
+NAME=afbt keeps switch cases after dispatch block split
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e anal.nopskip=false
+wx 90909090909090909090909090909090909090909090909090909090909090c3 @ 0
+wx c3 @ 0x300
+wx 1000000000030000 @ 0x200
+af+ 0 split_switch
+afb+ 0 0 32
+s 0x10
+afbt tbl=0x200 esz=4 n=2 base=0
+afbi @ 0x10~cases:,switch_at,case.
+EOF
+EXPECT=<<EOF
+cases: 2
+switch_at: 0x00000010
+case.0: 0x00000010
+case.1: 0x00000300
+EOF
+RUN
+
+NAME=afbt legacy metadata follows dispatch block split
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e anal.nopskip=false
+wx 90909090909090909090909090909090909090909090909090909090909090c3 @ 0
+wx c3 @ 0x300
+wx 1000000000030000 @ 0x200
+af+ 0 split_switch
+afb+ 0 0 32
+s 0x10
+afbt tbl=0x200 esz=4 n=2 low=7 reg=rax
+afbi @ 0x10~cases:,switch_at,case.
+afbt*
+EOF
+EXPECT=<<EOF
+cases: 2
+switch_at: 0x00000010
+case.7: 0x00000010
+case.8: 0x00000300
+'0x00000010'afbt tbl=0x200 esz=4 n=2 low=7 reg=rax
+EOF
+RUN
+
+NAME=afbt indirect metadata follows dispatch block split
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e anal.nopskip=false
+wx 90909090909090909090909090909090909090909090909090909090909090c3 @ 0
+wx c3 @ 0x300
+wx 1000000000030000 @ 0x200
+wx 0001 @ 0x240
+af+ 0 split_switch
+afb+ 0 0 32
+s 0x10
+afbt tbl=0x200 esz=4 n=2 vtbl=0x240 vsz=1 indir=1 low=7 reg=rax
+afbi @ 0x10~cases:,switch_at,case.
+afbt*
+EOF
+EXPECT=<<EOF
+cases: 2
+switch_at: 0x00000010
+case.7: 0x00000010
+case.8: 0x00000300
+'0x00000010'afbt tbl=0x200 esz=4 n=2 vtbl=0x240 vsz=1 low=7 reg=rax indir=1
+EOF
+RUN
+
+NAME=afbt star output uses call-at syntax
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+wx c3 @ 0x100
+wx c3 @ 0x300
+wx c3 @ 0x320
+wx 000300000000000020030000 @ 0x200
+wx 010203 @ 0x240
+s 0x100
+af+ 0x100 sparse_switch
+afb+ 0x100 0x100 1
+afbt tbl=0x200 esz=4 n=3 vtbl=0x240 vsz=1 sparse=1 base=0
+afbt*
+afbt* > /tmp/r2r-afbt-star.r2
+f- case.0x100.1
+f- case.0x100.3
+f- switch.0x100
+af- $$
+af+ 0x100 sparse_switch
+afb+ 0x100 0x100 1
+. /tmp/r2r-afbt-star.r2
+?e --
+f~case.
+!rm -f /tmp/r2r-afbt-star.r2
+EOF
+EXPECT=<<EOF
+'0x00000100'afbt tbl=0x200 esz=4 n=3 base=0x0 vtbl=0x240 vsz=1 sparse=1
+--
+0x00000300 1 case.0x100.1
+0x00000320 1 case.0x100.3
+EOF
+RUN
+
+NAME=afbt sparse skips zero sentinel entries
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+wx c3 @ 0x100
+wx c3 @ 0x300
+wx c3 @ 0x320
+wx 000300000000000020030000 @ 0x200
+wx 010203 @ 0x240
+s 0x100
+af+ 0x100 sparse_switch
+afb+ 0x100 0x100 1
+afbt tbl=0x200 esz=4 n=3 vtbl=0x240 vsz=1 sparse=1 base=0
+f~case.
+?e --
+C~Cd 4
+EOF
+EXPECT=<<EOF
+0x00000300 1 case.0x100.1
+0x00000320 1 case.0x100.3
+--
+0x00000200 data Cd 4
+0x00000204 data Cd 4
+0x00000208 data Cd 4
+EOF
+RUN
+
+NAME=afbt user override preserves long register name
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+wx c3 @ 0x100
+wx c3 @ 0x300
+wx 00030000 @ 0x200
+s 0x100
+af+ 0x100 long_reg_switch
+afb+ 0x100 0x100 1
+afbt tbl=0x200 esz=4 n=1 base=0 reg=reg_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz user=1
+k anal/switches/0x100
+EOF
+EXPECT=<<EOF
+j=0x200,e=4,n=1,s=0,b=0x0,d=0xffffffffffffffff,v=0xffffffffffffffff,V=0,L=0,F=0x300,r=reg_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz
+EOF
+RUN
+
+NAME=pc-relative indirect jmp is not a jump table
+FILE=malloc://0x1000
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 4839f77406ff25f5000000c3 @ 0x100
+wx c3 @ 0x300
+wx 0003000000000000000300000000000000030000000000000003000000000000 @ 0x200
+af @ 0x100
+f~case.~?
+afbj @ 0x100~switch_op~?
+afi @ 0x100~num-bbs
+EOF
+EXPECT=<<EOF
+0
+0
+num-bbs: 3
+EOF
+RUN
+
+NAME=pc-relative tail call after a scaled load is not a jump table
+FILE=bins/elf/bash
+CMDS=<<EOF
+af @ 0x43290
+f~case.~?
+pdf @ 0x43290~switch table?
+EOF
+EXPECT=<<EOF
+0
+0
+EOF
+RUN
+
+NAME=afbt keeps switch cases after a case deletes the dispatch block
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e anal.nopskip=false
+e anal.jmp.mid=false
+wx b890909090b890909090b890909090b890909090b890909090b8909090909090c3 @ 0
+wx c3 @ 0x310
+wx 08000000100000001003000010030000 @ 0x200
+af+ 0 split_switch
+afb+ 0 0 33
+s 0x10
+afbt tbl=0x200 esz=4 n=4 base=0
+afbi @ 0x10~cases:,switch_at,case.
+EOF
+EXPECT=<<EOF
+cases: 4
+switch_at: 0x00000010
+case.0: 0x00000008
+case.1: 0x00000010
+case.2: 0x00000310
+case.3: 0x00000310
+EOF
+RUN
+
+NAME=arm switch keeps its cases after a case deletes the dispatch block
+FILE=malloc://1024
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 0010a0e30020a0e3030050e300f19f971eff2fe1240100000c0100002c0100002c010000010050e12af01f15 @ 0x100
+wx 1eff2fe1 @@s:0x12c 0x18c 4
+af @ 0x100
+afbi @ 0x10c~cases:,switch_at,case.
+EOF
+EXPECT=<<EOF
+cases: 4
+switch_at: 0x0000010c
+case.0: 0x00000124
+case.1: 0x0000010c
+case.2: 0x0000012c
+case.3: 0x0000012c
+EOF
+RUN
+
+NAME=x86 switch keeps its cases after a case deletes the dispatch block
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 488d15f900000083f805c39090909090909090b0b8ffe09090c331c0c3 @ 0x100
+wx 14ffffff15ffffff14ffffff1affffff @ 0x200
+af @ 0x100
+afbi @ 0x115~cases:,switch_at,case.
+EOF
+EXPECT=<<EOF
+cases: 4
+switch_at: 0x00000115
+case.0: 0x00000114
+case.1: 0x00000115
+case.2: 0x00000114
+case.3: 0x0000011a
+EOF
+RUN
+
+NAME=arm64 byte jump table in a readable map
+FILE=malloc://0x1000
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 1f140071c8000054c9370010aa0700102b6960384a090b8b40011fd6c0035fd6 @ 0x100
+wx c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6 @ 0x200
+wx 000102030405 @ 0x800
+af @ 0x100
+afbi @ 0x108~cases:
+f~case.~?
+EOF
+EXPECT=<<EOF
+cases: 6
+7
+EOF
+RUN
+
+NAME=arm64 jump table in an unreadable map is not a switch
+FILE=malloc://0x1000
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 1f140071c8000054c9370010aa0700102b6960384a090b8b40011fd6c0035fd6 @ 0x100
+wx c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6c0035fd6 @ 0x200
+wx 000102030405 @ 0x800
+om 3 0x800 8 0x800 --- table
+af @ 0x100
+afbi @ 0x108~cases:~?
+f~case.~?
+afi @ 0x100~num-bbs
+EOF
+EXPECT=<<EOF
+0
+0
+num-bbs: 3
+EOF
+RUN

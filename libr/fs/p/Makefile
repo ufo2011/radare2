@@ -2,7 +2,7 @@ include ../../config.mk
 include ../../../mk/platform.mk
 
 CFLAGS+=-I$(LIBR)/include -Wall -shared ${PIC_CFLAGS} ${LDFLAGS_LIB} ${LDFLAGS_LINKPATH}..
-GRUB=$(LIBR)../shlr/grub/libgrub.a
+GRUB=$(LIBR)/fs/p/grub/libgrub.a
 #CFLAGS+=-I../../include
 LDFLAGS+=${LINK}
 
@@ -11,9 +11,14 @@ all:
 
 #FILESYSTEMS=hfs.mk iso9660.mk jfs.mk
 #FILESYSTEMS=hfsplus.mk
-FILESYSTEMS=ext2.mk fat.mk ntfs.mk reiserfs.mk tar.mk udf.mk ufs2.mk ufs.mk xfs.mk hfs.mk
+FILESYSTEMS=ext2.mk fat.mk ntfs.mk reiserfs.mk tar.mk ubifs.mk udf.mk ufs2.mk ufs.mk xfs.mk hfs.mk tmp.mk apfs.mk fatmacho.mk fossil.mk sep64.mk p9.mk
+FILESYSTEMS+=squashfs.mk
 include $(FILESYSTEMS)
 
+ifeq ($(R2_USE_SQSH),1)
+CFLAGS+=$(SQSH_CFLAGS)
+LDFLAGS+=$(SQSH_LDFLAGS)
+endif
 clean:
 	-rm -f *.${EXT_SO} *.o ${STATIC_OBJ}
 

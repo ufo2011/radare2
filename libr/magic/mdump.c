@@ -34,69 +34,102 @@
 #if !USE_LIB_MAGIC
 
 #include "file.h"
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <time.h>
+#include <r_util.h>
 
-#define SZOF(a)	(sizeof(a) / sizeof(a[0]))
+#define SZOF(a) (sizeof (a) / sizeof (a[0]))
+
+static void append_showstr(RStrBuf *sb, const char *s, size_t len) {
+	for (;;) {
+		char c = *s++;
+		if (len == ~0U) {
+			if (c == '\0') {
+				break;
+			}
+		} else {
+			if (len-- == 0) {
+				break;
+			}
+		}
+		if (c >= 040 && c <= 0176) {
+			r_strbuf_append_n (sb, &c, 1);
+		} else {
+			r_strbuf_append (sb, "\\");
+			switch (c) {
+			case '\a': r_strbuf_append (sb, "a"); break;
+			case '\b': r_strbuf_append (sb, "b"); break;
+			case '\f': r_strbuf_append (sb, "f"); break;
+			case '\n': r_strbuf_append (sb, "n"); break;
+			case '\r': r_strbuf_append (sb, "r"); break;
+			case '\t': r_strbuf_append (sb, "t"); break;
+			case '\v': r_strbuf_append (sb, "v"); break;
+			default:
+				r_strbuf_appendf (sb, "%.3o", c & 0377);
+				break;
+			}
+		}
+	}
+}
 
 #ifndef COMPILE_ONLY
-void file_mdump(struct r_magic *m) {
-	static const char optyp[] = { FILE_OPS };
-	char pp[ASCTIME_BUF_MINLEN];
+char *__magic_file_mrender(RMagic *ms, struct r_magic *m) {
+	char pp[ASCTIME_BUF_MAXLEN];
+	RStrBuf *sb = r_strbuf_new ("");
+	if (!sb) {
+		return NULL;
+	}
 
-	(void) eprintf ("[%u", m->lineno);
-	(void) eprintf ("%.*s %u", m->cont_level & 7, ">>>>>>>>", m->offset);
+	r_strbuf_appendf (sb, "[%u", m->lineno);
+	r_strbuf_appendf (sb, "%.*s %u", m->cont_level & 7, ">>>>>>>>", m->offset);
 
 	if (m->flag & INDIR) {
-		(void) eprintf ("(%s,",
-			       /* Note: type is unsigned */
-			       (m->in_type < file_nnames) ?
-					magic_file_names[m->in_type] : "*bad*");
-		if (m->in_op & FILE_OPINVERSE)
-			(void) fputc('~', stderr);
-		(void) eprintf ("%c%u),",
-			       ((m->in_op & FILE_OPS_MASK) < SZOF(optyp)) ?
-					optyp[m->in_op & FILE_OPS_MASK] : '?',
-				m->in_offset);
-	}
-	(void) eprintf (" %s%s", (m->flag & UNSIGNED) ? "u" : "",
-		       /* Note: type is unsigned */
-		       (m->type < file_nnames) ? magic_file_names[m->type] : "*bad*");
-	if (m->mask_op & FILE_OPINVERSE)
-		(void) fputc('~', stderr);
-
-	if (MAGIC_IS_STRING(m->type)) {
-		if (m->str_flags) {
-			(void) fputc('/', stderr);
-			if (m->str_flags & STRING_COMPACT_BLANK)
-				(void) fputc(CHAR_COMPACT_BLANK, stderr);
-			if (m->str_flags & STRING_COMPACT_OPTIONAL_BLANK)
-				(void) fputc(CHAR_COMPACT_OPTIONAL_BLANK,
-				    stderr);
-			if (m->str_flags & STRING_IGNORE_LOWERCASE)
-				(void) fputc(CHAR_IGNORE_LOWERCASE, stderr);
-			if (m->str_flags & STRING_IGNORE_UPPERCASE)
-				(void) fputc(CHAR_IGNORE_UPPERCASE, stderr);
-			if (m->str_flags & REGEX_OFFSET_START)
-				(void) fputc(CHAR_REGEX_OFFSET_START, stderr);
+		r_strbuf_appendf (sb, "(%s,",
+			/* Note: type is unsigned */
+			(m->in_type < FILE_NAMES_SIZE)? ms->magic_file_names[m->in_type]: "*bad*");
+		if (m->in_op & FILE_OPINVERSE) {
+			r_strbuf_append (sb, "~");
 		}
-		if (m->str_range)
-			(void) eprintf ("/%u", m->str_range);
+		r_strbuf_appendf (sb, "%c%u),", ((m->in_op & FILE_OPS_MASK) < SZOF (FILE_OPS))? FILE_OPS[m->in_op & FILE_OPS_MASK]: '?', m->in_offset);
 	}
-	else {
-		if ((m->mask_op & FILE_OPS_MASK) < SZOF(optyp))
-			(void) fputc(optyp[m->mask_op & FILE_OPS_MASK], stderr);
-		else
-			(void) fputc('?', stderr);
+	r_strbuf_appendf (sb, " %s%s", (m->flag & UNSIGNED)? "u": "",
+		/* Note: type is unsigned */
+		(m->type < FILE_NAMES_SIZE)? ms->magic_file_names[m->type]: "*bad*");
+	if (m->mask_op & FILE_OPINVERSE) {
+		r_strbuf_append (sb, "~");
+	}
 
-		if (m->num_mask)
-			(void) eprintf ("%08"PFMT64x, (ut64)m->num_mask);
+	if (MAGIC_IS_STRING (m->type)) {
+		if (m->str_flags) {
+			r_strbuf_append (sb, "/");
+			if (m->str_flags & STRING_COMPACT_BLANK) {
+				r_strbuf_appendf (sb, "%c", CHAR_COMPACT_BLANK);
+			}
+			if (m->str_flags & STRING_COMPACT_OPTIONAL_BLANK) {
+				r_strbuf_appendf (sb, "%c", CHAR_COMPACT_OPTIONAL_BLANK);
+			}
+			if (m->str_flags & STRING_IGNORE_LOWERCASE) {
+				r_strbuf_appendf (sb, "%c", CHAR_IGNORE_LOWERCASE);
+			}
+			if (m->str_flags & STRING_IGNORE_UPPERCASE) {
+				r_strbuf_appendf (sb, "%c", CHAR_IGNORE_UPPERCASE);
+			}
+			if (m->str_flags & REGEX_OFFSET_START) {
+				r_strbuf_appendf (sb, "%c", CHAR_REGEX_OFFSET_START);
+			}
+		}
+		if (m->str_range) {
+			r_strbuf_appendf (sb, "/%u", m->str_range);
+		}
+	} else {
+		if ((m->mask_op & FILE_OPS_MASK) < SZOF (FILE_OPS)) {
+			r_strbuf_appendf (sb, "%c", FILE_OPS[m->mask_op & FILE_OPS_MASK]);
+		} else {
+			r_strbuf_append (sb, "?");
+		}
+		if (m->num_mask) {
+			r_strbuf_appendf (sb, "%08" PFMT64x, (ut64)m->num_mask);
+		}
 	}
-	(void) eprintf (",%c", m->reln);
+	r_strbuf_appendf (sb, ",%c", m->reln);
 
 	if (m->reln != 'x') {
 		switch (m->type) {
@@ -108,12 +141,12 @@ void file_mdump(struct r_magic *m) {
 		case FILE_MELONG:
 		case FILE_BESHORT:
 		case FILE_BELONG:
-			(void) eprintf ("%d", m->value.l);
+			r_strbuf_appendf (sb, "%d", m->value.l);
 			break;
 		case FILE_BEQUAD:
 		case FILE_LEQUAD:
 		case FILE_QUAD:
-			(void) eprintf ("%"PFMT64d, (ut64)m->value.q);
+			r_strbuf_appendf (sb, "%" PFMT64d, (ut64)m->value.q);
 			break;
 		case FILE_PSTRING:
 		case FILE_STRING:
@@ -121,108 +154,95 @@ void file_mdump(struct r_magic *m) {
 		case FILE_BESTRING16:
 		case FILE_LESTRING16:
 		case FILE_SEARCH:
-			file_showstr(stderr, m->value.s, (size_t)m->vallen);
+			append_showstr (sb, m->value.s, (size_t)m->vallen);
 			break;
 		case FILE_DATE:
 		case FILE_LEDATE:
 		case FILE_BEDATE:
 		case FILE_MEDATE:
-			(void)eprintf ("%s,",
-			    file_fmttime (m->value.l, 1, pp));
+			r_strbuf_appendf (sb, "%s,", __magic_file_fmttime (m->value.l, 1, pp));
 			break;
 		case FILE_LDATE:
 		case FILE_LELDATE:
 		case FILE_BELDATE:
 		case FILE_MELDATE:
-			(void)eprintf ("%s,",
-			    file_fmttime (m->value.l, 0, pp));
+			r_strbuf_appendf (sb, "%s,", __magic_file_fmttime (m->value.l, 0, pp));
 			break;
 		case FILE_QDATE:
 		case FILE_LEQDATE:
 		case FILE_BEQDATE:
-			(void)eprintf ("%s,",
-			    file_fmttime ((ut32)m->value.q, 1, pp));
+			r_strbuf_appendf (sb, "%s,", __magic_file_fmttime ((ut32)m->value.q, 1, pp));
 			break;
 		case FILE_QLDATE:
 		case FILE_LEQLDATE:
 		case FILE_BEQLDATE:
-			(void)eprintf ("%s,",
-			    file_fmttime ((ut32)m->value.q, 0, pp));
+			r_strbuf_appendf (sb, "%s,", __magic_file_fmttime ((ut32)m->value.q, 0, pp));
 			break;
 		case FILE_FLOAT:
 		case FILE_BEFLOAT:
 		case FILE_LEFLOAT:
-			(void) eprintf ("%G", m->value.f);
+			r_strbuf_appendf (sb, "%G", m->value.f);
 			break;
 		case FILE_DOUBLE:
 		case FILE_BEDOUBLE:
 		case FILE_LEDOUBLE:
-			(void) eprintf ("%G", m->value.d);
+			r_strbuf_appendf (sb, "%G", m->value.d);
 			break;
 		case FILE_DEFAULT:
 			/* XXX - do anything here? */
 			break;
 		default:
-			(void) fputs("*bad*", stderr);
+			r_strbuf_append (sb, "*bad*");
 			break;
 		}
 	}
-	(void) eprintf (",\"%s\"]\n", m->desc);
+	r_strbuf_appendf (sb, ",\"%s\"]", m->desc);
+	return r_strbuf_drain (sb);
+}
+
+void __magic_file_mdump(RMagic *ms, struct r_magic *m) {
+	char *msg = __magic_file_mrender (ms, m);
+	if (!msg) {
+		return;
+	}
+	R_LOG_DEBUG ("%s", msg);
+	free (msg);
 }
 #endif
 
 /*VARARGS*/
-void file_magwarn(struct r_magic_set *ms, const char *f, ...) {
+void __magic_file_magwarn(RMagic *ms, const char *f, ...) {
 	va_list va;
-
-	/* cuz we use stdout for most, stderr here */
-	(void) fflush(stdout);
-
-	if (ms->file)
-		(void) eprintf ("%s, %lu: ", ms->file,
-		    (unsigned long)ms->line);
-	(void) eprintf ("Warning: ");
-	va_start(va, f);
-	(void) vfprintf (stderr, f, va);
-	va_end(va);
-	(void) fputc('\n', stderr);
+	RStrBuf *sb = r_strbuf_new ("");
+	if (R_STR_ISNOTEMPTY (ms->file)) {
+		r_strbuf_appendf (sb, "%s, %lu: ", ms->file, (unsigned long)ms->line);
+	}
+	va_start (va, f);
+	r_strbuf_vappendf (sb, f, va);
+	va_end (va);
+	char *msg = r_strbuf_drain (sb);
+	R_LOG_WARN ("%s", msg);
+	free (msg);
 }
 
-const char *file_fmttime(ut32 v, int local, char *pp) {
+const char *__magic_file_fmttime(ut32 v, int local, char *pp) {
 	time_t t = (time_t)v;
-	struct tm timestruct;
 
 	if (local) {
 		r_ctime_r (&t, pp);
 	} else {
-#ifndef HAVE_DAYLIGHT
-		static int daylight = 0;
-#ifdef HAVE_TM_ISDST
-		static time_t now = (time_t)0;
-
-		if (now == (time_t)0) {
-			struct tm *tm1;
-			(void)time (&now);
-			tm1 = localtime (&now);
-			if (!tm1)
-				return "*Invalid time*";
-			daylight = tm1->tm_isdst;
-		}
-#endif /* HAVE_TM_ISDST */
-#endif /* HAVE_DAYLIGHT */
-		if (daylight) {
-			t += 3600;
-		}
 #if __MINGW32__
 		// nothing
 #else
+		struct tm timestruct;
 		struct tm *tm = gmtime_r (&t, &timestruct);
-		if (!tm)
+		if (!tm) {
 			return "*Invalid time*";
+		}
 		r_asctime_r (tm, pp);
 #endif
 	}
-
+	// TODO i dont like string spoons
 	pp[strcspn (pp, "\n")] = '\0';
 	return pp;
 }

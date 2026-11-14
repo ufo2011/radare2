@@ -1,51 +1,9 @@
 #!/bin/sh
 
-GetPlatform() {
-	# Get OS and platform to decide if we need to limit memory usage
-	# during the build
-	PLATFORM=$(uname -a)
-	case "$PLATFORM" in
-	"Linux raspberrypi"*) MAX_MEM_PER_JOB=300000;;
-	"Linux"*) MAX_MEM_PER_JOB=150000;;
-	*) MAX_MEM_PER_JOB=200000 # If platform is not Linux (fallback value)
-	esac
-}
-
-BuildJobsThrottler(){
-	echo "Building on Linux : computing number of allowed parallel jobs."
-	echo "Maximum allowed RAM memory per job is $MAX_MEM_PER_JOB kB."
-
-	# Get number of CPUs on this target
-	# getconf does not exit on Darwin. Use sysctl on Darwin machines.
-	CPU_N=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)
-	printf "Number of CPUs is %s and "  "$CPU_N"
-
-	# Get remaining RAM that could be used for this build
-	FREE_RAM=$(grep MemAvailable /proc/meminfo | sed 's/[^0-9]//g')
-
-	DEFAULT_MAX_MEM_PER_JOB=200000
-	[ -z "${MAX_MEM_PER_JOB}" ] && MAX_MEM_PER_JOB="$DEFAULT_MAX_MEM_PER_JOB" # Defensive, prevent devision by 0
-
-	# Assuming we may have many 300MB compilation jobs running in parallel
-	MEM_ALLOWED_JOBS=$((FREE_RAM / MAX_MEM_PER_JOB))
-	echo "current free RAM allows us to run $MEM_ALLOWED_JOBS jobs in parallel."
-
-	# Set number of build jobs to be run in parallel as the minimum between $MEM_ALLOWED_JOBS and $CPU_N
-	MAKE_JOBS=$((MEM_ALLOWED_JOBS<CPU_N?MEM_ALLOWED_JOBS:CPU_N))
-	if [ ${MAKE_JOBS} -lt 1 ]; then
-		MAKE_JOBS=8
-	fi
-	echo "So, the build will run on $MAKE_JOBS job(s)."
-}
-
 OSNAME=$(uname)
+unset LINK
 
-if [ "${OSNAME}" = Linux ]; then
-	# Identify current platform
-	GetPlatform
-	# Define number of parallel jobs depending on ncpus and memory
-	BuildJobsThrottler
-fi
+. `dirname $0`/make-jobs.inc.sh
 
 if [ -z "${MAKE}" ]; then
 	MAKE=make
@@ -53,7 +11,6 @@ if [ -z "${MAKE}" ]; then
 	[ $? = 0 ] && MAKE=gmake
 fi
 
-[ -z "${MAKE_JOBS}" ] && MAKE_JOBS=12
 [ -z "${CERTID}" ] && CERTID=org.radare.radare2
 
 # find root
@@ -81,6 +38,9 @@ for a in $* ; do
 	'')
 		:
 		;;
+	'--prefix='*)
+		PREFIX=`echo "$1" | cut -d = -f 2`
+		;;
 	--**|-)
 		shift
 		CFGARG="${CFGARG} $a"
@@ -91,11 +51,34 @@ for a in $* ; do
 	esac
 done
 
+ABSPREFIX=`realpath ${PREFIX} 2> /dev/null`
+[ -n "${ABSPREFIX}" ] && PREFIX="${ABSPREFIX}"
+
+if [ "${WANT_V35}" = 1 ]; then
+	CFGARG="${CFGARG} --with-v35"
+fi
+
 if [ "${USE_CS4}" = 1 ]; then
 	CFGARG="${CFGARG} --with-capstone4"
 fi
+if [ "${USE_CSNEXT}" = 1 ]; then
+	CFGARG="${CFGARG} --with-capstone-next"
+fi
 
-if [ "${OSNAME}" = Linux ] && [ -n "${PREFIX}" ] && [ "${PREFIX}" != /usr ]; then
+# On distros like Fedora/RHEL/SUSE, 64-bit libraries live in lib64, not lib.
+# Detect this the same way RPM-based distros do, via the compiler's multi-os
+# directory, so installed .so files and .pc files end up in the right place.
+if [ "${OSNAME}" = Linux -a -z "${LIBDIR}" ]; then
+	_r2_multiosdir=$(${CC:-cc} -print-multi-os-directory 2>/dev/null)
+	case "${_r2_multiosdir}" in
+	../lib64)
+		CFGARG="${CFGARG} --libdir=${PREFIX}/lib64"
+		;;
+	esac
+	unset _r2_multiosdir
+fi
+
+if [ "${OSNAME}" = Linux -a -n "${PREFIX}" -a "${PREFIX}" != /usr ]; then
 	CFGARG="${CFGARG} --with-rpath"
 fi
 
@@ -136,7 +119,8 @@ ${MAKE} mrproper > /dev/null 2>&1
 unset R2DEPS
 pwd
 
-./configure ${CFGARG} --prefix="${PREFIX}" || exit 1
+echo ./configure ${CFGARG} --prefix="${PREFIX}"
+eval ./configure ${CFGARG} --prefix="${PREFIX}" || exit 1
 ${MAKE} -s -j${MAKE_JOBS} MAKE_JOBS=${MAKE_JOBS} || exit 1
 if [ "${OSNAME}" = Darwin ]; then
 	./sys/macos-cert.sh

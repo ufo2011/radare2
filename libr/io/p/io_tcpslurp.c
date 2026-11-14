@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2016-2021 - pancake */
+/* radare - LGPL - Copyright 2016-2022 - pancake */
 
 #include <r_io.h>
 #include <r_lib.h>
@@ -13,17 +13,15 @@ static bool __check(RIO *io, const char *pathname, bool many) {
 static ut8 *tcpme(const char *pathname, int *code, int *len) {
 	pathname += strlen ("tcp-slurp://");
 	*code = 404;
-#if __UNIX__ && !__wasi__
-	r_sys_signal (SIGINT, SIG_IGN);
-#endif
 	if (*pathname == '?') {
 		eprintf ("Usage: $ nc -l -p 9999 < /bin/ls ; r2 tcp-slurp://localhost:9999\n");
 		eprintf ("   or: $ nc localhost 9999 < /bin/ls ; r2 tcp-slurp://:9999\n");
 	} else if (*pathname == ':') {
-		/* listen and wait for connection */
+		/* listen and wait for connection - this is localhost only */
 		RSocket *sl = r_socket_new (false);
+		sl->local = true;
 		if (!r_socket_listen (sl, pathname + 1, NULL)) {
-			eprintf ("Cannot listen\n");
+			R_LOG_ERROR ("Cannot listen");
 			r_socket_free (sl);
 			return NULL;
 		}
@@ -36,7 +34,6 @@ static ut8 *tcpme(const char *pathname, int *code, int *len) {
 			return res;
 		}
 	} else {
-		/* connect and slurp the end point */
 		char *host = strdup (pathname);
 		if (!host) {
 			return NULL;
@@ -58,7 +55,7 @@ static ut8 *tcpme(const char *pathname, int *code, int *len) {
 			}
 			r_socket_free (s);
 		} else {
-			eprintf ("Missing port.\n");
+			R_LOG_ERROR ("Missing port");
 		}
 		free (host);
 	}
@@ -69,14 +66,11 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 	if (__check (io, pathname, 0)) {
 		int rlen, code;
 		RIOMalloc *mal = R_NEW0 (RIOMalloc);
-		if (!mal) {
-			return NULL;
-		}
 		mal->offset = 0;
 		mal->buf = tcpme (pathname, &code, &rlen);
 		if (mal->buf && rlen > 0) {
 			mal->size = rlen;
-			return r_io_desc_new (io, &r_io_plugin_tcpslurp, pathname, rw, mode, mal);
+			return r_io_desc_new (io, &r_io_plugin_tcpslurp, pathname, rw & R_PERM_RWX, mode, mal);
 		}
 		free (mal);
 	}
@@ -84,10 +78,13 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 }
 
 RIOPlugin r_io_plugin_tcpslurp = {
-	.name = "tcp",
-	.desc = "Slurp/load remote files via TCP (tcp-slurp://:9999 or tcp-slurp://host:port)",
+	.meta = {
+		.name = "tcp",
+		.author = "pancake",
+		.desc = "Slurp/load remote files via TCP (tcp-slurp://:9999 or tcp-slurp://host:port)",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "tcp-slurp://",
-	.license = "LGPL3",
 	.open = __open,
 	.close = io_memory_close,
 	.read = io_memory_read,

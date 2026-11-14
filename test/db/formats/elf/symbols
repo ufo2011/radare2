@@ -1,11 +1,73 @@
+NAME=arm data symbol keeps its odd address
+FILE=bins/elf/arm32esilcrash
+CMDS=is,name/eq/msg.8676,paddr/cols/vaddr/type/name,:csv
+EXPECT=<<EOF
+paddr,vaddr,type,name
+0x00061a2d,0x00069a2d,OBJ,msg.8676
+EOF
+RUN
+
+NAME=arm data symbol at an odd address is no thumb evidence
+FILE=malloc://448
+CMDS=<<EOF
+wx 7f454c4601010100000000000000000003002800010000005400000034000000d00000000000000534002000010028000600050001000000000000000000000000000000610000006100000007000000040000000000a0e31eff2fe1aa6f64640000000000000000000000000000000000000000010000005d00000004000000110002000a000000540000000800000012000100006f64645f646174610061726d5f66756e630000002e74657874002e64617461002e73796d746162002e737472746162002e7368737472746162000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000100000006000000540000005400000008000000000000000000000004000000000000000700000001000000030000005c0000005c00000005000000000000000000000001000000000000000d000000020000000000000000000000640000003000000004000000010000000400000010000000150000000300000000000000000000009400000013000000000000000000000001000000000000001d000000030000000000000000000000a80000002700000000000000000000000100000000000000
+oba 0
+iIj~{bits}
+is,name/eq/odd_data,paddr/cols/vaddr/type/name,:csv
+EOF
+EXPECT=<<EOF
+32
+paddr,vaddr,type,name
+0x0000005d,0x0000005d,OBJ,odd_data
+EOF
+RUN
+
+NAME=arm thumb ifunc drops the thumb bit
+FILE=malloc://420
+CMDS=<<EOF
+wx 7f454c4601010103000000000000000002002800010000005400000034000000b400000000000005340020000100280006000500010000000000000000000000000000005c0000005c00000007000000040000001eff2fe100207047000000000000000000000000000000000100000059000000040000001a000100007468756d625f6966756e6300000000002e74657874002e64617461002e73796d746162002e737472746162002e7368737472746162000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000100000006000000540000005400000008000000000000000000000004000000000000000700000001000000030000005c0000005c00000000000000000000000000000001000000000000000d0000000200000000000000000000005c0000002000000004000000010000000400000010000000150000000300000000000000000000007c0000000d000000000000000000000001000000000000001d0000000300000000000000000000008c0000002700000000000000000000000100000000000000
+oba 0
+is,name/eq/thumb_ifunc,paddr/cols/vaddr/type/name,:csv
+EOF
+EXPECT=<<EOF
+paddr,vaddr,type,name
+0x00000058,0x00000058,LOOS,thumb_ifunc
+EOF
+RUN
+
+NAME=arm loos symbol outside the gnu osabi keeps its odd address
+FILE=malloc://416
+CMDS=<<EOF
+wx 7f454c4601010161000000000000000002002800010000005400000034000000b000000000000005340020000100280006000500010000000000000000000000000000005c0000005c00000007000000040000001eff2fe100207047000000000000000000000000000000000100000059000000040000001a000100006c6f6f735f73796d000000002e74657874002e64617461002e73796d746162002e737472746162002e7368737472746162000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000100000006000000540000005400000008000000000000000000000004000000000000000700000001000000030000005c0000005c00000000000000000000000000000001000000000000000d0000000200000000000000000000005c0000002000000004000000010000000400000010000000150000000300000000000000000000007c0000000a000000000000000000000001000000000000001d000000030000000000000000000000880000002700000000000000000000000100000000000000
+oba 0
+iIj~{bits}
+is,name/eq/loos_sym,paddr/cols/vaddr/type/name,:csv
+EOF
+EXPECT=<<EOF
+32
+paddr,vaddr,type,name
+0x00000059,0x00000059,LOOS,loos_sym
+EOF
+RUN
+
+NAME=arm thumb function without a paddr drops the thumb bit
+FILE=malloc://436
+CMDS=<<EOF
+wx 7f454c4601010100000000000000000002002800010000005400000034000000c40000000000000534002000010028000600050001000000000000000000000000000000540000005c00000007000000040000001eff2fe100207047000000000000000000000000000000000100000058000000000000000000010004000000590000000400000012000100002474007468756d625f66756e630000002e74657874002e64617461002e73796d746162002e737472746162002e7368737472746162000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000800000006000000540000005400000008000000000000000000000004000000000000000700000001000000030000005c0000005c00000000000000000000000000000001000000000000000d0000000200000000000000000000005c0000003000000004000000020000000400000010000000150000000300000000000000000000008c0000000f000000000000000000000001000000000000001d0000000300000000000000000000009c0000002700000000000000000000000100000000000000
+oba 0
+is,paddr/cols/vaddr/type/name,:csv
+EOF
+EXPECT=<<EOF
+paddr,vaddr,type,name
+----------,0x00000058,SPCL,$t
+----------,0x00000058,FUNC,thumb_func
+EOF
+RUN
+
 NAME=entrypoint on object
 FILE=bins/elf/pngrutil_o
 CMDS=ie
-EXPECT=<<EOF
-[Entrypoints]
-
-0 entrypoints
-EOF
+EXPECT=
 RUN
 
 
@@ -13,10 +75,8 @@ NAME=symbols non common LD script
 FILE=bins/elf/analysis/custom_ldscript
 CMDS=is
 EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
+nth paddr      vaddr      bind   type   size lib name                  demangled
+--------------------------------------------------------------------------------
 1   0x00000200 0x00400200 LOCAL  SECT   0        .interp
 2   0x0000022c 0x0040022c LOCAL  SECT   0        .note.ABI-tag
 3   0x00000250 0x00400250 LOCAL  SECT   0        .hash
@@ -41,7 +101,7 @@ nth paddr      vaddr      bind   type   size lib name
 22  0x00200844 0x01c00844 LOCAL  SECT   0        .custom_text
 23  ---------- 0x00000000 LOCAL  SECT   0        .comment
 24  ---------- 0x00000000 LOCAL  FILE   0        custom_ldscript.c
-25  ---------- 0x00000000 LOCAL  FILE   0        
+25  ---------- 0x00000000 LOCAL  FILE   0
 26  0x00000660 0x00600660 LOCAL  NOTYPE 0        __init_array_end
 27  0x00000660 0x00600660 LOCAL  OBJ    0        _DYNAMIC
 28  0x00000660 0x00600660 LOCAL  NOTYPE 0        __init_array_start
@@ -72,10 +132,8 @@ NAME=symbols with no sections header information
 FILE=bins/elf/analysis/main_nosect
 CMDS=is
 EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
+nth paddr      vaddr      bind   type   size lib name                  demangled
+--------------------------------------------------------------------------------
 1   0x000003e0 0x004003e0 GLOBAL FUNC   16       imp.puts
 2   0x000003f0 0x004003f0 GLOBAL FUNC   16       imp.__libc_start_main
 3   0x00000400 0x00400400 WEAK   NOTYPE 16       imp.__gmon_start__
@@ -86,10 +144,8 @@ NAME=symbols with no sections header information 2
 FILE=bins/elf/analysis/clark
 CMDS=is
 EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
+nth paddr      vaddr      bind   type   size lib name                  demangled
+--------------------------------------------------------------------------------
 8   0x000007dc 0x080487dc GLOBAL OBJ    4        _IO_stdin_used
 1   0x00000370 0x08048370 GLOBAL FUNC   16       imp.mprotect
 2   0x00000380 0x08048380 GLOBAL FUNC   16       imp.puts
@@ -105,50 +161,48 @@ NAME=symbols with no sections header information 3
 FILE=bins/elf/libmemalloc-dump-mem
 CMDS=is
 EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
-3   0x00002dd0 0x00003dd0 WEAK   OBJ    36       vtable for gralloc::IMemAlloc
-6   0x00001210 0x00001210 GLOBAL FUNC   68       gralloc::IonAlloc::unmap_buffer(void*, unsigned int, int)
-11  0x00001254 0x00001254 GLOBAL FUNC   96       gralloc::IonAlloc::open_device()
-13  0x000012b4 0x000012b4 GLOBAL FUNC   240      gralloc::IonAlloc::clean_buffer(void*, unsigned int, int, int, int)
-15  0x000013a4 0x000013a4 GLOBAL FUNC   84       gralloc::IonAlloc::map_buffer(void**, unsigned int, int, int)
-17  0x000013f8 0x000013f8 GLOBAL FUNC   68       gralloc::IonAlloc::free_buffer(void*, unsigned int, int, int)
-21  0x0000143c 0x0000143c GLOBAL FUNC   304      gralloc::IonAlloc::alloc_buffer(gralloc::alloc_data&)
-22  0x0000156c 0x0000156c GLOBAL FUNC   22       gralloc::IonAlloc::close_device()
-24  0x00002df8 0x00003df8 GLOBAL OBJ    36       vtable for gralloc::IonAlloc
-26  0x00002e20 0x00003e20 WEAK   OBJ    24       vtable for gralloc::IAllocController
-27  0x00001614 0x00001614 GLOBAL FUNC   48       gralloc::IonController::getAllocator(int)
-28  0x00001644 0x00001644 GLOBAL FUNC   452      gralloc::IonController::allocate(gralloc::alloc_data&, int)
-36  0x00001808 0x00001808 GLOBAL FUNC   40       AdrenoMemInfo::AdrenoMemInfo()
-39  0x00001808 0x00001808 GLOBAL FUNC   40       AdrenoMemInfo::AdrenoMemInfo()
-40  0x00001830 0x00001830 GLOBAL FUNC   16       AdrenoMemInfo::~AdrenoMemInfo()
-42  0x00001830 0x00001830 GLOBAL FUNC   16       AdrenoMemInfo::~AdrenoMemInfo()
-43  0x00001840 0x00001840 GLOBAL FUNC   288      AdrenoMemInfo::getStride(int, int)
-45  0x00001960 0x00001960 GLOBAL FUNC   68       gralloc::IonController::IonController()
-47  0x00001960 0x00001960 GLOBAL FUNC   68       gralloc::IonController::IonController()
-48  0x000019a4 0x000019a4 GLOBAL FUNC   40       gralloc::IAllocController::getInstance()
-49  0x000019cc 0x000019cc GLOBAL FUNC   60       free_buffer(private_handle_t*)
-50  0x00001a08 0x00001a08 WEAK   FUNC   56       android::Singleton<AdrenoMemInfo>::getInstance()
-51  0x00001a40 0x00001a40 GLOBAL FUNC   636      getBufferSizeAndDimensions(int, int, int, int&, int&)
-52  0x00001cbc 0x00001cbc GLOBAL FUNC   244      alloc_buffer(private_handle_t**, int, int, int, int)
-54  0x00001db0 0x00001db0 WEAK   FUNC   44       android::Singleton<AdrenoMemInfo>::hasInstance()
-55  0x00001ddc 0x00001ddc WEAK   FUNC   2        android::Singleton<AdrenoMemInfo>::~Singleton()
-56  0x00001ddc 0x00001ddc WEAK   FUNC   2        android::Singleton<AdrenoMemInfo>::~Singleton()
-57  0x00001ddc 0x00001ddc WEAK   FUNC   2        android::Singleton<AdrenoMemInfo>::Singleton()
-58  0x00001ddc 0x00001ddc WEAK   FUNC   2        android::Singleton<AdrenoMemInfo>::Singleton()
-60  0x00002e38 0x00003e38 GLOBAL OBJ    24       vtable for gralloc::IonController
-61  ---------- 0x0000400c GLOBAL OBJ    4        gralloc::IAllocController::sController
-62  ---------- 0x00004004 GLOBAL OBJ    4        android::Singleton<AdrenoMemInfo>::sInstance
-63  ---------- 0x00004008 GLOBAL OBJ    4        android::Singleton<AdrenoMemInfo>::sLock
+nth paddr      vaddr      bind   type   size lib name                                                                demangled
+------------------------------------------------------------------------------------------------------------------------------
+3   0x00002dd0 0x00003dd0 WEAK   OBJ    36       _ZTVN7gralloc9IMemAllocE                                            vtable for gralloc::IMemAlloc
+6   0x00001210 0x00001210 GLOBAL FUNC   68       _ZN7gralloc8IonAlloc12unmap_bufferEPvji                             gralloc::IonAlloc::unmap_buffer(void*, unsigned int, int)
+11  0x00001254 0x00001254 GLOBAL FUNC   96       _ZN7gralloc8IonAlloc11open_deviceEv                                 gralloc::IonAlloc::open_device()
+13  0x000012b4 0x000012b4 GLOBAL FUNC   240      _ZN7gralloc8IonAlloc12clean_bufferEPvjiii                           gralloc::IonAlloc::clean_buffer(void*, unsigned int, int, int, int)
+15  0x000013a4 0x000013a4 GLOBAL FUNC   84       _ZN7gralloc8IonAlloc10map_bufferEPPvjii                             gralloc::IonAlloc::map_buffer(void**, unsigned int, int, int)
+17  0x000013f8 0x000013f8 GLOBAL FUNC   68       _ZN7gralloc8IonAlloc11free_bufferEPvjii                             gralloc::IonAlloc::free_buffer(void*, unsigned int, int, int)
+21  0x0000143c 0x0000143c GLOBAL FUNC   304      _ZN7gralloc8IonAlloc12alloc_bufferERNS_10alloc_dataE                gralloc::IonAlloc::alloc_buffer(gralloc::alloc_data&)
+22  0x0000156c 0x0000156c GLOBAL FUNC   22       _ZN7gralloc8IonAlloc12close_deviceEv                                gralloc::IonAlloc::close_device()
+24  0x00002df8 0x00003df8 GLOBAL OBJ    36       _ZTVN7gralloc8IonAllocE                                             vtable for gralloc::IonAlloc
+26  0x00002e20 0x00003e20 WEAK   OBJ    24       _ZTVN7gralloc16IAllocControllerE                                    vtable for gralloc::IAllocController
+27  0x00001614 0x00001614 GLOBAL FUNC   48       _ZN7gralloc13IonController12getAllocatorEi                          gralloc::IonController::getAllocator(int)
+28  0x00001644 0x00001644 GLOBAL FUNC   452      _ZN7gralloc13IonController8allocateERNS_10alloc_dataEi              gralloc::IonController::allocate(gralloc::alloc_data&, int)
+36  0x00001808 0x00001808 GLOBAL FUNC   40       _ZN13AdrenoMemInfoC2Ev                                              AdrenoMemInfo::AdrenoMemInfo()
+39  0x00001808 0x00001808 GLOBAL FUNC   40       _ZN13AdrenoMemInfoC1Ev                                              AdrenoMemInfo::AdrenoMemInfo()
+40  0x00001830 0x00001830 GLOBAL FUNC   16       _ZN13AdrenoMemInfoD2Ev                                              AdrenoMemInfo::~AdrenoMemInfo()
+42  0x00001830 0x00001830 GLOBAL FUNC   16       _ZN13AdrenoMemInfoD1Ev                                              AdrenoMemInfo::~AdrenoMemInfo()
+43  0x00001840 0x00001840 GLOBAL FUNC   288      _ZN13AdrenoMemInfo9getStrideEii                                     AdrenoMemInfo::getStride(int, int)
+45  0x00001960 0x00001960 GLOBAL FUNC   68       _ZN7gralloc13IonControllerC2Ev                                      gralloc::IonController::IonController()
+47  0x00001960 0x00001960 GLOBAL FUNC   68       _ZN7gralloc13IonControllerC1Ev                                      gralloc::IonController::IonController()
+48  0x000019a4 0x000019a4 GLOBAL FUNC   40       _ZN7gralloc16IAllocController11getInstanceEv                        gralloc::IAllocController::getInstance()
+49  0x000019cc 0x000019cc GLOBAL FUNC   60       _Z11free_bufferP16private_handle_t                                  free_buffer(private_handle_t*)
+50  0x00001a08 0x00001a08 WEAK   FUNC   56       _ZN7android9SingletonI13AdrenoMemInfoE11getInstanceEv               android::Singleton<AdrenoMemInfo>::getInstance()
+51  0x00001a40 0x00001a40 GLOBAL FUNC   636      _Z26getBufferSizeAndDimensionsiiiRiS_                               getBufferSizeAndDimensions(int, int, int, int&, int&)
+52  0x00001cbc 0x00001cbc GLOBAL FUNC   244      _Z12alloc_bufferPP16private_handle_tiiii                            alloc_buffer(private_handle_t**, int, int, int, int)
+54  0x00001db0 0x00001db0 WEAK   FUNC   44       _ZN7android9SingletonI13AdrenoMemInfoE11hasInstanceEv               android::Singleton<AdrenoMemInfo>::hasInstance()
+55  0x00001ddc 0x00001ddc WEAK   FUNC   2        _ZN7android9SingletonI13AdrenoMemInfoED2Ev                          android::Singleton<AdrenoMemInfo>::~Singleton()
+56  0x00001ddc 0x00001ddc WEAK   FUNC   2        _ZN7android9SingletonI13AdrenoMemInfoED1Ev                          android::Singleton<AdrenoMemInfo>::~Singleton()
+57  0x00001ddc 0x00001ddc WEAK   FUNC   2        _ZN7android9SingletonI13AdrenoMemInfoEC2Ev                          android::Singleton<AdrenoMemInfo>::Singleton()
+58  0x00001ddc 0x00001ddc WEAK   FUNC   2        _ZN7android9SingletonI13AdrenoMemInfoEC1Ev                          android::Singleton<AdrenoMemInfo>::Singleton()
+60  0x00002e38 0x00003e38 GLOBAL OBJ    24       _ZTVN7gralloc13IonControllerE                                       vtable for gralloc::IonController
+61  ---------- 0x0000400c GLOBAL OBJ    4        _ZN7gralloc16IAllocController11sControllerE                         gralloc::IAllocController::sController
+62  ---------- 0x00004004 GLOBAL OBJ    4        _ZN7android9SingletonI13AdrenoMemInfoE9sInstanceE                   android::Singleton<AdrenoMemInfo>::sInstance
+63  ---------- 0x00004008 GLOBAL OBJ    4        _ZN7android9SingletonI13AdrenoMemInfoE5sLockE                       android::Singleton<AdrenoMemInfo>::sLock
 64  ---------- 0x00004004 GLOBAL NOTYPE 0        _edata
 65  ---------- 0x00004004 GLOBAL NOTYPE 0        __bss_start
 66  ---------- 0x00004010 GLOBAL NOTYPE 0        _end
 1   0x00001050 0x00001050 GLOBAL FUNC   16       imp.__cxa_finalize
 2   0x0000105c 0x0000105c GLOBAL FUNC   16       imp.__cxa_atexit
-4   0x00000000 0x00000000 GLOBAL FUNC   16       imp.__aeabi_unwind_cpp_pr0
-5   0x00001068 0x00001068 GLOBAL FUNC   16       operator delete(void*)
+4   ---------- ---------- GLOBAL FUNC   16       imp.__aeabi_unwind_cpp_pr0
+5   0x00001068 0x00001068 GLOBAL FUNC   16       imp._ZdlPv                                                          operator delete(void*)
 7   0x00001074 0x00001074 GLOBAL FUNC   16       imp.munmap
 8   0x00001080 0x00001080 GLOBAL FUNC   16       imp.__errno
 9   0x0000108c 0x0000108c GLOBAL FUNC   16       imp.strerror
@@ -161,19 +215,19 @@ nth paddr      vaddr      bind   type   size lib name
 20  0x000010e0 0x000010e0 GLOBAL FUNC   16       imp.pthread_mutex_unlock
 23  0x000010ec 0x000010ec GLOBAL FUNC   16       imp.pthread_mutex_destroy
 25  0x000010f8 0x000010f8 GLOBAL FUNC   16       imp.__cxa_pure_virtual
-29  0x00001104 0x00001104 GLOBAL FUNC   16       operator new(unsigned int)
+29  0x00001104 0x00001104 GLOBAL FUNC   16       imp._Znwj                                                           operator new(unsigned int)
 30  0x00001110 0x00001110 GLOBAL FUNC   16       imp.property_get
 31  0x0000111c 0x0000111c GLOBAL FUNC   16       imp.strncmp
 32  0x00001128 0x00001128 GLOBAL FUNC   16       imp.__stack_chk_fail
-33  0x00000000 0x00000000 GLOBAL OBJ    16       imp.__stack_chk_guard
-34  0x00000000 0x00000000 GLOBAL OBJ    16       imp._ZN7android9SingletonIN7qdutils17QCCompositionTypeEE5sLockE
-35  0x00000000 0x00000000 GLOBAL OBJ    16       imp._ZN7android9SingletonIN7qdutils17QCCompositionTypeEE9sInstanceE
+33  ---------- ---------- GLOBAL OBJ    16       imp.__stack_chk_guard
+34  ---------- ---------- GLOBAL OBJ    16       imp._ZN7android9SingletonIN7qdutils17QCCompositionTypeEE5sLockE     android::Singleton<qdutils::QCCompositionType>::sLock
+35  ---------- ---------- GLOBAL OBJ    16       imp._ZN7android9SingletonIN7qdutils17QCCompositionTypeEE9sInstanceE android::Singleton<qdutils::QCCompositionType>::sInstance
 37  0x00001134 0x00001134 GLOBAL FUNC   16       imp.dlopen
 38  0x00001140 0x00001140 GLOBAL FUNC   16       imp.dlsym
 41  0x0000114c 0x0000114c GLOBAL FUNC   16       imp.dlclose
 44  0x00001158 0x00001158 GLOBAL FUNC   16       imp.strncasecmp
 46  0x00001164 0x00001164 GLOBAL FUNC   16       imp.pthread_mutex_init
-53  0x00000000 0x00000000 GLOBAL OBJ    16       imp.__page_size
+53  ---------- ---------- GLOBAL OBJ    16       imp.__page_size
 59  0x00001170 0x00001170 GLOBAL FUNC   16       imp.__aeabi_atexit
 EOF
 RUN
@@ -187,7 +241,7 @@ EXPECT=<<EOF
             0x00000466      6f46           mov r7, sp
             0x00000468      82b0           sub sp, 8
             0x0000046a      69ec1623       stcl p3, c2, [sb], -0x58
-            0x0000046e      0548           ldr r0, [0x00000484]        ; [0x484:4]=28 ; 1156
+            0x0000046e      0548           ldr r0, [0x00000484]        ; [0x484:4]=28
 EOF
 RUN
 
@@ -195,6 +249,138 @@ NAME=symname just before end of dynstr section of size 1
 FILE=bins/elf/switch-hello-world.elf
 CMDS=isq~?
 EXPECT=<<EOF
-1732
+1731
+EOF
+RUN
+
+NAME=imports using the wrong baddr
+FILE=bins/elf/easiestprintf
+CMDS=<<EOF
+ii
+s 0x080485e8
+pd 2
+EOF
+EXPECT=<<EOF
+nth vaddr      bind   type   lib name
+-------------------------------------
+1   0x080485c8 WEAK   NOTYPE     __gmon_start__
+2   0x080485d8 GLOBAL FUNC       open
+3   0x080485f0 GLOBAL FUNC       memset
+4   0x080485f8 GLOBAL FUNC       __isoc99_scanf
+5   0x080485e8 GLOBAL FUNC       setvbuf
+6   0x080485d0 GLOBAL FUNC       exit
+8   0x080485b0 GLOBAL FUNC       alarm
+9   0x080485e0 GLOBAL FUNC       __libc_start_main
+11  0x080485a8 GLOBAL FUNC       sleep
+12  0x080485c0 GLOBAL FUNC       puts
+14  0x080485b8 GLOBAL FUNC       __stack_chk_fail
+15  0x08048600 GLOBAL FUNC       close
+16  0x08048590 GLOBAL FUNC       read
+17  0x08048598 GLOBAL FUNC       printf
+18  0x080485a0 GLOBAL FUNC       _exit
+            ;-- setvbuf:
+            0x080485e8      ff25f09f0408   jmp dword [reloc.setvbuf]   ; 0x8049ff0
+            0x080485ee      6690           nop
+EOF
+RUN
+
+NAME=SHN_ABS symbols keep their value on x86-64 executables
+FILE=bins/elf/ifunc_rel64
+CMDS=is~LC_CTYPE_used
+EXPECT=<<EOF
+1043 ---------- 0x00000001 GLOBAL NOTYPE 0         _nl_current_LC_CTYPE_used
+EOF
+RUN
+
+NAME=SHN_ABS symbols keep their value on arm executables
+FILE=bins/elf/arm1.bin
+CMDS=is~LC_CTYPE_used
+EXPECT=<<EOF
+2240 ---------- 0x00000001 GLOBAL NOTYPE 0         _nl_current_LC_CTYPE_used
+EOF
+RUN
+
+NAME=SHN_ABS odd constants are not thumb addresses
+FILE=bins/elf/analysis/example.elf
+CMDS=is~ONMODE_Msk
+EXPECT=<<EOF
+21  ---------- 0x00000003 LOCAL  NOTYPE 0        NRF_POWER_RAMONx_RAMxON_ONMODE_Msk
+EOF
+RUN
+
+NAME=SHN_ABS constants keep their value under a rebase
+FILE=bins/elf/ifunc_rel64
+ARGS=-B 0x10000000
+CMDS=is~LC_CTYPE_used
+EXPECT=<<EOF
+1043 ---------- 0x00000001 GLOBAL NOTYPE 0         _nl_current_LC_CTYPE_used
+EOF
+RUN
+
+NAME=SHN_ABS values inside a segment are not moved by a rebase
+FILE=bins/elf/arm1.bin
+ARGS=-B 0x10000000
+CMDS=is~__exidx_start
+EXPECT=<<EOF
+2285 ---------- 0x0007a9d4 GLOBAL NOTYPE 0         __exidx_start
+EOF
+RUN
+
+NAME=SHN_ABS function in a mapped segment keeps its value
+FILE=bins/elf/abs_func_mapped
+CMDS=is~absfn
+EXPECT=<<EOF
+5   0x00001010 0x00401010 GLOBAL FUNC   4        absfn
+EOF
+RUN
+
+NAME=SHN_ABS function in a mapped segment at its file offset in physical mode
+FILE=bins/elf/abs_func_mapped
+ARGS=-e io.va=false
+CMDS=is~absfn
+EXPECT=<<EOF
+5   0x00001010 0x00001010 GLOBAL FUNC   4        absfn
+EOF
+RUN
+
+NAME=SHN_ABS function in a mapped segment is not moved by a rebase
+FILE=bins/elf/abs_func_mapped
+ARGS=-B 0x10000000
+CMDS=is~absfn
+EXPECT=<<EOF
+5   0x00001010 0x00401010 GLOBAL FUNC   4        absfn
+EOF
+RUN
+
+NAME=SHN_ABS function in a mapped segment is analysed
+FILE=bins/elf/abs_func_mapped
+CMDS=aa;afl
+EXPECT=<<EOF
+0x00401000    1     16 entry0
+0x00401010    1      4 sym.absfn
+EOF
+RUN
+
+NAME=aliased symtab headers load the table once
+FILE=malloc://1088
+CMDS=<<EOF
+wx 7f454c4601010100000000000000000002000300010000000080040834000000000300000000000034002000010028000800030001000000000000000080040800800408400400004004000005000000001000000100000000900408100000001200010001000000109004081000000012000100010000002090040810000000120001000100000030900408100000001200010001000000409004081000000012000100010000005090040810000000120001000100000060900408100000001200010001000000709004081000000012000100010000008090040810000000120001000100000090900408100000001200010001000000a0900408100000001200010001000000b0900408100000001200010001000000c0900408100000001200010001000000d0900408100000001200010001000000e0900408100000001200010001000000f090040810000000120001000100000000910408100000001200010001000000109104081000000012000100010000002091040810000000120001000100000030910408100000001200010001000000409104081000000012000100010000005091040810000000120001000100000060910408100000001200010001000000709104081000000012000100010000008091040810000000120001000100000090910408100000001200010001000000a0910408100000001200010001000000b0910408100000001200010001000000c0910408100000001200010001000000d0910408100000001200010001000000e0910408100000001200010001000000f0910408100000001200010001000000009204081000000012000100010000001092040810000000120001000100000020920408100000001200010001000000309204081000000012000100010000004092040810000000120001000100000050920408100000001200010001000000609204081000000012000100010000007092040810000000120001000066636e00000000002e74657874002e737472746162002e7368737472746162002e73796d74616200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000060000000080040800000000540000000000000000000000040000000000000007000000030000000000000000000000d402000005000000000000000000000004000000000000000f000000030000000000000000000000dc020000210000000000000000000000040000000000000019000000020000000000000000000000540000008002000002000000000000000400000010000000190000000200000000000000000000005400000080020000020000000000000004000000100000001900000002000000000000000000000054000000800200000200000000000000040000001000000019000000020000000000000000000000540000008002000002000000000000000400000010000000
+oba 0
+is~?fcn
+EOF
+EXPECT=<<EOF
+39
+EOF
+RUN
+
+NAME=disjoint symtab headers keep all their symbols
+FILE=malloc://1088
+CMDS=<<EOF
+wx 7f454c4601010100000000000000000002000300010000000080040834000000000300000000000034002000010028000800030001000000000000000080040800800408400400004004000005000000001000000100000000900408100000001200010001000000109004081000000012000100010000002090040810000000120001000100000030900408100000001200010001000000409004081000000012000100010000005090040810000000120001000100000060900408100000001200010001000000709004081000000012000100010000008090040810000000120001000100000090900408100000001200010001000000a0900408100000001200010001000000b0900408100000001200010001000000c0900408100000001200010001000000d0900408100000001200010001000000e0900408100000001200010001000000f090040810000000120001000100000000910408100000001200010001000000109104081000000012000100010000002091040810000000120001000100000030910408100000001200010001000000409104081000000012000100010000005091040810000000120001000100000060910408100000001200010001000000709104081000000012000100010000008091040810000000120001000100000090910408100000001200010001000000a0910408100000001200010001000000b0910408100000001200010001000000c0910408100000001200010001000000d0910408100000001200010001000000e0910408100000001200010001000000f0910408100000001200010001000000009204081000000012000100010000001092040810000000120001000100000020920408100000001200010001000000309204081000000012000100010000004092040810000000120001000100000050920408100000001200010001000000609204081000000012000100010000007092040810000000120001000066636e00000000002e74657874002e737472746162002e7368737472746162002e73796d74616200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000001000000060000000080040800000000540000000000000000000000040000000000000007000000030000000000000000000000d402000005000000000000000000000004000000000000000f000000030000000000000000000000dc02000021000000000000000000000004000000000000001900000002000000000000000000000054000000a00000000200000000000000040000001000000019000000020000000000000000000000f4000000a0000000020000000000000004000000100000001900000002000000000000000000000094010000a0000000020000000000000004000000100000001900000002000000000000000000000034020000a000000002000000000000000400000010000000
+oba 0
+is~?fcn
+EOF
+EXPECT=<<EOF
+36
 EOF
 RUN

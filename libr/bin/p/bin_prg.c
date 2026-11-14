@@ -1,14 +1,13 @@
-/* radare - LGPL3 - 2019 - thestr4ng3r */
+/* radare - LGPL3 - 2019-2024 - thestr4ng3r */
 
 #include <r_bin.h>
-#include <r_lib.h>
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	// no magic
 	return false;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
 	return true;
 }
 
@@ -19,9 +18,6 @@ static ut64 baddr(RBinFile *bf) {
 
 static RBinInfo *info(RBinFile *bf) {
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
 	ret->file = strdup (bf->file);
 	ret->type = strdup ("PRG");
 	ret->machine = strdup ("Commodore 64");
@@ -32,19 +28,13 @@ static RBinInfo *info(RBinFile *bf) {
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret = r_list_newf ((RListFree)r_bin_section_free);
-	if (!ret) {
-		return NULL;
-	}
+static bool sections_vec(RBinFile *bf) {
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 	ut64 sz = r_buf_size (bf->buf);
 	if (sz < 2) {
-		return ret;
+		return true;
 	}
-	RBinSection *section = R_NEW0 (RBinSection);
-	if (!section) {
-		return ret;
-	}
+	RBinSection *section = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	section->name = strdup ("prg");
 	section->paddr = 2;
 	section->size = sz - 2;
@@ -52,8 +42,7 @@ static RList *sections(RBinFile *bf) {
 	section->vsize = sz - 2;
 	section->perm = R_PERM_RWX;
 	section->add = true;
-	r_list_append (ret, section);
-	return ret;
+	return true;
 }
 
 static RList *entries(RBinFile *bf) {
@@ -62,9 +51,6 @@ static RList *entries(RBinFile *bf) {
 		return NULL;
 	}
 	RBinAddr *binaddr = R_NEW0 (RBinAddr);
-	if (!binaddr) {
-		return ret;
-	}
 	binaddr->paddr = 2;
 	binaddr->vaddr = baddr (bf);
 	r_list_append (ret, binaddr);
@@ -72,14 +58,17 @@ static RList *entries(RBinFile *bf) {
 }
 
 RBinPlugin r_bin_plugin_prg = {
-	.name = "prg",
-	.desc = "C64 PRG",
-	.license = "LGPL3",
-	.load_buffer = load_buffer,
+	.meta = {
+		.name = "prg",
+		.author = "thestr4ng3r",
+		.desc = "Commodore64 Programs",
+		.license = "LGPL-3.0-only",
+	},
+	.load = load,
 	.baddr = baddr,
-	.check_buffer = check_buffer,
+	.check = check,
 	.entries = entries,
-	.sections = sections,
+	.sections_vec = &sections_vec,
 	.info = info,
 };
 

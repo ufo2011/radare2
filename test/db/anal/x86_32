@@ -1,6 +1,14 @@
+# merged: hang-on-aa/-aac fix (#15004)
 NAME=ao 10~bytes
 FILE=bins/pe/15004.file
-CMDS=ao 10~bytes
+CMDS=<<EOF
+ao 10~bytes
+?e --
+e anal.vars.stackname=true
+aa
+e asm.var=false
+pdb
+EOF
 EXPECT=<<EOF
 bytes: e8d8170000
 bytes: 8d642444
@@ -12,22 +20,83 @@ bytes: 8d81c6140e8f
 bytes: 50
 bytes: 891c24
 bytes: 9c
-EOF
-RUN
-
-NAME=hang-on-aa/-aac fix (#15004)
-FILE=bins/pe/15004.file
-CMDS=<<EOF
-e anal.vars.stackname=true
-aa
-e asm.var=false
-pdb
-EOF
-EXPECT=<<EOF
-/ 337: entry0 (int32_t arg_40h, int32_t arg_44h);
+--
+/ 337: entry0 (int32_t arg_0h, int32_t arg_4h, int32_t arg_18h, int32_t arg_1ch, int32_t arg_28h, int32_t arg_2ch, int32_t arg_30h, int32_t arg_44h, int32_t arg_50h, int32_t arg_78h, int32_t arg_7ch, int32_t arg_80h, int32_t arg_84h, int32_t arg_c8h);
 |           0x006453a1      e8d8170000     call fcn.00646b7e
 |           0x006453a6      8d642444       lea esp, [arg_44h]
 |       ,=< 0x006453aa      0f85a6300000   jne 0x648456
+EOF
+RUN
+
+NAME=x86-32 static calling convention stack pop
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e anal.arch=x86
+e asm.bits=32
+k anal/cc/cc.cdecl.pop
+k anal/cc/cc.cdecl-fastcall-ms.pop
+k anal/cc/cc.optlink.pop
+k anal/cc/cc.stdcall.pop
+k anal/cc/cc.fastcall.pop
+k anal/cc/cc.borland.pop
+k anal/cc/cc.watcom.pop
+k anal/cc/cc.pascal.pop
+k anal/cc/cc.dlang.pop
+EOF
+EXPECT=<<EOF
+caller
+callee
+callee
+callee
+callee
+callee
+callee
+callee
+callee
+EOF
+RUN
+
+NAME=x86-32 static calling convention preserve sets
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e anal.arch=x86
+e asm.bits=32
+k anal/cc/cc.cdecl.preserve
+k anal/cc/cc.stdcall.preserve
+k anal/cc/cc.fastcall.preserve
+k anal/cc/cc.cdecl.clobber
+k anal/cc/cc.stdcall.clobber
+k anal/cc/cc.fastcall.clobber
+EOF
+EXPECT=<<EOF
+ebx,esi,edi,ebp,esp
+ebx,esi,edi,ebp,esp
+ebx,esi,edi,ebp,esp
+eax,ecx,edx
+eax,ecx,edx
+eax,ecx,edx
+EOF
+RUN
+
+NAME=x86-32 cdecl clobber kills optlink eax arg after call
+FILE=malloc://32
+CMDS=<<EOF
+e asm.arch=x86
+e anal.arch=x86
+e asm.bits=32
+e anal.cc=optlink
+wx 89c2e80900000089c1c3909090909090c3
+af @ 0
+afc optlink @ 0
+af @ 0x10
+afc cdecl @ 0x10
+afva @ 0
+afvR @ 0
+EOF
+EXPECT=<<EOF
+      arg1  0x0
 EOF
 RUN
 
@@ -80,7 +149,7 @@ e anal.hasnext=0
 e asm.arch=x86
 e asm.bits=32
 wx 85c0740585c07405c385c0eb01c385c07401c3b8efbeaddec3
-a2f
+a:a2f
 afb
 EOF
 EXPECT=<<EOF
@@ -103,7 +172,7 @@ e asm.arch=x86
 e asm.bits=32
 wx 31c031c983c10183c10285c975f231c931c040c3
 s 0xa
-a2f
+a:a2f
 afb
 EOF
 EXPECT=<<EOF
@@ -121,7 +190,7 @@ e asm.arch=x86
 e asm.bits=32
 wx 31c083c00183e801750831c083e80183c00131c983c10183e90175e431d283ea0183c2017402ebd831c0c3
 s 0x26
-a2f
+a:a2f
 afb
 EOF
 EXPECT=<<EOF
@@ -142,7 +211,7 @@ e anal.arch = x86
 e io.cache=true
 e asm.bits=32
 wx 31c0740140c3
-a2f
+a:a2f
 afb
 EOF
 EXPECT=<<EOF
@@ -159,7 +228,7 @@ aar
 axt 0x4bffb0
 EOF
 EXPECT=<<EOF
-(nofunc) 0x4bfe53 [DATA] mov edx, 0x4bffb0
+(nofunc) 0x4bfe53 [DATA:r--] mov edx, 0x4bffb0
 EOF
 RUN
 
@@ -189,7 +258,6 @@ RUN
 
 NAME=lab1B
 FILE=bins/elf/lab1B
-BROKEN=1
 CMDS=<<EOF
 s 0x08048a8b
 af
@@ -202,9 +270,8 @@ EXPECT=<<EOF
 0x08048a91 0x08048aa0 00:0000 15
 0x08048bd5 0x08048be4 00:0000 15
 
-/ (fcn) fcn.08048a8b 36
-|   fcn.08048a8b ();
-|           ; var int var_ch @ ebp-0xc
+/ 36: fcn.08048a8b ();
+| afv: vars(1:sp[0xc..0xc])
 |       ,=< 0x08048a8b      0f8744010000   ja 0x8048bd5
 |       |   0x08048a91      8b45f4         mov eax, dword [var_ch]
 |       |   0x08048a94      c1e002         shl eax, 2
@@ -212,7 +279,7 @@ EXPECT=<<EOF
 |       |   0x08048a9c      8b00           mov eax, dword [eax]
 |       |   0x08048a9e      ffe0           jmp eax
 ..
-| ||||||`-> 0x08048bd5      e856fcffff     call sym.imp.rand           ; int rand(void)
+| ||||||`-> 0x08048bd5      e856fcffff     call sym.imp.rand
 | ||||||    0x08048bda      890424         mov dword [esp], eax
 | ||||||    0x08048bdd      e8d5fdffff     call sym.decrypt
 | ``````--> 0x08048be2      c9             leave
@@ -250,17 +317,20 @@ RUN
 
 NAME=x86: fastcall argument analysis
 FILE=bins/elf/analysis/fast
-CMDS=aa ; s sym.fastcaslled ; afc fastcall ; afva ; pdf~arg,var
+CMDS=<<EOF
+e asm.var.summary=0
+aa ; s sym.fastcaslled ; afc fastcall ; afva ; pdf~arg,var
+EOF
 EXPECT=<<EOF
 / 59: sym.fastcaslled (int32_t arg1, int32_t arg2, int32_t arg_8h, int32_t arg_ch);
-|           ; var int32_t var_20h @ ebp-0x20
-|           ; var int32_t var_1ch @ ebp-0x1c
-|           ; var int32_t var_10h @ ebp-0x10
-|           ; var int32_t var_ch @ ebp-0xc
-|           ; arg int32_t arg_8h @ ebp+0x8
-|           ; arg int32_t arg_ch @ ebp+0xc
 |           ; arg int32_t arg1 @ ecx
 |           ; arg int32_t arg2 @ edx
+|           ; arg int32_t arg_8h @ ebp+0x8
+|           ; arg int32_t arg_ch @ ebp+0xc
+|           ; var int32_t var_ch @ ebp-0xc
+|           ; var int32_t var_10h @ ebp-0x10
+|           ; var int32_t var_1ch @ ebp-0x1c
+|           ; var int32_t var_20h @ ebp-0x20
 |           0x08048421      894de4         mov dword [var_1ch], ecx    ; arg1
 |           0x08048424      8955e0         mov dword [var_20h], edx    ; arg2
 |           0x08048427      8b55e4         mov edx, dword [var_1ch]
@@ -322,10 +392,9 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=af anal.endsize
+NAME=af anal
 FILE=bins/elf/echo-bin
 CMDS=<<EOF
-e anal.endsize=0
 aaa
 s 0x1144
 afi~name
@@ -335,10 +404,9 @@ name: main
 EOF
 RUN
 
-NAME=af anal.endsize
+NAME=af anal
 FILE=bins/elf/echo-bin
 CMDS=<<EOF
-e anal.endsize=1
 aaa
 s 0x1144
 afi~name
@@ -417,32 +485,30 @@ af
 afl
 EOF
 EXPECT=<<EOF
-0x00401000    1 59           main
-0x004010e4    4 148          fcn.004010e4
-0x004010c7    1 29           fcn.004010c7
-0x0040104a    4 109          fcn.0040104a
-0x0040103b    3 15           fcn.0040103b
-0x00401335    3 262          loc.00401335
-0x00404ad7    1 8            fcn.00404ad7
+0x00401000    1     59 main
+0x004010e4    4    148 fcn.004010e4
+0x004010c7    1     29 fcn.004010c7
+0x0040104a    4    109 fcn.0040104a
+0x00401335    3    262 fcn.00401335
+0x0040103b    3     15 fcn.0040103b
 EOF
 RUN
 
-NAME=anal.fcnprefix
+NAME=anal.prefix.default
 FILE=bins/pe/test.exe
 CMDS=<<EOF
 s 0x401000
-e anal.fcnprefix=root
+e anal.prefix.default=root
 af
 afl
 EOF
 EXPECT=<<EOF
-0x00401000    1 59           main
-0x004010e4    4 148          root.004010e4
-0x004010c7    1 29           root.004010c7
-0x0040104a    4 109          root.0040104a
-0x0040103b    3 15           root.0040103b
-0x00401335    3 262          loc.00401335
-0x00404ad7    1 8            root.00404ad7
+0x00401000    1     59 main
+0x004010e4    4    148 root.004010e4
+0x004010c7    1     29 root.004010c7
+0x0040104a    4    109 root.0040104a
+0x00401335    3    262 root.00401335
+0x0040103b    3     15 root.0040103b
 EOF
 RUN
 
@@ -480,7 +546,7 @@ s 0x00402ade
 pd 4~printf
 EOF
 EXPECT=<<EOF
-  0x00402ae8      call dword [sym.imp.msvcrt.dll_printf] ; 0x402d48 ; esp=0x177ff8 ; eip=0x2d08 reloc.msvcrt.dll_printf
+  0x00402ae8      call dword [sym.imp.msvcrt.dll_printf] ; 0x402d48 ; esp=0x177ff8 ; [0x00177ff8:4] = 0x402aee ; eip=0x2d08 reloc.msvcrt.dll_printf
                     ; int printf("  - RT_MANIFEST resource located\n")
 EOF
 RUN
@@ -503,8 +569,10 @@ afb @ 0x401012
 afb @ 0x40dfd0
 EOF
 EXPECT=<<EOF
-0x00401000 0x00401002 00:0000 2
-0x00401012 0x00401059 00:0000 71
+0x00401000 0x00401002 00:0000 2 j 0x00401012
+0x00401012 0x00401059 00:0000 71 j 0x0040dfd0
+0x00401000 0x00401002 00:0000 2 j 0x00401012
+0x00401012 0x00401059 00:0000 71 j 0x0040dfd0
 0x0040dfd0 0x0040e075 00:0000 165 j 0x0040e0af f 0x0040e075
 0x0040e075 0x0040e094 00:0000 31 j 0x0040e0a8
 0x0040e094 0x0040e0a8 00:0000 20 j 0x0040e0a8
@@ -537,14 +605,13 @@ NAME=afb twice
 FILE=bins/pe/bcc1.ex
 CMDS=<<EOF
 e anal.recont=true
-e anal.depth=100
 e anal.hasnext=true
 af @ 0x40dfd0
 af;afb;afb @ 0x40dfd0
 EOF
 EXPECT=<<EOF
 0x00401000 0x00401002 00:0000 2 j 0x00401012
-0x00401012 0x00401059 00:0000 71 j 0x0040dfd0
+0x00401012 0x00401059 00:0000 71
 0x0040dfd0 0x0040e075 00:0000 165 j 0x0040e0af f 0x0040e075
 0x0040e075 0x0040e094 00:0000 31 j 0x0040e0a8
 0x0040e094 0x0040e0a8 00:0000 20 j 0x0040e0a8
@@ -655,10 +722,12 @@ NAME=Main in disassembly
 FILE=bins/elf/analysis/ls_main_bug
 CMDS=<<EOF
 aa
-afi @ main ~offset
+afi @ main ~addr
 EOF
 EXPECT=<<EOF
-offset: 0x000038b0
+addr: 0x000038b0
+minaddr: 0x000038b0
+maxaddr: 0x000051b6
 EOF
 RUN
 
@@ -676,6 +745,7 @@ RUN
 NAME=mac-ls switch count
 FILE=bins/mach0/mac-ls
 CMDS=<<EOF
+e anal.vars=false
 aaa
 f~?switch
 EOF
@@ -684,26 +754,22 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: mac-ls switch count2
 NAME=mac-ls main switch
 FILE=bins/mach0/mac-ls
 CMDS=<<EOF
+e anal.vars=false
 s main;af
 f~switch
+f~?case
+?e --
+aaa
 f~?case
 EOF
 EXPECT=<<EOF
 0x1000011b5 1 switch.0x1000011b5
 73
-EOF
-RUN
-
-NAME=mac-ls switch count2
-FILE=bins/mach0/mac-ls
-CMDS=<<EOF
-aaa
-f~?case
-EOF
-EXPECT=<<EOF
+--
 91
 EOF
 RUN
@@ -711,7 +777,7 @@ RUN
 NAME=mac-ls switch count3
 FILE=bins/pe/test.exe
 CMDS=<<EOF
-e anal.jmp.tbl=true
+e anal.jmptbl=true
 s 0x402cb6
 af
 afb
@@ -961,7 +1027,7 @@ RUN
 NAME=mac-ls switch count4
 FILE=bins/pe/ConsoleApplication1.exe
 CMDS=<<EOF
-e anal.jmp.tbl=true
+e anal.jmptbl=true
 s 0x401090
 af
 afb
@@ -1000,6 +1066,7 @@ RUN
 NAME=ls_amd64 all switches
 FILE=bins/jmptbl/ls_amd64
 CMDS=<<EOF
+e anal.vars=false
 aaa
 CC. @@ switch
 EOF
@@ -1101,7 +1168,7 @@ EXPECT=<<EOF
 0x004010a5 1 case.0x40100e.8
 0x004010a5 1 case.0x40100e.10
 0x004010a5 1 case.default.0x40100e
-0x0040be7e 1 case.default.0x40be85
+0x0040be6d 1 case.default.0x40be85
 0x0040bed4 1 case.0x40beb5.0
 0x0040bed4 1 case.0x40be85.0
 0x0040bedc 1 case.0x40beb5.1
@@ -1146,7 +1213,7 @@ EXPECT=<<EOF
 0x004010ae 1 case.0x40100e.8
 0x004010ae 1 case.0x40100e.10
 0x004010ae 1 case.default.0x40100e
-0x0040286e 1 case.default.0x402875
+0x0040285d 1 case.default.0x402875
 0x004028c4 1 case.0x4028a5.0
 0x004028c4 1 case.0x402875.0
 0x004028cc 1 case.0x4028a5.1
@@ -1420,25 +1487,83 @@ aar
 axt @ str.john
 EOF
 EXPECT=<<EOF
-main 0x804831a [DATA] mov dword [var_ch], str.john
+main 0x804831a [STRN:r--] mov dword [var_ch], str.john
 EOF
 RUN
 
+NAME=imul var sub capstone
+FILE=bins/elf/ioli/crackme0x02
+CMDS=<<EOF
+e asm.arch = x86
+e anal.arch = x86
+aa
+s 0x8048444
+pi 1
+EOF
+EXPECT=<<EOF
+imul eax, dword [var_8h]
+EOF
+RUN
+
+NAME=imul var sub zydis
+REQUIRE=zydis
+FILE=bins/elf/ioli/crackme0x02
+CMDS=<<EOF
+e asm.arch = x86.zydis
+e anal.arch = x86.zydis
+aa
+s 0x8048444
+pi 1
+EOF
+EXPECT=<<EOF
+imul eax, dword [var_8h]
+EOF
+RUN
+
+# note: use afv[RW] [var]~?[addr] to check for a specific xref,
+# since many xrefs are still missing on both capstone and zydis
+
+NAME=imul var xref capstone
+FILE=bins/elf/ioli/crackme0x02
+CMDS=<<EOF
+e asm.arch = x86
+e anal.arch = x86
+aa
+s 0x8048444
+afvR var_8h~?0x8048444
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=imul var xref zydis
+REQUIRE=zydis
+FILE=bins/elf/ioli/crackme0x02
+CMDS=<<EOF
+e asm.arch = x86.zydis
+e anal.arch = x86.zydis
+aa
+s 0x8048444
+afvR var_8h~?0x8048444
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+# merged: resolve reloc symbols 2
 NAME=resolve reloc symbols 1
 FILE=bins/elf/libc.so.6
 CMDS=<<EOF
 s 0x0003a4af
 pd 1
+?e --
+ir~0x[4]
 EOF
 EXPECT=<<EOF
             0x0003a4af      ff15f33a1800   call qword [reloc.free]     ; [0x1bdfa8:8]=0
-EOF
-RUN
-
-NAME=resolve reloc symbols 2
-FILE=bins/elf/libc.so.6
-CMDS=ir~0x[3]
-EXPECT=<<EOF
+--
 0x001bf3c0
 _res
 0x00023a90
@@ -2602,6 +2727,16 @@ ifunc_89210
 ifunc_8a9d0
 ifunc_89840
 ifunc_8a6c0
+0x00000038
+0x00000030
+0x00000050
+0x00000040
+0x00000048
+0x00000058
+0x00000060
+0x00000078
+0x00000080
+0x00000088
 stderr
 error_one_per_line
 realloc
@@ -2614,6 +2749,7 @@ __ctype32_tolower
 _rtld_global
 __progname
 argp_err_exit_status
+0x00000028
 mallwatch
 __rcmd_errstr
 __libc_enable_secure
@@ -2627,9 +2763,11 @@ __timezone
 ifunc_a4800
 memalign
 _dl_exception_create
+0x00000074
 _rtld_global_ro
 __malloc_initialize_hook
 ifunc_90b10
+0x00000010
 optarg
 __ctype_tolower
 __ctype_toupper
@@ -2647,6 +2785,7 @@ ifunc_a5f90
 ifunc_8ab70
 __daylight
 __memalign_hook
+0x00000020
 __malloc_hook
 __free_hook
 _nl_domain_bindings
@@ -2656,6 +2795,7 @@ _dl_find_dso_for_object
 argp_program_bug_address
 __key_decryptsession_pk_LOCAL
 h_errlist
+0x00000018
 program_invocation_short_name
 calloc
 optind
@@ -2681,6 +2821,7 @@ opterr
 __ctype32_toupper
 __realloc_hook
 _dl_argv
+0x00000008
 0x00183fe9
 0x00183f44
 0x00183f54
@@ -2821,14 +2962,30 @@ EOF
 RUN
 
 NAME=long basic blocks
+REQUIRE=cs5
 FILE=bins/elf/analysis/movfuscator
-BROKEN=1
 CMDS=<<EOF
 af
-afb
+afb~?
+afi~size
 EOF
 EXPECT=<<EOF
-0x0804827c 0x0804c2fc 00:0000 16512
+12
+size: 16512
+EOF
+RUN
+
+NAME=long basic blocks (cs6)
+REQUIRE=cs6
+FILE=bins/elf/analysis/movfuscator
+CMDS=<<EOF
+af
+afb~?
+afi~size
+EOF
+EXPECT=<<EOF
+12
+size: 16510
 EOF
 RUN
 
@@ -2997,8 +3154,7 @@ afF
 agf
 EOF
 EXPECT=<<EOF
-[0x00000000]>  # test ();
- --------------------------.
+.--------------------------.
 |  0x0                     |
 | / (fcn) test             |
 | (6 byte folded function) |
@@ -3075,7 +3231,6 @@ EXPECT=<<EOF
     "mask": "ffff",
     "esil": "eax,eax,^=,$z,zf,:=,$p,pf,:=,31,$s,sf,:=,0,cf,:=,0,of,:=",
     "sign": false,
-    "prefix": 0,
     "id": 1503,
     "opex": {
       "operands": [
@@ -3099,8 +3254,6 @@ EXPECT=<<EOF
     "size": 2,
     "type": "xor",
     "esilcost": 0,
-    "scale": 0,
-    "refptr": 0,
     "cycles": 1,
     "failcycles": 0,
     "delay": 0,
@@ -3124,13 +3277,12 @@ EXPECT=<<EOF
   {
     "opcode": "pushf",
     "disasm": "pushf",
-    "pseudo": "push ()",
+    "pseudo": "push (cpuflags)",
     "description": "push flags register onto the stack",
     "mnemonic": "pushf",
     "mask": "ffff",
     "esil": "4,esp,-=,eflags,esp,=[4]",
     "sign": false,
-    "prefix": 0,
     "id": 612,
     "opex": {
       "operands": [
@@ -3147,8 +3299,6 @@ EXPECT=<<EOF
     "size": 2,
     "type": "upush",
     "esilcost": 12,
-    "scale": 0,
-    "refptr": 0,
     "cycles": 2,
     "failcycles": 0,
     "delay": 0,
@@ -3163,9 +3313,9 @@ RUN
 NAME=reflines offset
 FILE=malloc://1023
 CMDS=<<EOF
-e asm.calls=false
+e asm.cmt.calls=false
+e asm.var.summary=0
 e asm.bits=32
-e asm.leahints=false
 e asm.cpu=x86
 e asm.arch=x86
 e scr.utf8=true
@@ -3177,13 +3327,13 @@ aa > /dev/null
 pd 38
 EOF
 EXPECT=<<EOF
-┌ (fcn) fcn.00000000 1645
+┌ (fcn) fcn.00000000 297
 // void fcn.00000000 (int32_t arg_4h, int32_t arg_1ch, int32_t arg_2ch);
-│           ; var int32_t var_30h @ esp+0x1c
-│           ; var int32_t var_20h @ esp+0x2c
 │           ; arg int32_t arg_4h @ esp+0x50
 │           ; arg int32_t arg_1ch @ esp+0x68
 │           ; arg int32_t arg_2ch @ esp+0x78
+│           ; var int32_t var_30h @ esp+0x1c
+│           ; var int32_t var_20h @ esp+0x2c
 │           0x00000000      xor eax, eax
 │           0x00000002      cmp esi, edx
 │       ┌─< 0x00000004      jb 0x50
@@ -3228,9 +3378,9 @@ RUN
 NAME=reflines offset (ascii)
 FILE=malloc://1023
 CMDS=<<EOF
-e asm.calls=false
+e asm.cmt.calls=false
+e asm.var.summary=0
 e asm.bits=32
-e asm.leahints=false
 e asm.cpu=x86
 e anal.cpu=x86
 e anal.vars.stackname=true
@@ -3242,13 +3392,13 @@ aa >/dev/null
 pd 38
 EOF
 EXPECT=<<EOF
-/ (fcn) fcn.00000000 1645
+/ (fcn) fcn.00000000 297
 // void fcn.00000000 (int32_t arg_4h, int32_t arg_1ch, int32_t arg_2ch);
-|           ; var int32_t var_30h @ esp+0x1c
-|           ; var int32_t var_20h @ esp+0x2c
 |           ; arg int32_t arg_4h @ esp+0x50
 |           ; arg int32_t arg_1ch @ esp+0x68
 |           ; arg int32_t arg_2ch @ esp+0x78
+|           ; var int32_t var_30h @ esp+0x1c
+|           ; var int32_t var_20h @ esp+0x2c
 |           0x00000000      xor eax, eax
 |           0x00000002      cmp esi, edx
 |       ,=< 0x00000004      jb 0x50
@@ -3309,10 +3459,11 @@ NAME=afva for esp based vars
 FILE=malloc://1024
 CMDS=<<EOF
 e asm.bits=32
+e asm.var.summary=0
 e asm.arch = x86
 e anal.arch = x86
 e anal.vars.stackname=true
-e asm.calls=false
+e asm.cmt.calls=false
 wx 83ec108b44241899f77c241c8b44241401d08944240c8b44242099f77c24288b44240c01d0894424088b5424148b44240c8d0c028b44242c99f7f98b44240801d0894424048b54240c8b44240801c28b44240401d083c410c38d4c240483e4f0ff71fc5589e55183ec046a076a066a056a046a036a026a01e883ffffff83c41c83ec08506844850408e847feffff83c410b8000000008b4dfcc98d61fcc36690669066909055575653e887feffff81c3371b000083ec0c8b6c24208db30cffffffe8d3fdffff8d8308ffffff29c6c1fe0285f6742531ff8db60000000083ec04ff74242cff74242c55ff94bb08ffffff83c70183c41039f775e383c40c5b5e5f
 e asm.bits=32
 e asm.comments=false
@@ -3323,15 +3474,15 @@ EOF
 EXPECT=<<EOF
 / (fcn) fcn.00000000 89
 // void fcn.00000000 (int32_t arg_4h, int32_t arg_8h, int32_t arg_ch, int32_t arg_10h, int32_t arg_18h, int32_t arg_1ch);
-|           ; var int32_t var_ch @ esp+0x4
-|           ; var int32_t var_8h @ esp+0x8
-|           ; var int32_t var_4h @ esp+0xc
 |           ; arg int32_t arg_4h @ esp+0x14
 |           ; arg int32_t arg_8h @ esp+0x18
 |           ; arg int32_t arg_ch @ esp+0x1c
 |           ; arg int32_t arg_10h @ esp+0x20
 |           ; arg int32_t arg_18h @ esp+0x28
 |           ; arg int32_t arg_1ch @ esp+0x2c
+|           ; var int32_t var_ch @ esp+0x4
+|           ; var int32_t var_8h @ esp+0x8
+|           ; var int32_t var_4h @ esp+0xc
 |           0x00000000      83ec10         sub esp, 0x10
 |           0x00000003      8b442418       mov eax, dword [arg_8h]
 |           0x00000007      99             cdq
@@ -3375,19 +3526,16 @@ ao 1
 p8 1
 EOF
 EXPECT=<<EOF
-18
+15
 address: 0x0
 opcode: nop
 esilcost: 0
 disasm: nop
-pseudo: no 
 mnemonic: nop
 description: no operation
 mask: ff
-prefix: 0
 id: 510
 bytes: 90
-refptr: 0
 size: 1
 sign: false
 type: nop
@@ -3406,7 +3554,7 @@ s 0x00402130
 axt
 EOF
 EXPECT=<<EOF
-(nofunc) 0x4010d1 [DATA] lea edx, [ebx*4 + 0x402130]
+(nofunc) 0x4010d1 [DATA:r--] lea edx, [ebx*4 + 0x402130]
 EOF
 RUN
 
@@ -3414,7 +3562,7 @@ NAME=Indirect jump table case detection
 FILE=--
 CMDS=<<EOF
 o malloc://0x500 0x401000
-omf 1 rwx
+omp 1 rwx
 s 0x401000
 e asm.arch=x86
 e asm.bits=32
@@ -3512,16 +3660,54 @@ e asm.comments=false
 aF
 aaef  # TODO Fix if aae here
 pdf
-# TODO eip flag?
 EOF
 EXPECT=<<EOF
-            ;-- eip:
 / 7: entry0 ();
 |           0x08048054      mov bl, 0x2a
 |           0x08048056      xor eax, eax
 |           0x08048058      inc eax
 |           ;-- syscall.exit:
+|           ;-- syscall.exit.0:
 \           0x08048059      int 0x80
+EOF
+RUN
+
+NAME=dyncc role-only self arg recovery
+FILE=malloc://32
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+e scr.color=0
+wx 89d8c3
+af
+afc dyncc::eax!Tebx
+afva
+afvr~self
+EOF
+EXPECT=<<EOF
+arg int32_t self @ ebx
+EOF
+RUN
+
+NAME=stdcall import prototype callee stack pop vars
+FILE=malloc://0x100
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
+e scr.color=0
+wx 6a046a036a026a01e8430000008b442404c3 @ 0
+wx c3 @ 0x50
+fs imports
+f sym.imp.foobar 1 0x50
+fs *
+td int foobar(int a, int b, int c, int d);
+tk func.foobar.cc=stdcall
+af
+afva
+afvs~arg_4h
+EOF
+EXPECT=<<EOF
+arg int32_t arg_4h @ esp+0x14
 EOF
 RUN
 
@@ -3548,10 +3734,12 @@ RUN
 NAME=tiny1 aae non-start-bb first
 FILE=bins/elf/analysis/tiny1
 CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=32
 e io.cache=true
-$orig_end=?e `omt va_end/cols~[0]:3`
-omr 1 `omt size/cols~[0]:3`+2
-s `$orig_end`
+$orig_end=?e `om,va_end/cols,:quiet`
+oms 1 `om,size/cols,:quiet`+2
+s `$orig_end`+1
 wa jmp entry0
 aF
 aae
@@ -3560,34 +3748,207 @@ agf
 afl
 EOF
 EXPECT=<<EOF
-[0x0804805b]>  # fcn.0804805b ();
- ----.
+.----.
 |    |
-|.-------------------------------------------.
-||  0x8048054                                |
-|| ;-- entry0:                               |
-|| ; CODE XREF from fcn.0804805b @ 0x804805b |
-|| ; '*'                                     |
-|| ; 42                                      |
-|| mov bl, 0x2a                              |
-|| xor eax, eax                              |
-|| inc eax                                   |
-|| ;-- syscall.close:                        |
-|| int 0x80                                  |
-|`-------------------------------------------'
+|.----------------------------------------------.
+||  0x8048054                                   |
+|| ;-- entry0:                                  |
+|| ; CODE XREF from fcn.0804805b @ 0x804805b(x) |
+|| ; '*'                                        |
+|| ; 42                                         |
+|| mov bl, 0x2a                                 |
+|| xor eax, eax                                 |
+|| inc eax                                      |
+|| ;-- syscall.close:                           |
+|| int 0x80                                     |
+|`----------------------------------------------'
 |    v
 |    |
-|    '----------.
-|               |
-|           .---------------------.
-|           |  0x804805b          |
-|           | 9: fcn.0804805b (); |
-|           | jmp entry0          |
-|           `---------------------'
-|               v
-|               |
-`---------------'
+|    '------------.
+|                 |
+|             .---------------------.
+|             |  0x804805b          |
+|             | 9: fcn.0804805b (); |
+|             | jmp entry0          |
+|             `---------------------'
+|                 v
+|                 |
+`-----------------'
 
-0x0804805b    2 9            fcn.0804805b
+0x0804805b    2      9 fcn.0804805b
+EOF
+RUN
+
+NAME=callargs reads stack arguments from the call-site stack pointer
+FILE=malloc://256
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 68580000006850000000e81100000083c408c3
+wx c3 @ 0x20
+w AA @ 0x50
+w BB @ 0x58
+af @ 0x20
+afn twostr @ 0x20
+'td int twostr(const char *first, const char *second);
+af @ 0
+a:callargs-q 0xa
+EOF
+EXPECT=<<EOF
+int twostr("AA", "BB")
+EOF
+RUN
+
+NAME=callargs advances past a wide stack argument
+FILE=malloc://256
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 685800000068000000006844332211e80c00000083c40cc3
+wx c3 @ 0x20
+w BB @ 0x58
+af @ 0x20
+afn f @ 0x20
+'td int f(uint64_t a, char *s);
+af @ 0
+a:callargs-q 0xf
+EOF
+EXPECT=<<EOF
+int f(0x0000000000000000, "BB")
+EOF
+RUN
+
+NAME=callargs reports the source location it actually read under revarg
+FILE=malloc://256
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx bf58000000be50000000e81100000083c404c3
+wx c3 @ 0x20
+w AA @ 0x50
+w BB @ 0x58
+af @ 0x20
+afn two @ 0x20
+'td int two(char *a, char *b);
+tk func.two.cc=dlang
+af @ 0
+a:callargs-j 0xa~{args[0].source}
+a:callargs-j 0xa~{args[0].value}
+a:callargs-j 0xa~{args[1].source}
+a:callargs-j 0xa~{args[1].value}
+EOF
+EXPECT=<<EOF
+esi
+\"AA\"
+edi
+\"BB\"
+EOF
+RUN
+
+NAME=callargs shifts a reverse-stack argument past a wide one pushed after it
+FILE=malloc://256
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 685000000068000000006822222222e80c00000083c40cc3
+wx c3 @ 0x20
+w AA @ 0x50
+af @ 0x20
+afn revwide @ 0x20
+'td int revwide(char *a, uint64_t b);
+tk func.revwide.cc=pascal
+af @ 0
+a:callargs-j 0xf~{args[0].value}
+EOF
+EXPECT=<<EOF
+\"AA\"
+EOF
+RUN
+
+NAME=callargs keeps fixed stack slots that are not in ascending order
+FILE=malloc://256
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 68111111116822222222685000000068333333336858000000e80200000083c414c3
+wx c3 @ 0x20
+w AA @ 0x50
+w BB @ 0x58
+af @ 0x20
+afn fixedslots @ 0x20
+'td int fixedslots(char *a, char *b);
+tk func.fixedslots.cc=dyncc:^2,^0:eax
+af @ 0
+a:callargs-q 0x19
+EOF
+EXPECT=<<EOF
+int fixedslots("AA", "BB")
+EOF
+RUN
+
+NAME=x86 bp alias survives a 32 to 16 bits switch inside a function
+FILE=malloc://32
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 5531c031c031c090 @ 0
+wx 89e58b460266c3 @ 8
+ahb 16 @ 8
+af @ 0
+afv
+EOF
+EXPECT=<<EOF
+var int16_t var_2h @ bp+0x2
+EOF
+RUN
+
+NAME=x86_32 intel rotate memory destination is read and written
+ARGS=-a x86 -b 32 -e asm.syntax=intel
+FILE=malloc://16
+CMDS=<<EOF
+wx d303;aoj~{[0].opex.operands[0].rw}
+wx d10b;aoj~{[0].opex.operands[0].rw}
+wx c10b05;aoj~{[0].opex.operands[0].rw}
+wx d203;aoj~{[0].opex.operands[0].rw}
+wx 66c11b05;aoj~{[0].opex.operands[0].rw}
+wx ff33;aoj~{[0].opex.operands[0].rw}
+EOF
+EXPECT=<<EOF
+3
+3
+3
+3
+3
+1
+EOF
+RUN
+
+NAME=x86_32 att rotate memory destination is read and written
+ARGS=-a x86 -b 32 -e asm.syntax=att
+FILE=malloc://16
+CMDS=<<EOF
+wx d303;aoj~{[0].opex.operands[0].rw}
+wx d10b;aoj~{[0].opex.operands[0].rw}
+wx c10b05;aoj~{[0].opex.operands[0].rw}
+wx d203;aoj~{[0].opex.operands[0].rw}
+wx 66c11b05;aoj~{[0].opex.operands[0].rw}
+wx ff33;aoj~{[0].opex.operands[0].rw}
+EOF
+EXPECT=<<EOF
+3
+3
+3
+3
+3
+1
+EOF
+RUN
+
+NAME=tail call target named after its flag
+FILE=bins/pdb/SimplePDB.exe
+ARGS=-e io.cache=true
+CMDS=<<EOF
+wx e90b000000 @ 0x401000
+wx 5589e55dc3 @ 0x401010
+f target @ 0x401010
+af @ 0x401000
+afi @ 0x401010~^name
+EOF
+EXPECT=<<EOF
+name: target
 EOF
 RUN

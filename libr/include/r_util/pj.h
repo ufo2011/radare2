@@ -3,6 +3,7 @@
 #define R_PRINT_JSON_DEPTH_LIMIT 128
 
 #include <r_util/r_strbuf.h>
+#include <r_util/r_json.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +28,7 @@ typedef struct pj_t {
 	RStrBuf sb;
 	bool is_first;
 	bool is_key;
+	const char *comma;
 	char braces[R_PRINT_JSON_DEPTH_LIMIT];
 	int level;
 	PJEncodingStr str_encoding;
@@ -34,8 +36,8 @@ typedef struct pj_t {
 } PJ;
 
 /* lifecycle */
-R_API PJ *pj_new(void);
-R_API PJ *pj_new_with_encoding(PJEncodingStr str_encoding, PJEncodingNum num_encoding);
+R_API PJ * R_NONNULL pj_new(void);
+R_API PJ * R_NONNULL pj_new_with_encoding(PJEncodingStr str_encoding, PJEncodingNum num_encoding);
 R_API void pj_free(PJ *j);
 R_API void pj_reset(PJ *j); // clear the pj contents, but keep the buffer allocated to re-use it
 R_API char *pj_drain(PJ *j);
@@ -48,6 +50,7 @@ R_API const char *pj_string(PJ *pj);
 /* close the current json list or array */
 R_API PJ *pj_end(PJ *j);
 R_API void pj_raw(PJ *j, const char *k);
+R_API void pj_kraw(PJ *j);
 
 /* object, array */
 /* open new json list { */
@@ -103,6 +106,8 @@ R_API PJ *pj_i(PJ *j, int d);
 R_API PJ *pj_d(PJ *j, double d);
 R_API PJ *pj_f(PJ *j, float d);
 R_API PJ *pj_b(PJ *j, bool v);
+
+R_API void pj_rj(PJ *pj, RJson *j);
 
 #ifdef __cplusplus
 }

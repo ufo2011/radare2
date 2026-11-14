@@ -1,0 +1,148 @@
+NAME=internal rabin2 preserves pushd stack
+FILE=-
+CMDS=<<EOF
+cd /
+pushd /dev
+rabin2 -Z malloc://16
+pwd
+popd
+pwd
+EOF
+EXPECT=<<EOF
+16
+/dev
+/
+EOF
+EXPECT_ERR=<<EOF
+/
+EOF
+RUN
+
+NAME=pushd;popd
+FILE=-
+CMDS=<<EOF
+cd /
+pushd dev
+pushd ../dev
+pushd /
+pushd /404
+pwd
+popd
+popd
+popd
+popd
+pwd
+EOF
+EXPECT=<<EOF
+/
+/
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot chdir
+/dev
+/dev
+/
+ERROR: Nothing was pushd. Cannot popd
+EOF
+RUN
+
+NAME=mkdir; ls
+FILE=-
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/blah/bleh
+rm .tmp/blah
+mkdir .tmp/blah
+? 1+1 > .tmp/blah/bleh
+ls -l .tmp/blah~bleh[4]
+rm .tmp/blah/bleh
+rm .tmp/blah
+EOF
+EXPECT=<<EOF
+.tmp/blah/bleh
+EOF
+RUN
+
+NAME=mkdir -p (without specifying directory)
+FILE=-
+CMDS=mkdir -p
+EXPECT_ERR=<<EOF
+INFO: Usage: mkdir [-p] [directory]
+EOF
+RUN
+
+NAME=mkdir -p
+FILE=-
+CMDS=<<EOF
+rm /tmp/foo/bar/foo/fooz
+rm /tmp/foo/bar/foo
+rm /tmp/foo/bar
+rm /tmp/foo
+mkdir -p /tmp/foo/bar/foo
+? 1+1 > /tmp/foo/bar/foo/fooz
+ls /tmp/foo/bar/foo
+rm /tmp/foo/bar/foo/fooz
+rm /tmp/foo/bar/foo
+rm /tmp/foo/bar
+rm /tmp/foo
+EOF
+EXPECT=<<EOF
+/tmp/foo/bar/foo/fooz     
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=cd looks up CDPATH
+FILE=-
+CMDS=<<EOF
+cd /
+%CDPATH=/nonexistent:/usr
+cd share
+pwd
+cd /
+cd ./usr
+pwd
+cd /
+%CDPATH=:/nonexistent
+cd usr
+pwd
+cd /
+%CDPATH=
+cd usr
+pwd
+EOF
+EXPECT=<<EOF
+/usr/share
+/usr/share
+/usr
+/usr
+/usr
+EOF
+RUN
+
+NAME=sh mktemp without arguments reports usage and keeps running
+FILE=-
+CMDS=<<EOF
+sh mktemp
+?e alive
+EOF
+EXPECT=<<EOF
+alive
+EOF
+EXPECT_ERR=<<EOF
+INFO: Usage: mktemp [-d] [file|directory]
+EOF
+RUN
+
+NAME=pa .extern without the exec grain
+FILE=-
+CMDS=<<EOF
+e cfg.sandbox.grain=none
+e cfg.sandbox=true
+pa .extern x~alive
+?e alive
+EOF
+EXPECT=<<EOF
+alive
+EOF
+RUN

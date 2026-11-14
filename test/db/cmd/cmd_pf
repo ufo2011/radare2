@@ -1,3 +1,14 @@
+NAME=pf register without name
+FILE=-
+CMDS=pf r
+EXPECT=<<EOF
+
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Missing register name
+EOF
+RUN
+
 NAME=pf QeQ
 FILE=-
 CMDS=<<EOF
@@ -27,7 +38,7 @@ pf.-foo
 pf.
 EOF
 EXPECT=<<EOF
-pf.foo xxd
+'pf.foo xxd
 EOF
 RUN
 
@@ -40,7 +51,7 @@ pf.-*
 pf.
 EOF
 EXPECT=<<EOF
-pf.foo xxd
+'pf.foo xxd
 EOF
 RUN
 
@@ -62,10 +73,24 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=Cf main
+NAME=pf array spanning past the block (#26034)
+FILE=malloc://64
+CMDS=<<EOF
+b 16
+w ABCDEFGHIJKLMNOPQRSTUVWXYZ
+pf [20]b
+EOF
+EXPECT=<<EOF
+0x00000000 = [ 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54 ]
+EOF
+RUN
+
+# Cf without a format reports its usage
+NAME=Cf missing format
 FILE=-
 CMDS=Cf main;C*
 EXPECT=<<EOF
+| Cf[?][-] [sz] [0|cnt][fmt] [a0 a1...] [@addr]  format memory (see pf?)
 EOF
 RUN
 
@@ -79,7 +104,7 @@ RUN
 NAME=seteq
 FILE=malloc://1024
 CMDS=<<EOF
-pf.foo xd foo bar
+pf.foo xi foo bar
 pf.foo
 EOF
 EXPECT=<<EOF
@@ -109,7 +134,7 @@ RUN
 NAME=seteq2
 FILE=malloc://1024
 CMDS=<<EOF
-pf.foo=xd foo bar
+pf.foo=xi foo bar
 pf.foo
 EOF
 EXPECT=<<EOF
@@ -153,17 +178,17 @@ pf u ulebtest
 wx 00000000e58e258e2525 @ 0x10
 pf.plop [4]u ulebtest
 pf.plop @ 0x14
+pf*.plop.ulebtest[2]=42 @ 0x14
 pf.plop.ulebtest[2]=42 @ 0x14
-.pf.plop.ulebtest[2]=42 @ 0x14
 pf.plop @ 0x14
 pfj.plop @ 0x14
 EOF
 EXPECT=<<EOF
  ulebtest : 0x00000000 = 624485
  ulebtest : 0x00000014 = [ 608101, 4750, 37, 0 ]
-"wx 2a" @ 0x00000019
+wx 2a @ 0x00000019
  ulebtest : 0x00000014 = [ 608101, 4750, 42, 0 ]
-[{"name":"ulebtest","type":"u","offset":20,"value":[ "608101", "4750", "42", "0" ]}]
+[{"name":"ulebtest","type":"u","offset":20,"values":[608101,4750,42,0]}]
 EOF
 RUN
 
@@ -222,7 +247,7 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=swap endianess
+NAME=swap endianness
 FILE=malloc://1024
 CMDS=<<EOF
 wx deadbeef00000000adde
@@ -305,8 +330,8 @@ pf.troll
 EOF
 EXPECT=<<EOF
     hu : 0x00000000 = 42
- swagg : 0x00000004 = "B*A AABLABLA"
-  plop : 0x00000011 = 4000
+ swagg : 0x00000004 = "B*A AA"
+  plop : 0x0000000b = 4000
 EOF
 RUN
 
@@ -458,7 +483,7 @@ EXPECT=<<EOF
                       struct<troll>
                  integer : 0x00000010 = 42
                     word : 0x00000014 = 0x002a
-                     Bah : (*0x0) NULL
+                     Bah :  NULL
      plop : 0x0000000e = 0x1664
 EOF
 RUN
@@ -482,7 +507,7 @@ EXPECT=<<EOF
                       struct<struct>
                 first : 0x00000004 = 0x00000fa0
                second : 0x00000008 = 0x000020a0
-            word : 0x00000004 = 0x0fa0
+            word : 0x0000000c = 0x7201
      plop : 0x0000000c = 0x7201
 EOF
 RUN
@@ -517,7 +542,7 @@ EXPECT=<<EOF
                                   struct<troll>
                                  integer : 0x00000020 = 1664
                                     word : 0x00000024 = 0x4000
-                                     Bah : (*0x0) NULL
+                                     Bah :  NULL
          bwa : 0x00000012 = 0x4214
   foo : 0x00000014 = 0x00001664
 EOF
@@ -563,10 +588,6 @@ Cd 4 @ 0x00000020
 f word=0x00000024
 fl 2 @ 0x00000024
 Cd 2 @ 0x00000024
-fl 4 @ 0x00000020
-Cd 4 @ 0x00000020
-fl 4 @ 0x00000030
-Cd 4 @ 0x00000030
 fl 10 @ 0x00000008
 Cd 10 @ 0x00000008
 f bwa=0x00000012
@@ -592,7 +613,7 @@ RUN
 
 NAME=Print value only
 FILE=bins/pe/ch22.exe
-ARGS=-nn
+ARGS=-nn -e bin.types=true
 CMDS=<<EOF
 e asm.bits=32
 s 0x80
@@ -679,7 +700,7 @@ RUN
 
 NAME=PE test
 FILE=bins/pe/ch22.exe
-ARGS=-nn
+ARGS=-nn -e bin.types=true
 CMDS=<<EOF
 e asm.bits=32
 s 0x80
@@ -696,6 +717,7 @@ EXPECT=<<EOF
                            numberOfSymbols : 0x00000090 = 0x00000000
                       sizeOfOptionalHeader : 0x00000094 = 0x00e0
                            characteristics : 0x00000096 = characteristics (bitfield) = 0x00000102 : IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_32BIT_MACHINE
+
  optionalHeader : 
                 struct<pe_image_optional_header32>
                                                    magic : 0x00000098 = magic (enum pe_magic) = 0x10b ; IMAGE_NT_OPTIONAL_HDR32_MAGIC
@@ -722,6 +744,7 @@ EXPECT=<<EOF
                                                 checkSum : 0x000000d8 = 0x00000000
                                                subsystem : 0x000000dc = subsystem (enum pe_subsystem) = 0x2 ; IMAGE_SUBSYSTEM_WINDOWS_GUI
                                       dllCharacteristics : 0x000000de = dllCharacteristics (bitfield) = 0x00008560 : IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA | IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE | IMAGE_DLLCHARACTERISTICS_NX_COMPAT | IMAGE_DLLCHARACTERISTICS_NO_SEH | IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
+
                                       sizeOfStackReserve : 0x000000e0 = 0x00100000
                                        sizeOfStackCommit : 0x000000e4 = 0x00001000
                                        sizeOfHeapReserve : 0x000000e8 = 0x00100000
@@ -815,7 +838,10 @@ NAME=Infinite Recursion segfault 1
 FILE=malloc://1024
 CMDS=pf._NT_TIB ? (_NT_TIB)Self ; pf._NT_TIB > /dev/null ; pf.
 EXPECT=<<EOF
-pf._NT_TIB ? (_NT_TIB)Self
+'pf._NT_TIB ? (_NT_TIB)Self
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Recursive struct '_NT_TIB'
 EOF
 RUN
 
@@ -823,16 +849,91 @@ NAME=Infinite Recursion segfault 2
 FILE=malloc://1024
 CMDS=pf._NT_TIB ?ppppip? (_EXCEPTION_REGISTRATION_RECORD)ExceptionList StackBase StackLimit SubSystemTib FiberData Version ArbitraryUserPointer (_NT_TIB)Self ; pf._NT_TIB > /dev/null ; pf.
 EXPECT=<<EOF
-pf._NT_TIB ?ppppip? (_EXCEPTION_REGISTRATION_RECORD)ExceptionList StackBase StackLimit SubSystemTib FiberData Version ArbitraryUserPointer (_NT_TIB)Self
+'pf._NT_TIB ?ppppip? (_EXCEPTION_REGISTRATION_RECORD)ExceptionList StackBase StackLimit SubSystemTib FiberData Version ArbitraryUserPointer (_NT_TIB)Self
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot find format for struct `_EXCEPTION_REGISTRATION_RECORD'
 EOF
 RUN
 
+NAME=Undefined inline struct format
+FILE=malloc://1024
+CMDS=pf i?i first (missing)child last
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot find format for struct `missing'
+EOF
+RUN
+
+NAME=Undefined nested struct format
+FILE=malloc://1024
+CMDS=<<EOF
+pf.inner ? (missing)child
+pf.outer i?i first (inner)child last
+pfs.outer
+pf.outer
+EOF
+EXPECT=<<EOF
+-1
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot find format for struct `missing'
+ERROR: Cannot find format for struct `missing'
+EOF
+RUN
+
+NAME=Mutually recursive struct formats
+FILE=malloc://1024
+CMDS=<<EOF
+pf.a ? (b)child
+pf.b ? (a)child
+pf.a
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot find size for `? (a)child'
+EOF
+RUN
+
+NAME=Recursive NT_TIB struct pointer
+FILE=malloc://1024
+ARGS=-b 32
+CMDS=<<EOF
+wx 10000000
+pf._NT_TIB *? (_NT_TIB)Self
+pfs._NT_TIB
+pf._NT_TIB
+EOF
+EXPECT=<<EOF
+4
+ Self : (*0x10)
+                struct<_NT_TIB>
+      Self :  NULL
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=Self pointer struct format size
+FILE=malloc://1024
+ARGS=-b 32
+CMDS=<<EOF
+pf.node p*? value (node)next
+pfs.node
+pf.node
+EOF
+EXPECT=<<EOF
+8
+ value : 0x00000000 = 0x00000000
+  next :  NULL
+EOF
+EXPECT_ERR=
+RUN
+
 NAME=One byte enum endianness
-BROKEN=1
 FILE=malloc://1024
 CMDS=<<EOF
 e cfg.bigendian=true
-wb 4142434431323334
+wX 4142434431323334
 "td enum ascii{ LETTER_A=0x41, LETTER_D=0x44, DIGIT_1=0x31, DIGIT_4=0x34}"
 pf.somestring [1]E[1]E[1]E[1]E[1]E[1]E[1]E[1]E (ascii)B1 (ascii)B2 (ascii)B3 (ascii)B4 (ascii)B5 (ascii)B6 (ascii)B7 (ascii)B8
 pf.somestring
@@ -948,7 +1049,7 @@ EXPECT=<<EOF
     "name": "f1",
     "type": "q",
     "offset": 6,
-    "value": -2382384186880648516
+    "value": 16064359886828903100
   }
 ]
 EOF
@@ -1014,7 +1115,7 @@ EXPECT=<<EOF
     "name": "f1",
     "type": "q",
     "offset": 1,
-    "value": -2382384186880648516
+    "value": 16064359886828903100
   }
 ]
 
@@ -1055,5 +1156,148 @@ EXPECT=<<EOF
     ]
   }
 ]
+EOF
+RUN
+
+NAME=pfp printf format string to pf (64bit)
+FILE=-
+ARGS=-e asm.bits=64
+CMDS=pfp %s%d%f%x
+EXPECT=<<EOF2
+SiFx
+EOF2
+RUN
+
+NAME=pfp printf format string to pf (32bit)
+FILE=-
+ARGS=-e asm.bits=32
+CMDS=pfp %ld%s
+EXPECT=<<EOF2
+is
+EOF2
+RUN
+
+NAME=pfp rejects unsupported format
+FILE=-
+CMDS=pfp %1$s
+EXPECT=<<EOF2
+EOF2
+RUN
+
+NAME=pf colors pointer values by the memory they point to
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=<<EOF
+e io.cache=true
+wv8 entry0 @ section..data
+wv8 section..data @ section..data+8
+e scr.color=1
+pf qq code rw @ section..data
+pf [2]x arr @ section..data
+e scr.color=0
+pf qq code rw @ section..data
+EOF
+EXPECT=<<EOF
+[36m code[0m : [32m0x00600900[0m = (qword)[31m0x0000000000400410[0m
+[36m   rw[0m : [32m0x00600908[0m = (qword)[34m0x0000000000600900[0m
+[36m arr[0m : [32m0x00600900[0m = [ [31m0x00400410[0m, 0x00000000 ]
+ code : 0x00600900 = (qword)0x0000000000400410
+   rw : 0x00600908 = (qword)0x0000000000600900
+EOF
+RUN
+
+NAME=pf array size from a flag or $$ sizes the buffer and is bounded by it
+FILE=malloc://64
+CMDS=<<EOF2
+wx 04000000
+wx 1111111111111111222222222222222233333333333333334444444444444444 @ 16
+b 16
+f n=4
+pfs [n]q
+s 16
+pf [n]q
+s 4
+pfs [$$]q
+s 16
+pf [$$]w
+s 0
+pf [*0x0]q
+pf [*0x1000]b
+?e done
+EOF2
+EXPECT=<<EOF2
+32
+0x00000010 = (qword)[ 0x1111111111111111, 0x2222222222222222, 0x3333333333333333, 0x4444444444444444 ]
+32
+0x00000010 = [ 0x1111, 0x1111, 0x1111, 0x1111, 0x2222, 0x2222, 0x2222, 0x2222, 0x3333, 0x3333, 0x3333, 0x3333, 0x4444, 0x4444, 0x4444, 0x4444 ]
+0x00000000 = [  ]
+done
+EOF2
+RUN
+
+NAME=pf field selector index is checked against the array size
+FILE=malloc://32
+CMDS=<<EOF2
+wx 0011223344556677
+pf.foo X a
+pf.bar [4]b a
+pf.skipq .q a b
+pf.foo.a[1]
+pf.foo.a[0]
+pf.bar.a[0]
+pf.bar.a[3]
+pf.bar.a[4]
+pf.bar.a[-1]
+pf.skipq.a[-2]
+?e done
+EOF2
+EXPECT=<<EOF2
+ a : 0x00000000 = [ 0x00 ]
+ a : 0x00000003 = [ 0x33 ]
+done
+EOF2
+EXPECT_ERR=<<EOF2
+ERROR: Field 'a' has no element 1
+ERROR: Field 'a' has no element 0
+ERROR: Field 'a' has no element 4
+ERROR: Field 'a' has no element -1
+ERROR: Field 'a' has no element -2
+EOF2
+RUN
+
+NAME=pf address and label colors respect scr.color and output modes
+FILE=malloc://64
+CMDS=<<EOF
+e scr.color=1
+ec addr red
+ec label yellow
+pf b
+pf b field
+pf q field
+pf Q field
+pf z field
+pfj b field
+pfq b field
+pfv b field
+e scr.color=0
+pf b
+pf b field
+pf q field
+pf Q field
+pf z field
+EOF
+EXPECT=<<EOF
+[31m0x00000000[0m = 0x00
+[33m field[0m : [31m0x00000000[0m = 0x00
+[33m field[0m : [31m0x00000000[0m = (qword)[31m0x0000000000000000[0m
+[33m field[0m : [31m0x00000000[0m = (uint128_t)0x00000000000000000000000000000000
+[33m field[0m : [31m0x00000000[0m = ""
+[{"name":"field","type":"b","offset":0,"value":0}]
+0x00
+0x00
+0x00000000 = 0x00
+ field : 0x00000000 = 0x00
+ field : 0x00000000 = (qword)0x0000000000000000
+ field : 0x00000000 = (uint128_t)0x00000000000000000000000000000000
+ field : 0x00000000 = ""
 EOF
 RUN

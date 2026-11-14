@@ -1,0 +1,165 @@
+NAME=ELF Itanium exception cleanup region
+FILE=bins/elf/ClassCpp.out
+CMDS=iwj~{[0]}
+EXPECT=<<EOF
+{"index":0,"source":4713,"from":4778,"to":4872,"handler":4908,"filter":0,"kind":"cleanup"}
+EOF
+RUN
+
+NAME=rabin2 lists exception regions
+FILE=bins/elf/ClassCpp.out
+CMDS=!!rabin2 -wr ${R2_FILE}~try.0.
+EXPECT=<<EOF
+f try.0.1269.from=0x000012aa
+f try.0.1269.to=0x00001308
+f try.0.1269.cleanup=0x0000132c
+EOF
+RUN
+
+NAME=exception regions readable and quiet output
+FILE=bins/elf/ClassCpp.out
+CMDS=<<EOF
+iw~0x000012aa
+iwq~0x000012aa
+!!rabin2 -w ${R2_FILE}~0x000012aa
+EOF
+EXPECT=<<EOF
+0 0x000012aa-0x00001308 cleanup -> 0x0000132c (source 0x00001269)
+0x000012aa 0x00001308 0x0000132c
+0 0x000012aa-0x00001308 cleanup -> 0x0000132c (source 0x00001269)
+EOF
+RUN
+
+NAME=ELF Itanium catch-all region
+FILE=bins/elf/demangle-test-cpp
+CMDS=iwj~{[1]}
+EXPECT=<<EOF
+{"index":1,"source":5546,"from":5808,"to":5871,"handler":6019,"filter":0,"kind":"catch","typeFilter":1,"catchAll":true}
+EOF
+RUN
+
+NAME=ELF Itanium typed catch region
+FILE=bins/elf/0pack
+CMDS=iwj~{[0]}
+EXPECT=<<EOF
+{"index":0,"source":4684212,"from":4684240,"to":4684243,"handler":4684248,"filter":0,"kind":"catch","typeFilter":1,"type":"std::exception"}
+EOF
+RUN
+
+NAME=ELF readable typed catch
+FILE=bins/elf/0pack
+CMDS=iw~^0 0x004779d0
+EXPECT=<<EOF
+0 0x004779d0-0x004779d3 catch (std::exception) -> 0x004779d8 (source 0x004779b4)
+EOF
+RUN
+
+NAME=disasm exception region annotations and clipped views
+FILE=bins/elf/ClassCpp.out
+CMDS=<<EOF
+e asm.flags=false
+pd 2 @ 0x12aa~try 0x
+pd 1 @ 0x12af~try 0x
+pd 1 @ 0x1308~try 0x
+pdJ 2 @ 0x12aa~try 0x
+e asm.lines=false
+pd 2 @ 0x12aa~try 0x
+e asm.lines=true
+e asm.trycatch=false
+pd 2 @ 0x12aa~try 0x
+EOF
+EXPECT=<<EOF
+            ; try 0x000012aa-0x00001308 cleanup -> 0x0000132c
+            ; try 0x000012aa-0x00001308 cleanup -> 0x0000132c
+EOF
+RUN
+
+NAME=disasm typed and catch-all handlers sharing a region
+FILE=bins/elf/0pack
+CMDS=<<EOF
+pd 2 @ 0x4779d0~try 0x
+EOF
+EXPECT=<<EOF
+            ; try 0x004779d0-0x004779d3 catch (std::exception) -> 0x004779d8
+            ; try 0x004779d0-0x004779d3 catch (...) -> 0x004779d8
+EOF
+RUN
+
+NAME=disasm exception background stops at the exclusive end
+FILE=bins/elf/ClassCpp.out
+CMDS=<<EOF
+f-*
+e asm.comments=false
+e asm.bytes=false
+e asm.addr=false
+e scr.color=1
+ec linehl white blue
+pd 2 @ 0x1303
+EOF
+EXPECT=<<EOF
+            [44m[37m     [1;32mcall[33m [32m0x1110[27;22;24;25;28;39m[0m
+                 [36mmov[37m ebx[0m,[37m [32m0[0m
+EOF
+RUN
+
+NAME=ELF shared catch handler analysis without try flags
+FILE=bins/elf/0pack
+CMDS=<<EOF
+e anal.trycatch=false
+af @ 0x4779b4
+afbq @ 0x4779b4~?0x004779d8
+af-*
+e anal.trycatch=true
+f-try.*
+af @ 0x4779b4
+afbq @ 0x4779b4~?0x004779d8
+EOF
+EXPECT=<<EOF
+0
+1
+EOF
+RUN
+
+NAME=ELF cleanup handler is added to its function
+FILE=bins/elf/ClassCpp.out
+CMDS=<<EOF
+af @ 0x1269
+afbq @ 0x1269~?0x0000132c
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=ELF cyclic LSDA action chains
+FILE=malloc://416
+CMDS=<<EOF
+wx 7f454c46020101
+wx 03003e0001 @ 0x10
+wv8 0xa0 @ 0x28
+wx 400000000000400004000300 @ 0x34
+wx 0f00000000000000017a4c52000178100203010c00000017000000806010040020 @ 0x40
+wx ffff01080001080104010803017f027d @ 0x67
+wz .eh_frame @ 0x78
+wz .gcc_except_table @ 0x82
+wz .shstrtab @ 0x94
+wx 010000000100000002 @ 0xe0
+wv8 0x1000 @ 0xf0
+wv8 0x40 @ 0xf8
+wv8 0x27 @ 0x100
+wx 0b0000000100000002 @ 0x120
+wv8 0x2000 @ 0x130
+wv8 0x67 @ 0x138
+wv8 0x10 @ 0x140
+wx 1d00000003 @ 0x160
+wv8 0x77 @ 0x178
+wv8 0x27 @ 0x180
+oba 0
+iw
+EOF
+EXPECT=<<EOF
+0 0x00003000-0x00003001 catch -> 0x00003008 (source 0x00003000)
+1 0x00003004-0x00003005 catch -> 0x00003008 (source 0x00003000)
+2 0x00003004-0x00003005 catch -> 0x00003008 (source 0x00003000)
+EOF
+RUN

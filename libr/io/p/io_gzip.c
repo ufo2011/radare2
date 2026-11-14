@@ -1,10 +1,6 @@
-/* radare - LGPL - Copyright 2008-2021 - pancake */
+/* radare - LGPL - Copyright 2008-2026 - pancake */
 
-#include "r_io.h"
-#include "r_lib.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
+#include <r_io.h>
 
 typedef struct {
 	ut8 *buf;
@@ -85,19 +81,27 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 }
 
 static bool __resize(RIO *io, RIODesc *fd, ut64 count) {
-	ut8 * new_buf = NULL;
-	if (!fd || !fd->data || count == 0) {
+	if (!fd || !fd->data) {
 		return false;
+	}
+	if (count == 0) {
+		free (_io_malloc_buf (fd));
+		_io_malloc_set_buf (fd, NULL);
+		_io_malloc_set_sz (fd, 0);
+		_io_malloc_set_off (fd, 0);
+		return true;
 	}
 	ut32 mallocsz = _io_malloc_sz (fd);
 	if (_io_malloc_off (fd) > mallocsz) {
 		return false;
 	}
-	new_buf = malloc (count);
+	ut8 *new_buf = malloc (count);
 	if (!new_buf) {
 		return false;
 	}
-	memcpy (new_buf, _io_malloc_buf (fd), R_MIN (count, mallocsz));
+	if (mallocsz > 0) {
+		memcpy (new_buf, _io_malloc_buf (fd), R_MIN (count, mallocsz));
+	}
 	if (count > mallocsz) {
 		memset (new_buf + mallocsz, 0, count - mallocsz);
 	}
@@ -108,7 +112,7 @@ static bool __resize(RIO *io, RIODesc *fd, ut64 count) {
 }
 
 static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	memset (buf, 0xff, count);
+	memset (buf, io->Oxff, count);
 	if (!fd || !fd->data) {
 		return -1;
 	}
@@ -119,7 +123,9 @@ static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	if (_io_malloc_off (fd) + count >= mallocsz) {
 		count = mallocsz - _io_malloc_off (fd);
 	}
-	memcpy (buf, _io_malloc_buf (fd) + _io_malloc_off (fd), count);
+	if (count > 0) {
+		memcpy (buf, _io_malloc_buf (fd) + _io_malloc_off (fd), count);
+	}
 	return count;
 }
 
@@ -129,7 +135,7 @@ static bool __close(RIODesc *fd) {
 	}
 	RIOGzip *riom = fd->data;
 	if (riom->has_changed) {
-		eprintf ("TODO: Writing changes into gzipped files is not yet supported\n");
+		R_LOG_ERROR ("TODO: Writing changes into gzipped files is not yet supported");
 	}
 	R_FREE (riom->buf);
 	R_FREE (fd->data);
@@ -143,13 +149,13 @@ static ut64 __lseek(RIO* io, RIODesc *fd, ut64 offset, int whence) {
 	}
 	ut32 mallocsz = _io_malloc_sz (fd);
 	switch (whence) {
-	case SEEK_SET:
+	case R_IO_SEEK_SET:
 		r_offset = (offset <= mallocsz) ? offset : mallocsz;
 		break;
-	case SEEK_CUR:
+	case R_IO_SEEK_CUR:
 		r_offset = (_io_malloc_off (fd) + offset <= mallocsz ) ? _io_malloc_off (fd) + offset : mallocsz;
 		break;
-	case SEEK_END:
+	case R_IO_SEEK_END:
 		r_offset = _io_malloc_sz (fd);
 		break;
 	}
@@ -158,33 +164,36 @@ static ut64 __lseek(RIO* io, RIODesc *fd, ut64 offset, int whence) {
 }
 
 static bool __plugin_open(RIO *io, const char *pathname, bool many) {
-	return (!strncmp (pathname, "gzip://", 7));
+	return r_str_startswith (pathname, "gzip://");
 }
 
 static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 	if (__plugin_open (io, pathname, 0)) {
-		RIOGzip *mal = R_NEW0 (RIOGzip);
-		if (!mal) {
+		size_t len;
+		ut8 *data = (ut8 *)r_file_slurp (pathname + 7, &len); //memleak here?
+		if (!data) {
 			return NULL;
 		}
-		size_t len;
-		ut8 *data = (ut8 *)r_file_slurp (pathname+7, &len);	//memleak here?
+		RIOGzip *mal = R_NEW0 (RIOGzip);
 		int *size = (int*)&mal->size;
 		mal->buf = r_inflate (data, (int)len, NULL, size);
+		free (data);
 		if (mal->buf) {
 			return r_io_desc_new (io, &r_io_plugin_gzip, pathname, rw, mode, mal);
 		}
-		free (data);
-		eprintf ("Cannot allocate (%s) %d byte(s)\n", pathname+9, mal->size);
+		R_LOG_ERROR ("Cannot allocate %d bytes for %s", mal->size, pathname + 9);
 		free (mal);
 	}
 	return NULL;
 }
 
 RIOPlugin r_io_plugin_gzip = {
-	.name = "gzip",
-	.desc = "Read/write gzipped files",
-	.license = "LGPL3",
+	.meta = {
+		.name = "gzip",
+		.desc = "Read/write gzipped files",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "gzip://",
 	.open = __open,
 	.close = __close,

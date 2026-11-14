@@ -1,9 +1,5 @@
-/* radare - LGPL - Copyright 2010-2019 pancake, nibble */
+/* radare - LGPL - Copyright 2010-2026 pancake, nibble */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <r_types.h>
 #include <r_util.h>
 #include "elf.h"
 
@@ -11,22 +7,36 @@
 /* TODO: Take care of endianness */
 /* TODO: Real error handling */
 /* TODO: Resize sections before .init */
-// ut64 Elf_(r_bin_elf_resize_section)(struct Elf_(r_bin_elf_obj_t) *bin, const char *name, ut64 size) {
-ut64 Elf_(r_bin_elf_resize_section)(RBinFile *bf, const char *name, ut64 size) {
-	struct Elf_(r_bin_elf_obj_t) *bin = bf->o->bin_obj; // , const char *name, ut64 size) {
+ut64 Elf_(resize_section)(RBinFile *bf, const char *name, ut64 size) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj && bf->buf && name, UT64_MAX);
+	struct Elf_(obj_t) *bin = bf->bo->bin_obj; // , const char *name, ut64 size) {
+	R_RETURN_VAL_IF_FAIL (bin->b, UT64_MAX);
+	if (bin->endian != R_SYS_ENDIAN) {
+		R_LOG_ERROR ("Cross-endian ELF section resizing is not supported");
+		return UT64_MAX;
+	}
+	if (bin->b->type != R_BUFFER_BYTES) {
+		RBuffer *nb = r_buf_new_with_buf (bin->b);
+		if (!nb) {
+			return UT64_MAX;
+		}
+		r_unref (bin->b);
+		bin->b = nb;
+	}
 	Elf_(Ehdr) *ehdr = &bin->ehdr;
 	Elf_(Phdr) *phdr = bin->phdr, *phdrp;
 	Elf_(Shdr) *shdr = bin->shdr, *shdrp;
 	const char *strtab = bin->shstrtab;
-	ut8 *buf;
 	ut64 off, got_offset = 0, got_addr = 0, rsz_offset = 0, delta = 0;
 	ut64 rsz_osize = 0, rsz_size = size, rest_size = 0;
-	int i, j, done = 0;
+	int i, j;
+	bool done = false;
 
 	if (size == 0) {
-		eprintf ("0 size section?\n");
-		return 0;
+		R_LOG_ERROR ("0 size section?");
+		return UT64_MAX;
 	}
+	bool section_not_found = true;
 
 	/* calculate delta */
 	for (i = 0, shdrp = shdr; i < ehdr->e_shnum; i++, shdrp++) {
@@ -35,23 +45,51 @@ ut64 Elf_(r_bin_elf_resize_section)(RBinFile *bf, const char *name, ut64 size) {
 			continue;
 		}
 		const char *sh_name = &strtab[shdrp->sh_name];
-		if (sh_name && !strncmp (name, sh_name, ELF_STRING_LENGTH)) {
-			delta =  rsz_size - shdrp->sh_size;
+		if (!strncmp (name, sh_name, ELF_STRING_LENGTH)) {
+			section_not_found = false;
+			if (rsz_size < (ut64)shdrp->sh_size) {
+				R_LOG_ERROR ("Shrinking sections is not supported");
+				return UT64_MAX;
+			}
+			if (shdrp->sh_type == 8) {
+				// is virtual section. so we only need to patch the headers
+				delta = 0;
+				shdrp->sh_size = rsz_size;
+				off = ehdr->e_shoff + (i * sizeof (Elf_(Shdr)));
+				r_buf_write_at (bin->b, off, (ut8*)shdrp, sizeof (Elf_(Shdr)));
+				r_unref (bf->buf);
+				bf->buf = r_ref (bin->b);
+				return 0;
+			}
+			delta = rsz_size - shdrp->sh_size;
 			rsz_offset = (ut64)shdrp->sh_offset;
 			rsz_osize = (ut64)shdrp->sh_size;
+			break;
 		}
 	}
 
-	if (delta == 0) {
-		eprintf ("Cannot find section\n");
-		return 0;
+	if (section_not_found) {
+		R_LOG_ERROR ("Cannot find section");
+		return UT64_MAX;
 	}
- 
-	eprintf ("delta: %"PFMT64d"\n", delta);
-	
+
+	if (rsz_osize > bin->size || rsz_offset > bin->size - rsz_osize) {
+		R_LOG_ERROR ("Invalid section bounds");
+		return UT64_MAX;
+	}
+	if (UT64_MAX - delta < bin->size) {
+		R_LOG_ERROR ("Integer overflow in resize delta");
+		return UT64_MAX;
+	}
+
+	R_LOG_INFO ("File size delta: %"PFMT64d, delta);
+
 	/* rewrite rel's (imports) */
 	for (i = 0, shdrp = shdr; i < ehdr->e_shnum; i++, shdrp++) {
-		if (!strcmp(&strtab[shdrp->sh_name], ".got")) {
+		if (shdrp->sh_name >= bin->shstrtab_size) {
+			continue;
+		}
+		if (!strncmp (&strtab[shdrp->sh_name], ".got", ELF_STRING_LENGTH)) {
 			got_addr = (ut64)shdrp->sh_addr;
 			got_offset = (ut64)shdrp->sh_offset;
 		}
@@ -61,79 +99,91 @@ ut64 Elf_(r_bin_elf_resize_section)(RBinFile *bf, const char *name, ut64 size) {
 	}
 
 	for (i = 0, shdrp = shdr; i < ehdr->e_shnum; i++, shdrp++) {
-		if (!strcmp (&strtab[shdrp->sh_name], ".rel.plt")) {
+		if (shdrp->sh_name >= bin->shstrtab_size) {
+			continue;
+		}
+		if (!strncmp (&strtab[shdrp->sh_name], ".rel.plt", ELF_STRING_LENGTH)) {
 			Elf_(Rel) *rel, *relp;
-			rel = (Elf_(Rel) *)malloc (1+shdrp->sh_size);
+			rel = (Elf_(Rel) *)malloc (shdrp->sh_size);
 			if (!rel) {
-				perror ("malloc");
-				return 0;
+				r_sys_perror ("malloc");
+				return UT64_MAX;
 			}
 			if (r_buf_read_at (bin->b, shdrp->sh_offset, (ut8*)rel, shdrp->sh_size) == -1) {
-				perror("read (rel)");
+				r_sys_perror ("read (rel)");
+				free (rel);
+				break;
 			}
-			for (j = 0, relp = rel; j < shdrp->sh_size; j += sizeof(Elf_(Rel)), relp++) {
+			for (j = 0, relp = rel; j < shdrp->sh_size; j += sizeof (Elf_(Rel)), relp++) {
 				/* rewrite relp->r_offset */
 				if (relp->r_offset - got_addr + got_offset >= rsz_offset + rsz_osize) {
-					relp->r_offset+=delta;
+					relp->r_offset += delta;
 					off = shdrp->sh_offset + j;
 					if (r_buf_write_at (bin->b, off, (ut8*)relp, sizeof (Elf_(Rel))) == -1) {
-						perror("write (imports)");
+						r_sys_perror ("write (imports)");
 					}
 				}
 			}
-			free(rel);
+			free (rel);
 			break;
 		} else if (!strcmp (&strtab[shdrp->sh_name], ".rela.plt")) {
 			Elf_(Rela) *rel, *relp;
-			rel = (Elf_(Rela) *)malloc (shdrp->sh_size + 1);
+			rel = (Elf_(Rela) *)malloc (shdrp->sh_size);
 			if (!rel) {
-				perror("malloc");
-				return 0;
+				r_sys_perror ("malloc");
+				return UT64_MAX;
 			}
 			if (r_buf_read_at (bin->b, shdrp->sh_offset, (ut8*)rel, shdrp->sh_size) == -1) {
-				perror("read (rel)");
+				r_sys_perror ("read (rel)");
+				free (rel);
+				break;
 			}
-			for (j = 0, relp = rel; j < shdrp->sh_size; j += sizeof(Elf_(Rela)), relp++) {
+			for (j = 0, relp = rel; j < shdrp->sh_size; j += sizeof (Elf_(Rela)), relp++) {
 				/* rewrite relp->r_offset */
 				if (relp->r_offset - got_addr + got_offset >= rsz_offset + rsz_osize) {
-					relp->r_offset+=delta;
 					off = shdrp->sh_offset + j;
+					relp->r_offset += delta;
 					if (r_buf_write_at (bin->b, off, (ut8*)relp, sizeof (Elf_(Rela))) == -1) {
-						perror("write (imports)");
+						r_sys_perror ("write (imports)");
 					}
 				}
 			}
-			free(rel);
+			free (rel);
 			break;
 		}
 	}
 
 	/* rewrite section headers */
 	for (i = 0, shdrp = shdr; i < ehdr->e_shnum; i++, shdrp++) {
-		if (!done && !strncmp (name, &strtab[shdrp->sh_name], ELF_STRING_LENGTH)) {
-			shdrp->sh_size = rsz_size;
-			done = 1;
+		off = ehdr->e_shoff + (i * sizeof (Elf_(Shdr)));
+		if (shdrp->sh_name >= bin->shstrtab_size) {
+			continue;
+		}
+		if (!done && !strncmp (name, strtab + shdrp->sh_name, ELF_STRING_LENGTH)) {
+			R_LOG_INFO ("patching the virtual section size from %"PFMT64d" to %"PFMT64d, (ut64)shdrp->sh_size, rsz_size);
+			Elf_(Shdr) *es = (Elf_(Shdr)*)shdrp;
+			es->sh_size = rsz_size; // XXX this is tied to endian
+			done = true;
 		} else if (shdrp->sh_offset >= rsz_offset + rsz_osize) {
 			shdrp->sh_offset += delta;
 			if (shdrp->sh_addr) {
 				shdrp->sh_addr += delta;
 			}
 		}
-		off = ehdr->e_shoff + i * sizeof (Elf_(Shdr));
 		if (r_buf_write_at (bin->b, off, (ut8*)shdrp, sizeof (Elf_(Shdr))) == -1) {
-			perror ("write (shdr)");
+			r_sys_perror ("write (shdr)");
 		}
-		printf ("-> elf section (%s)\n", &strtab[shdrp->sh_name]);
+		R_LOG_DEBUG ("-> elf section (%s)", &strtab[shdrp->sh_name]);
 	}
 
 	/* rewrite program headers */
-	for (i = 0, phdrp = phdr; i < ehdr->e_phnum; i++, phdrp++) {
-#if 0 
+	for (i = 0, phdrp = phdr; i < bin->phnum; i++, phdrp++) {
+#if 0
 		if (phdrp->p_offset < rsz_offset && phdrp->p_offset + phdrp->p_filesz > rsz_offset) {
 			phdrp->p_filesz += delta;
 			phdrp->p_memsz += delta;
 		}
-#endif 
+#endif
 		if (phdrp->p_offset >= rsz_offset + rsz_osize) {
 			phdrp->p_offset += delta;
 			if (phdrp->p_vaddr) {
@@ -145,50 +195,72 @@ ut64 Elf_(r_bin_elf_resize_section)(RBinFile *bf, const char *name, ut64 size) {
 		} else if (phdrp->p_offset + phdrp->p_filesz >= rsz_offset + rsz_osize) {
 			phdrp->p_filesz += delta;
 			phdrp->p_memsz += delta;
-		} 
+		}
 		off = ehdr->e_phoff + i * sizeof (Elf_(Phdr));
 		if (r_buf_write_at (bin->b, off, (ut8 *)phdrp, sizeof (Elf_ (Phdr))) == -1) {
-			perror ("write (phdr)");
+			r_sys_perror ("write (phdr)");
 		}
-		printf ("-> program header (0x%08"PFMT64x")\n", (ut64) phdrp->p_offset);
+		R_LOG_DEBUG ("-> program header (0x%08"PFMT64x")", (ut64) phdrp->p_offset);
 	}
 
 	/* rewrite other elf pointers (entrypoint, phoff, shoff) */
 	if (ehdr->e_entry - bin->baddr >= rsz_offset + rsz_osize) {
 		ehdr->e_entry += delta;
+		R_LOG_INFO ("patch entry");
 	}
 	if (ehdr->e_phoff >= rsz_offset + rsz_osize) {
 		ehdr->e_phoff += delta;
+		R_LOG_INFO ("patch phoff");
 	}
 	if (ehdr->e_shoff >= rsz_offset + rsz_osize) {
 		ehdr->e_shoff += delta;
+		R_LOG_INFO ("patch shoff");
 	}
+	R_LOG_INFO ("writing ehdr");
 	if (r_buf_write_at (bin->b, 0, (ut8*)ehdr, sizeof (Elf_(Ehdr))) == -1) {
-		perror ("write (ehdr)");
+		r_sys_perror ("write (ehdr)");
 	}
 
-	/* inverse order to write bodies .. avoid overlapping here */
-	/* XXX Check when delta is negative */
+	/* Shift subsequent sections and file body forward by delta */
 	rest_size = bin->size - (rsz_offset + rsz_osize);
 
-	buf = (ut8 *)malloc (1+bin->size);
-	r_buf_read_at (bin->b, 0, (ut8*)buf, bin->size);
-	r_buf_set_bytes (bin->b, (ut8*)buf, (int)(rsz_offset+rsz_size+rest_size));
+	if (delta == 0) {
+		R_LOG_INFO ("Size unchanged");
+	} else {
+		if (rest_size > 0) {
+			ut8 *rest = (ut8 *)malloc (rest_size);
+			if (!rest) {
+				R_LOG_ERROR ("Cannot allocate %"PFMT64d, rest_size);
+				return UT64_MAX;
+			}
+			r_buf_read_at (bin->b, rsz_offset + rsz_osize, rest, rest_size);
+			if (!r_buf_resize (bin->b, bin->size + delta)) {
+				free (rest);
+				return UT64_MAX;
+			}
+			r_buf_write_at (bin->b, rsz_offset + rsz_size, rest, rest_size);
+			free (rest);
+		} else {
+			if (!r_buf_resize (bin->b, bin->size + delta)) {
+				return UT64_MAX;
+			}
+		}
+		ut8 *zeros = calloc (1, delta);
+		if (zeros) {
+			r_buf_write_at (bin->b, rsz_offset + rsz_osize, zeros, delta);
+			free (zeros);
+		}
+		bin->size = r_buf_size (bin->b);
+	}
 
-	printf ("COPY FROM 0x%08"PFMT64x"\n", (ut64)(rsz_offset+rsz_osize));
-	r_buf_read_at (bin->b, rsz_offset + rsz_osize, (ut8*)buf, rest_size);
-	printf ("COPY TO 0x%08"PFMT64x"\n", (ut64)(rsz_offset+rsz_size));
-	r_buf_write_at (bin->b, rsz_offset + rsz_size, (ut8*)buf, rest_size);
-	printf ("Shifted %d byte(s)\n", (int)delta);
-	free (buf);
-	bin->size = r_buf_size (bin->b);
-
+	r_unref (bf->buf);
+	bf->buf = r_ref (bin->b);
 	return delta;
 }
 
 /* XXX Endianness? */
-bool Elf_(r_bin_elf_del_rpath)(RBinFile *bf) {
-	struct Elf_(r_bin_elf_obj_t) *bin = bf->o->bin_obj;
+bool Elf_(del_rpath)(RBinFile *bf) {
+	struct Elf_(obj_t) *bin = bf->bo->bin_obj;
 	Elf_(Dyn) *dyn = NULL;
 	ut64 stroff = 0LL;
 	int ndyn, i, j;
@@ -196,16 +268,16 @@ bool Elf_(r_bin_elf_del_rpath)(RBinFile *bf) {
 	if (!bin->phdr) {
 		return false;
 	}
-	for (i = 0; i < bin->ehdr.e_phnum; i++) {
+	for (i = 0; i < bin->phnum; i++) {
 		if (bin->phdr[i].p_type != PT_DYNAMIC) {
 			continue;
 		}
-		if (!(dyn = malloc (bin->phdr[i].p_filesz + 1))) {
-			perror ("malloc (dyn)");
+		if (!(dyn = malloc (bin->phdr[i].p_filesz))) {
+			r_sys_perror ("malloc (dyn)");
 			return false;
 		}
 		if (r_buf_read_at (bin->b, bin->phdr[i].p_offset, (ut8*)dyn, bin->phdr[i].p_filesz) == -1) {
-			eprintf ("Error: read (dyn)\n");
+			R_LOG_ERROR ("read (dyn)");
 			free (dyn);
 			return false;
 		}
@@ -220,7 +292,7 @@ bool Elf_(r_bin_elf_del_rpath)(RBinFile *bf) {
 				if (dyn[j].d_tag == DT_RPATH || dyn[j].d_tag == DT_RUNPATH) {
 					if (r_buf_write_at (bin->b, stroff + dyn[j].d_un.d_val,
 								(ut8*)"", 1) == -1) {
-						eprintf ("Error: write (rpath)\n");
+						R_LOG_ERROR ("write (rpath)");
 						free (dyn);
 						return false;
 					}
@@ -233,15 +305,24 @@ bool Elf_(r_bin_elf_del_rpath)(RBinFile *bf) {
 	return true;
 }
 
-bool Elf_(r_bin_elf_section_perms)(RBinFile *bf, const char *name, int perms) {
-	struct Elf_(r_bin_elf_obj_t) *bin = bf->o->bin_obj;
+bool Elf_(section_perms)(RBinFile *bf, const char *name, int perms) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj && bf->buf && name, false);
+	struct Elf_(obj_t) *bin = bf->bo->bin_obj;
+	if (bin->endian != R_SYS_ENDIAN) {
+		R_LOG_ERROR ("Cross-endian ELF section permission patching is not supported");
+		return false;
+	}
 	Elf_(Ehdr) *ehdr = &bin->ehdr;
 	Elf_(Shdr) *shdr = bin->shdr, *shdrp;
 	const char *strtab = bin->shstrtab;
 	int i, patchoff;
 
-	/* calculate delta */
+	/* ELF has no SHF_READ, so the R bit of `perms` is intentionally ignored —
+	 * sections are always readable if SHF_ALLOC is set. */
 	for (i = 0, shdrp = shdr; i < ehdr->e_shnum; i++, shdrp++) {
+		if (shdrp->sh_name >= bin->shstrtab_size) {
+			continue;
+		}
 		const char *shname = &strtab[shdrp->sh_name];
 		int operms = shdrp->sh_flags;
 		if (!strncmp (name, shname, ELF_STRING_LENGTH)) {
@@ -261,7 +342,7 @@ bool Elf_(r_bin_elf_section_perms)(RBinFile *bf, const char *name, int perms) {
 			patchoff = bin->ehdr.e_shoff;
 			patchoff += ((const ut8*)shdrp - (const ut8*)bin->shdr);
 			patchoff += r_offsetof (Elf_(Shdr), sh_flags);
-			printf ("wx %02x @ 0x%x\n", newperms, patchoff);
+			R_LOG_DEBUG ("wx %02x @ 0x%x", newperms, patchoff);
 			r_buf_write_at (bf->buf, patchoff, (ut8*)&newperms, 1);
 			return true;
 		}
@@ -269,7 +350,59 @@ bool Elf_(r_bin_elf_section_perms)(RBinFile *bf, const char *name, int perms) {
 	return false;
 }
 
-bool Elf_(r_bin_elf_entry_write)(RBinFile *bf, ut64 addr) {
+/* Return a stable synthetic name for a program header, or NULL if the type
+ * is not one we expose. Variable names (LOAD0, LOAD1, ...) are formatted
+ * into the caller-provided buffer. Keep in sync with elf.c segment naming. */
+static const char *phdr_synthetic_name(Elf_(Phdr) *phdrp, int load_idx, char *buf, size_t buflen) {
+	switch (phdrp->p_type) {
+	case PT_LOAD:
+		snprintf (buf, buflen, "LOAD%d", load_idx);
+		return buf;
+	case PT_DYNAMIC:      return "DYNAMIC";
+	case PT_INTERP:       return "INTERP";
+	case PT_NOTE:         return "NOTE";
+	case PT_TLS:          return "TLS";
+	case PT_PHDR:         return "PHDR";
+	case PT_GNU_STACK:    return "GNU_STACK";
+	case PT_GNU_RELRO:    return "GNU_RELRO";
+	case PT_GNU_EH_FRAME: return "GNU_EH_FRAME";
+	}
+	return NULL;
+}
+
+bool Elf_(segment_perms)(RBinFile *bf, const char *name, int perms) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj && bf->buf && name, false);
+	struct Elf_(obj_t) *bin = bf->bo->bin_obj;
+	if (bin->endian != R_SYS_ENDIAN) {
+		R_LOG_ERROR ("Cross-endian ELF segment permission patching is not supported");
+		return false;
+	}
+	if (!bin->phdr) {
+		return false;
+	}
+	Elf_(Ehdr) *ehdr = &bin->ehdr;
+	int load_idx = 0;
+	ut64 i;
+	for (i = 0; i < bin->phnum; i++) {
+		Elf_(Phdr) *phdrp = &bin->phdr[i];
+		char synthetic[32];
+		int this_idx = (phdrp->p_type == PT_LOAD)? load_idx++: 0;
+		const char *pname = phdr_synthetic_name (phdrp, this_idx, synthetic, sizeof (synthetic));
+		if (!pname || strcmp (name, pname)) {
+			continue;
+		}
+		/* preserve OS/processor-specific bits in the upper nibbles */
+		ut32 newflags = (phdrp->p_flags & ~(ut32)7) | (ut32)(perms & 7);
+		phdrp->p_flags = newflags;
+		ut64 patchoff = ehdr->e_phoff + (i * sizeof (Elf_(Phdr))) + r_offsetof (Elf_(Phdr), p_flags);
+		R_LOG_DEBUG ("wv4 0x%x @ 0x%"PFMT64x, newflags, patchoff);
+		r_buf_write_at (bf->buf, patchoff, (ut8*)&newflags, sizeof (newflags));
+		return true;
+	}
+	return false;
+}
+
+bool Elf_(entry_write)(RBinFile *bf, ut64 addr) {
 	const int patchoff = 0x18;
 #if R_BIN_ELF64
 	printf ("wv8 0x%"PFMT64x" @ 0x%x\n", addr, patchoff);

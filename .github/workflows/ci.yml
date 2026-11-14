@@ -8,18 +8,35 @@ on:
 #  schedule:
 #    - cron: '0 0 * * 1'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+#  build-offline:
+#    name: linux-offline
+#    runs-on: ubuntu-22.04
+#    steps:
+#    - name: Checkout
+#      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+#    - name: Building r2 without network access
+#      run: |
+#        ./preconfigure
+#        echo UNPLUG
+#        sudo rm -f /etc/resolv.conf || true
+#        ping av.com || true
+#        ./configure --with-rpath --prefix=/usr
+#        make -j ; sudo make install
   build-oldlibs:
     name: linux-acr-oldlibsbug
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
     - name: Setting up bad libnames
       run: |
         mkdir -p /tmp/fakelibs /tmp/fakeincs
-        for a in anal asm cons crypto flag hash lang parse reg search syscall util ; do touch /tmp/fakelibs/libr_$a.a ; touch /tmp/fakelibs/libr_$a.so ; done
+        for a in anal asm cons crypto flag lang parse reg search syscall util ; do touch /tmp/fakelibs/libr_$a.a ; touch /tmp/fakelibs/libr_$a.so ; done
         touch /tmp/fakeincs/r_util.h
         chmod 000 /tmp/fakelibs/*
         export CFLAGS=-I/tmp/fakeincs/
@@ -27,69 +44,250 @@ jobs:
         sys/install.sh
   build-nocs:
     name: linux-nocs
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Linting
+      run: sys/lint.sh
     - name: Building without capstone
+      env:
+        CFLAGS: -O0
       run: |
         cp -f dist/plugins-cfg/plugins.nocs.cfg plugins.cfg
-        ./configure --without-capstone && make -j
-  build-wasi:
-    name: linux-wasi
-    runs-on: ubuntu-20.04
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Installing with symlinks
+        ./configure --without-capstone --with-rpath && make -j
+        sudo make install
+    - name: Running c/m with self-hosted libmagic
+      run:
+        time r2 -a gb -e search.verbose=false -qc/m test/bins/mach0/ls-m1 > /tmp/m.1 2>&1 || true
+        cat /tmp/m.1
+    - name: Uninstall test
       run: |
-        sys/wasi.sh
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( cd sys;python version.py )"
-      id: r2v
-    - uses: actions/upload-artifact@v2
-      with:
-        name: radare2-${{ steps.r2v.outputs.branch }}-wasi.zip
-        path: radare2-*-wasi.zip
+        sudo make uninstall
+    - name: Building with libmagic
+      env:
+        CFLAGS: -O0
+      run: |
+        sudo apt update
+        sudo apt install -y libmagic-dev
+        git clean -xdf
+        cp -f dist/plugins-cfg/plugins.nocs.cfg plugins.cfg
+        ./configure --with-sysmagic --without-capstone --with-rpath && make -j
+        sudo make install
+    - name: Running c/m with system libmagic
+      run:
+        time r2 -a gb -e search.verbose=false -qc/m test/bins/mach0/ls-m1 > /tmp/m.2 2>&1 || true
+        cat /tmp/m.2
+    - name: Compare magic times and results
+      run: |
+        echo ===== m.1
+        cat /tmp/m.1
+        echo ===== m.2
+        cat /tmp/m.2
   build-acr-gperf:
     name: linux-acr-gperf
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install meson ninja r2pipe wget
+        pip install meson ninja r2pipe wget --break-system-packages
+        sudo apt update --assume-yes
         sudo apt install gperf
     - name: Installing with symlinks
       run: |
-        export CFLAGS="-O2 -Werror -Wno-unused-result -Wno-stringop-truncation"
+        export CFLAGS="-O0 -Werror -Wno-unused-result -Wno-stringop-truncation"
         sys/install.sh
+    - name: Run signal debugger regressions
+      run: r2r -C test -L -t 30 db/archos/linux-x86_64/cmd_di_onsignals
+    - name: Running C2 parser tests
+      run: make -C libr/anal/c2
     - name: Running tests
-      run: r2r test/db/cmd
-  build-resymlink:
-    name: linux-acr-resymlink
-    runs-on: ubuntu-20.04
+      run: r2r -o /tmp/r2r.json test/db/cmd
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: r2r.json
+        path: /tmp/r2r.json
+  build-syscapstone-resymlink:
+    name: linux-sys-capstone-resymlink
+    runs-on: ubuntu-22.04
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
-    - name: Installing with symlinks
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Installing capstone v5
       run: |
-        export CFLAGS="-O2 -Werror -Wno-unused-result -Wno-stringop-truncation"
+        git clone --branch v5 --single-branch --depth=1 https://github.com/capstone-engine/capstone
+        cd capstone && ( git log | head ) && sh make.sh && sudo make install
+    - name: Installing r2 with symlinks (sys-capstone)
+      run: |
+        export CFLAGS="-O0 -Werror -Wno-unused-result -Wno-stringop-truncation"
         sys/install.sh
     - name: Uninstalling
       run: sudo make uninstall
     - name: Reinstalling without symlinks
       run: sudo make install
+    - name: Checking if capstone was cloned
+      run: if find subprojects -maxdepth 1 -type d \( -name 'capstone-v4' -o -name 'capstone-v5' -o -name 'capstone-next' \) | grep -q .; then echo "Capstone wasnt supposed to be cloned"; exit 1; fi
+  linux-test:
+    runs-on: ubuntu-24.04
+#    if: contains(github.ref, 'ci-')
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Building Radare2
+      run: |
+        python3 -m pip install --upgrade pip
+        pip3 install --user r2pipe wheel
+        export CFLAGS="-O2 -Wno-unused-result"
+        sys/install.sh
+    - name: Running tests
+      run: |
+        export LD_LIBRARY_PATH=/usr/local/lib
+        export R2R_SKIP_ARCHOS=1
+        make tests
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: results.json
+        path: test/results.json
+  linux-test6:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Building Radare2 with Capstone 6
+      run: |
+        python3 -m pip install --upgrade pip
+        pip3 install --user r2pipe wheel
+        export CFLAGS="-O2 -Wno-unused-result"
+        sys/install.sh --without-pull --without-syscapstone --with-capstone-next
+    - name: Running tests
+      run: |
+        export LD_LIBRARY_PATH=/usr/local/lib
+        export R2R_SKIP_ARCHOS=1
+        make tests || true
+  mipsbe:
+    name: mipsbe
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Install mipsbe toolchain
+      run: |
+        sudo apt-get update --assume-yes
+        sudo apt-get install --assume-yes gcc make gperf file gcc-mips-linux-gnu qemu-user
+    - name: Build static mipsbe r2 and unit tests
+      run: sys/mipsbe.sh build && sudo make install
+    - name: Run mipsbe unit tests
+      run: sys/mipsbe.sh unit
+    # the cross build and the unit tests run on every PR, the 1854-case r2r
+    # smoke run costs 20 minutes under qemu and only rarely says anything new.
+    # head_ref is the source branch on a pull_request, where github.ref is the
+    # merge ref and can never carry the branch name
+    - name: Run mipsbe r2r smoke tests
+      if: contains(github.ref, 'master') || contains(github.head_ref, 'ci-')
+      run: sys/mipsbe.sh smoke
+  linux-uefi:
+    name: linux-uefi
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Install the uefi toolchain
+      run: |
+        sudo apt-get update --assume-yes
+        sudo apt-get --assume-yes install binutils clang lld gnu-efi musl-dev
+    - name: Build radare2 for UEFI
+      run: make -C dist/uefi
+    - name: Upload the EFI application
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: BOOTX64.EFI
+        path: build-uefi/BOOTX64.EFI
+  linux-uefi-arm64:
+    name: linux-uefi-arm64
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Checkout VC4 sources
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        repository: radareorg/radare2-extras
+        ref: d5e7a28186e0cef1b698748c86bbd8aeb3c2a4de
+        path: libr/xps/p/vc4
+    - name: Enable the VC4 static plugin
+      run: |
+        cp -R dist/uefi/vc4/r2plugin libr/xps/p/vc4/
+        echo 'EXTERNAL_PLUGINS+=vc4' > libr/xps/config.mk
+        make -C libr/xps
+    - name: Install the uefi toolchain
+      run: |
+        sudo apt-get update --assume-yes
+        sudo apt-get --assume-yes install binutils clang lld gnu-efi musl-dev libclang-rt-dev qemu-system-arm qemu-efi-aarch64
+    - name: Build radare2 for UEFI
+      run: make -C dist/uefi
+    - name: Boot it in qemu
+      run: make -C dist/uefi smoke
+    - name: Verify the VC4 static plugin
+      run: nm build-uefi/r2efi.so | grep -w r_arch_plugin_vc4
+    - name: Upload the EFI application
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: BOOTAA64.EFI
+        path: build-uefi/BOOTAA64.EFI
+  linux-static-meson:
+#    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
+    continue-on-error: true
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Installing the musl runtime
+      run: |
+        sudo apt update --assume-yes
+        sudo apt install musl-tools
+        sudo apt-get --assume-yes install python3-wheel python3-setuptools cabextract gperf
+        sudo pip3 install meson ninja
+    - name: Static r2 build with meson
+      run: |
+        # CFLAGS="-static" LDFLAGS="-static"
+        meson --prefix=${HOME}/.local --buildtype release --default-library static build
+        ninja -C build && ninja -C build install
+    - name: meson gpl-less build
+      run: |
+        meson -Dnogpl=true build-nogpl
+        ninja -C build-nogpl
+  macos-test:
+    runs-on: macos-15-intel
+    if: contains(github.ref, 'master') || contains(github.ref, 'ci-') || startsWith(github.head_ref, 'ci-')
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Install dependencies
+      run: |
+        python3 -m pip install r2pipe --break-system-packages
+        brew install pkg-config
+    - name: Building Radare2
+      run: export CFLAGS="-O2"; sys/install.sh --without-pull
+    - name: Running tests
+      run: R2R_JOBS=4 make tests
+    - name: Upload macOS test report
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: macos-test-report
+        path: test/results.json
   build-rpath-linux:
     if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     name: linux-rpath
     continue-on-error: true
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
     - name: build and run
       run: |
         # test and build rpath installation
@@ -104,10 +302,10 @@ jobs:
     if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     name: macos-rpath
     continue-on-error: true
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
     - name: build and run
       run: |
         # test and build rpath installation
@@ -118,12 +316,12 @@ jobs:
         /tmp/bin/r2 -v
         /tmp/bin/rabin2 -l /tmp/bin/r2
   build-spaces:
+    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     name: linux-meson-spaces
-    continue-on-error: true
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
     #- name: XXX this is not possible with make Install from a directory with spaces
     #  run: |
     #    git config pull.rebase false
@@ -143,304 +341,167 @@ jobs:
       run: |
         export PATH=${HOME}/.local/bin:${HOME}/Library/Python/3.9/bin:${PATH}
         sudo apt-get --assume-yes install python3-wheel gperf python3-setuptools cabextract gperf
-        sudo pip3 install meson==0.59.4 ninja==1.10.0
+        sudo pip3 install meson ninja
         git config --global pull.rebase false
         git clone --depth 1 . "spa ces"
         cd "spa ces"
-        export CFLAGS="-O2 -Werror -Wno-unused-result -Wno-stringop-truncation"
+        export CFLAGS="-O0 -Werror -Wno-unused-result -Wno-stringop-truncation"
         meson --prefix="/tmp/r 2" build
         ninja -C build
         ninja -C build install
         cd ..
         find "/tmp/r 2"
         LD_LIBRARY_PATH="/tmp/r 2/lib/x86_64-linux-gnu/" "/tmp/r 2/bin/r2" -v
-  linux-static:
-    runs-on: ubuntu-20.04
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Installing the musl runtime
-      run: |
-        sudo apt install musl-tools
-    - name: Building static r2 with acr
-      run: |
-        cp -f dist/plugins-cfg/plugins.static.nogpl.cfg plugins.cfg
-        NOLTO=1 sys/static.sh
-        # NOLTO=1 sys/static.sh
-        make -C binr/blob
-        tar cJvf r2-static.tar.xz r2-static
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( cd sys;python version.py )"
-      id: r2v
-    - name: Pub
-      uses: actions/upload-artifact@v2
-      with:
-        name: radare2-${{ steps.r2v.outputs.branch }}-static.tar.xz
-        path: r2-static.tar.xz
-    - name: Static static r2 with meson 
-      run: |
-        sudo apt-get --assume-yes install python3-wheel python3-setuptools cabextract gperf
-        sudo pip3 install meson==0.59.4 ninja==1.10.0
-        CFLAGS="-static" LDFLAGS="-static" meson --prefix=${HOME}/.local --buildtype release --default-library static build
-        ninja -C build && ninja -C build install
-  linux-acr-deb-64:
-    runs-on: ubuntu-18.04
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Packaging for Debian
-      run: sys/debian.sh
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( cd sys; python version.py )"
-      id: r2v
-    - name: Pub
-      uses: actions/upload-artifact@v2
-      with:
-        name: radare2_${{ steps.r2v.outputs.branch }}-debian_amd64.zip
-        path: dist/debian/*/*.deb
-  linux-acr-deb-32:
-    runs-on: ubuntu-18.04
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Packaging for 32bit Debian
-      run: |
-        sudo apt install gcc-multilib gperf
-        export CFLAGS=-m32
-        export LDFLAGS=-m32
-        export ARCH=i386
-        sys/debian.sh
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( cd sys;python version.py )"
-      id: r2v
-    - name: Pub
-      uses: actions/upload-artifact@v2
-      with:
-        name: radare2_${{ steps.r2v.outputs.branch }}-debian_i386.zip
-        path: dist/debian/*/*.deb
-## RPM PACKAGES DISABLED
-#  linux-meson-rpm:
-#    runs-on: ubuntu:18.04
-#    container: centos:8
-#    steps:
-#    - name: Checkout
-#      uses: actions/checkout@v2
-#    - name: Prepare Skeleton
-#      run: |
-#        mkdir -p SOURCES SPECS
-#        cp -f dist/rpm/*spec SPECS
-#        wget -O https://github.com/radareorg/radare2/archive/master/radare2-5.1.0-git.tar.gz
-#    - name: rpmbuild
-#      uses: robertdebock/rpmbuild-action@1.1.1
-#    - name: Pub
-#      uses: actions/upload-artifact@v2
-#      with:
-#        path: RPMS/*/*.rpm *.rpm dist/rpm/*.rpm
-#  centos-meson-rpm:
-#    runs-on: ubuntu:18.04
-#    container: centos:8
-#    steps:
-#    - name: Checkout
-#      uses: actions/checkout@v2
-#    - name: Install tools for CentOS:8
-#      run: |
-#        yum install -y patch unzip git gcc make python38 python38-pip rpm-build rpmdevtools wget
-#        pip3.8 install meson ninja r2pipe
-#    - name: Building with Meson
-#      run: |
-#        meson build
-#        ninja -C build
-#        ninja -C build install
-#    - name: RPM Packaging
-#      run: |
-#        cp -f dist/rpm/radare2.spec .
-#        rpmdev-setuptree
-#        mkdir -p rpmbuild/SOURCES
-#        cd rpmbuild/SOURCES
-#        wget https://github.com/radareorg/radare2/archive/5860c3efc12d4b75e72bdce4b1d3834599620913/radare2-5.1.0-git.tar.gz
-#        cd -
-#        rpmbuild -ba radare2.spec
-#    - name: Pub
-#      uses: actions/upload-artifact@v2
-#      with:
-#        path: rpmbuild/RPMS/*/*.rpm
-  linux-asan-fuzz:
-    runs-on: ubuntu-20.04
+  linux-tinyasan-fuzz:
+    runs-on: ubuntu-24.04
     continue-on-error: true
-    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
     - name: Building Radare2
       run: |
-        pip install r2pipe
+        pip install r2pipe --break-system-packages
+        sudo sh -c 'echo 0 > /proc/sys/kernel/randomize_va_space'
+        export SANITIZE=address
         sys/sanitize.sh
     - name: Installing tools for the testsuite
       run: sudo apt-get --assume-yes install python3-wheel python3-setuptools cabextract gperf
     - name: Running tests
       run: |
-        export ASAN_OPTIONS=detect_leaks=0
+        export ASAN_OPTIONS="detect_leaks=0 detect_stack_use_after_return=1"
+        export R2R_TIMEOUT=3600
         export R2R_SKIP_ARCHOS=1
+        export R2R_SHALLOW=25 # Run 3/4 of the test suite
+        export R2R_JOBS=4     # r2r reads R2R_JOBS, not JOBS
         export LD_LIBRARY_PATH=/usr/local/lib
-        export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.5
-        make tests
+        export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8
+        status=0
+        r2r -t 3600 -L -o r2r-tinyasan.json test/db/cmd || status=$?
+        exit $status
+    - name: Upload r2r tinyasan report
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: r2r-tinyasan.json
+        path: r2r-tinyasan.json
     - name: Run fuzz tests
       run: |
-        export ASAN_OPTIONS=detect_leaks=0
+        export ASAN_OPTIONS="detect_leaks=0 detect_stack_use_after_return=1"
         export R2R_SKIP_ARCHOS=1
-        export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.5
+        export R2R_TIMEOUT=3600
+        export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8
         make -C test fuzz-tests
-  linux-test:
-    runs-on: ubuntu-20.04
-#    if: contains(github.ref, 'ci-')
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Building Radare2
-      run: |
-        pip install r2pipe wheel
-        export CFLAGS="-O2 -Wno-unused-result"
-        sys/install.sh
-    - name: Running tests
-      run: |
-        export LD_LIBRARY_PATH=/usr/local/lib
-        make tests
-
-  # Apple
-  macos-acr:
-    runs-on: macos-latest
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Packaging
-      run: dist/macos/build-pkg.sh
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( python sys/version.py )"
-      id: r2v
-#    - name: Building Radare2
-#      run: |
-#        export CFLAGS="-O2" # -Werror -Wno-unused-result -Wno-unicode -Wno-unneeded-internal-declaration"
-#        sys/install.sh && make -C dist/macos
-    - name: Pub
-      uses: actions/upload-artifact@v2
-      with:
-        path: dist/macos/*.pkg
-        name: radare2-${{ steps.r2v.outputs.branch }}_macos.pkg
-#   macos-acr-m1:
-#     runs-on: macos-latest
-#     steps:
-#     - name: Checkout
-#       uses: actions/checkout@v2
-#     - name: Packaging
-#       run: export CC="xcrun --sdk macosx11.1 gcc -arch arm64" ; dist/macos/build-pkg.sh
-#     - name: Extract r2 version
-#       run: echo "##[set-output name=branch;]$( python sys/version.py )"
-#       id: r2v
-#     - name: Pub
-#       uses: actions/upload-artifact@v2
-#       with:
-#         path: dist/macos/*.pkg
-#         name: radare2-${{ steps.r2v.outputs.branch }}_macos_m1.pkg
-  macos-test:
-    runs-on: macos-latest
+  linux-asan-fuzz:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
     if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Building Radare2
+      run: |
+        pip install r2pipe --break-system-packages
+        sudo sh -c 'echo 0 > /proc/sys/kernel/randomize_va_space'
+        sys/sanitize.sh
+    - name: Installing tools for the testsuite
+      run: sudo apt-get --assume-yes install python3-wheel python3-setuptools cabextract gperf
+    - name: Running tests
+      run: |
+        export ASAN_OPTIONS="detect_leaks=0 detect_stack_use_after_return=1"
+        export R2R_SKIP_ARCHOS=1
+        export R2R_TIMEOUT=3600
+        export R2R_SHALLOW=25 # Run 3/4 of the test suite
+        export R2R_JOBS=4     # r2r reads R2R_JOBS, not JOBS
+        export LD_LIBRARY_PATH=/usr/local/lib
+        export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8
+        status=0
+        make -C test unit-tests || status=$?
+        cd test
+        r2r -L -o ../r2r-asan.json || status=$?
+        cd ..
+        exit $status
+    - name: Upload r2r asan report
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: r2r-asan.json
+        path: r2r-asan.json
+    - name: Run fuzz tests
+      run: |
+        export ASAN_OPTIONS="detect_leaks=0 detect_stack_use_after_return=1"
+        export R2R_TIMEOUT=3600
+        export R2R_SKIP_ARCHOS=1
+        export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8
+        make -C test fuzz-tests
+
+  w64-make:
+    runs-on: windows-2022
+    steps:
+    - name: Win configure Pagefile
+      uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc # v1.5
+      with:
+          minimum-size: 16GB
+          maximum-size: 16GB
+          disk-root: "C:"
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+      with:
+        python-version: '3.12'
+    - name: Preparing nmake
+      uses: TheMrMilchmann/setup-msvc-dev@368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9 # v4
+      with:
+        arch: x64
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install r2pipe
-    - name: Building Radare2
-      run: export CFLAGS="-O2"; sys/install.sh
-    - name: Running tests
-      run: pip3 install r2pipe; make tests
-
-  # Mobile
-  ios-cydia:
+        pip install meson ninja r2pipe wget --break-system-packages
+    - name: Build with meson + ninja
+      shell: cmd
+      run: |
+        call preconfigure amd64
+        call configure release
+        call make
+    - name: Test executable
+      # continue-on-error: true
+      shell: cmd
+      run: |
+        cd prefix\bin
+        radare2 -v
+    - name: Test executable again
+      # continue-on-error: true
+      shell: cmd
+      run: |
+        cd prefix\bin
+        radare2 -qc "?e Hello" -
+  w32-mingw:
     if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
-    runs-on: macos-latest
+    name: w32-mingw
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v2
-    - name: Install pkg-config/ldid2 with Homebrew
-      run: brew install pkg-config ldid
-#     - name: Create cydia32 package
-#       run: ./sys/ios-cydia32.sh
-#     - name: List sys/cydia
-#       run: ls -lahR ./sys/cydia
-#     - uses: actions/upload-artifact@v2
-#       with:
-#         name: radare2-arm32_${{ steps.extract_version.outputs.branch }}_iphoneos-arm
-#         path: ./dist/cydia/radare2/radare2-arm32_${{ steps.extract_version.outputs.branch }}_iphoneos-arm.deb
-    - name: Create cydia package
-      run: ./sys/ios-cydia.sh
-    - name: Create iOS SDK
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Compiling
       run: |
-        ./sys/ios-sdk.sh
-        pushd /tmp/r2ios
-        zip -r /tmp/r2ios-sdk.zip *
-        popd
-        mv /tmp/r2ios-sdk.zip .
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( python sys/version.py )"
-      id: r2v
-    - uses: actions/upload-artifact@v2
+        export PATH=${HOME}/.local/bin:${HOME}/Library/Python/3.9/bin:${PATH}
+        sudo apt-get --assume-yes install python3-wheel gperf python3-setuptools cabextract gperf gcc-mingw-w64
+        sys/mingw32.sh
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
-        name: r2ios_sdk-${{ steps.r2v.outputs.branch }}.zip
-        path: ./r2ios-sdk.zip
-    - uses: actions/upload-artifact@v2
-      with:
-        name: radare2-${{ steps.r2v.outputs.branch }}_iphoneos-arm64.zip
-        path: ./dist/cydia/radare2*/*.deb
-
-  android-acr-aarch64:
-    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
+        name: w32-mingw
+        path: radare2*.zip
+  w64-mingw:
+    name: w64-mingw
+    runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v2
-    - name: Install dependencies
-      run: sudo apt-get --assume-yes install pax wget gperf cabextract unzip python3-wheel python3-setuptools python3-pip && pip3 install --user meson ninja
-    - name: Compile with acr
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    - name: Compiling
       run: |
-        sys/android-ndk-install.sh
-        sys/android-build.sh arm64
-        ls -l
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( cd sys;python version.py )"
-      id: r2v
-    - uses: actions/upload-artifact@v2
+        export PATH=${HOME}/.local/bin:${HOME}/Library/Python/3.9/bin:${PATH}
+        sudo apt-get --assume-yes install python3-wheel gperf python3-setuptools cabextract gperf gcc-mingw-w64
+        sys/mingw64.sh
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
-        name: radare2-${{ steps.r2v.outputs.branch }}-android-aarch64.tar.gz
-        path: radare2*android*aarch64.tar.gz
-
-  android-meson:
-    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-      #  name: [x86_64, arm, aarch64]
-        name: [x86_64, arm]
-    steps:
-    - uses: actions/checkout@v2
-    - name: Install dependencies
-      run: sudo apt-get --assume-yes install pax wget cabextract unzip python3-wheel python3-setuptools python3-pip && pip3 install --user meson ninja
-    - name: Compile with meson
-      run: |
-        export PATH=${HOME}/.local/bin:${PATH}
-        CFLAGS="-static" LDFLAGS="-static" meson --buildtype release --default-library static --prefix=/tmp/android-dir -Dblob=true build --cross-file .github/meson-android-${{ matrix.name }}.ini
-        ninja -C build && ninja -C build install
-    - name: Create radare2-android-${{ matrix.name }}.tar.gz
-      run: |
-        cd /tmp
-        rm -rf android-dir/include android-dir/lib
-        tar --transform 's/android-dir/data\/data\/org.radareorg.radare2installer/g' -cvf radare2-android-${{ matrix.name }}.tar.gz android-dir/
-    - name: Extract r2 version
-      run: echo "##[set-output name=branch;]$( cd sys;python version.py )"
-      id: r2v
-    - uses: actions/upload-artifact@v2
-      with:
-        name: radare2-${{ steps.r2v.outputs.branch }}-android-${{ matrix.name }}.tar.gz
-        path: /tmp/radare2-android-${{ matrix.name }}.tar.gz
+        name: w64-mingw
+        path: radare2*.zip

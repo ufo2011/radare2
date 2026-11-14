@@ -1,3 +1,36 @@
+NAME=wawa
+FILE=-
+CMDS=<<EOF
+-a sh
+pd 1
+wa 8d00
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      0000           .word 0x00000000
+            0x00000000      0000           .word 0x00000000
+EOF
+RUN
+
+NAME=breakpoint sizes follow architecture changes at the same bit width
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e asm.arch=mips
+e dbg.bpsize
+db 0x10
+e asm.arch=x86
+e dbg.bpsize
+db 0x20
+dbj
+EOF
+EXPECT=<<EOF
+4
+1
+[{"addr":16,"size":4,"perm":"--x","hw":false,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x10"},{"addr":32,"size":1,"perm":"--x","hw":false,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x20"}]
+EOF
+RUN
+
 NAME=endian tests: mips
 FILE=-
 CMDS=<<EOF
@@ -62,7 +95,7 @@ pi 1
 EOF
 EXPECT=<<EOF
 bic w24, w1, w20, lsr 0
-strb w10, [x0], 7
+bic w24, w1, w20, lsr 0
 EOF
 RUN
 
@@ -84,6 +117,7 @@ RUN
 
 NAME=endian tests: sparc.gnu
 FILE=-
+REQUIRE=gpl
 CMDS=<<EOF
 e asm.arch=sparc.gnu
 e asm.bits=64
@@ -99,10 +133,70 @@ invalid
 EOF
 RUN
 
+NAME=endian tests: sparc.cs
+FILE=-
+CMDS=<<EOF
+e asm.arch=sparc
+e asm.bits=64
+wx 554889e5
+e cfg.bigendian=true
+pi 1
+e cfg.bigendian=false
+pi 1
+EOF
+EXPECT=<<EOF
+call 0x55222794
+invalid
+EOF
+RUN
+
+NAME=endian tests: cfg.bigendian set before asm.arch
+FILE=malloc://16
+CMDS=<<EOF
+e cfg.bigendian=true
+e asm.arch=mips
+e asm.bits=32
+e cfg.bigendian
+wa addiu sp, sp, -24
+p8 4
+pi 1
+EOF
+EXPECT=<<EOF
+true
+27bdffe8
+addiu sp, sp, -0x18
+EOF
+RUN
+
+NAME=endian tests: asm.arch keeps cfg.bigendian
+FILE=malloc://16
+CMDS=<<EOF
+e cfg.bigendian=true
+e asm.arch=arm
+e asm.bits=32
+wx e3a00001
+pi 1
+e asm.arch=ppc
+e asm.bits=32
+wx 38600001
+pi 1
+e cfg.bigendian=false
+e asm.arch=mips
+e asm.bits=32
+wx 27bdffe8
+pi 1
+EOF
+EXPECT=<<EOF
+mov r0, 1
+li r3, 1
+swc2 31, -0x42d9(a3)
+EOF
+RUN
+
 NAME=tests: ppcps
 FILE=malloc://256
 CMDS=<<EOF
-wb E003D004E42230081045254C1062228CF0623008F4627008104322CE10C7460E10A03A1010A03A111022182A1022182B11822040118220C011822000118220801044302410443025100118BA100118BB102220DC102220DD102220DE102220DF10443420104434211044346010443461104434A0104434A1104434E0104434E11060289010602891104441B8104441B91043017210430173106401D8106401D9106401DA106401DB102029101020291110202850102028511023397E1023397F1023397C1023397D11201830112018311120183411201835102220EE102220EF10AB102810AB10291045525410455255104552561045525710032FECF3E10028
+wX E003D004E42230081045254C1062228CF0623008F4627008104322CE10C7460E10A03A1010A03A111022182A1022182B11822040118220C011822000118220801044302410443025100118BA100118BB102220DC102220DD102220DE102220DF10443420104434211044346010443461104434A0104434A1104434E0104434E11060289010602891104441B8104441B91043017210430173106401D8106401D9106401DA106401DB102029101020291110202850102028511023397E1023397F1023397C1023397D11201830112018311120183411201835102220EE102220EF10AB102810AB10291045525410455255104552561045525710032FECF3E10028
 e asm.arch=ppc
 e cfg.bigendian = true
 e asm.cpu=ps
@@ -176,4 +270,19 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=ppc ps decodes psq loads and stores with the high bit set
+FILE=malloc://16
+ARGS=-a ppc -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+e asm.cpu=ps
+wx e0230000e4223008f0623008f4627008
+pi 4~[0]
+EOF
+EXPECT=<<EOF
+psq_l
+psq_lu
+psq_st
+psq_stu
+EOF
+RUN
 

@@ -1,0 +1,169 @@
+NAME=elf swift classes from swift5 metadata
+FILE=bins/elf/swift-klass
+CMDS=<<EOF
+icc
+EOF
+EXPECT=<<EOF
+class main.SuperKlass {
+  var superfield : Swift.Int
+  var superfield { get }  // 0x00001e18
+  var superfield { set }  // 0x00001e60
+  func superfield() {}  // 0x0000109c
+  func superMethod() {}  // 0x00001ea8
+  init()  // 0x00001178
+  func deinit() {}  // 0x00001118
+  func deinit() {}  // 0x0000113c
+  init()  // 0x000011b0
+}
+class main.SomeClass : main.SuperKlass {
+  var meh : Swift.Int
+  let cow : Swift.String
+  var meh { get }  // 0x00001ebc
+  var meh { set }  // 0x00001f04
+  func meh() {}  // 0x000011e8
+  func instanceMethod() {}  // 0x00001f94
+  var cow { get }  // 0x00001f4c
+  func superMethod() {}  // 0x00001f80
+  static func staticMethod() {}  // 0x00001fc4
+  init()  // 0x00001290
+  init()  // 0x000012c8
+  func deinit() {}  // 0x00001394
+  func deinit() {}  // 0x000013cc
+}
+struct main.SomeStruct {
+  var name : Swift.String
+  let id : Swift.Int
+  var name { get }  // 0x00002000
+  var name { set }  // 0x00002030
+  func name() {}  // 0x00001408
+  var id { get }  // 0x00002078
+  func describe() {}  // 0x00002080
+  init()  // 0x0000141c
+}
+enum main.SomeEnum {
+  case second(error: Swift.Int)
+  case third(Swift.String)
+  case first
+}
+protocol main.SomeProto {
+  associatedtype Item
+}
+EOF
+RUN
+
+NAME=swift cc gives no self or error to a c function or a free swift function
+FILE=bins/elf/analysis/hello-swift
+ARGS=-e bin.demangle=false
+CMDS=<<EOF
+e anal.cc
+af @ sym.__libc_csu_init
+afs @ sym.__libc_csu_init
+o bins/elf/swift-klass
+e anal.cc
+af @ 0x20d0
+afv @ 0x20d0~self,error
+afs @ 0x20d0
+EOF
+EXPECT=<<EOF
+swift
+void sym.__libc_csu_init (int64_t arg1, int64_t arg2, int64_t arg3);
+swift
+void sym._s4main5entrySiyF ();
+EOF
+RUN
+
+NAME=swift cc gives self to struct setters, class static methods and class initializers
+FILE=bins/elf/swift-klass
+ARGS=-e bin.demangle=false
+CMDS=<<EOF
+e anal.cc
+af @ sym._s4main10SomeStructV4nameSSvs
+afv @ sym._s4main10SomeStructV4nameSSvs~self,error
+af @ sym._s4main9SomeClassC12staticMethodyyFZ
+afv @ sym._s4main9SomeClassC12staticMethodyyFZ~self,error
+af @ sym._s4main9SomeClassCACycfc
+afv @ sym._s4main9SomeClassCACycfc~self,error
+EOF
+EXPECT=<<EOF
+swift
+arg int64_t self @ x20
+arg int64_t self @ x20
+arg int64_t self @ x20
+EOF
+RUN
+
+NAME=swift cc gives no self to struct initializers
+FILE=bins/elf/swift-klass
+ARGS=-e bin.demangle=false
+CMDS=<<EOF
+e anal.cc
+af @ sym._s4main10SomeStructV4name2idACSS_SitcfC
+afv @ sym._s4main10SomeStructV4name2idACSS_SitcfC~?self
+afs @ sym._s4main10SomeStructV4name2idACSS_SitcfC
+EOF
+EXPECT=<<EOF
+swift
+0
+void method.constructor.main.SomeStruct.init ();
+EOF
+RUN
+
+NAME=swift self and error survive type propagation of their callee's arg names
+FILE=malloc://512
+ARGS=-a arm -b 64 -e anal.cc=swift
+CMDS=<<EOF
+wx e00314aa3f000094c0035fd6
+# mov x21, x22; mov x0, x21; bl takebuf; ret
+wx f50316aae00315aa36000094c0035fd6 @ 0x20
+wx e20300aae00302aa2e000094c0035fd6 @ 0x40
+wx c0035fd6 @ 0x100
+td void takebuf(char *buffer);
+af takebuf @ 0x100
+af self_caller @ 0
+af error_caller @ 0x20
+af arg_caller @ 0x40
+aaft
+afv @ 0
+afv @ 0x20
+afv @ 0x40
+EOF
+EXPECT=<<EOF
+arg char * self @ x20
+arg char * error @ x21
+arg char * buffer @ x0
+EOF
+RUN
+
+NAME=swift constant error assignment stops callee argument type propagation
+FILE=malloc://512
+ARGS=-a arm -b 64 -e anal.cc=swift
+CMDS=<<EOF
+# mov x21, 16; mov x0, x21; bl takebuf; ret
+wx 150280d2e00315aa36000094c0035fd6 @ 0x20
+wx c0035fd6 @ 0x100
+td void takebuf(char *buffer);
+af takebuf @ 0x100
+af error_caller @ 0x20
+aaft
+afv @ 0x20
+EOF
+EXPECT=<<EOF
+arg int64_t error @ x21
+EOF
+RUN
+
+
+NAME=elf swift5 metadata sections larger than the file are not walked
+# synthetic ET_DYN, swift5_type_metadata and swift5_protocols declare sh_size 0x7fffffff
+FILE=malloc://512
+TIMEOUT=10
+CMDS=<<EOF
+wx 7f454c4602010100000000000000000003003e000100000040000100000000004000000000000000b900000000000000000000004000380001004000040001000100000005000000000000000000000000000100000000000000010000000000000000000100000000000000010000000100000000000000002e7368737472746162007377696674355f747970655f6d65746164617461007377696674355f70726f746f636f6c73000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000010000000300000000000000000000000000000000000000780000000000000031000000000000000000000000000000010000000000000000000000000000000b000000010000000200000000000000a900010000000000a900000000000000ffffff7f0000000000000000000000000100000000000000000000000000000020000000010000000200000000000000a900010000000000a900000000000000ffffff7f00000000000000000000000001000000000000000000000000000000
+oba
+iS~swift5?
+ic
+EOF
+EXPECT=<<EOF
+2
+EOF
+RUN

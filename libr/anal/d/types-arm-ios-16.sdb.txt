@@ -1,12 +1,12 @@
-__assert_rtn=func
-func.__assert_rtn.args=4
-func.__assert_rtn.arg.0=const char *,assertion
-func.__assert_rtn.arg.1=const char *,file
-func.__assert_rtn.arg.2=unsigned int,line
-func.__assert_rtn.arg.3=const char *,function
-func.__assert_rtn.noreturn=true
-func.__assert_rtn.ret=void
-func.__assert_rtn.cc=amd64
+assert_rtn=func
+func.assert_rtn.args=4
+func.assert_rtn.arg.0=const char *,assertion
+func.assert_rtn.arg.1=const char *,file
+func.assert_rtn.arg.2=unsigned int,line
+func.assert_rtn.arg.3=const char *,function
+func.assert_rtn.noreturn=true
+func.assert_rtn.ret=void
+func.assert_rtn.cc=amd64
 
 _exit=func
 func._exit.args=1

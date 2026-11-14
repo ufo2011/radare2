@@ -18,6 +18,29 @@ after:
 EOF
 RUN
 
+NAME=ah=$$+4
+FILE=malloc://32
+ARGS=-a arm -b64
+CMDS=<<EOF
+wx 9f2403d5 1d0080d2
+pd 2
+?e ==
+ah=$$+4
+pd 2
+dr x29=3
+aes
+dr?x29
+EOF
+EXPECT=<<EOF
+            0x00000000      9f2403d5       bti j
+            0x00000004      1d0080d2       mov x29, 0
+==
+            0x00000000      9f2403d5       mov x29, 0
+            0x00000004      1d0080d2       mov x29, 0
+0x00000000
+EOF
+RUN
+
 NAME=ah-offset
 FILE=-
 CMDS=<<EOF
@@ -113,37 +136,37 @@ ah* 0x1337
 EOF
 EXPECT=<<EOF
 all:
-ahi 17185 @ 0x815
-aha ppc @ 0x1337
-ahb 16 @ 0x1337
-ahc 0x804804 @ 0x1337
-ahe 3,eax,+= @ 0x1337
-ahf 0x12345 @ 0x1337
-ahF 0x10 @ 0x1337
-ahh @ 0x1337
-ahi 10 @ 0x1337
-ahd foo a0,33 @ 0x1337
-ahp 0xc0ff33 @ 0x1337
-ahr 0x2a @ 0x1337
-ahs 0x4 @ 0x1337
-ahS jz @ 0x1337
-aho call @ 0x1337
+'@0x815'ahi 17185
+'@0x1337'aha ppc
+'@0x1337'ahb 16
+'@0x1337'ahc 0x804804
+'@0x1337'ahe 3,eax,+=
+'@0x1337'ahf 0x12345
+'@0x1337'ahF 0x10
+'@0x1337'ahh
+'@0x1337'ahi 10
+'@0x1337'ahd foo a0,33
+'@0x1337'ahp 0xc0ff33
+'@0x1337'ahr 0x2a
+'@0x1337'ahs 0x4
+'@0x1337'ahS jz
+'@0x1337'aho call
 --
 at 0x1337:
-aha ppc @ 0x1337
-ahb 16 @ 0x1337
-ahc 0x804804 @ 0x1337
-ahe 3,eax,+= @ 0x1337
-ahf 0x12345 @ 0x1337
-ahF 0x10 @ 0x1337
-ahh @ 0x1337
-ahi 10 @ 0x1337
-ahd foo a0,33 @ 0x1337
-ahp 0xc0ff33 @ 0x1337
-ahr 0x2a @ 0x1337
-ahs 0x4 @ 0x1337
-ahS jz @ 0x1337
-aho call @ 0x1337
+'@0x1337'aha ppc
+'@0x1337'ahb 16
+'@0x1337'ahc 0x804804
+'@0x1337'ahe 3,eax,+=
+'@0x1337'ahf 0x12345
+'@0x1337'ahF 0x10
+'@0x1337'ahh
+'@0x1337'ahi 10
+'@0x1337'ahd foo a0,33
+'@0x1337'ahp 0xc0ff33
+'@0x1337'ahr 0x2a
+'@0x1337'ahs 0x4
+'@0x1337'ahS jz
+'@0x1337'aho call
 EOF
 RUN
 
@@ -200,8 +223,8 @@ EXPECT=<<EOF
             0x100001059      4889e5         mov rbp, rsp
             0x10000105c      4157           push r15
             0x100001058      55             hello world
-            0x100001059      4889e5         mov rbp, rsp
-            0x10000105c      4157           push r15
+            0x100001059      4889e5         mov  rbp,  rsp
+            0x10000105c      4157           push  r15
 EOF
 RUN
 
@@ -234,8 +257,8 @@ EXPECT=<<EOF
 -- all json
 [{"addr":66,"arch":"arm"},{"addr":132,"arch":null}]
 -- all cmd
-aha arm @ 0x42
-aha 0 @ 0x84
+'@0x42'aha arm
+'@0x84'aha 0
 -- before hints
 -- at first
  0x00000042 => arch='arm'
@@ -277,8 +300,8 @@ EXPECT=<<EOF
 -- all json
 [{"addr":66,"bits":16},{"addr":132,"bits":0}]
 -- all cmd
-ahb 16 @ 0x42
-ahb 0 @ 0x84
+'@0x42'ahb 16
+'@0x84'ahb 0
 -- before hints
 -- at first
  0x00000042 => bits=16
@@ -288,5 +311,21 @@ ahb 0 @ 0x84
  0x00000084 => bits=RESET
 -- after second
  0x00000084 => bits=RESET
+EOF
+RUN
+
+NAME=ARM and Thumb hints in a mixed-mode ELF
+FILE=bins/elf/r2pay-arm32.so
+CMDS=<<EOF
+ahb. @ entry0
+ahb. @ 0x4560
+pi 1 @ entry0
+pi 1 @ 0x4560
+EOF
+EXPECT=<<EOF
+32
+16
+ldr r0, [0x00004530]
+bx lr
 EOF
 RUN

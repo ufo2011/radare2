@@ -1,3 +1,43 @@
+NAME=sm5xx pc/sp regs
+FILE=-
+CMDS=<<EOF
+-a sm5xx
+dr=
+dr*
+-b 4
+dr*
+EOF
+EXPECT=<<EOF
+    acc 0x00000000       bl 0x00000000       bm 0x00000000    bmask 0x00000000
+      c 0x00000000     skip 0x00000000        w 0x00000000        r 0x00000000
+     sp 0x00000000       pc 0x00000000  
+fs+registers
+f acc 0 0x00000000
+f bl 0 0x00000000
+f bm 0 0x00000000
+f bmask 0 0x00000000
+f c 0 0x00000000
+f skip 0 0x00000000
+f w 0 0x00000000
+f r 0 0x00000000
+f sp 8 0x00000000
+f pc 8 0x00000000
+fs-
+fs+registers
+f acc 0 0x00000000
+f bl 0 0x00000000
+f bm 0 0x00000000
+f bmask 0 0x00000000
+f c 0 0x00000000
+f skip 0 0x00000000
+f w 0 0x00000000
+f r 0 0x00000000
+f sp 8 0x00000000
+f pc 8 0x00000000
+fs-
+EOF
+RUN
+
 NAME=arpg
 FILE=-
 CMDS=<<EOF
@@ -38,13 +78,13 @@ arp~?
 EOF
 EXPECT=<<EOF
 160
-147
+300
 64
-87
+138
 68
-127
+129
 808
-311
+426
 EOF
 RUN
 
@@ -59,29 +99,36 @@ EXPECT=<<EOF
 Aliases (Reg->name)
 0 PC rip
 1 SP rsp
-2 SR ?
-3 BP rbp
-4 LR ?
-5 RS ?
-6 A0 rdi
-7 A1 rsi
-8 A2 rdx
-9 A3 rcx
-10 A4 r8
-11 A5 r9
-12 A6 r10
-13 A7 r11
-14 A8 ?
-15 A9 ?
-16 R0 ?
-17 R1 ?
-18 R2 ?
-19 R3 ?
-20 ZF ?
-21 SF ?
-22 CF ?
-23 OF ?
-24 SN rax
+2 GP ?
+3 RA ?
+4 SR ?
+5 BP rbp
+6 LR ?
+7 RS ?
+8 A0 rdi
+9 A1 rsi
+10 A2 rdx
+11 A3 rcx
+12 A4 r8
+13 A5 r9
+14 A6 r10
+15 A7 r11
+16 A8 ?
+17 A9 ?
+18 R0 rax
+19 R1 ?
+20 R2 ?
+21 R3 ?
+22 F0 ?
+23 F1 ?
+24 F2 ?
+25 F3 ?
+26 ZF ?
+27 SF ?
+28 CF ?
+29 OF ?
+30 TR ?
+31 SN rax
 regset 0 (gpr)
 * arena gpr size 160
    rax gpr @ gpr (offset: 80  size: 8)
@@ -160,6 +207,7 @@ regset 0 (gpr)
    if flg @ gpr (offset: 145  size: 0)
    df flg @ gpr (offset: 145  size: 0)
    of flg @ gpr (offset: 145  size: 0)
+   riz gpr @ gpr (offset: 0  size: 8)
    rsp gpr @ gpr (offset: 152  size: 8)
    esp gpr @ gpr (offset: 152  size: 4)
    sp gpr @ gpr (offset: 152  size: 2)
@@ -173,7 +221,7 @@ regset 1 (drx)
    dr6 drx @ drx (offset: 48  size: 8)
    dr7 drx @ drx (offset: 56  size: 8)
 regset 2 (fpu)
-* arena fpu size 296
+* arena fpu size 2272
    cwd fpu @ fpu (offset: 0  size: 2)
    swd fpu @ fpu (offset: 2  size: 2)
    ftw fpu @ fpu (offset: 4  size: 2)
@@ -190,40 +238,193 @@ regset 2 (fpu)
    st5 fpu @ fpu (offset: 112  size: 8)
    st6 fpu @ fpu (offset: 128  size: 8)
    st7 fpu @ fpu (offset: 144  size: 8)
-   xmm0 xmm @ fpu (offset: 160  size: 16)
+   xmm0 vec128 @ fpu (offset: 160  size: 16)
+   ymm0 vec256 @ fpu (offset: 160  size: 32)
+   zmm0 vec512 @ fpu (offset: 160  size: 64)
    xmm0l fpu @ fpu (offset: 160  size: 8)
    xmm0h fpu @ fpu (offset: 168  size: 8)
-   xmm1 xmm @ fpu (offset: 176  size: 16)
-   xmm1l fpu @ fpu (offset: 176  size: 8)
-   xmm1h fpu @ fpu (offset: 184  size: 8)
-   xmm2 xmm @ fpu (offset: 192  size: 16)
-   xmm2l fpu @ fpu (offset: 192  size: 8)
-   xmm2h fpu @ fpu (offset: 200  size: 8)
-   xmm3 xmm @ fpu (offset: 208  size: 16)
-   xmm3l fpu @ fpu (offset: 208  size: 8)
-   xmm3h fpu @ fpu (offset: 216  size: 8)
-   xmm4 xmm @ fpu (offset: 224  size: 16)
-   xmm4l fpu @ fpu (offset: 224  size: 8)
-   xmm4h fpu @ fpu (offset: 232  size: 8)
-   xmm5 xmm @ fpu (offset: 240  size: 16)
-   xmm5l fpu @ fpu (offset: 240  size: 8)
-   xmm5h fpu @ fpu (offset: 248  size: 8)
-   xmm6 xmm @ fpu (offset: 256  size: 16)
-   xmm6l fpu @ fpu (offset: 256  size: 8)
-   xmm6h fpu @ fpu (offset: 264  size: 8)
-   xmm7 xmm @ fpu (offset: 272  size: 16)
-   xmm7l fpu @ fpu (offset: 272  size: 8)
-   xmm7h fpu @ fpu (offset: 280  size: 8)
-   x64 fpu @ fpu (offset: 288  size: 8)
-regset 3 (mmx)
-* arena mmx size 1
-regset 4 (xmm)
-* arena xmm size 1
-regset 5 (ymm)
-* arena ymm size 1
-regset 6 (flg)
+   xmm1 vec128 @ fpu (offset: 224  size: 16)
+   ymm1 vec256 @ fpu (offset: 224  size: 32)
+   zmm1 vec512 @ fpu (offset: 224  size: 64)
+   xmm1l fpu @ fpu (offset: 224  size: 8)
+   xmm1h fpu @ fpu (offset: 232  size: 8)
+   xmm2 vec128 @ fpu (offset: 288  size: 16)
+   ymm2 vec256 @ fpu (offset: 288  size: 32)
+   zmm2 vec512 @ fpu (offset: 288  size: 64)
+   xmm2l fpu @ fpu (offset: 288  size: 8)
+   xmm2h fpu @ fpu (offset: 296  size: 8)
+   xmm3 vec128 @ fpu (offset: 352  size: 16)
+   ymm3 vec256 @ fpu (offset: 352  size: 32)
+   zmm3 vec512 @ fpu (offset: 352  size: 64)
+   xmm3l fpu @ fpu (offset: 352  size: 8)
+   xmm3h fpu @ fpu (offset: 360  size: 8)
+   xmm4 vec128 @ fpu (offset: 416  size: 16)
+   ymm4 vec256 @ fpu (offset: 416  size: 32)
+   zmm4 vec512 @ fpu (offset: 416  size: 64)
+   xmm4l fpu @ fpu (offset: 416  size: 8)
+   xmm4h fpu @ fpu (offset: 424  size: 8)
+   xmm5 vec128 @ fpu (offset: 480  size: 16)
+   ymm5 vec256 @ fpu (offset: 480  size: 32)
+   zmm5 vec512 @ fpu (offset: 480  size: 64)
+   xmm5l fpu @ fpu (offset: 480  size: 8)
+   xmm5h fpu @ fpu (offset: 488  size: 8)
+   xmm6 vec128 @ fpu (offset: 544  size: 16)
+   ymm6 vec256 @ fpu (offset: 544  size: 32)
+   zmm6 vec512 @ fpu (offset: 544  size: 64)
+   xmm6l fpu @ fpu (offset: 544  size: 8)
+   xmm6h fpu @ fpu (offset: 552  size: 8)
+   xmm7 vec128 @ fpu (offset: 608  size: 16)
+   ymm7 vec256 @ fpu (offset: 608  size: 32)
+   zmm7 vec512 @ fpu (offset: 608  size: 64)
+   xmm7l fpu @ fpu (offset: 608  size: 8)
+   xmm7h fpu @ fpu (offset: 616  size: 8)
+   xmm8 vec128 @ fpu (offset: 672  size: 16)
+   ymm8 vec256 @ fpu (offset: 672  size: 32)
+   zmm8 vec512 @ fpu (offset: 672  size: 64)
+   xmm8l fpu @ fpu (offset: 672  size: 8)
+   xmm8h fpu @ fpu (offset: 680  size: 8)
+   xmm9 vec128 @ fpu (offset: 736  size: 16)
+   ymm9 vec256 @ fpu (offset: 736  size: 32)
+   zmm9 vec512 @ fpu (offset: 736  size: 64)
+   xmm9l fpu @ fpu (offset: 736  size: 8)
+   xmm9h fpu @ fpu (offset: 744  size: 8)
+   xmm10 vec128 @ fpu (offset: 800  size: 16)
+   ymm10 vec256 @ fpu (offset: 800  size: 32)
+   zmm10 vec512 @ fpu (offset: 800  size: 64)
+   xmm10l fpu @ fpu (offset: 800  size: 8)
+   xmm10h fpu @ fpu (offset: 808  size: 8)
+   xmm11 vec128 @ fpu (offset: 864  size: 16)
+   ymm11 vec256 @ fpu (offset: 864  size: 32)
+   zmm11 vec512 @ fpu (offset: 864  size: 64)
+   xmm11l fpu @ fpu (offset: 864  size: 8)
+   xmm11h fpu @ fpu (offset: 872  size: 8)
+   xmm12 vec128 @ fpu (offset: 928  size: 16)
+   ymm12 vec256 @ fpu (offset: 928  size: 32)
+   zmm12 vec512 @ fpu (offset: 928  size: 64)
+   xmm12l fpu @ fpu (offset: 928  size: 8)
+   xmm12h fpu @ fpu (offset: 936  size: 8)
+   xmm13 vec128 @ fpu (offset: 992  size: 16)
+   ymm13 vec256 @ fpu (offset: 992  size: 32)
+   zmm13 vec512 @ fpu (offset: 992  size: 64)
+   xmm13l fpu @ fpu (offset: 992  size: 8)
+   xmm13h fpu @ fpu (offset: 1000  size: 8)
+   xmm14 vec128 @ fpu (offset: 1056  size: 16)
+   ymm14 vec256 @ fpu (offset: 1056  size: 32)
+   zmm14 vec512 @ fpu (offset: 1056  size: 64)
+   xmm14l fpu @ fpu (offset: 1056  size: 8)
+   xmm14h fpu @ fpu (offset: 1064  size: 8)
+   xmm15 vec128 @ fpu (offset: 1120  size: 16)
+   ymm15 vec256 @ fpu (offset: 1120  size: 32)
+   zmm15 vec512 @ fpu (offset: 1120  size: 64)
+   xmm15l fpu @ fpu (offset: 1120  size: 8)
+   xmm15h fpu @ fpu (offset: 1128  size: 8)
+   xmm16 vec128 @ fpu (offset: 1184  size: 16)
+   ymm16 vec256 @ fpu (offset: 1184  size: 32)
+   zmm16 vec512 @ fpu (offset: 1184  size: 64)
+   xmm16l fpu @ fpu (offset: 1184  size: 8)
+   xmm16h fpu @ fpu (offset: 1192  size: 8)
+   xmm17 vec128 @ fpu (offset: 1248  size: 16)
+   ymm17 vec256 @ fpu (offset: 1248  size: 32)
+   zmm17 vec512 @ fpu (offset: 1248  size: 64)
+   xmm17l fpu @ fpu (offset: 1248  size: 8)
+   xmm17h fpu @ fpu (offset: 1256  size: 8)
+   xmm18 vec128 @ fpu (offset: 1312  size: 16)
+   ymm18 vec256 @ fpu (offset: 1312  size: 32)
+   zmm18 vec512 @ fpu (offset: 1312  size: 64)
+   xmm18l fpu @ fpu (offset: 1312  size: 8)
+   xmm18h fpu @ fpu (offset: 1320  size: 8)
+   xmm19 vec128 @ fpu (offset: 1376  size: 16)
+   ymm19 vec256 @ fpu (offset: 1376  size: 32)
+   zmm19 vec512 @ fpu (offset: 1376  size: 64)
+   xmm19l fpu @ fpu (offset: 1376  size: 8)
+   xmm19h fpu @ fpu (offset: 1384  size: 8)
+   xmm20 vec128 @ fpu (offset: 1440  size: 16)
+   ymm20 vec256 @ fpu (offset: 1440  size: 32)
+   zmm20 vec512 @ fpu (offset: 1440  size: 64)
+   xmm20l fpu @ fpu (offset: 1440  size: 8)
+   xmm20h fpu @ fpu (offset: 1448  size: 8)
+   xmm21 vec128 @ fpu (offset: 1504  size: 16)
+   ymm21 vec256 @ fpu (offset: 1504  size: 32)
+   zmm21 vec512 @ fpu (offset: 1504  size: 64)
+   xmm21l fpu @ fpu (offset: 1504  size: 8)
+   xmm21h fpu @ fpu (offset: 1512  size: 8)
+   xmm22 vec128 @ fpu (offset: 1568  size: 16)
+   ymm22 vec256 @ fpu (offset: 1568  size: 32)
+   zmm22 vec512 @ fpu (offset: 1568  size: 64)
+   xmm22l fpu @ fpu (offset: 1568  size: 8)
+   xmm22h fpu @ fpu (offset: 1576  size: 8)
+   xmm23 vec128 @ fpu (offset: 1632  size: 16)
+   ymm23 vec256 @ fpu (offset: 1632  size: 32)
+   zmm23 vec512 @ fpu (offset: 1632  size: 64)
+   xmm23l fpu @ fpu (offset: 1632  size: 8)
+   xmm23h fpu @ fpu (offset: 1640  size: 8)
+   xmm24 vec128 @ fpu (offset: 1696  size: 16)
+   ymm24 vec256 @ fpu (offset: 1696  size: 32)
+   zmm24 vec512 @ fpu (offset: 1696  size: 64)
+   xmm24l fpu @ fpu (offset: 1696  size: 8)
+   xmm24h fpu @ fpu (offset: 1704  size: 8)
+   xmm25 vec128 @ fpu (offset: 1760  size: 16)
+   ymm25 vec256 @ fpu (offset: 1760  size: 32)
+   zmm25 vec512 @ fpu (offset: 1760  size: 64)
+   xmm25l fpu @ fpu (offset: 1760  size: 8)
+   xmm25h fpu @ fpu (offset: 1768  size: 8)
+   xmm26 vec128 @ fpu (offset: 1824  size: 16)
+   ymm26 vec256 @ fpu (offset: 1824  size: 32)
+   zmm26 vec512 @ fpu (offset: 1824  size: 64)
+   xmm26l fpu @ fpu (offset: 1824  size: 8)
+   xmm26h fpu @ fpu (offset: 1832  size: 8)
+   xmm27 vec128 @ fpu (offset: 1888  size: 16)
+   ymm27 vec256 @ fpu (offset: 1888  size: 32)
+   zmm27 vec512 @ fpu (offset: 1888  size: 64)
+   xmm27l fpu @ fpu (offset: 1888  size: 8)
+   xmm27h fpu @ fpu (offset: 1896  size: 8)
+   xmm28 vec128 @ fpu (offset: 1952  size: 16)
+   ymm28 vec256 @ fpu (offset: 1952  size: 32)
+   zmm28 vec512 @ fpu (offset: 1952  size: 64)
+   xmm28l fpu @ fpu (offset: 1952  size: 8)
+   xmm28h fpu @ fpu (offset: 1960  size: 8)
+   xmm29 vec128 @ fpu (offset: 2016  size: 16)
+   ymm29 vec256 @ fpu (offset: 2016  size: 32)
+   zmm29 vec512 @ fpu (offset: 2016  size: 64)
+   xmm29l fpu @ fpu (offset: 2016  size: 8)
+   xmm29h fpu @ fpu (offset: 2024  size: 8)
+   xmm30 vec128 @ fpu (offset: 2080  size: 16)
+   ymm30 vec256 @ fpu (offset: 2080  size: 32)
+   zmm30 vec512 @ fpu (offset: 2080  size: 64)
+   xmm30l fpu @ fpu (offset: 2080  size: 8)
+   xmm30h fpu @ fpu (offset: 2088  size: 8)
+   xmm31 vec128 @ fpu (offset: 2144  size: 16)
+   ymm31 vec256 @ fpu (offset: 2144  size: 32)
+   zmm31 vec512 @ fpu (offset: 2144  size: 64)
+   xmm31l fpu @ fpu (offset: 2144  size: 8)
+   xmm31h fpu @ fpu (offset: 2152  size: 8)
+   k0 fpu @ fpu (offset: 2208  size: 8)
+   mm0 vec64 @ fpu (offset: 32  size: 8)
+   k1 fpu @ fpu (offset: 2216  size: 8)
+   mm1 vec64 @ fpu (offset: 48  size: 8)
+   k2 fpu @ fpu (offset: 2224  size: 8)
+   mm2 vec64 @ fpu (offset: 64  size: 8)
+   k3 fpu @ fpu (offset: 2232  size: 8)
+   mm3 vec64 @ fpu (offset: 80  size: 8)
+   k4 fpu @ fpu (offset: 2240  size: 8)
+   mm4 vec64 @ fpu (offset: 96  size: 8)
+   k5 fpu @ fpu (offset: 2248  size: 8)
+   mm5 vec64 @ fpu (offset: 112  size: 8)
+   k6 fpu @ fpu (offset: 2256  size: 8)
+   mm6 vec64 @ fpu (offset: 128  size: 8)
+   k7 fpu @ fpu (offset: 2264  size: 8)
+   mm7 vec64 @ fpu (offset: 144  size: 8)
+regset 3 (vec64)
+* arena vec64 size 1
+regset 4 (vec128)
+* arena vec128 size 1
+regset 5 (vec256)
+* arena vec256 size 1
+regset 6 (vec512)
+* arena vec512 size 1
+regset 7 (flg)
 * arena flg size 1
-regset 7 (seg)
+regset 8 (seg)
 * arena seg size 216
    cs seg @ seg (offset: 136  size: 8)
    ss seg @ seg (offset: 160  size: 8)
@@ -233,9 +434,31 @@ regset 7 (seg)
    es seg @ seg (offset: 192  size: 8)
    fs seg @ seg (offset: 200  size: 8)
    gs seg @ seg (offset: 208  size: 8)
+regset 9 (pri)
+* arena pri size 1
 EOF
 RUN
 
+NAME=bad regprofile log test
+FILE=-
+CMDS=<<EOF
+e log.origin=true
+e asm.arch=x86
+e asm.bits=64
+arps
+arp scripts/badrp.r2
+arps
+ar=
+ar rax
+EOF
+EXPECT=<<EOF
+160
+88
+   rax 0x00000000        
+0x00000000
+EOF
+EXPECT_ERR=
+RUN
 
 NAME=bad regprofile
 FILE=-
@@ -251,12 +474,10 @@ EOF
 EXPECT=<<EOF
 160
 88
-    rax 0x00000000       
+   rax 0x00000000        
 0x00000000
 EOF
-EXPECT_ERR=<<EOF
-Warning: =A0 not defined
-EOF
+EXPECT_ERR=
 RUN
 
 NAME=bad regprofile 2
@@ -267,21 +488,164 @@ e asm.bits=64
 arps
 arp scripts/badrp2.r2
 arps
+?e --
+arp
+?e --regs
+ar=
+?e --
+-a x86
+-b 32
+arps
 ar=
 ar rax
 EOF
 EXPECT=<<EOF
 160
 1
+--
+--regs
+--
+64
+   oeax 0x00000000      eax 0x00000000      ebx 0x00000000      ecx 0x00000000
+    edx 0x00000000      esi 0x00000000      edi 0x00000000      esp 0x00000000
+    ebp 0x00000000      eip 0x00000000   eflags 0x00000000  
+bl = 0x00000000
+bx = 0x00000000
+cwd = 0x00000000
+dr0 = 0x00000000
+ebx = 0x00000000
+bh = 0x00000000
+swd = 0x00000000
+cl = 0x00000000
+cx = 0x00000000
+ftw = 0x00000000
+dr1 = 0x00000000
+ecx = 0x00000000
+ch = 0x00000000
+fop = 0x00000000
+dl = 0x00000000
+dx = 0x00000000
+dr2 = 0x00000000
+edx = 0x00000000
+fip = 0x00000000
+dh = 0x00000000
+si = 0x00000000
+dr3 = 0x00000000
+esi = 0x00000000
+fcs = 0x00000000
+di = 0x00000000
+edi = 0x00000000
+foo = 0x00000000
+bp = 0x00000000
+ebp = 0x00000000
+fos = 0x00000000
+al = 0x00000000
+ax = 0x00000000
+dr6 = 0x00000000
+eax = 0x00000000
+mxcsr = 0x00000000
+ah = 0x00000000
+dr7 = 0x00000000
+mxcr_mask = 0x00000000
+mm0 = 0x00000000
+st0 = 0x00000000
+xfs = 0x00000000
+xgs = 0x00000000
+oeax = 0x00000000
+ip = 0x00000000
+eip = 0x00000000
+mm1 = 0x00000000
+st1 = 0x00000000
+cs = 0x00000000
+xcs = 0x00000000
+xss = 0x00000000
+cf = 0x00000000
+flags = 0x00000000
+eflags = 0x00000000
+pf = 0x00000000
+af = 0x00000000
+zf = 0x00000000
+sf = 0x00000000
+tf = 0x00000000
+if = 0x00000000
+df = 0x00000000
+of = 0x00000000
+nt = 0x00000000
+rf = 0x00000000
+vm = 0x00000000
+sp = 0x00000000
+esp = 0x00000000
+mm2 = 0x00000000
+st2 = 0x00000000
+mm3 = 0x00000000
+st3 = 0x00000000
+mm4 = 0x00000000
+st4 = 0x00000000
+mm5 = 0x00000000
+st5 = 0x00000000
+mm6 = 0x00000000
+st6 = 0x00000000
+mm7 = 0x00000000
+st7 = 0x00000000
+xmm0l = 0x00000000
+xmm0 = 0x00000000000000000000000000000000
+ymm0 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm0 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm0h = 0x00000000
+xmm1l = 0x00000000
+xmm1 = 0x00000000000000000000000000000000
+ymm1 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm1 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm1h = 0x00000000
+xmm2l = 0x00000000
+xmm2 = 0x00000000000000000000000000000000
+ymm2 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm2 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm2h = 0x00000000
+xmm3l = 0x00000000
+xmm3 = 0x00000000000000000000000000000000
+ymm3 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm3 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm3h = 0x00000000
+xmm4l = 0x00000000
+xmm4 = 0x00000000000000000000000000000000
+ymm4 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm4 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm4h = 0x00000000
+xmm5l = 0x00000000
+xmm5 = 0x00000000000000000000000000000000
+ymm5 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm5 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm5h = 0x00000000
+xmm6l = 0x00000000
+xmm6 = 0x00000000000000000000000000000000
+ymm6 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm6 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm6h = 0x00000000
+xmm7l = 0x00000000
+xmm7 = 0x00000000000000000000000000000000
+ymm7 = 0x0000000000000000000000000000000000000000000000000000000000000000
+zmm7 = 0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+xmm7h = 0x00000000
+k0 = 0x00000000
+k1 = 0x00000000
+k2 = 0x00000000
+k3 = 0x00000000
+k4 = 0x00000000
+k5 = 0x00000000
+k6 = 0x00000000
+k7 = 0x00000000
 EOF
 EXPECT_ERR=<<EOF
-r_reg_set_profile_string: Parse error @ line 3 (Invalid syntax: Wrong number of columns)
+ERROR: Parse error @ line 3 (Invalid syntax: Wrong number of columns)
+ERROR: No register profile defined. Try 'dr.'
 EOF
 RUN
 
 NAME=bad regprofile 2
 FILE=-
 CMDS=<<EOF
+e log.origin=true
 e asm.arch=x86
 e asm.bits=64
 arps
@@ -298,6 +662,109 @@ EXPECT=<<EOF
 160
 EOF
 EXPECT_ERR=<<EOF
-r_reg_set_profile_string: Parse error @ line 3 (Invalid syntax: Wrong number of columns)
+ERROR: [r_reg_set_profile_string] Parse error @ line 3 (Invalid syntax: Wrong number of columns)
 EOF
+RUN
+
+NAME=ar 1bit register on a shrunk arena stays inside the arena
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+arps 8
+ar zf=1
+ar zf
+arps 160
+ar zf=1
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+EOF
+EXPECT_ERR=<<EOF
+WARN: RRegSetOverflow 145 vs 8
+ERROR: Cannot set register 'zf'
+EOF
+RUN
+
+NAME=ar 4bit register on a shrunk arena stays inside the arena
+FILE=-
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=32
+arps 56
+ar gef=5
+ar gef
+arps 68
+ar gef=5
+ar gef
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000005
+EOF
+RUN
+
+NAME=arp rejects offsets and sizes that do not fit the register arena
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+arp scripts/badrp_offset.r2
+arp scripts/badrp_size.r2
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Parse error @ line 3 (Invalid offset)
+ERROR: Parse error @ line 3 (Invalid size)
+EOF
+RUN
+
+NAME=ar prints a 512-bit register
+FILE=malloc://64
+CMDS=<<EOF
+arp bins/regprofile/zmm512.r2
+ar zmm0
+ar rip
+EOF
+EXPECT=<<EOF
+0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0x00000000
+EOF
+EXPECT_ERR=
+RUN
+
+# zmm512.r2 with the offset of zmm0 16 -> ?, so bytes 1..64 of zmm0 overrun its arena; rip still prints
+NAME=ar rejects a 512-bit register that overruns a shorter arena
+FILE=malloc://64
+CMDS=<<EOF
+arp bins/regprofile/zmm512-nooff.r2
+ar zmm0
+ar rip
+EOF
+EXPECT=<<EOF
+0x00000000
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot retrieve reg 'zmm0' of 512 bits
+EOF
+RUN
+
+# gpr arena takes bytes 01..10, the vec512 arena starts at 16, zmm0 at its offset 16 holds 26..65
+NAME=ar prints distinct chunks of a 512-bit register
+FILE=malloc://64
+CMDS=<<EOF
+arp bins/regprofile/zmm512.r2
+arw 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9
+ar rip
+ar rsp
+ar zmm0
+EOF
+EXPECT=<<EOF
+0x807060504030201
+0x100f0e0d0c0b0a09
+0x6564636261605f5e5d5c5b5a595857565554535251504f4e4d4c4b4a494847464544434241403f3e3d3c3b3a393837363534333231302f2e2d2c2b2a29282726
+EOF
+EXPECT_ERR=
 RUN

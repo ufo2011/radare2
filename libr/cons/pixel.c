@@ -1,19 +1,17 @@
-/* radare2 - LGPL - Copyright 2021 - pancake */
+/* radare2 - LGPL - Copyright 2021-2022 - pancake */
 
 #include <r_cons.h>
 #include <r_util/r_print.h>
 
 R_API RConsPixel *r_cons_pixel_new(int w, int h) {
-	if (UT64_MUL_OVFCHK (w, h)) {
+	size_t buf_size;
+	if (r_mul_overflow ((size_t)w, (size_t)h, &buf_size)) {
 		return NULL;
 	}
 	RConsPixel *p = R_NEW (RConsPixel);
-	if (!p) {
-		return NULL;
-	}
 	p->w = w;
 	p->h = h;
-	p->buf_size = w * h;
+	p->buf_size = buf_size;
 	p->buf = calloc (w, h);
 	if (!p->buf) {
 		free (p);
@@ -30,7 +28,7 @@ R_API void r_cons_pixel_free(RConsPixel *p) {
 }
 
 R_API ut8 r_cons_pixel_get(RConsPixel *p, int x, int y) {
-	r_return_val_if_fail (p, 0);
+	R_RETURN_VAL_IF_FAIL (p, 0);
 	if (x < 0 || x >= p->w) {
 		return 0;
 	}
@@ -44,7 +42,7 @@ R_API ut8 r_cons_pixel_get(RConsPixel *p, int x, int y) {
 	return 0;
 }
 R_API void r_cons_pixel_set(RConsPixel *p, int x, int y, ut8 v) {
-	r_return_if_fail (p);
+	R_RETURN_IF_FAIL (p);
 	if (x < 0 || x >= p->w) {
 		return;
 	}
@@ -58,7 +56,7 @@ R_API void r_cons_pixel_set(RConsPixel *p, int x, int y, ut8 v) {
 }
 
 R_API void r_cons_pixel_sets(RConsPixel *p, int x, int y, const char *s) {
-	r_return_if_fail (p && s);
+	R_RETURN_IF_FAIL (p && s);
 	RRune ch;
 	int cols = 0;
 	int h = 0;
@@ -87,7 +85,7 @@ R_API void r_cons_pixel_sets(RConsPixel *p, int x, int y, const char *s) {
 }
 
 R_API void r_cons_pixel_fill(RConsPixel *p, int _x, int _y, int w, int h, int v) {
-	r_return_if_fail (p);
+	R_RETURN_IF_FAIL (p);
 	int x, y;
 	for (x = _x; x < _x+w; x++) {
 		for (y = _y; y < _y+h; y++) {
@@ -100,14 +98,31 @@ R_API void r_cons_pixel_fill(RConsPixel *p, int _x, int _y, int w, int h, int v)
 }
 
 R_API char *r_cons_pixel_drain(RConsPixel *p) {
-	r_return_val_if_fail (p, NULL);
+	R_RETURN_VAL_IF_FAIL (p, NULL);
 	char *s = r_cons_pixel_tostring (p);
 	r_cons_pixel_free (p);
 	return s;
 }
 
+static int pixel_get(RConsPixel *p, int x, int y) {
+	ut8 *X = p->buf + (x + (y * p->w));
+	int u = 0;
+	u |= (X[0]?_BR00:0);
+	u |= (X[1]?_BR01:0);
+	X = p->buf + (x + ((y + 1) * p->w));
+	u |= (X[0]?_BR10:0);
+	u |= (X[1]?_BR11:0);
+	X = p->buf + (x + ((y + 2) * p->w));
+	u |= (X[0]?_BR20:0);
+	u |= (X[1]?_BR21:0);
+	X = p->buf + (x + ((y + 3) * p->w));
+	u |= (X[0]?_BR30:0);
+	u |= (X[1]?_BR31:0);
+	return u;
+}
+
 R_API char *r_cons_pixel_tostring(RConsPixel *p) {
-	r_return_val_if_fail (p, NULL);
+	R_RETURN_VAL_IF_FAIL (p, NULL);
 	RStrBuf *sb = r_strbuf_new (NULL);
 	size_t x, y;
 	for (y = 0; y < p->h; y += 4) {
@@ -116,19 +131,7 @@ R_API char *r_cons_pixel_tostring(RConsPixel *p) {
 			if (delta >= p->buf_size) {
 				continue;
 			}
-			ut8 *X = p->buf + (x + ((y + 0) * p->w));
-			int u = 0;
-			u |= (X[0]?$00:0);
-			u |= (X[1]?$01:0);
-			X = p->buf + (x + ((y + 1) * p->w));
-			u |= (X[0]?$10:0);
-			u |= (X[1]?$11:0);
-			X = p->buf + (x + ((y + 2) * p->w));
-			u |= (X[0]?$20:0);
-			u |= (X[1]?$21:0);
-			X = p->buf + (x + ((y + 3) * p->w));
-			u |= (X[0]?$30:0);
-			u |= (X[1]?$31:0);
+			int u = pixel_get (p, x, y);
 			RBraile b = r_print_braile (u);
 			r_strbuf_append (sb, b.str);
 		}
@@ -137,37 +140,28 @@ R_API char *r_cons_pixel_tostring(RConsPixel *p) {
 	return r_strbuf_drain (sb);
 }
 
-R_API void r_cons_pixel_flush(RConsPixel *p, int sx, int sy) {
-	r_return_if_fail (p);
-	int rows, cols = r_cons_get_size (&rows);
-	size_t x, y;
-	for (y = 0; y + 4< p->h; y += 4) {
-		for (x = 0; x + 2 < p->w; x += 2) {
-			ut8 *X = p->buf + (x + (y * p->w));
-			int u = 0;
-			u |= (X[0]?$00:0);
-			u |= (X[1]?$01:0);
-			X = p->buf + (x + ((y + 1) * p->w));
-			u |= (X[0]?$10:0);
-			u |= (X[1]?$11:0);
-			X = p->buf + (x + ((y + 2) * p->w));
-			u |= (X[0]?$20:0);
-			u |= (X[1]?$21:0);
-			X = p->buf + (x + ((y + 3) * p->w));
-			u |= (X[0]?$30:0);
-			u |= (X[1]?$31:0);
-			if (u) {
-				RBraile b = r_print_braile (u);
-				int px = sx + (x / 2);
-				int py = sy + (y / 4);
-				if (px >= 0 && px < cols) {
-					if (py >= 0 && py < rows) {
-						r_cons_gotoxy (sx + (x / 2), sy + (y / 4));
-						// r_cons_print (Color_RESET);
-						r_cons_print (b.str);
-					}
-				}
+static inline void cons_pixel_paint(RCons *cons, RConsPixel *p, int sx, int sy, int x, int y, int cols, int rows) {
+	int u = pixel_get (p, x, y);
+	if (u) {
+		RBraile b = r_print_braile (u);
+		int px = sx + (x / 2);
+		int py = sy + (y / 4);
+		if (px >= 0 && px < cols) {
+			if (py >= 0 && py < rows) {
+				r_cons_gotoxy (cons, sx + (x / 2), sy + (y / 4));
+				r_cons_print (cons, b.str);
 			}
+		}
+	}
+}
+
+R_API void r_cons_pixel_flush(RCons *cons, RConsPixel *p, int sx, int sy) {
+	R_RETURN_IF_FAIL (p);
+	int rows, cols = r_cons_get_size (cons, &rows);
+	size_t x, y;
+	for (y = 0; y + 4 < p->h; y += 4) {
+		for (x = 0; x + 2 < p->w; x += 2) {
+			cons_pixel_paint (cons, p, sx, sy, x, y, cols, rows);
 		}
 	}
 }

@@ -1,55 +1,34 @@
+# merged: entry point of qnx; sections of qnx; sections 16 bits content; get signature info; get header info
 NAME=load qnx
 FILE=bins/qnx/test.x
-CMDS=iI~bintype
+CMDS=<<EOF
+iI~bintype
+?e --
+ie=~addr
+?e --
+iS
+?e --
+px 16 @ 0x00000152
+?e --
+iC
+?e --
+iH
+EOF
 EXPECT=<<EOF
 bintype  QNX
-EOF
-RUN
-
-NAME=entry point of qnx
-FILE=bins/qnx/test.x
-CMDS=ie~addr
-EXPECT=<<EOF
-vaddr=0x0000021c paddr=0x0000021c haddr=-1 type=program
-EOF
-RUN
-
-
-NAME=sections of qnx
-FILE=bins/qnx/test.x
-CMDS=iS
-EXPECT=<<EOF
-[Sections]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000044   0xf6 0x00000044   0xf6 ---- LMF_LOAD
-1   0x00000152  0x6c3 0x00000152  0x6c3 ---- LMF_LOAD
-
-EOF
-RUN
-
-NAME=sections 16 bits content
-FILE=bins/qnx/test.x
-CMDS=px 16 @ 0x00000152
-EXPECT=<<EOF
-- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+--
+paddr=0x0000021c vaddr=0x0000021c haddr=-1 type=program
+--
+nth paddr        size vaddr       vsize perm flags type name
+------------------------------------------------------------
+0   0x00000044   0xf6 0x00000044   0xf6 ---- 0x0   ---- LMF_LOAD
+1   0x00000152  0x6c3 0x00000152  0x6c3 ---- 0x0   ---- LMF_LOAD
+--
+- offset -  5253 5455 5657 5859 5A5B 5C5D 5E5F 6061  23456789ABCDEF01
 0x00000152  0000 0000 0000 cd00 9090 9090 0000 0000  ................
-EOF
-RUN
-
-NAME=get signature info
-FILE=bins/qnx/test.x
-CMDS=iC
-EXPECT=<<EOF
+--
 2692336605
-EOF
-RUN
-
-NAME=get header info
-FILE=bins/qnx/test.x
-CMDS=iH
-EXPECT=<<EOF
+--
 QNX file header:
 version : 0x190H
 cflags : 0x16H
@@ -65,5 +44,41 @@ stack_nbytes : 0x8000H
 heap_nbytes : 0x1000H
 image_base : 0xa000H
 spare3[2] : 0x0H
+EOF
+RUN
+
+# Linked with Open Watcom v2 using the QNX OPTION RESOURCE directive.
+NAME=Open Watcom QNX LMF resource
+FILE=bins/qnx/qnx_resource.lmf
+CMDS=<<EOF
+iI~bintype
+iuq
+iuj
+iS~LMF_RESOURCE
+EOF
+EXPECT=<<EOF
+bintype  QNX
+0x00000048 25 USAGE -
+[{"name":"","index":0,"type":"USAGE","vaddr":72,"paddr":72,"size":25,"id":null,"type_id":0,"lang":null,"language_id":0,"codepage":0,"named":false,"timestamp":null}]
+0   0x00000048  0x19 0x00000048   0x19 ---- 0x0   ---- LMF_RESOURCE
+EOF
+RUN
+
+NAME=Open Watcom QNX LMF resource extraction
+FILE=bins/qnx/qnx_resource.lmf
+ARGS=-e log.level=0
+CMDS=<<EOF
+rmrf .tmp/qnx-resource-extract-a
+rmrf .tmp/qnx-resource-extract-b
+iux .tmp/qnx-resource-extract-a
+ixu .tmp/qnx-resource-extract-b
+!!rahash2 -qq -a sha256 .tmp/qnx-resource-extract-a/resource_USAGE_named_0.bin
+!!rahash2 -qq -a sha256 .tmp/qnx-resource-extract-b/resource_USAGE_named_0.bin
+rmrf .tmp/qnx-resource-extract-a
+rmrf .tmp/qnx-resource-extract-b
+EOF
+EXPECT=<<EOF
+ecbb18d099d8b23e1a9e1eba38bce7bec52841952eb383fec02416c1186a934a
+ecbb18d099d8b23e1a9e1eba38bce7bec52841952eb383fec02416c1186a934a
 EOF
 RUN

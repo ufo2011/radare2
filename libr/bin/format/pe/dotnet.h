@@ -2,7 +2,8 @@
 #define YR_DOTNET_H
 
 #include <r_types.h>
-#include "pe_specs.h"
+#include <r_list.h>
+#include <r_util/r_buf.h>
 
 #pragma pack(push, 1)
 
@@ -13,25 +14,31 @@
      (uint8_t*) (pointer) <= pe->data + pe->data_size - size)
 
 #define struct_fits_in_pe(pe, pointer, struct_type) \
-    fits_in_pe(pe, pointer, sizeof(struct_type))
+    fits_in_pe(pe, pointer, sizeof (struct_type))
+
+// Simple data directory structure
+typedef struct {
+	ut32 VirtualAddress;
+	ut32 Size;
+} DATA_DIRECTORY;
 
 //
 // CLI header.
 // ECMA-335 Section II.25.3.3
 //
 typedef struct _CLI_HEADER {
-    DWORD Size; // Called "Cb" in documentation.
-    WORD MajorRuntimeVersion;
-    WORD MinorRuntimeVersion;
-    IMAGE_DATA_DIRECTORY MetaData;
-    DWORD Flags;
-    DWORD EntryPointToken;
-    IMAGE_DATA_DIRECTORY Resources;
-    IMAGE_DATA_DIRECTORY StrongNameSignature;
-    ULONGLONG CodeManagerTable;
-    IMAGE_DATA_DIRECTORY VTableFixups;
-    ULONGLONG ExportAddressTableJumps;
-    ULONGLONG ManagedNativeHeader;
+    ut32 Size; // Called "Cb" in documentation.
+    ut16 MajorRuntimeVersion;
+    ut16 MinorRuntimeVersion;
+    DATA_DIRECTORY MetaData;
+    ut32 Flags;
+    ut32 EntryPointToken;
+    DATA_DIRECTORY Resources;
+    DATA_DIRECTORY StrongNameSignature;
+    ut64 CodeManagerTable;
+    DATA_DIRECTORY VTableFixups;
+    ut64 ExportAddressTableJumps;
+    ut64 ManagedNativeHeader;
 } CLI_HEADER, *PCLI_HEADER;
 
 #define NET_METADATA_MAGIC 0x424a5342
@@ -43,11 +50,11 @@ typedef struct _CLI_HEADER {
 // Note: This is only part of the struct, as the rest of it is variable length.
 //
 typedef struct _NET_METADATA {
-    DWORD Magic;
-    WORD MajorVersion;
-    WORD MinorVersion;
-    DWORD Reserved;
-    DWORD Length;
+    ut32 Magic;
+    ut16 MajorVersion;
+    ut16 MinorVersion;
+    ut32 Reserved;
+    ut32 Length;
     char Version[0];
 } NET_METADATA, *PNET_METADATA;
 
@@ -58,8 +65,8 @@ typedef struct _NET_METADATA {
 // ECMA-335 Section II.24.2.2
 //
 typedef struct _STREAM_HEADER {
-    DWORD Offset;
-    DWORD Size;
+    ut32 Offset;
+    ut32 Size;
     char Name[0];
 } STREAM_HEADER, *PSTREAM_HEADER;
 
@@ -69,13 +76,13 @@ typedef struct _STREAM_HEADER {
 // ECMA-335 Section II.24.2.6
 //
 typedef struct _TILDE_HEADER {
-    DWORD Reserved1;
-    BYTE MajorVersion;
-    BYTE MinorVersion;
-    BYTE HeapSizes;
-    BYTE Reserved2;
-    ULONGLONG Valid;
-    ULONGLONG Sorted;
+    ut32 Reserved1;
+    ut8 MajorVersion;
+    ut8 MinorVersion;
+    ut8 HeapSizes;
+    ut8 Reserved2;
+    ut64 Valid;
+    ut64 Sorted;
 } TILDE_HEADER, *PTILDE_HEADER;
 
 // These are the bit positions in Valid which will be set if the table
@@ -141,7 +148,39 @@ typedef struct _TILDE_HEADER {
 // them. This only includes the ones we care about.
 // ECMA-335 Section II.23.1.16
 //
+#define ELEMENT_TYPE_END 0x00
+#define ELEMENT_TYPE_VOID 0x01
+#define ELEMENT_TYPE_BOOLEAN 0x02
+#define ELEMENT_TYPE_CHAR 0x03
+#define ELEMENT_TYPE_I1 0x04
+#define ELEMENT_TYPE_U1 0x05
+#define ELEMENT_TYPE_I2 0x06
+#define ELEMENT_TYPE_U2 0x07
+#define ELEMENT_TYPE_I4 0x08
+#define ELEMENT_TYPE_U4 0x09
+#define ELEMENT_TYPE_I8 0x0A
+#define ELEMENT_TYPE_U8 0x0B
+#define ELEMENT_TYPE_R4 0x0C
+#define ELEMENT_TYPE_R8 0x0D
 #define ELEMENT_TYPE_STRING 0x0E
+#define ELEMENT_TYPE_PTR 0x0F
+#define ELEMENT_TYPE_BYREF 0x10
+#define ELEMENT_TYPE_VALUETYPE 0x11
+#define ELEMENT_TYPE_CLASS 0x12
+#define ELEMENT_TYPE_VAR 0x13
+#define ELEMENT_TYPE_ARRAY 0x14
+#define ELEMENT_TYPE_GENERICINST 0x15
+#define ELEMENT_TYPE_TYPEDBYREF 0x16
+#define ELEMENT_TYPE_I 0x18
+#define ELEMENT_TYPE_U 0x19
+#define ELEMENT_TYPE_FNPTR 0x1B
+#define ELEMENT_TYPE_OBJECT 0x1C
+#define ELEMENT_TYPE_SZARRAY 0x1D
+#define ELEMENT_TYPE_MVAR 0x1E
+#define ELEMENT_TYPE_CMOD_REQD 0x1F
+#define ELEMENT_TYPE_CMOD_OPT 0x20
+#define ELEMENT_TYPE_SENTINEL 0x41
+#define ELEMENT_TYPE_PINNED 0x45
 
 
 // The string length of a typelib attribute is at most 0xFF.
@@ -152,22 +191,22 @@ typedef struct _TILDE_HEADER {
 // ECMA-335 Section II.22.30
 //
 typedef struct _MODULE_TABLE {
-    WORD Generation;
+    ut16 Generation;
     union {
-        WORD Name_Short;
-        DWORD Name_Long;
+        ut16 Name_Short;
+        ut32 Name_Long;
     } Name;
     union {
-        WORD Mvid_Short;
-        DWORD Mvid_Long;
+        ut16 Mvid_Short;
+        ut32 Mvid_Long;
     } Mvid;
     union {
-        WORD EncId_Short;
-        DWORD EncId_Long;
+        ut16 EncId_Short;
+        ut32 EncId_Long;
     } EncId;
     union {
-        WORD EncBaseId_Short;
-        DWORD EncBaseId_Long;
+        ut16 EncBaseId_Short;
+        ut32 EncBaseId_Long;
     } EncBaseId;
 } MODULE_TABLE, *PMODULE_TABLE;
 
@@ -176,19 +215,19 @@ typedef struct _MODULE_TABLE {
 // ECMA-335 Section II.22.2
 //
 typedef struct _ASSEMBLY_TABLE {
-    DWORD HashAlgId;
-    WORD MajorVersion;
-    WORD MinorVersion;
-    WORD BuildNumber;
-    WORD RevisionNumber;
-    DWORD Flags;
+    ut32 HashAlgId;
+    ut16 MajorVersion;
+    ut16 MinorVersion;
+    ut16 BuildNumber;
+    ut16 RevisionNumber;
+    ut32 Flags;
     union {
-        WORD PublicKey_Short;
-        DWORD PublicKey_Long;
+        ut16 PublicKey_Short;
+        ut32 PublicKey_Long;
     } PublicKey;
     union {
-        WORD Name_Short;
-        DWORD Name_Long;
+        ut16 Name_Short;
+        ut32 Name_Long;
     } Name;
 } ASSEMBLY_TABLE, *PASSEMBLY_TABLE;
 
@@ -198,18 +237,18 @@ typedef struct _ASSEMBLY_TABLE {
 // ECMA-335 Section II.22.5
 //
 typedef struct _ASSEMBLYREF_TABLE {
-    WORD MajorVersion;
-    WORD MinorVersion;
-    WORD BuildNumber;
-    WORD RevisionNumber;
-    DWORD Flags;
+    ut16 MajorVersion;
+    ut16 MinorVersion;
+    ut16 BuildNumber;
+    ut16 RevisionNumber;
+    ut32 Flags;
     union {
-        WORD PublicKeyOrToken_Short;
-        DWORD PublicKeyOrToken_Long;
+        ut16 PublicKeyOrToken_Short;
+        ut32 PublicKeyOrToken_Long;
     } PublicKeyOrToken;
     union {
-        WORD Name_Short;
-        DWORD Name_Long;
+        ut16 Name_Short;
+        ut32 Name_Long;
     } Name;
 } ASSEMBLYREF_TABLE, *PASSEMBLYREF_TABLE;
 
@@ -219,15 +258,15 @@ typedef struct _ASSEMBLYREF_TABLE {
 // ECMA-335 Section II.22.24
 //
 typedef struct _MANIFESTRESOURCE_TABLE {
-    DWORD Offset;
-    DWORD Flags;
+    ut32 Offset;
+    ut32 Flags;
     union {
-        WORD Name_Short;
-        DWORD Name_Long;
+        ut16 Name_Short;
+        ut32 Name_Long;
     } Name;
     union {
-        WORD Implementation_Short;
-        DWORD Implementation_Long;
+        ut16 Implementation_Short;
+        ut32 Implementation_Long;
     } Implementation;
 } MANIFESTRESOURCE_TABLE, *PMANIFESTRESOURCE_TABLE;
 
@@ -239,8 +278,8 @@ typedef struct _MANIFESTRESOURCE_TABLE {
 //
 typedef struct _MODULEREF_TABLE {
   union {
-      WORD Name_Short;
-      DWORD Name_Long;
+      ut16 Name_Short;
+      ut32 Name_Long;
   } Name;
 } MODULEREF_TABLE, *PMODULEREF_TABLE;
 
@@ -251,16 +290,16 @@ typedef struct _MODULEREF_TABLE {
 //
 typedef struct _CUSTOMATTRIBUTE_TABLE {
   union {
-    WORD Parent_Short;
-    DWORD Parent_Long;
+    ut16 Parent_Short;
+    ut32 Parent_Long;
   } Parent;
   union {
-    WORD Type_Short;
-    DWORD Type_Long;
+    ut16 Type_Short;
+    ut32 Type_Long;
   } Type;
   union {
-    WORD Value_Short;
-    DWORD Value_Long;
+    ut16 Value_Short;
+    ut32 Value_Long;
   } Value;
 } CUSTOMATTRIBUTE_TABLE, *PCUSTOMATTRIBUTE_TABLE;
 
@@ -270,14 +309,14 @@ typedef struct _CUSTOMATTRIBUTE_TABLE {
 // ECMA-335 Section II.22.9
 //
 typedef struct _CONSTANT_TABLE {
-  WORD Type;
+  ut16 Type;
   union {
-    WORD Parent_Short;
-    DWORD Parent_Long;
+    ut16 Parent_Short;
+    ut32 Parent_Long;
   } Parent;
   union {
-    WORD Value_Short;
-    DWORD Value_Long;
+    ut16 Value_Short;
+    ut32 Value_Long;
   } Value;
 } CONSTANT_TABLE, *PCONSTANT_TABLE;
 
@@ -296,34 +335,34 @@ typedef struct _STREAMS {
 // ECMA-335 Section II.24.2.4
 typedef struct _BLOB_PARSE_RESULT {
     uint8_t size; // Number of bytes parsed. This is the new offset.
-    DWORD length; // Value of the bytes parsed. This is the blob length.
+    ut32 length; // Value of the bytes parsed. This is the blob length.
 } BLOB_PARSE_RESULT, *PBLOB_PARSE_RESULT;
 
 
 // Used to store the number of rows of each table.
 typedef struct _ROWS {
-    uint32_t module;
-    uint32_t moduleref;
-    uint32_t assemblyref;
-    uint32_t typeref;
-    uint32_t methoddef;
-    uint32_t memberref;
-    uint32_t typedef_;
-    uint32_t typespec;
-    uint32_t field;
-    uint32_t param;
-    uint32_t property;
-    uint32_t interfaceimpl;
-    uint32_t event;
-    uint32_t standalonesig;
-    uint32_t assembly;
-    uint32_t file;
-    uint32_t exportedtype;
-    uint32_t manifestresource;
-    uint32_t genericparam;
-    uint32_t genericparamconstraint;
-    uint32_t methodspec;
-    uint32_t assemblyrefprocessor;
+    ut32 module;
+    ut32 moduleref;
+    ut32 assemblyref;
+    ut32 typeref;
+    ut32 methoddef;
+    ut32 memberref;
+    ut32 typedef_;
+    ut32 typespec;
+    ut32 field;
+    ut32 param;
+    ut32 property;
+    ut32 interfaceimpl;
+    ut32 event;
+    ut32 standalonesig;
+    ut32 assembly;
+    ut32 file;
+    ut32 exportedtype;
+    ut32 manifestresource;
+    ut32 genericparam;
+    ut32 genericparamconstraint;
+    ut32 methodspec;
+    ut32 assemblyrefprocessor;
 } ROWS, *PROWS;
 
 
@@ -345,5 +384,90 @@ typedef struct _INDEX_SIZES {
     uint8_t genericparam;
 } INDEX_SIZES, *PINDEX_SIZES;
 
+typedef struct {
+	char *name;
+	ut64 vaddr;
+	ut64 paddr;
+	ut64 eh_paddr;    // methoddef: paddr of the IL exception handling sections (0 if none)
+	ut32 size;
+	ut32 hsize;
+	char *namespace;  // For types
+	char *classname;  // Declaring class for methods and fields
+	char *short_name; // Unqualified method/type/member name
+	char *signature;  // Canonical source signature for method tokens
+	char *return_type;
+	char *type;       // "typedef", "methoddef", "memberref", "typeref", etc.
+	ut32 flags;       // access flags, etc.
+	ut32 token;       // Token value for symbolication
+	ut32 extends_token;
+	bool is_native;   // true if method is native code, false if IL
+	bool is_instance; // For methoddef: HASTHIS flag, first arg slot is `this`
+	ut16 param_count; // For methoddef: argument slot count including implicit 'this'
+	ut16 ret_count;   // For methoddef: return slot count (0 for void)
+	RList *methods;   // List of DotNetMethod pointers
+	RList *fields;    // List of DotNetField pointers
+} DotNetSymbol;
+
+typedef struct {
+	char *name;
+	ut64 vaddr;
+	ut32 flags;
+} DotNetMethod;
+
+typedef struct {
+	char *name;
+	char *type_name;
+	ut32 flags;
+	ut32 offset;
+	ut32 token;
+} DotNetField;
+
+typedef struct {
+	char *name;
+	char *version;
+	ut16 major_version;
+	ut16 minor_version;
+	ut16 build_number;
+	ut16 revision_number;
+} DotNetLibrary;
+
+typedef struct {
+	char *name;
+	char *library;  // Native library name for P/Invoke
+	int ordinal;
+} DotNetImport;
+
+typedef struct {
+	ut16 cli_major;
+	ut16 cli_minor;
+	ut16 asm_major;
+	ut16 asm_minor;
+	ut16 asm_build;
+	ut16 asm_revision;
+	char *asm_name;
+} DotNetVersionInfo;
+
+typedef struct {
+	char *name;
+	ut32 offset;
+	ut32 flags;
+	ut32 implementation;
+} DotNetManifestResource;
+
 #pragma pack(pop)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+RList* dotnet_parse(const ut8 *buf, int size, ut64 baddr);
+RList* dotnet_parse_libs(const ut8 *buf, int size);
+RList* dotnet_parse_imports(const ut8 *buf, int size);
+DotNetVersionInfo* dotnet_parse_version_info(const ut8 *buf, int size);
+RList *dotnet_parse_manifest_resources(RBuffer *buf, ut64 metadata_paddr, ut64 metadata_size);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

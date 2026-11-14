@@ -9,10 +9,10 @@ r 4
 i~^size[1]
 r+6
 i~^size[1]
-!rm ${R2_FILE}
+!rm .resize.V1OzXt
 EOF
 EXPECT=<<EOF
-0
+0x0
 0xa
 0x4
 0xa
@@ -30,10 +30,10 @@ i~^size[1]
 w hello world
 i~^size[1]
 psz
-!rm ${R2_FILE}
+!rm .resize.V11zXt
 EOF
 EXPECT=<<EOF
-0
+0x0
 0x3
 0xb
 hello world

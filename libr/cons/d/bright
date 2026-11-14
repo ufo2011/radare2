@@ -1,5 +1,5 @@
 # r2 default palette but with bright colors for all
-
+ecd
 ec b0x00 rgb:00ff00
 ec b0x7f rgb:00ffff
 ec b0xff rgb:ff0000
@@ -27,7 +27,7 @@ ec math rgb:ffff00
 ec mov rgb:ffffff
 ec nop rgb:0000ff
 ec num rgb:ffff00
-ec offset rgb:00ff00
+ec addr rgb:00ff00
 ec other rgb:ffffff
 ec pop rgb:ff00ff . bold
 ec prompt rgb:ffff00
@@ -44,27 +44,29 @@ ec ai.read rgb:00ff00
 ec ai.write rgb:0000ff
 ec ai.exec rgb:ff0000
 ec ai.seq rgb:ff00ff
-ec ai.ascii rgb:ffff00
+ec str rgb:ffff00
 
 ec gui.cflow rgb:ffff00
 ec gui.dataoffset rgb:ffff00
 ec gui.background rgb:000000
-ec gui.alt_background rgb:ffffff
+ec gui.background2 rgb:ffffff
 ec gui.border rgb:000000
 ec wordhl rgb:ff0000
 ec linehl rgb:000080
 
-ec func_var rgb:ffffff
-ec func_var_type rgb:ffff00
-ec func_var_addr rgb:00ffff
+ec var rgb:ffffff
+ec var.type rgb:ffff00
+ec var.addr rgb:00ffff
+ec var.name rgb:ffffff
 
-ec widget_bg rgb:303030
-ec widget_sel rgb:ff0000
+ec widget.bg rgb:303030
+ec widget.sel rgb:ff0000
 
 ec graph.box rgb:0000ff
 ec graph.box2 rgb:00ff00
 ec graph.box3 rgb:ff00ff
 ec graph.box4 rgb:808080
+ec diff.match rgb:808080
 ec graph.true rgb:00ff00
 ec graph.false rgb:ff0000
 ec graph.trufae rgb:0000ff    # single jump

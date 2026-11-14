@@ -1,5 +1,6 @@
 #ifndef LE_H
 #define LE_H
+
 #include <r_bin.h>
 #include "le_specs.h"
 
@@ -14,14 +15,17 @@ typedef struct r_bin_le_obj_s {
 	ut32 headerOff; /* File offset to start of LE/LX header */
 	LE_object_entry *objtbl;
 	void *buf; /* Pointer to RBuffer of file */
-} r_bin_le_obj_t;
+	ut64 *obj_bases;
+	size_t n_bases;
+} RBinLEObj;
 
-r_bin_le_obj_t *r_bin_le_new_buf(RBuffer *buf);
-void r_bin_le_free(r_bin_le_obj_t *bin);
-RList *r_bin_le_get_entrypoints(r_bin_le_obj_t *bin);
-RList *r_bin_le_get_sections(r_bin_le_obj_t *bin);
-RList *r_bin_le_get_symbols(r_bin_le_obj_t *bin);
-RList *r_bin_le_get_imports(r_bin_le_obj_t *bin);
-RList *r_bin_le_get_libs(r_bin_le_obj_t *bin);
-RList *r_bin_le_get_relocs(r_bin_le_obj_t *bin);
+R_IPI RBinLEObj *r_bin_le_new_buf(RBuffer *buf);
+R_IPI void r_bin_le_free(RBinLEObj *bin);
+R_IPI RList *r_bin_le_get_entrypoints(RBinLEObj *bin);
+R_IPI bool r_bin_le_load_sections(RBinLEObj *bin, RVecRBinSection *sections);
+R_IPI void r_bin_le_load_symbols(RBinLEObj *bin, RVecRBinSymbol *vec);
+R_IPI void r_bin_le_load_imports(RBinLEObj *bin, RVecRBinImport *vec);
+R_IPI bool r_bin_le_load_resources(RBinLEObj *bin, RVecRBinResource *resources);
+R_IPI RList *r_bin_le_get_libs(RBinLEObj *bin);
+R_IPI RVecRBinReloc *r_bin_le_get_relocs(RBinLEObj *bin);
 #endif

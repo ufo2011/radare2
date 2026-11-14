@@ -20,7 +20,7 @@ psz @@/j hello
 EOF
 EXPECT=<<EOF
 hello
-[{"offset":10,"type":"string","data":"hello"}]
+[{"addr":10,"type":"string","data":"hello"}]
 EOF
 RUN
 
@@ -31,7 +31,7 @@ wx 005c
 /xj 005c
 EOF
 EXPECT=<<EOF
-[{"offset":0,"type":"hexpair","data":"005c"}]
+[{"addr":0,"type":"hexpair","data":"005c"}]
 EOF
 RUN
 
@@ -42,7 +42,7 @@ wx 0067
 /j g
 EOF
 EXPECT=<<EOF
-[{"offset":1,"type":"string","data":"g"}]
+[{"addr":1,"type":"string","data":"g"}]
 EOF
 RUN
 
@@ -189,9 +189,9 @@ e asm.bits=32
 /at pop
 EOF
 EXPECT=<<EOF
-0x00000003 1 pop ebx
+0x00000003 pop 1 pop ebx
 pop ebx
-0x00000004 1 pop ebp
+0x00000004 pop 1 pop ebp
 pop ebp
 EOF
 RUN
@@ -326,18 +326,41 @@ RUN
 
 NAME=from/to /V
 FILE=-
-BROKEN=1
 CMDS=<<EOF
 wx 05
-e cmd.hit = pi 1
+e cmd.hit = ?e hit-command-ran
 e search.in =raw
 e search.from = 0x00000000
 e search.to = 0x00000004
 /V1 1 5
 EOF
 EXPECT=<<EOF
-0x00000000 hit0_0 05
-add dword [rax], eax
+0x0: 0x5
+hit-command-ran
+EOF
+EXPECT_ERR=<<EOF
+INFO: hits: 1
+EOF
+RUN
+
+NAME=from/to /V across a huge unmapped gap
+FILE=-
+CMDS=<<EOF
+on malloc://0x1000 0x1000
+on malloc://0x1000 0xf0000000
+wv8 0x1235 @ 0x1010
+wv8 0x1234 @ 0xf0000010
+e search.in = range
+e search.from = 0x00001000
+e search.to = 0xf0001000
+/V8 0x1230 0x1240
+EOF
+EXPECT=<<EOF
+0x1010: 0x1235
+0xf0000010: 0x1234
+EOF
+EXPECT_ERR=<<EOF
+INFO: hits: 2
 EOF
 RUN
 
@@ -352,5 +375,14 @@ e search.to = 0x00000000
 /V1 1 5
 EOF
 EXPECT=<<EOF
+EOF
+RUN
+
+NAME=/mb only sizes a header with the plugin that parsed it
+FILE=hex://7f454c4602010100000000000000000002003e00010000000000400000000000004041414141000000000000000000000000000040003800000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000feedface
+CMDS=/mb
+EXPECT=<<EOF
+0x00000000  elf64
+0x00000080  mach0
 EOF
 RUN

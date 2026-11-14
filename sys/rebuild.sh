@@ -18,13 +18,13 @@ Rebuild() {
 	cd "$1" || exit 1
 	$MAKE clean
 	$MAKE -j8 || exit 1
-	cd -
+	cd - > /dev/null
 }
 
 Build() {
 	cd "$1" || exit 1
 	$MAKE -j8 || exit 1
-	cd -
+	cd - > /dev/null
 }
 
 RebuildIOSDebug() {
@@ -46,36 +46,58 @@ RebuildSpp() {
 	Rebuild libr/lang
 }
 
+RebuildQJS() {
+# rm -f shlr/qjs/js_repl.c
+# rm -f shlr/qjs/js_r2papi.c
+	make -C shlr/qjs
+	Rebuild libr/lang
+	touch libr/core/cmd.c
+	make -C libr/core
+}
+
 RebuildJava() {
 	Rebuild shlr/java
-	Rebuild libr/asm
-	Rebuild libr/anal
 	Rebuild libr/bin
+	Rebuild libr/asm
+	Rebuild libr/arch
 	Rebuild libr/core
 }
 
-RebuildCapstone() {
-	if [ ! -d shlr/capstone ]; then
-		make -C shlr capstone
+CapstoneSubproject() {
+	if grep -q '^USE_CSNEXT=1' config-user.mk 2> /dev/null; then
+		echo capstone-next
+	elif grep -q '^USE_CS4=1' config-user.mk 2> /dev/null; then
+		echo capstone-v4
+	else
+		echo capstone-v5
 	fi
-	Rebuild shlr/capstone
+}
+
+RebuildCapstone() {
+	make -C subprojects "$(CapstoneSubproject)" || exit 1
+	make -C shlr capstone-build || exit 1
 	Rebuild libr/asm
 	Rebuild libr/anal
 }
 
 RebuildSdb() {
-	Rebuild shlr/sdb
+	Rebuild subprojects/sdb
 	Rebuild libr/util
 }
 
 RebuildFs() {
-	Rebuild shlr/grub
+	Rebuild libr/fs/p/grub
 	Rebuild libr/fs
 }
 
 RebuildBin() {
 	Rebuild libr/bin
 	Rebuild libr/core
+}
+
+RebuildAr() {
+	Rebuild shlr/ar
+	Rebuild libr/io
 }
 
 RebuildGdb() {
@@ -97,13 +119,14 @@ RebuildZip() {
 
 RebuildTcc() {
 	Rebuild shlr/tcc
-	Rebuild libr/parse
+	Rebuild libr/asm
 }
 
 case "$1" in
 grub|fs)RebuildFs; ;;
 bin)    RebuildBin ; ;;
 gdb)    RebuildGdb ; ;;
+ar)     RebuildAr ; ;;
 winkd)  RebuildWinkd ; ;;
 sdb)    RebuildSdb ; ;;
 spp)    RebuildSpp ; ;;
@@ -111,6 +134,7 @@ tcc)    RebuildTcc ; ;;
 bin)    RebuildBin ; ;;
 zip)    RebuildZip ; ;;
 java)   RebuildJava ; ;;
+qjs)    RebuildQJS ; ;;
 iosdbg) RebuildIOSDebug ; ;;
 capstone|cs) RebuildCapstone ; ;;
 *)

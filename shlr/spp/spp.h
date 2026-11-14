@@ -20,39 +20,39 @@
 #elif R_INLINE
   #define S_API inline
 #else
-  #if defined(__GNUC__) && __GNUC__ >= 4
-    #define S_API __attribute__((visibility("default")))
-  #elif defined(_MSC_VER)
+  #if __WIN32__ || MINGW32 && !__CYGWIN__ || _MSC_VER
     #define S_API __declspec(dllexport)
+  #elif defined(__GNUC__) && __GNUC__ >= 4
+    #define S_API __attribute__((visibility("default")))
   #else
     #define S_API
   #endif
 #endif
 
 #if defined(EMSCRIPTEN) || defined(__linux__) || defined(__APPLE__) || defined(__GNU__) || defined(__ANDROID__) || defined(__QNX__)
-  #define __BSD__ 0
-  #define __UNIX__ 1
+  #define R2__BSD__ 0
+  #define R2__UNIX__ 1
 #endif
 #if __KFBSD__ || defined(__NetBSD__) || defined(__OpenBSD__)
-  #define __BSD__ 1
-  #define __UNIX__ 1
+  #define R2__BSD__ 1
+  #define R2__UNIX__ 1
 #endif
 #if __WIN32__ || __CYGWIN__ || MINGW32
   #define __addr_t_defined
   #include <windows.h>
 #endif
-#if __WIN32__ || MINGW32 && !__CYGWIN__ || _MSC_VER
+#if __WIN32__ && (!__CYGWIN__ || _MSC_VER || __MINGW32__)
   #ifndef _MSC_VER
     #include <winsock.h>
   #endif
   typedef int socklen_t;
   #undef USE_SOCKETS
-  #define __WINDOWS__ 1
-  #undef __UNIX__
-  #undef __BSD__
+  #define R2__WINDOWS__ 1
+  #undef R2__UNIX__
+  #undef R2__BSD__
 #endif
 
-#ifdef __WINDOWS__
+#if R2__WINDOWS__ || __WIN32__ || __MINGW32__
 #include <io.h>
 #define popen    _popen
 #define pclose   _pclose
@@ -64,6 +64,8 @@
 
 #ifndef DLL_LOCAL
 #ifdef _MSC_VER
+#define DLL_LOCAL
+#elif __WIN32__
 #define DLL_LOCAL
 #else
 #define DLL_LOCAL  __attribute__ ((visibility ("hidden")))
@@ -89,16 +91,26 @@ typedef struct s_strbuf_t {
 } SStrBuf;
 #endif
 
+struct Proc;
+
 typedef struct {
 	SStrBuf *cout;
 	FILE *fout;
+	struct Proc *proc;
 	int size;
 } Output;
 
 typedef struct SppState {
+	void *user;
+	FILE *pipe_fd;
+	char *switch_str;
 	int lineno;
 	int echo[MAXIFL];
 	int ifl;
+	bool failed;
+	bool seen_else[MAXIFL];
+	unsigned int include_depth;
+	const char *include_dir;
 } SppState;
 
 typedef struct SppBuf {
@@ -140,6 +152,7 @@ typedef struct Proc {
 	int default_echo;
 	SppState state;
 	SppBuf buf;
+	char *(*filter)(const char *input);
 } SppProc;
 
 typedef struct spp_t {
@@ -155,6 +168,9 @@ S_API void spp_io(FILE *in, Output *out);
 S_API void spp_proc_list(void);
 S_API void spp_proc_list_kw(void);
 S_API void spp_proc_set(SppProc *p, const char *arg, int fail);
+S_API const SppProc *spp_default_proc(void);
+/* Evaluation uses an isolated copy of p, or the default processor when NULL. */
+S_API char *spp_eval_str(SppProc *p, const char *code);
 
 S_API Spp *spp_new(SppProc *proc);
 S_API char *spp_parse(Spp *s, const char *input);

@@ -1,31 +1,34 @@
 r_cons_sources = [
   '2048.c',
-  'canvas.c',
   'canvas_line.c',
+  'canvas.c',
   'cons.c',
-  'html.c',
-  # 'dietline.c',
+  'cpipe.c',
+  'cutf8.c',
   'editor.c',
   'grep.c',
+  'help.c',
   'hud.c',
+  'dietline.c',
   'input.c',
-  'pixel.c',
   'less.c',
-  'stiv.c',
   'line.c',
-  'more.c',
-  'output.c',
+  'msg.c',
   'pager.c',
   'pal.c',
-  'cpipe.c',
+  'pixel.c',
   'rgb.c',
-  'cutf8.c'
+  'stiv.c',
+  'visual.c',
+  'winutils.c'
 ]
+
+r_cons_deps = [r_util_dep]
 
 r_cons = library('r_cons', r_cons_sources,
   include_directories: [platform_inc],
   c_args: library_cflags,
-  dependencies: [r_util_dep],
+  dependencies: r_cons_deps,
   install: true,
   implicit_include_directories: false,
   install_rpath: rpath_lib,
@@ -33,7 +36,22 @@ r_cons = library('r_cons', r_cons_sources,
 )
 
 r_cons_dep = declare_dependency(link_with: r_cons,
+                                dependencies: r_cons_deps,
                                 include_directories: [platform_inc])
+
+if get_option('blob')
+r_cons_static = static_library('r_cons_static', r_cons_sources,
+  include_directories: [platform_inc],
+  c_args: library_cflags,
+  dependencies: [r_util_static_dep],
+  install: true,
+  implicit_include_directories: false,
+  install_rpath: rpath_lib,
+)
+
+r_cons_static_dep = declare_dependency(link_with: r_cons_static,
+                                include_directories: [platform_inc])
+endif
 
 pkgconfig_mod.generate(r_cons,
   subdirs: 'libr',

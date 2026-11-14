@@ -1,11 +1,18 @@
-OBJ_CHIP8=asm_chip8.o
+OBJ_CHIP8PSEUDO+=$(LIBR)/arch/p/chip8/pseudo.o
 
-STATIC_OBJ+=${OBJ_CHIP8}
-TARGET_CHIP8=asm_chip8.${EXT_SO}
+TARGET_CHIP8PSEUDO=parse_chip8_pseudo.${EXT_SO}
+STATIC_OBJ+=${OBJ_CHIP8PSEUDO}
+ifeq ($(CC),cccl)
+LIBDEPS=-L../../util -llibr_util
+LIBDEPS+=-L../../flag -llibr_flag
+else
+LIBDEPS=-L../../util -lr_util
+LIBDEPS+=-L../../flag -lr_flag
+endif
 
 ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_CHIP8}
-
-${TARGET_CHIP8}: ${OBJ_CHIP8}
-	${CC} ${call libname,asm_chip8} ${CFLAGS} -o ${TARGET_CHIP8} ${OBJ_CHIP8}
+ALL_TARGETS+=${TARGET_CHIP8PSEUDO}
+${TARGET_CHIP8PSEUDO}: ${OBJ_CHIP8PSEUDO}
+	${CC} $(call libname,parse_chip8_pseudo) ${LIBDEPS} $(LDFLAGS) \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_CHIP8PSEUDO} ${OBJ_CHIP8PSEUDO}
 endif

@@ -1,0 +1,35 @@
+# merged: agfj honors CIL architecture hints on first use
+NAME=dotnet hello world program
+FILE=bins/dotnet/HelloWorld.dll
+CMDS=<<EOF
+ah*~aha cil
+pdi 2 @ entry0
+pdi 2 @ 0x1000209c
+il
+?e --
+aaa
+s 0x10002224
+agfj > $graph
+$graph~{[0].blocks[0].ops[0].opcode}
+$graph~{[0].blocks[0].ops[1].opcode}
+EOF
+EXPECT=<<EOF
+'@0x10002051'aha cil
+'@0x10002074'aha cil
+'@0x10002090'aha cil
+'@0x100020c8'aha cil
+'@0x10002130'aha cil
+'@0x100021c0'aha cil
+'@0x10002224'aha cil
+'@0x10002300'aha cil
+0x10002fba   entry0:
+0x10002fba         ff2500200010  jmp dword [sym.imp.mscoree.dll__CorDllMain]
+0x10002fc0                   4d  dec ebp
+0x1000209c           7201000070  ldstr "Error: No file path provided."
+0x100020a1           280f00000a  call System.Console.WriteLine(string):void
+mscoree.dll
+--
+nop
+newobj System.Collections.Generic.Dictionary`2<string,object>..ctor(this;):void
+EOF
+RUN

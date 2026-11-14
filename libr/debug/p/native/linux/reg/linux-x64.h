@@ -12,6 +12,7 @@ return strdup (
 "=A5	r9\n"
 "=SN	orax\n"
 "# no profile defined for x86-64\n"
+"gpr	riz	.64	?	0\n"
 "gpr	rax	.64	80	0\n"
 "gpr	eax	.32	80	0\n"
 "gpr	ax	.16	80	0\n"
@@ -82,8 +83,8 @@ return strdup (
 "gpr	bpl	.8	32	0\n"
 "gpr	rip	.64	128	0\n"
 "seg@gpr	cs	.64	136	0\n"
-"flg	rflags	.64	144	0	c1p.a.zstido.n.rv\n"
-"flg	eflags	.32	144	0	c1p.a.zstido.n.rv\n"
+"gpr	rflags	.64	144	0	c1p.a.zstido.n.rv\n"
+"gpr	eflags	.32	144	0	c1p.a.zstido.n.rv\n"
 "flg	cf	.1	.1152	0	carry\n"
 "flg	pf	.1	.1154	0	parity\n"
 "flg	af	.1	.1156	0	adjust\n"
@@ -110,113 +111,5 @@ return strdup (
 // dr5 40
 "drx	dr6	.64	48	0\n"
 "drx	dr7	.64	56	0\n"
-
-/*0030 struct user_fpregs_struct
-0031 {
-0032   __uint16_t        cwd;
-0033   __uint16_t        swd;
-0034   __uint16_t        ftw;
-0035   __uint16_t        fop;
-0036   __uint64_t        rip;
-0037   __uint64_t        rdp;
-0038   __uint32_t        mxcsr;
-0039   __uint32_t        mxcr_mask;
-0040   __uint32_t        st_space[32];   // 8*16 bytes for each FP-reg = 128 bytes
-0041   __uint32_t        xmm_space[64];  // 16*16 bytes for each XMM-reg = 256 bytes
-0042   __uint32_t        padding[24];
-0043 };
-*/
-"fpu	cwd	.16	0	0\n"
-"fpu	swd	.16	2	0\n"
-"fpu	ftw	.16	4	0\n"
-"fpu	fop	.16	6	0\n"
-"fpu	frip	.64	8	0\n"
-"fpu	frdp	.64	16	0\n"
-"fpu	mxcsr	.32	24	0\n"
-"fpu	mxcr_mask	.32	28	0\n"
-
-"fpu	st0	.80	32	0\n"
-"fpu	st1	.80	48	0\n"
-"fpu	st2	.80	64	0\n"
-"fpu	st3	.80	80	0\n"
-"fpu	st4	.80	96	0\n"
-"fpu	st5	.80	112	0\n"
-"fpu	st6	.80	128	0\n"
-"fpu	st7	.80	144	0\n"
-
-"mmx@fpu	mm0 .64 32	8\n"
-"mmx@fpu	mm1 .64 48	8\n"
-"mmx@fpu	mm2 .64 64	8\n"
-"mmx@fpu	mm3 .64 80	8\n"
-"mmx@fpu	mm4 .64 96	8\n"
-"mmx@fpu	mm5 .64 112	8\n"
-"mmx@fpu	mm6 .64 128 8\n"
-"mmx@fpu	mm7 .64 144 8\n"
-
-"xmm@fpu    xmm0    .128	160 16\n"
-"fpu		xmm0h	.64		160	8\n"
-"fpu		xmm0l	.64		168	8\n"
-"xmm@fpu    xmm1    .128	176 16\n"
-"fpu		xmm1h	.64		176	8\n"
-"fpu		xmm1l	.64		184	8\n"
-"xmm@fpu    xmm2    .128	192 16\n"
-"fpu		xmm2h	.64		192	8\n"
-"fpu		xmm2l	.64		200	8\n"
-"xmm@fpu    xmm3    .128	208 16\n"
-"fpu		xmm3h	.64		208	8\n"
-"fpu		xmm3l	.64		216	8\n"
-"xmm@fpu    xmm4    .128	224 16\n"
-"fpu		xmm4h	.64		224	8\n"
-"fpu		xmm4l	.64		232	8\n"
-"xmm@fpu    xmm5    .128	240 16\n"
-"fpu		xmm5h	.64		240	8\n"
-"fpu		xmm5l	.64		248	8\n"
-"xmm@fpu    xmm6    .128	256 16\n"
-"fpu		xmm6h	.64		256	8\n"
-"fpu		xmm6l	.64		264	8\n"
-"xmm@fpu    xmm7    .128	272 16\n"
-"fpu		xmm7h	.64		272	8\n"
-"fpu		xmm7l	.64		280	8\n"
-"xmm@fpu    xmm8    .128	288 16\n"
-"fpu		xmm8h	.64		288	8\n"
-"fpu		xmm8l	.64		296	8\n"
-"xmm@fpu    xmm9    .128	304 16\n"
-"fpu		xmm9h	.64		304	8\n"
-"fpu		xmm9l	.64		312	8\n"
-"xmm@fpu    xmm10   .128	320 16\n"
-"fpu		xmm10h	.64		320	8\n"
-"fpu		xmm10l	.64		328	8\n"
-"xmm@fpu    xmm11   .128	336 16\n"
-"fpu		xmm11h	.64		336	8\n"
-"fpu		xmm11l	.64		344	8\n"
-"xmm@fpu    xmm12   .128	352 16\n"
-"fpu		xmm12h	.64		352	8\n"
-"fpu		xmm12l	.64		360	8\n"
-"xmm@fpu    xmm13   .128	368 16\n"
-"fpu		xmm13h	.64		368	8\n"
-"fpu		xmm13l	.64		376	8\n"
-"xmm@fpu    xmm14   .128	384 16\n"
-"fpu		xmm14h	.64		384	8\n"
-"fpu		xmm14l	.64		392	8\n"
-"xmm@fpu    xmm15   .128	400 16\n"
-"fpu		xmm15h	.64		400	8\n"
-"fpu	x64	.64	416	0\n"
-
-"ymm	ymm0	.256	0	32\n"
-"ymm	ymm1	.256	32	32\n"
-"ymm	ymm2	.256	64	32\n"
-"ymm	ymm3	.256	96	32\n"
-"ymm	ymm4	.256	128	32\n"
-"ymm	ymm5	.256	160	32\n"
-"ymm	ymm6	.256	192	32\n"
-"ymm	ymm7	.256	224	32\n"
-"ymm	ymm8	.256	256	32\n"
-"ymm	ymm9	.256	288	32\n"
-"ymm	ymm10	.256	320	32\n"
-"ymm	ymm11	.256	352	32\n"
-"ymm	ymm12	.256	384	32\n"
-"ymm	ymm13	.256	416	32\n"
-"ymm	ymm14	.256	448	32\n"
-"ymm	ymm15	.256	480	32\n"
 
 );

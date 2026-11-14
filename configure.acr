@@ -1,20 +1,37 @@
 PKGNAME radare2
-VERSION 5.4.3
+VERSION 6.2.7
 CONTACT pancake ; pancake@nopcode.org
+
+DESCRIPTION The UNIX-like reverse engineering toolkit ;
 
 LANG_C!
 
 ARG_DISABLE DEBUGGER debugger disable native debugger features ;
+ARG_DISABLE R2_NETWORK network disable socket and HTTP networking ;
 
-(( -ldl -dynamic ... ))
 USE_DL
 
 USE_PKGCONFIG
 
+R2_BUILDSYSTEM = "make" ;
+
 CHKPRG! PATCH patch
+CHKPRG! AR ar
 CHKPRG GIT git
 CHKPRG GPERF gperf
+CHKLIB atomic
 CHKLIB magic
+CHKINC linux/can.h
+
+ARG_WITH USE_LIB_ATOMIC libatomic force to use libatomic ;
+IFAND HAVE_LIB_ATOMIC USE_LIB_ATOMIC {
+	USE_LIB_ATOMIC = 1 ;
+	LIBATOMIC = '-latomic' ;
+}{
+	USE_LIB_ATOMIC = 0 ;
+	LIBATOMIC = '' ;
+}
+
 ARG_WITH USE_MAGIC sysmagic force to use system's magic ;
 IFAND HAVE_LIB_MAGIC USE_MAGIC {
 	USE_LIB_MAGIC = 1 ;
@@ -29,22 +46,31 @@ ARG_DISABLE WANT_THREADS threads disable use of thread apis ;
 (( useful for static builds . see sys/static.sh ))
 ARG_DISABLE LOADLIBS loadlibs disable loading plugins ;
 
+ARG_ENABLE R_CRITICAL_ENABLED threadsafety enable mutexes in critical code paths ;
+
+ARG_WITHOUT WANT_QJS qjs build without the QuickJS runtime ;
 ARG_WITHOUT WANT_DYLINK dylink disable support for dynamic loading of plugins ;
 ARG_WITHOUT HAVE_FORK fork disable fork ;
 ARG_WITHOUT WANT_PTRACE_WRAP ptrace-wrap build ptrace-wrap support needed for the iaito debugger on Linux ;
 ARG_WITHOUT WANT_GPERF gperf do not statically link the sdb databases even if gperf is found ;
 ARG_WITHOUT WANT_CAPSTONE capstone dont build the capstone dependency ;
+ARG_WITHOUT WANT_ZYDIS zydis dont build the zydis dependency ;
 
 IFNOT WANT_GPERF {
 	HAVE_GPERF = 0 ;
 }
 
 ARG_WITH WITH_LIBR libr build libr.a and libr.dylib ;
+ARG_WITH WITH_STATIC_THEMES static-themes default themes are compiled and fallback if not available on disk ;
 
-ARG_WITH USE_CS5 capstone5 build next branch of capstone5 (default) ;
+(( CAPSTONE ))
+ARG_WITH USE_CSNEXT capstone-next build next branch of the capstone disassembler ;
+(( TODO rename to capstone-v5 and capstone-v4 ))
+ARG_WITH USE_CS5 capstone5 build v5 branch of capstone5 (default) ;
 ARG_WITH USE_CS4 capstone4 build v4 branch of capstone ;
 
 ARG_WITH WITH_CAPSTONE syscapstone force to use system-wide capstone ;
+ARG_WITHOUT WITHOUT_SYSCAPSTONE syscapstone avoid the system-wide capstone ;
 IF WITH_CAPSTONE {
 	PKGCFG CAPSTONE_CFLAGS CAPSTONE_LDFLAGS capstone
 }
@@ -54,20 +80,141 @@ IFAND WITH_CAPSTONE HAVE_PKGCFG_CAPSTONE {
 	USE_CAPSTONE = 0 ;
 }
 
+IFNOT WITHOUT_SYSCAPSTONE {
+	USE_CAPSTONE = 0 ;
+	HAVE_PKGCFG_CAPSTONE = 0 ;
+	CAPSTONE_CFLAGS = "" ;
+	CAPSTONE_LDFLAGS = "" ;
+}
+
+(( ZYDIS ))
+ARG_WITH WITH_ZYDIS syszydis force to use system-wide zydis ;
+ARG_WITHOUT WITHOUT_SYSZYDIS syszydis avoid the system-wide zydis ;
+WANT_SYS_ZYDIS = 0 ;
+IFAND WITH_ZYDIS WANT_ZYDIS {
+	WANT_SYS_ZYDIS = 1 ;
+}
+IF WITH_ZYDIS {
+	PKGCFG ZYDIS_CFLAGS ZYDIS_LDFLAGS zydis
+	CHKINC Zydis/Zydis.h
+	CHKLIB zydis
+}
+IFAND WITH_ZYDIS HAVE_PKGCFG_ZYDIS {
+	USE_ZYDIS = 1 ;
+	USE_SYS_ZYDIS = 1 ;
+}{
+	IFAND WITH_ZYDIS HAVE_ZYDIS_ZYDIS_H {
+		IF HAVE_LIB_ZYDIS {
+			USE_ZYDIS = 1 ;
+			USE_SYS_ZYDIS = 1 ;
+			ZYDIS_LDFLAGS = -lzydis ;
+		}{
+			USE_ZYDIS = 0 ;
+			USE_SYS_ZYDIS = 0 ;
+		}
+	}{
+		USE_ZYDIS = 0 ;
+		USE_SYS_ZYDIS = 0 ;
+	}
+}
+
+IFNOT WITHOUT_SYSZYDIS {
+	USE_ZYDIS = 0 ;
+	USE_SYS_ZYDIS = 0 ;
+	HAVE_PKGCFG_ZYDIS = 0 ;
+	ZYDIS_CFLAGS = "" ;
+	ZYDIS_LDFLAGS = "" ;
+}
+IFNOT WANT_ZYDIS {
+	USE_ZYDIS = 0 ;
+	USE_SYS_ZYDIS = 0 ;
+	HAVE_PKGCFG_ZYDIS = 0 ;
+	ZYDIS_CFLAGS = "" ;
+	ZYDIS_LDFLAGS = "" ;
+}
+IF WANT_SYS_ZYDIS {
+	DIENOT USE_SYS_ZYDIS system zydis was requested but not found ;
+}
+
+(( SQSH ))
+PKGCFG SQSH_CFLAGS SQSH_LDFLAGS libsqsh
+ARG_WITHOUT WITH_SQSH sqsh ensure squashfs support is not included, even if library is found ;
+IFAND WITH_SQSH HAVE_PKGCFG_LIBSQSH {
+	USE_SQSH = 1 ;
+}{
+	USE_SQSH = 0 ;
+}
+
+(( LZ4 ))
+PKGCFG LZ4_CFLAGS LZ4_LDFLAGS liblz4
+ARG_WITH WITH_SYSLZ4 syslz4 force to use system's liblz4 ;
+IFAND WITH_SYSLZ4 HAVE_PKGCFG_LIBLZ4 {
+	USE_SYSLZ4 = 1 ;
+}{
+	USE_SYSLZ4 = 0 ;
+	LZ4_CFLAGS = '' ;
+	LZ4_LDFLAGS = '' ;
+
+}
+
+(( ZIP ))
+ARG_WITHOUT WANT_ZIP zip build without the ZIP/ZLIB support ;
 CHKLIB z
 CHKLIB zip
 ARG_WITH USE_ZIP syszip force to use system's libzip and zlib ;
-IFAND HAVE_LIB_Z USE_ZIP {
-	IF HAVE_LIB_ZIP {
-		USE_LIB_ZIP = 1 ;
-		LIBZIP = -lz -lzip ;
+IFNOT WANT_ZIP {
+	USE_ZIP = 0 ;
+	USE_LIB_ZIP = 0 ;
+	LIBZIP = '' ;
+	PKGCFG_ZLIBS = '' ;
+	PKGCFG_LIBZIPLIBS = '' ;
+}{
+	IF HAVE_LIB_Z {
+		PKGCFG_ZLIBS = -lz ;
+	}{
+		PKGCFG_ZLIBS = -lr_shlr ;
+	}
+	IFAND HAVE_LIB_Z USE_ZIP {
+		IF HAVE_LIB_ZIP {
+			USE_LIB_ZIP = 1 ;
+			LIBZIP = -lz -lzip ;
+			PKGCFG_LIBZIPLIBS = -lz -lzip ;
+		}{
+			USE_LIB_ZIP = 0 ;
+			LIBZIP = '' ; (( static linking to shlr/zip ))
+			PKGCFG_LIBZIPLIBS = '' ;
+		}
 	}{
 		USE_LIB_ZIP = 0 ;
 		LIBZIP = '' ; (( static linking to shlr/zip ))
+		PKGCFG_LIBZIPLIBS = '' ;
 	}
+}
+
+PKGCFG_R_ARCH_LIBS_PRIVATE = -lr_shlr ;
+PKGCFG_R_ASM_LIBS_PRIVATE = -lr_shlr ;
+PKGCFG_R_BIN_LIBS_PRIVATE = -lr_shlr ;
+PKGCFG_R_DEBUG_LIBS_PRIVATE = -lr_shlr ;
+PKGCFG_R_FS_LIBS_PRIVATE = '' ;
+PKGCFG_R_IO_LIBS_PRIVATE = -lr_shlr ;
+PKGCFG_R_LANG_LIBS_PRIVATE = -lm ;
+PKGCFG_R_UTIL_LIBS_PRIVATE = '' ;
+
+IFNOT WANT_ZIP {
+	PKGCFG_R_UTIL_LIBS_PRIVATE = '' ;
 }{
-	USE_LIB_ZIP = 0 ;
-	LIBZIP = '' ; (( static linking to shlr/zip ))
+	IF HAVE_LIB_Z {
+		PKGCFG_R_UTIL_LIBS_PRIVATE = -lz ;
+	}{
+		PKGCFG_R_UTIL_LIBS_PRIVATE = -lr_shlr ;
+	}
+}
+
+IFAND HAVE_LIB_Z USE_ZIP {
+	IF HAVE_LIB_ZIP {
+		PKGCFG_R_FS_LIBS_PRIVATE += -lz -lzip ;
+		PKGCFG_R_IO_LIBS_PRIVATE += -lz -lzip ;
+	}
 }
 
 CHKLIB xxhash
@@ -87,9 +234,22 @@ CHKDECL features.h __GLIBC__
 CHKFNC c arc4random_uniform
 CHKFNC c explicit_bzero
 CHKFNC c explicit_memset
+CHKFNC c memmem
+CHKFNC c poll
 CHKFNC c clock_nanosleep
+CHKFNC c __atomic_fetch_add_8
 CHKFNC c sigaction
 CHKFNC c clock_gettime
+
+IFNOT HAVE___ATOMIC_FETCH_ADD_8 {
+	IF HAVE_LIB_ATOMIC {
+		FORCE_LIB_ATOMIC = 1 ;
+		LIBATOMIC ?= '-latomic' ;
+	}{
+		FORCE_LIB_ATOMIC = 0 ;
+		LIBATOMIC ?= '' ;
+	}
+}
 
 IFNOT HAVE_CLOCK_GETTIME {
 	IF HAVE_DECL___GLIBC__ {
@@ -107,26 +267,36 @@ HAVE_GMP = 0 ;
 ))
 HAVE_LIB_GMP = 0 ;
 
-CHKLIB ssl
-PKGCFG SSL_CFLAGS SSL_LDFLAGS openssl
-IFNOTNULL SSL_LDFLAGS {
-	HAVE_OPENSSL = 1 ;
-}
-(( ARG_WITHOUT HAVE_OPENSSL ssl disable openssl dependency ; ))
-ARG_WITH WANT_OPENSSL openssl build with openssl if possible ;
-IFAND WANT_OPENSSL HAVE_OPENSSL {
-	HAVE_OPENSSL = 1 ;
-}{
+
+(( openssl is used for https:// in rsocket and crypto/hash ))
+ARG_WITH WANT_SSL ssl build with (Open|Boring|..)SSL if possible ;
+ARG_WITH WANT_SSL_CRYPTO ssl-crypto build crypto code with libssl ;
+IFNOT WANT_SSL {
 	HAVE_OPENSSL = 0 ;
-}
-IFNULL SSL_LDFLAGS {
-	IFNOT HAVE_LIB_SSL {
-		HAVE_OPENSSL = 0 ;
+	SSL_CFLAGS = "" ;
+	SSL_LDFLAGS = "" ;
+}{
+	CHKLIB ssl
+	PKGCFG SSL_CFLAGS SSL_LDFLAGS openssl
+	IFNOTNULL SSL_LDFLAGS {
+		HAVE_OPENSSL = 1 ;
+	}
+
+	IFNULL SSL_LDFLAGS {
+		IFNOT HAVE_LIB_SSL {
+			HAVE_OPENSSL = 0 ;
+		}{
+			SSL_LDFLAGS = -lssl ;
+		}
+	}
+	IFAND WANT_SSL_CRYPTO HAVE_OPENSSL {
+		WANT_SSL_CRYPTO = 1 ;
 	}{
-		SSL_LDFLAGS = -lssl ;
+		WANT_SSL_CRYPTO = 0 ;
 	}
 }
 
+ARG_WITH WANT_LIBUV libuv use libuv if available ;
 CHKVER libuv 1.0.0
 IF HAVE_LIBUV_VERSION_1_0_0 {
 	PKGCFG LIBUV_CFLAGS LIBUV_LDFLAGS libuv
@@ -135,7 +305,6 @@ IF HAVE_LIBUV_VERSION_1_0_0 {
 	}{
 		HAVE_LIBUV = 0 ;
 	}
-	ARG_WITHOUT WANT_LIBUV libuv disable libuv dependency ;
 	IFNOT WANT_LIBUV {
 		HAVE_LIBUV = 0 ;
 	}
@@ -143,7 +312,13 @@ IF HAVE_LIBUV_VERSION_1_0_0 {
 	HAVE_LIBUV = 0 ;
 }
 
+ARG_WITH WANT_V35 v35 build with v35 plugin ;
+
+ARG_WITH R2_WASM_BROWSER wasm-browser enable WASM browser imports ;
+
 ARG_WITH USE_RPATH rpath use rpath to build ;
+
+ARG_WITH USE_BUNDLE_PREFIX bundle-prefix load data files relative to the binary location (bundle/framework resources) ;
 
 (( rules for the compiler ))
 ARG_WITH USERCC=gcc compiler Define compiler to use (see mk/) ;
@@ -192,10 +367,13 @@ IFEQ USEROSTYPE auto ; {
 	}{
 	IFEQ HOST_OS darwin ; {
 		USEROSTYPE = darwin ;
-        }{
+	}{
 	IFEQ HOST_OS haiku ; {
 		USEROSTYPE = haiku ;
-	} } } } } } } } } } } } }
+	}{
+	IFEQ HOST_OS aix ; {
+		USEROSTYPE = aix ;
+	} } } } } } } } } } } } } }
 }
 
 (( this hack is required for openbsd ports ))
@@ -234,9 +412,13 @@ IFEQ USEROSTYPE haiku ; {
 	HAVE_PTRACE = 0 ;
 	USE_PTRACE_WRAP = 0 ;
 }{
+IFEQ USEROSTYPE aix ; {
+	HAVE_PTRACE = 0 ;
+	USE_PTRACE_WRAP = 0 ;
+}{
 	HAVE_PTRACE = 1 ;
 	USE_PTRACE_WRAP = 0 ;
-} } } } } }
+} } } } } } }
 
 IFNOT DEBUGGER {
 	HAVE_PTRACE = 0 ;
@@ -247,37 +429,42 @@ IFEQ WANT_PTRACE_WRAP 0 ; {
 }
 
 ARG_WITH R_CHECKS_LEVEL=2 checks-level value between 0 and 3 to enable different level of assert (see R_CHECKS_LEVEL) ;
+ARG_DISABLE WANT_DEBUGSTUFF debug-stuff disable the log messages and disable control-c ;
 
-REPORT R_CHECKS_LEVEL PREFIX HAVE_LIB_GMP HAVE_OPENSSL HAVE_LIBUV
-	USE_CAPSTONE HAVE_PTRACE USE_PTRACE_WRAP HAVE_FORK
-	VERSION USE_LIB_ZIP USE_LIB_MAGIC USE_LIB_XXHASH DEBUGGER
-	CC USERCC HAVE_ARC4RANDOM_UNIFORM PKGCONFIG HAVE_GPERF
-	HAVE_EXPLICIT_BZERO HAVE_EXPLICIT_MEMSET WANT_DYLINK USEROSTYPE
-	LIBVERSION BUILD HOST TARGET CFLAGS LDFLAGS ;
+REPORT
+	BUILD CC CFLAGS DEBUGGER HAVE_ARC4RANDOM_UNIFORM HAVE_EXPLICIT_BZERO
+	HAVE_EXPLICIT_MEMSET HAVE_MEMMEM HAVE_FORK HAVE_GPERF HAVE_LIBUV HAVE_LIB_GMP WANT_DEBUGSTUFF
+	HAVE_OPENSSL WANT_SSL_CRYPTO HAVE_PTRACE HOST LDFLAGS LIBVERSION PKGCONFIG PREFIX
+	R_CHECKS_LEVEL TARGET USERCC USEROSTYPE USE_CAPSTONE USE_LIB_MAGIC USE_SQSH
+	USE_LIB_XXHASH USE_LIB_ZIP USE_PTRACE_WRAP USE_SYSLZ4 VERSION WANT_DYLINK
+	USE_LIB_ATOMIC HAVE___ATOMIC_FETCH_ADD_8 FORCE_LIB_ATOMIC WANT_QJS WANT_ZYDIS
+	USE_ZYDIS USE_SYS_ZYDIS
+;
 
-(( TODO: Add the rest of .pc files here.. add a rule for acr? ))
+PKGCFG_DO pkgcfg/r_egg.pc r_egg r_asm r_syscall r_util r_reg r_flag r_cons ;
+PKGCFG_DO pkgcfg/r_io.pc r_io r_util r_socket r_cons r_muta ;
+PKGCFG_DO pkgcfg/r_esil.pc r_esil r_util r_reg ;
+PKGCFG_DO pkgcfg/r_cons.pc r_cons r_util ;
+PKGCFG_DO pkgcfg/r_socket.pc r_socket r_util ;
+PKGCFG_DO pkgcfg/r_reg.pc r_reg r_util ;
+PKGCFG_DO pkgcfg/r_bp.pc r_bp r_util ;
+PKGCFG_DO pkgcfg/r_flag.pc r_flag r_util ;
+PKGCFG_DO pkgcfg/r_bin.pc r_bin r_util r_io r_socket r_magic ;
+PKGCFG_DO pkgcfg/r_lang.pc r_lang r_util ;
+PKGCFG_DO pkgcfg/r_syscall.pc r_syscall r_util ;
+PKGCFG_DO pkgcfg/r_config.pc r_config r_util ;
+PKGCFG_DO pkgcfg/r_fs.pc r_fs r_util r_io ;
+PKGCFG_DO pkgcfg/r_util.pc r_util ;
+PKGCFG_DO pkgcfg/r_magic.pc r_magic r_util ;
+PKGCFG_DO pkgcfg/r_search.pc r_search r_util ;
+PKGCFG_DO pkgcfg/r_arch.pc r_arch r_util r_reg r_esil ;
+PKGCFG_DO pkgcfg/r_muta.pc r_muta r_util ;
+PKGCFG_DO pkgcfg/r_anal.pc r_anal r_util r_reg r_syscall r_search r_cons r_flag r_muta r_arch r_esil ;
+PKGCFG_DO pkgcfg/r_asm.pc r_asm r_util r_reg r_syscall r_search r_cons r_flag r_muta r_arch r_esil ;
+PKGCFG_DO pkgcfg/r_debug.pc r_debug r_util ;
+
+/* TODO: Add the rest of .pc files here.. add a rule for acr? */
 SUBDIRS ./config-user.mk
 	libr/include/r_userconf.h
-	pkgcfg/r_io.pc
-	pkgcfg/r_magic.pc
-	pkgcfg/r_asm.pc
-	pkgcfg/r_bin.pc
-	pkgcfg/r_anal.pc
-	pkgcfg/r_hash.pc
-	pkgcfg/r_cons.pc
 	pkgcfg/r_core.pc
-	pkgcfg/r_lang.pc
-	pkgcfg/r_socket.pc
-	pkgcfg/r_debug.pc
-	pkgcfg/r_reg.pc
-	pkgcfg/r_config.pc
-	pkgcfg/r_flag.pc
-	pkgcfg/r_syscall.pc
-	pkgcfg/r_util.pc
-	pkgcfg/r_search.pc
-	pkgcfg/r_bp.pc
-	pkgcfg/r_parse.pc
-	pkgcfg/r_fs.pc
-	pkgcfg/r_egg.pc
-	pkgcfg/r_crypto.pc
 ;

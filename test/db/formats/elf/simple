@@ -21,43 +21,39 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: ELF: asm.flags.middle=1 + local symbols
 NAME=ELF: asm.flags.middle=0 + local symbols
 FILE=bins/elf/analysis/example.elf
-CMDS=e asm.flags.middle=0;pd 3 @ 0x356
+CMDS=<<EOF
+e asm.flags.middle=0;pd 3 @ 0x356
+?e --
+e asm.flags.middle=1;pd 3 @ 0x356
+EOF
 EXPECT=<<EOF
+        :   0x00000356      00f033f9       bl sym.app_uart_get
+        :   0x0000035a      0028           cmp r0, 0
+        `=< 0x0000035c      fad1           bne 0x354
+--
         :   0x00000356      00f033f9       bl sym.app_uart_get
         :   0x0000035a      0028           cmp r0, 0
         `=< 0x0000035c      fad1           bne 0x354
 EOF
 RUN
 
-NAME=ELF: asm.flags.middle=1 + local symbols
-FILE=bins/elf/analysis/example.elf
-CMDS=e asm.flags.middle=1;pd 3 @ 0x356
-EXPECT=<<EOF
-        :   0x00000356      00f033f9       bl sym.app_uart_get
-        :   0x0000035a      0028           cmp r0, 0
-        `=< 0x0000035c      fad1           bne 0x354
-EOF
-RUN
-
+# merged: ELF: asm.flags.middle2 + local symbols
 NAME=ELF: asm.flags.middle + local symbols
 FILE=bins/elf/analysis/example.elf
-CMDS=pd 3 @ 0x356
-EXPECT=<<EOF
-        :   0x00000356      00f033f9       bl sym.app_uart_get
-        :   0x0000035a      0028           cmp r0, 0
-        `=< 0x0000035c      fad1           bne 0x354
-EOF
-RUN
-
-NAME=ELF: asm.flags.middle2 + local symbols
-FILE=bins/elf/analysis/example.elf
 CMDS=<<EOF
+pd 3 @ 0x356
+?e --
 e asm.flags.middle=0
 pd 3 @ 0x356
 EOF
 EXPECT=<<EOF
+        :   0x00000356      00f033f9       bl sym.app_uart_get
+        :   0x0000035a      0028           cmp r0, 0
+        `=< 0x0000035c      fad1           bne 0x354
+--
         :   0x00000356      00f033f9       bl sym.app_uart_get
         :   0x0000035a      0028           cmp r0, 0
         `=< 0x0000035c      fad1           bne 0x354
@@ -85,18 +81,18 @@ NAME=ELF: phdr override 2
 FILE=bins/elf/busybox-phdr-shdr
 CMDS=ii~OBJ
 EXPECT=<<EOF
-7   0x00000000 GLOBAL OBJ      __environ
-43  0x00000000 GLOBAL OBJ      __ctype_tolower
-145 0x00000000 GLOBAL OBJ      __stdout
-189 0x00000000 GLOBAL OBJ      stderr
-409 0x00000000 GLOBAL OBJ      stdin
-410 0x00000000 GLOBAL OBJ      __stdin
-417 0x00000000 GLOBAL OBJ      optind
-468 0x00000000 GLOBAL OBJ      environ
-588 0x00000000 GLOBAL OBJ      optarg
-667 0x00000000 GLOBAL OBJ      __ctype_b
-706 0x00000000 GLOBAL OBJ      allCountryList
-718 0x00000000 GLOBAL OBJ      stdout
+7   ---------- GLOBAL OBJ      __environ
+43  ---------- GLOBAL OBJ      __ctype_tolower
+145 ---------- GLOBAL OBJ      __stdout
+189 ---------- GLOBAL OBJ      stderr
+409 ---------- GLOBAL OBJ      stdin
+410 ---------- GLOBAL OBJ      __stdin
+417 ---------- GLOBAL OBJ      optind
+468 ---------- GLOBAL OBJ      environ
+588 ---------- GLOBAL OBJ      optarg
+667 ---------- GLOBAL OBJ      __ctype_b
+706 ---------- GLOBAL OBJ      allCountryList
+718 ---------- GLOBAL OBJ      stdout
 EOF
 RUN
 
@@ -111,9 +107,8 @@ EXPECT=<<EOF
 965  0x000c9420 0x000c9420 GLOBAL FUNC   12        __getpid
 3577 0x000c9420 0x000c9420 LOCAL  FUNC   12        __GI___getpid
 3807 0x000c9420 0x000c9420 LOCAL  FUNC   12        __GI_getpid
+6267 0x000c9420 0x000c9420 WEAK   FUNC   12        getpid
+8102 0x000c9420 0x000c9420 GLOBAL FUNC   12        __getpid
 0x000c9420 12 sym.getpid
-0x000c9420 12 sym.__getpid
-0x000c9420 12 sym.__GI___getpid
-0x000c9420 12 sym.__GI_getpid
 EOF
 RUN

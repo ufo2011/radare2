@@ -1,13 +1,13 @@
 NAME=fatmach0 string location dylib
 FILE=bins/mach0/libexpat.1.dylib
-ARGS=-b32
+ARGS=-a x86 -b 32
 CMDS=<<EOF
 s str.parsing_finished
 x 16
 ps
 EOF
 EXPECT=<<EOF
-- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+- offset -   C D  E F 1011 1213 1415 1617 1819 1A1B  CDEF0123456789AB
 0x0002520c  7061 7273 696e 6720 6669 6e69 7368 6564  parsing finished
 parsing finished
 EOF
@@ -15,16 +15,26 @@ RUN
 
 NAME=fatmach0 string location dylib 64
 FILE=bins/mach0/libexpat.1.dylib
-ARGS=-b64
+ARGS=-ax86 -b64
 CMDS=<<EOF
 s str.parsing_finished
 x 16
 ps
 EOF
 EXPECT=<<EOF
-- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+- offset -  1819 1A1B 1C1D 1E1F 2021 2223 2425 2627  89ABCDEF01234567
 0x0002be18  7061 7273 696e 6720 6669 6e69 7368 6564  parsing finished
 parsing finished
+EOF
+RUN
+
+NAME=fatmach0 file type dylib
+FILE=bins/mach0/libexpat.1.dylib
+ARGS=-a x86 -b 32
+CMDS=i~type
+EXPECT=<<EOF
+type     Dynamically bound shared library
+bintype  mach0
 EOF
 RUN
 
@@ -127,6 +137,7 @@ RUN
 
 NAME=fatmach0 entry0
 FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
 CMDS=?v entry0
 EXPECT=<<EOF
 0x100000ef8
@@ -135,26 +146,25 @@ RUN
 
 NAME=fatmach0 entry0 data
 FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
 CMDS=p8 16 @ entry0
 EXPECT=<<EOF
 6a004889e54883e4f0488b7d08488d75
 EOF
 RUN
 
+# merged: fatmach0 entry1 data
 NAME=fatmach0 entry1
 FILE=bins/mach0/fatmach0-3true
 ARGS=-a x86 -b 32
-CMDS=?v entry0
+CMDS=<<EOF
+?v entry0
+?e --
+p8 16 @ entry0
+EOF
 EXPECT=<<EOF
 0x1f44
-EOF
-RUN
-
-NAME=fatmach0 entry1 data
-FILE=bins/mach0/fatmach0-3true
-ARGS=-a x86 -b 32
-CMDS=p8 16 @ entry0
-EXPECT=<<EOF
+--
 6a0089e583e4f083ec108b5d04891c24
 EOF
 RUN
@@ -180,35 +190,35 @@ RUN
 NAME=fatmach0 entry1 rabin2 (2)
 FILE=bins/mach0/fatmach0-3true
 ARGS=-n
-CMDS=!rabin2 -a x86 -b 32 -e bins/mach0/fatmach0-3true | grep paddr=
+CMDS=!rabin2 -a x86 -b 32 -e bins/mach0/fatmach0-3true
 EXPECT=<<EOF
-vaddr=0x00001f44 paddr=0x00005f44 haddr=0x00000420 type=program
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00005f44 0x00001f44 0x00005420 0x00001420 program
 EOF
 RUN
 
+# merged: fatmach0 entry2 data
 NAME=fatmach0 entry2
 FILE=bins/mach0/fatmach0-3true
 ARGS=-a ppc -b 32
-CMDS=?v entry0
+CMDS=<<EOF
+?v entry0
+?e --
+p8 16 @ entry0
+EOF
 EXPECT=<<EOF
 0x1f64
-EOF
-RUN
-
-NAME=fatmach0 entry2 data
-FILE=bins/mach0/fatmach0-3true
-ARGS=-a ppc -b 32
-CMDS=p8 16 @ entry0
-EXPECT=<<EOF
+--
 7c3a0b783821fffc5421003438000000
 EOF
 RUN
 
-NAME=fatmach0 archs iA iAj
+NAME=fatmach0 archs ia iaj
 FILE=bins/mach0/fatmach0-3true
 CMDS=<<EOF
-iA
-iAj
+ia
+iaj
 EOF
 EXPECT=<<EOF
 000 0x00001000 13792 x86_64 x86 64 all
@@ -257,36 +267,336 @@ FILE=bins/mach0/fatmach0-3true
 ARGS=-a x86 -b32 -B 0x90000000
 CMDS=is
 EXPECT=<<EOF
-[Symbols]
-
-nth paddr      vaddr      bind   type size lib name
----------------------------------------------------
-0   0x00005000 0x90000000 GLOBAL FUNC 0        __mh_execute_header
-1   0x00005000 0x95613542 LOCAL  FUNC 0        radr://5614542
-2   0x00005f94 0x90000f94 LOCAL  FUNC 0        imp.exit
+nth paddr      vaddr      bind   type   size lib name                demangled
+------------------------------------------------------------------------------
+0   0x00005000 0x90000000 GLOBAL NOTYPE 0        __mh_execute_header
+1   0x00005f94 0x90000f94 LOCAL  FUNC   0        imp.exit
 EOF
 RUN
 
 NAME=fatmach0 objc
 FILE=bins/mach0/modernobjc-noarm64
-ARGS=-a arm
+ARGS=-a arm -b 64
 CMDS=ic
 EXPECT=<<EOF
-0x100009298 [0x100001e90 - 0x100001e90]      0 class 0 ViewController
-0x100001e90 method 0      viewDidLoad
-0x1000092c0 [0x100001ee4 - 0x1000020a4]    448 class 0 AppDelegate
-0x100001ee4 method 0      application:didFinishLaunchingWithOptions:
-0x100001f74 method 1      application:configurationForConnectingSceneSession:options:
-0x1000020a4 method 2      application:didDiscardSceneSessions:
-0x100009310 [0x1000021d0 - 0x100002494]    708 class 0 SceneDelegate
-0x1000021d0 method 0      scene:willConnectToSession:options:
-0x100002280 method 1      sceneDidDisconnect:
-0x1000022d4 method 2      sceneDidBecomeActive:
-0x100002328 method 3      sceneWillResignActive:
-0x10000237c method 4      sceneWillEnterForeground:
-0x1000023d0 method 5      sceneDidEnterBackground:
-0x100002424 method 6      window
-0x100002450 method 7      setWindow:
-0x100002494 method 8      .cxx_destruct
+0x100009298 [0x100001e90 - 0x100001e90]      0 objc class 0 ViewController :: UIViewController
+0x100001e90 objc   method   0      viewDidLoad
+0x1000092c0 [0x100001ee4 - 0x1000020a4]    448 objc class 1 AppDelegate :: UIResponder
+0x100001ee4 objc   method   0      application:didFinishLaunchingWithOptions:
+0x100001f74 objc   method   1      application:configurationForConnectingSceneSession:options:
+0x1000020a4 objc   method   2      application:didDiscardSceneSessions:
+0x00000000 objc property   0      window
+0x00000000 objc property   1      hash
+0x00000000 objc property   2      superclass
+0x00000000 objc property   3      description
+0x00000000 objc property   4      debugDescription
+0x100009310 [0x1000021d0 - 0x100002494]    708 objc class 2 SceneDelegate :: UIResponder
+0x1000021d0 objc   method   0      scene:willConnectToSession:options:
+0x100002280 objc   method   1      sceneDidDisconnect:
+0x1000022d4 objc   method   2      sceneDidBecomeActive:
+0x100002328 objc   method   3      sceneWillResignActive:
+0x10000237c objc   method   4      sceneWillEnterForeground:
+0x1000023d0 objc   method   5      sceneDidEnterBackground:
+0x100002424 objc   method   6      window
+0x100002450 objc   method   7      setWindow:
+0x100002494 objc   method   8      .cxx_destruct
+0x00000000 objc      var   0      isa
+0x100009268 objc      var   1      _window
+0x00000000 objc property   2      window
+0x00000000 objc property   3      hash
+0x00000000 objc property   4      superclass
+0x00000000 objc property   5      description
+0x00000000 objc property   6      debugDescription
+EOF
+RUN
+
+NAME=fatmacho rfs auto-mount
+FILE=bins/mach0/fatmach0-3true
+CMDS=md /
+EXPECT=<<EOF
+m /bin
+EOF
+RUN
+
+NAME=fatmacho rfs list slices
+FILE=bins/mach0/fatmach0-3true
+CMDS=md /bin
+EXPECT=<<EOF
+r x86_64.0
+r x86_32.1
+r ppc_32.2
+EOF
+RUN
+
+NAME=fatmacho rfs list slices (2 archs)
+FILE=bins/mach0/BatteryLife
+CMDS=md /bin
+EXPECT=<<EOF
+r arm_32.0
+r arm_64.1
+EOF
+RUN
+
+NAME=fatmacho rfs slice info
+FILE=bins/mach0/fatmach0-3true
+CMDS=<<EOF
+mi /bin/x86_64.0
+mi /bin/x86_32.1
+mi /bin/ppc_32.2
+EOF
+EXPECT=<<EOF
+'f file 13792 0x00001000
+'f file 13760 0x00005000
+'f file 13616 0x00009000
+EOF
+RUN
+
+NAME=fatmacho rfs mis seeks to slice
+FILE=bins/mach0/fatmach0-3true
+CMDS=<<EOF
+mis /bin/x86_32.1
+s
+EOF
+EXPECT=<<EOF
+'f file 13760 0x00005000
+0x5000
+EOF
+RUN
+
+NAME=fatmacho switch slice via oba without leaving shell
+FILE=bins/mach0/fatmach0-3true
+CMDS=<<EOF
+oba 0x5000
+oba 0x9000
+ob~?
+ob 1
+e asm.arch
+ob 2
+e asm.arch
+EOF
+EXPECT=<<EOF
+3
+x86
+ppc
+EOF
+RUN
+
+NAME=fatmacho switch slice via mis+oba
+FILE=bins/mach0/fatmach0-3true
+CMDS=<<EOF
+mis /bin/ppc_32.2
+oba `?vi $$`
+ob 1
+e asm.arch
+EOF
+EXPECT=<<EOF
+'f file 13616 0x00009000
+ppc
+EOF
+RUN
+
+NAME=fatmacho switch arm64/arm32 via mis+oba
+FILE=bins/mach0/BatteryLife
+ARGS=-aarm -b64
+CMDS=<<EOF
+mis /bin/arm_32.0
+oba `?vi $$`
+ob 1
+e asm.arch
+e asm.bits
+ob 0
+e asm.arch
+e asm.bits
+EOF
+EXPECT=<<EOF
+'f file 1502560 0x00004000
+arm
+32
+arm
+64
+EOF
+RUN
+
+NAME=fatmacho o- refuses to close mounted fd
+FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+o~?
+o-3
+o~?
+EOF
+EXPECT=<<EOF
+2
+2
+EOF
+RUN
+
+NAME=fatmacho o- works after umount
+FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+m-/bin
+o-3
+o~?
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=fatmacho mo loads binfile for slice
+FILE=bins/mach0/fatmach0-3true
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mo /bin/ppc_32.2
+ob~?
+ob~ppc
+EOF
+EXPECT=<<EOF
+2
+* 1 5 ppc-32 ba:0x00000000 sz:13616 malloc://13616
+EOF
+RUN
+
+NAME=fatmacho ob- after mo doesn't assert
+FILE=bins/mach0/fatmach0-3true
+CMDS=<<EOF
+mo /bin/ppc_32.2
+ob-1
+ob~?
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=fatmacho ob- after oba doesn't assert
+FILE=bins/mach0/fatmach0-3true
+CMDS=<<EOF
+oba 0x5000
+ob-1
+ob~?
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=fatmacho ms "r2 slice" exits shell and adds binfile
+FILE=--
+CMDS=!printf "r2 x86_32.1\n" | radare2 -NN -escr.interactive=1 -escr.color=0 -Qc "md /bin;ms /bin;ob~?" bins/mach0/fatmach0-3true 2>/dev/null | tail -1
+EXPECT=<<EOF
+2
+EOF
+RUN
+
+NAME=fatmacho ms "o slice" stays in shell and adds binfile
+FILE=--
+CMDS=!printf "o x86_32.1\nq\n" | radare2 -NN -escr.interactive=1 -escr.color=0 -Qc "md /bin;ms /bin;ob~?" bins/mach0/fatmach0-3true 2>/dev/null | tail -1
+EXPECT=<<EOF
+2
+EOF
+RUN
+
+NAME=fatmacho mo seeks to new binfile entry0
+FILE=bins/mach0/fatmach0-3true
+CMDS=<<EOF
+mo /bin/x86_32.1
+e asm.arch
+e asm.bits
+?v $$
+pi 1
+EOF
+EXPECT=<<EOF
+x86
+32
+0xf44
+push 0
+EOF
+RUN
+
+NAME=fatmacho ms "r2 slice" seeks to new binfile entry0
+FILE=--
+CMDS=!printf "r2 x86_32.1\n" | radare2 -NN -escr.interactive=1 -escr.color=0 -Qc "md /bin;ms /bin;e asm.arch;e asm.bits;?v \$\$" bins/mach0/fatmach0-3true 2>/dev/null | tail -3
+EXPECT=<<EOF
+x86
+32
+0xf44
+EOF
+RUN
+
+NAME=fatmacho preserves the selected subtype across architecture lookups
+FILE=malloc://1280
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx cafebabe000000030100000c800000020000010000000100000000000100000c810000020000020000000100000000000100000700000003000003000000010000000000 @ 0
+wx cffaedfe0c00000102000080020000000100000048000000000000000000000019000000480000005f5f5445585400000000000000000000001000000000000000010000000000000000000000000000000100000000000007000000050000000000000000000000000000000000000000000000000000000000000000000000960e178b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 @ 0x100
+wx cffaedfe0c00000102000081020000000100000048000000000000000000000019000000480000005f5f5445585400000000000000000000001000000000000000010000000000000000000000000000000100000000000007000000050000000000000000000000000000000000000000000000000000000000000000000000962e179a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 @ 0x200
+wx cffaedfe0700000103000000020000000100000048000000000000000000000019000000480000005f5f5445585400000000000000000000001000000000000000010000000000000000000000000000000100000000000007000000050000000000000000000000000000000000000000000000000000000000000000000000909090c300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 @ 0x300
+oba 0
+oa arm 64
+ia
+iI~machine
+p8 4 @ 0x1080
+oa arm 64
+p8 4 @ 0x1080
+oa x86 64
+p8 4 @ 0x1080
+oa arm 64
+p8 4 @ 0x1080
+oa arm 64
+p8 4 @ 0x1080
+EOF
+EXPECT=<<EOF
+000 0x00000100 256 arm_64 arm64e
+001 0x00000200 256 arm_64 arm64e
+002 0x00000300 256 x86_64 x86 64 all
+machine  arm64e
+960e178b
+960e178b
+909090c3
+960e178b
+960e178b
+EOF
+RUN
+
+NAME=fatmacho identifies X1 subtypes and preserves an explicitly opened slice
+FILE=malloc://1536
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx cafebabe000000040100000c000000000000010000000100000000000100000c000000030000020000000100000000000100000c800000020000030000000100000000000100000c8000000c000004000000010000000000 @ 0
+wx cffaedfe0c00000100000000020000000100000048000000000000000000000019000000480000005f5f5445585400000000000000000000001000000000000000010000000000000000000000000000000100000000000007000000050000000000000000000000000000000000000000000000000000000000000000000000960e178b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 @ 0x100
+wx cffaedfe0c00000103000000020000000100000048000000000000000000000019000000480000005f5f5445585400000000000000000000001000000000000000010000000000000000000000000000000100000000000007000000050000000000000000000000000000000000000000000000000000000000000000000000962e179a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 @ 0x200
+wx cffaedfe0c00000102000080020000000100000048000000000000000000000019000000480000005f5f5445585400000000000000000000001000000000000000010000000000000000000000000000000100000000000007000000050000000000000000000000000000000000000000000000000000000000000000000000960e178b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 @ 0x300
+wx cffaedfe0c0000010c000080020000000100000048000000000000000000000019000000480000005f5f5445585400000000000000000000001000000000000000010000000000000000000000000000000100000000000007000000050000000000000000000000000000000000000000000000000000000000000000000000962e179a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 @ 0x400
+oba 0
+oa arm 64
+ia
+mo /bin/arm_64.3
+iI~machine
+p8 4 @ 0x80
+oa arm 64 malloc://256
+iI~machine
+p8 4 @ 0x80
+mo /bin/arm_64.1
+iI~machine
+p8 4 @ 0x80
+oa arm 64 malloc://256
+iI~machine
+p8 4 @ 0x80
+EOF
+EXPECT=<<EOF
+000 0x00000100 256 arm_64 all
+001 0x00000200 256 arm_64 arm64.x1
+002 0x00000300 256 arm_64 arm64e
+003 0x00000400 256 arm_64 arm64e.x1
+machine  arm64e.x1
+962e179a
+machine  arm64e.x1
+962e179a
+machine  arm64.x1
+962e179a
+machine  arm64.x1
+962e179a
 EOF
 RUN

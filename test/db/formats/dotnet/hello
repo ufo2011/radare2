@@ -1,0 +1,39 @@
+NAME=dotnet hello world program
+FILE=bins/dotnet/HelloWorld.dll
+CMDS=<<EOF
+is~BinaryParser
+il
+EOF
+EXPECT=<<EOF
+0   0x00000251 0x10002051 GLOBAL FUNC 34               BinaryParserLibrary.BinaryParser..ctor(this;string:path):void
+0   0x00000274 0x10002074 GLOBAL FUNC 14               BinaryParserLibrary.BinaryParser.LoadData(this;byte[]:inputData):void
+0   0x00000290 0x10002090 GLOBAL FUNC 42               BinaryParserLibrary.BinaryParser.ValidateArgs(this;string[]:args):bool
+0   0x000002c8 0x100020c8 GLOBAL FUNC 91               BinaryParserLibrary.BinaryParser.ParseHeader(this;):void
+0   0x00000330 0x10002130 GLOBAL FUNC 131              BinaryParserLibrary.BinaryParser.ProcessSections(this;):void
+0   0x000003c0 0x100021c0 GLOBAL FUNC 70               BinaryParserLibrary.BinaryParser.CalculateChecksum(this;):int
+0   0x00000424 0x10002224 GLOBAL FUNC 192              BinaryParserLibrary.BinaryParser.AnalyzeMetadata(this;):void
+0   0x00000500 0x10002300 GLOBAL FUNC 63               BinaryParserLibrary.BinaryParser.RunAnalysis(this;string[]:args):void
+mscoree.dll
+EOF
+RUN
+
+NAME=CIL: a method paddr is not looked up as a vaddr
+FILE=bins/cil/hello.exe
+CMDS=<<EOF
+on malloc://0x100 0x200
+e anal.in=io.maps
+af @ 0x251
+afc @ 0x251
+afv @ 0x251
+?e --
+af @ 0x402051
+afc @ 0x402051
+afv @ 0x402051
+EOF
+EXPECT=<<EOF
+reg
+--
+dyncc:a0+1:!T0
+arg int a0 @ a0
+EOF
+RUN

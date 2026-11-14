@@ -25,7 +25,11 @@ extern "C" {
 
 typedef struct r_space_t {
 	char *name;
-	RBNode rb;
+	// Optional list of string prefixes associated with this space.
+	// Used by RFlag when cfg.autoflagspace is enabled to auto-assign
+	// flags whose names start with any of these prefixes.
+	RList *prefixes; // <char*>
+	ut32 privtag; // plugin-private tag used for string index refs
 } RSpace;
 
 typedef enum {
@@ -54,8 +58,8 @@ typedef struct r_space_event_t {
 typedef struct r_spaces_t {
 	const char *name;
 	RSpace *current;
-	RBTree spaces;
-	RList *spacestack;
+	RRBTree *spaces;
+	R_OWNED RList *spacestack; // copies of the pushed space names
 	REvent *event;
 } RSpaces;
 
@@ -95,13 +99,12 @@ static inline const char *r_spaces_current_name(RSpaces *sp) {
 }
 
 static inline bool r_spaces_is_empty(RSpaces *sp) {
-	RBIter it = r_rbtree_first (sp->spaces);
-	return it.len == 0;
+	return !!r_crbtree_first_node (sp->spaces);
 }
 
-typedef RBIter RSpaceIter;
+typedef RRBNode RSpaceIter;
 #define r_spaces_foreach(sp, it, s) \
-	r_rbtree_foreach ((sp)->spaces, (it), (s), RSpace, rb)
+	r_crbtree_foreach ((sp)->spaces, (it), RSpace, (s))
 
 #ifdef __cplusplus
 }

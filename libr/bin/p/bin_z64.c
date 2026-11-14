@@ -3,7 +3,7 @@
 /*
  * info comes from here.
  * https://github.com/mikeryan/n64dev
- * http://en64.shoutwiki.com/wiki/N64_Memory
+ * https://en64.shoutwiki.com/wiki/N64_Memory
  */
 
 #include <r_types.h>
@@ -17,29 +17,29 @@
 
 // starting at 0
 /*
-0000h              (1 byte): initial PI_BSB_DOM1_LAT_REG value (0x80)
-0001h              (1 byte): initial PI_BSB_DOM1_PGS_REG value (0x37)
-0002h              (1 byte): initial PI_BSB_DOM1_PWD_REG value (0x12)
-0003h              (1 byte): initial PI_BSB_DOM1_PGS_REG value (0x40)
-0004h - 0007h     (1 dword): ClockRate
-0008h - 000Bh     (1 dword): Program Counter (PC)
-000Ch - 000Fh     (1 dword): Release
-0010h - 0013h     (1 dword): CRC1
-0014h - 0017h     (1 dword): CRC2
-0018h - 001Fh    (2 dwords): Unknown (0x0000000000000000)
-0020h - 0033h    (20 bytes): Image name
-                             Padded with 0x00 or spaces (0x20)
-0034h - 0037h     (1 dword): Unknown (0x00000000)
-0038h - 003Bh     (1 dword): Manufacturer ID
-                             0x0000004E = Nintendo ('N')
-003Ch - 003Dh      (1 word): Cartridge ID
-003Eh - 003Fh      (1 word): Country code
-                             0x4400 = Germany ('D')
-                             0x4500 = USA ('E')
-                             0x4A00 = Japan ('J')
-                             0x5000 = Europe ('P')
-                             0x5500 = Australia ('U')
-0040h - 0FFFh (1008 dwords): Boot code
+	0000h              (1 byte): initial PI_BSB_DOM1_LAT_REG value (0x80)
+	0001h              (1 byte): initial PI_BSB_DOM1_PGS_REG value (0x37)
+	0002h              (1 byte): initial PI_BSB_DOM1_PWD_REG value (0x12)
+	0003h              (1 byte): initial PI_BSB_DOM1_PGS_REG value (0x40)
+	0004h - 0007h     (1 dword): ClockRate
+	0008h - 000Bh     (1 dword): Program Counter (PC)
+	000Ch - 000Fh     (1 dword): Release
+	0010h - 0013h     (1 dword): CRC1
+	0014h - 0017h     (1 dword): CRC2
+	0018h - 001Fh    (2 dwords): Unknown (0x0000000000000000)
+	0020h - 0033h    (20 bytes): Image name
+				     Padded with 0x00 or spaces (0x20)
+	0034h - 0037h     (1 dword): Unknown (0x00000000)
+	0038h - 003Bh     (1 dword): Manufacturer ID
+				     0x0000004E = Nintendo ('N')
+	003Ch - 003Dh      (1 word): Cartridge ID
+	003Eh - 003Fh      (1 word): Country code
+				     0x4400 = Germany ('D')
+				     0x4500 = USA ('E')
+				     0x4A00 = Japan ('J')
+				     0x5000 = Europe ('P')
+				     0x5500 = Australia ('U')
+	0040h - 0FFFh (1008 dwords): Boot code
 */
 typedef struct {
 	ut8 x1; /* initial PI_BSB_DOM1_LAT_REG value */
@@ -69,7 +69,7 @@ static ut64 baddr(RBinFile *bf) {
 	return (ut64) r_read_be32(&n64_header.BootAddress);
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 magic[4];
 	if (r_buf_size (b) < N64_ROM_START) {
 		return false;
@@ -78,11 +78,11 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 	return !memcmp (magic, "\x80\x37\x12\x40", 4);
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb) {
-	if (check_buffer (bf, b)) {
+static bool load(RBinFile *bf, RBuffer *b, ut64 loadaddr) {
+	if (check (bf, b)) {
 		ut8 buf[sizeof (N64Header)] = {0};
 		r_buf_read_at (b, 0, buf, sizeof (buf));
-		*bin_obj = memcpy (&n64_header, buf, sizeof (N64Header));
+		bf->bo->bin_obj = memcpy (&n64_header, buf, sizeof (N64Header));
 		return true;
 	}
 	return false;
@@ -94,24 +94,15 @@ static RList *entries(RBinFile *bf) {
 		return NULL;
 	}
 	RBinAddr *ptr = R_NEW0 (RBinAddr);
-	if (ptr) {
-		ptr->paddr = N64_ROM_START;
-		ptr->vaddr = baddr (bf);
-		r_list_append (ret, ptr);
-	}
+	ptr->paddr = N64_ROM_START;
+	ptr->vaddr = baddr (bf);
+	r_list_append (ret, ptr);
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList /*<RBinSection>*/ *ret = r_list_new ();
-	if (!ret) {
-		return NULL;
-	}
-	RBinSection *text = R_NEW0 (RBinSection);
-	if (!text) {
-		r_list_free (ret);
-		return NULL;
-	}
+static bool sections_vec(RBinFile *bf) {
+	RVecRBinSection_clear (&bf->bo->sections_vec);
+	RBinSection *text = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	text->name = strdup ("text");
 	text->size = r_buf_size (bf->buf) - N64_ROM_START;
 	text->vsize = text->size;
@@ -119,20 +110,12 @@ static RList *sections(RBinFile *bf) {
 	text->vaddr = baddr (bf);
 	text->perm = R_PERM_RX;
 	text->add = true;
-	r_list_append (ret, text);
-	return ret;
-}
-
-static ut64 boffset(RBinFile *bf) {
-	return 0LL;
+	return true;
 }
 
 static RBinInfo *info(RBinFile *bf) {
 	char GameName[21] = {0};
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
 	memcpy (GameName, n64_header.Name, sizeof (n64_header.Name));
 	ret->file = r_str_newf ("%s (%c)", GameName, n64_header.CountryCode);
 	ret->os = strdup ("n64");
@@ -148,15 +131,17 @@ static RBinInfo *info(RBinFile *bf) {
 #if !R_BIN_Z64
 
 RBinPlugin r_bin_plugin_z64 = {
-	.name = "z64",
-	.desc = "Nintendo 64 binaries big endian r_bin plugin",
-	.license = "LGPL3",
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.meta = {
+		.name = "z64",
+		.author = "pancake",
+		.desc = "Nintendo N64 rom",
+		.license = "LGPL-3.0-only",
+	},
+	.load = &load,
+	.check = &check,
 	.baddr = baddr,
-	.boffset = &boffset,
 	.entries = &entries,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
 	.info = &info
 };
 

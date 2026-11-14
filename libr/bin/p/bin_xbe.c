@@ -1,4 +1,4 @@
-/* radare - LGPL - 2014-2019 - thatlemon@gmail.com, pancake */
+/* radare - LGPL - 2014-2026 - thatlemon@gmail.com, pancake */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -11,7 +11,7 @@ static const char *kt_name[] = {
 #include "../format/xbe/kernel.h"
 };
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 magic[4];
 	if (r_buf_read_at (b, 0, magic, sizeof (magic)) == 4) {
 		return !memcmp (magic, "XBEH", 4);
@@ -19,13 +19,118 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 	return false;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	r_bin_xbe_obj_t *obj = R_NEW (r_bin_xbe_obj_t);
-	if (!obj) {
+static bool read_xbe_header(RBuffer *b, xbe_header *h) {
+	ut8 buf[sizeof (*h)];
+	if (r_buf_read_at (b, 0, buf, sizeof (buf)) != sizeof (buf)) {
 		return false;
 	}
-	st64 r = r_buf_read_at (buf, 0, (ut8 *)&obj->header, sizeof (obj->header));
-	if (r != sizeof (obj->header)) {
+	const ut8 *p = buf;
+	h->magic = r_read_le32 (p);
+	p += sizeof (ut32);
+	memcpy (h->signature, p, sizeof (h->signature));
+	p += sizeof (h->signature);
+	h->base = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->headers_size = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->image_size = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->image_header_size = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->timestamp = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->cert_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->sections = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->sechdr_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->init_flags = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->ep = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->tls_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	int i;
+	for (i = 0; i < R_ARRAY_SIZE (h->pe_shit); i++) {
+		h->pe_shit[i] = r_read_le32 (p);
+		p += sizeof (ut32);
+	}
+	h->debug_path_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->debug_name_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->debug_uname_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->kernel_thunk_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->nonkernel_import_dir_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->lib_versions = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->lib_versions_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->kernel_lib_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	h->xapi_lib_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	for (i = 0; i < R_ARRAY_SIZE (h->shit); i++) {
+		h->shit[i] = r_read_le32 (p);
+		p += sizeof (ut32);
+	}
+	return h->magic == XBE_MAGIC;
+}
+
+static bool read_xbe_section(RBuffer *b, ut64 addr, xbe_section *sect) {
+	ut8 buf[sizeof (*sect)];
+	if (r_buf_read_at (b, addr, buf, sizeof (buf)) != sizeof (buf)) {
+		return false;
+	}
+	const ut8 *p = buf;
+	sect->flags = r_read_le32 (p);
+	p += sizeof (ut32);
+	sect->vaddr = r_read_le32 (p);
+	p += sizeof (ut32);
+	sect->vsize = r_read_le32 (p);
+	p += sizeof (ut32);
+	sect->offset = r_read_le32 (p);
+	p += sizeof (ut32);
+	sect->size = r_read_le32 (p);
+	p += sizeof (ut32);
+	sect->name_addr = r_read_le32 (p);
+	p += sizeof (ut32);
+	sect->refcount = r_read_le32 (p);
+	p += sizeof (ut32);
+	int i;
+	for (i = 0; i < R_ARRAY_SIZE (sect->shit); i++) {
+		sect->shit[i] = r_read_le32 (p);
+		p += sizeof (ut32);
+	}
+	memcpy (sect->digest, p, sizeof (sect->digest));
+	return true;
+}
+
+static bool read_xbe_lib(RBuffer *b, ut64 addr, xbe_lib *lib) {
+	ut8 buf[sizeof (*lib)];
+	if (r_buf_read_at (b, addr, buf, sizeof (buf)) != sizeof (buf)) {
+		return false;
+	}
+	const ut8 *p = buf;
+	memcpy (lib->name, p, sizeof (lib->name));
+	p += sizeof (lib->name);
+	lib->major = r_read_le16 (p);
+	p += sizeof (ut16);
+	lib->minor = r_read_le16 (p);
+	p += sizeof (ut16);
+	lib->build = r_read_le16 (p);
+	p += sizeof (ut16);
+	lib->flags = r_read_le16 (p);
+	return true;
+}
+
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	r_bin_xbe_obj_t *obj = R_NEW (r_bin_xbe_obj_t);
+	if (!read_xbe_header (buf, &obj->header)) {
 		R_FREE (obj);
 		return false;
 	}
@@ -43,23 +148,20 @@ static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadadd
 		obj->ep_key = XBE_EP_RETAIL;
 		obj->kt_key = XBE_KP_RETAIL;
 	}
-	*bin_obj = obj;
+	bf->bo->bin_obj = obj;
 	return true;
 }
 
 static void destroy(RBinFile *bf) {
-	R_FREE (bf->o->bin_obj);
+	R_FREE (bf->bo->bin_obj);
 }
 
 static RBinAddr *binsym(RBinFile *bf, int type) {
-	if (!bf || !bf->buf || type != R_BIN_SYM_MAIN) {
+	if (type != R_BIN_SYM_MAIN) {
 		return NULL;
 	}
-	r_bin_xbe_obj_t *obj = bf->o->bin_obj;
+	r_bin_xbe_obj_t *obj = bf->bo->bin_obj;
 	RBinAddr *ret = R_NEW0 (RBinAddr);
-	if (!ret) {
-		return NULL;
-	}
 	ret->vaddr = obj->header.ep ^ obj->ep_key;
 	ret->paddr = ret->vaddr - obj->header.base;
 	return ret;
@@ -69,7 +171,7 @@ static RList *entries(RBinFile *bf) {
 	const r_bin_xbe_obj_t *obj;
 	RList *ret;
 	RBinAddr *ptr = R_NEW0 (RBinAddr);
-	if (!bf || !bf->buf || !bf->o->bin_obj || !ptr) {
+	if (!bf || !bf->buf || !bf->bo->bin_obj) {
 		free (ptr);
 		return NULL;
 	}
@@ -79,35 +181,30 @@ static RList *entries(RBinFile *bf) {
 		return NULL;
 	}
 	ret->free = free;
-	obj = bf->o->bin_obj;
+	obj = bf->bo->bin_obj;
 	ptr->vaddr = obj->header.ep ^ obj->ep_key;
 	ptr->paddr = ptr->vaddr - obj->header.base;
 	r_list_append (ret, ptr);
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
+static bool sections_vec(RBinFile *bf) {
 	xbe_section *sect = NULL;
 	r_bin_xbe_obj_t *obj = NULL;
 	xbe_header *h = NULL;
-	RList *ret = NULL;
 	char tmp[0x100];
 	int i, r;
 	ut32 addr;
 
-	if (!bf || !bf->o || !bf->o->bin_obj || !bf->buf) {
-		return NULL;
+	if (!bf || !bf->bo || !bf->bo->bin_obj || !bf->buf) {
+		return false;
 	}
-	obj = bf->o->bin_obj;
+	obj = bf->bo->bin_obj;
 	h = &obj->header;
 	if (h->sections < 1) {
-		return NULL;
+		return false;
 	}
-	ret = r_list_new ();
-	if (!ret) {
-		return NULL;
-	}
-	ret->free = free;
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 	if (h->sections < 1 || h->sections > 255) {
 		goto out_error;
 	}
@@ -116,28 +213,27 @@ static RList *sections(RBinFile *bf) {
 		goto out_error;
 	}
 	addr = h->sechdr_addr - h->base;
-	if (addr > bf->size || addr + (sizeof(xbe_section) * h->sections) > bf->size) {
-		goto out_error;
-	}
-	r = r_buf_read_at (bf->buf, addr, (ut8 *) sect, sizeof(xbe_section) * h->sections);
-	if (r < 1) {
+	if (addr > bf->size || addr + (sizeof (xbe_section) * h->sections) > bf->size) {
 		goto out_error;
 	}
 	for (i = 0; i < h->sections; i++) {
-		RBinSection *item = R_NEW0 (RBinSection);
+		if (!read_xbe_section (bf->buf, addr + (sizeof (xbe_section) * i), &sect[i])) {
+			goto out_error;
+		}
+	}
+	for (i = 0; i < h->sections; i++) {
 		addr = sect[i].name_addr - h->base;
 		tmp[0] = 0;
 		if (addr > bf->size || addr + sizeof (tmp) > bf->size) {
-			free (item);
 			goto out_error;
 		}
 		r = r_buf_read_at (bf->buf, addr, (ut8 *) tmp, sizeof (tmp));
 		if (r < 1) {
-			free (item);
 			goto out_error;
 		}
 		tmp[sizeof (tmp) - 1] = 0;
-		item->name = r_str_newf ("%s.%i", tmp, i);
+		RBinSection *item = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+		item->name = r_str_newf ("%s.%i", r_str_is_printable (tmp)? tmp: "", i);
 		item->paddr = sect[i].offset;
 		item->vaddr = sect[i].vaddr;
 		item->size = sect[i].size;
@@ -151,29 +247,28 @@ static RList *sections(RBinFile *bf) {
 		if (sect[i].flags & SECT_FLAG_W) {
 			item->perm |= R_PERM_W;
 		}
-		r_list_append (ret, item);
 	}
 	free (sect);
-	return ret;
+	return true;
 out_error:
-	r_list_free (ret);
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 	free (sect);
-	return NULL;
+	return false;
 }
 
 static RList *libs(RBinFile *bf) {
 	r_bin_xbe_obj_t *obj;
 	xbe_header *h = NULL;
-	int i, off, libs, r;
+	int i, off, libs;
 	xbe_lib lib;
 	RList *ret;
 	char *s;
 	ut32 addr;
 
-	if (!bf || !bf->o || !bf->o->bin_obj) {
+	if (!bf || !bf->bo || !bf->bo->bin_obj) {
 		return NULL;
 	}
-	obj = bf->o->bin_obj;
+	obj = bf->bo->bin_obj;
 	h = &obj->header;
 	ret = r_list_new ();
 	if (!ret) {
@@ -185,11 +280,10 @@ static RList *libs(RBinFile *bf) {
 	} else {
 		off = h->kernel_lib_addr - h->base;
 	}
-	if (off > bf->size || off + sizeof(xbe_lib) > bf->size) {
+	if (off > bf->size || off + sizeof (xbe_lib) > bf->size) {
 		goto out_error;
 	}
-	r = r_buf_read_at (bf->buf, off, (ut8 *) &lib, sizeof(xbe_lib));
-	if (r < 1) {
+	if (!read_xbe_lib (bf->buf, off, &lib)) {
 		goto out_error;
 	}
 	lib.name[7] = 0;
@@ -202,11 +296,10 @@ static RList *libs(RBinFile *bf) {
 	} else {
 		off = h->xapi_lib_addr - h->base;
 	}
-	if (off > bf->size || off + sizeof(xbe_lib) > bf->size) {
+	if (off > bf->size || off + sizeof (xbe_lib) > bf->size) {
 		goto out_error;
 	}
-	r = r_buf_read_at (bf->buf, off, (ut8 *) &lib, sizeof(xbe_lib));
-	if (r < 1) {
+	if (!read_xbe_lib (bf->buf, off, &lib)) {
 		goto out_error;
 	}
 
@@ -224,8 +317,7 @@ static RList *libs(RBinFile *bf) {
 		if (addr > bf->size || addr + sizeof (xbe_lib) > bf->size) {
 			goto out_error;
 		}
-		r = r_buf_read_at (bf->buf, addr, (ut8 *) &lib, sizeof (xbe_lib));
-		if (r < 1) {
+		if (!read_xbe_lib (bf->buf, addr, &lib)) {
 			goto out_error;
 		}
 		// make sure it ends with 0
@@ -242,99 +334,85 @@ out_error:
 	return NULL;
 }
 
-static RList *symbols(RBinFile *bf) {
+static bool symbols_vec(RBinFile *bf) {
 	r_bin_xbe_obj_t *obj;
 	xbe_header *h;
-	RList *ret;
 	int i, found = false;
 	ut32 thunk_addr[XBE_MAX_THUNK];
 	ut32 kt_addr;
 	xbe_section sect;
 	ut32 addr;
 
-	if (!bf || !bf->o || !bf->o->bin_obj) {
-		return NULL;
+	if (!bf || !bf->bo || !bf->bo->bin_obj) {
+		return false;
 	}
 
-	obj = bf->o->bin_obj;
+	obj = bf->bo->bin_obj;
 	h = &obj->header;
 	kt_addr = h->kernel_thunk_addr ^ obj->kt_key;
-	ret = r_list_new ();
-	if (!ret) {
-		return NULL;
-	}
-	ret->free = free;
-	eprintf ("sections %d\n", h->sections);
+	RVecRBinSymbol *ret = &bf->bo->symbols_vec;
 	int limit = h->sections;
-	if (limit * (sizeof(xbe_section)) >= bf->size - h->sechdr_addr) {
-		goto out_error;
+	if (h->sechdr_addr < h->base) {
+		return false;
+	}
+	ut32 sechdr_off = h->sechdr_addr - h->base;
+	if (sechdr_off >= bf->size || limit * sizeof (xbe_section) > bf->size - sechdr_off) {
+		return false;
 	}
 	for (i = 0; found == false && i < limit; i++) {
 		addr = h->sechdr_addr - h->base + (sizeof (xbe_section) * i);
-		if (addr > bf->size || addr + sizeof(sect) > bf->size) {
-			goto out_error;
+		if (addr > bf->size || addr + sizeof (sect) > bf->size) {
+			return false;
 		}
-		r_buf_read_at (bf->buf, addr, (ut8 *) &sect, sizeof(sect));
+		if (!read_xbe_section (bf->buf, addr, &sect)) {
+			return false;
+		}
 		if (kt_addr >= sect.vaddr && kt_addr < sect.vaddr + sect.vsize) {
 			found = true;
 		}
 	}
 	if (!found) {
-		goto out_error;
+		return false;
 	}
 	addr = sect.offset + (kt_addr - sect.vaddr);
-	if (addr > bf->size || addr + sizeof(thunk_addr) > bf->size) {
-		goto out_error;
+	if (addr > bf->size || addr + sizeof (thunk_addr) > bf->size) {
+		return false;
 	}
-	i = r_buf_read_at (bf->buf, addr, (ut8 *) &thunk_addr, sizeof (thunk_addr));
-	if (i != sizeof (thunk_addr)) {
-		goto out_error;
+	ut8 thunk_buf[sizeof (thunk_addr)];
+	i = r_buf_read_at (bf->buf, addr, thunk_buf, sizeof (thunk_buf));
+	if (i != sizeof (thunk_buf)) {
+		return false;
+	}
+	for (i = 0; i < XBE_MAX_THUNK; i++) {
+		thunk_addr[i] = r_read_le32 (thunk_buf + (i * sizeof (ut32)));
 	}
 	for (i = 0; i < XBE_MAX_THUNK && thunk_addr[i]; i++) {
-		RBinSymbol *sym = R_NEW0 (RBinSymbol);
-		if (!sym) {
-			goto out_error;
-		}
 		const ut32 thunk_index = thunk_addr[i] ^ 0x80000000;
 		// Basic sanity checks
 		if (thunk_addr[i] & 0x80000000 && thunk_index > 0 && thunk_index <= XBE_MAX_THUNK) {
-			eprintf ("thunk_index %d\n", thunk_index);
-			sym->name = r_str_newf ("kt.%s", kt_name[thunk_index - 1]);
+			RBinSymbol *sym = RVecRBinSymbol_emplace_back (ret);
+			R_LOG_DEBUG ("thunk_index %d", thunk_index);
+			sym->name = r_bin_name_new_from (r_str_newf ("kt.%s", kt_name[thunk_index - 1]));
 			sym->vaddr = (h->kernel_thunk_addr ^ obj->kt_key) + (4 * i);
 			sym->paddr = sym->vaddr - h->base;
-			sym->size = 4;
+			sym->attr.size = 4;
 			sym->ordinal = i;
-			r_list_append (ret, sym);
-		} else {
-			free (sym);
 		}
 	}
-	return ret;
-out_error:
-	r_list_free (ret);
-	return NULL;
+	return true;
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	r_bin_xbe_obj_t *obj;
-	RBinInfo *ret;
-	ut8 dbg_name[256];
-
-	if (!bf || !bf->buf) {
-		return NULL;
+	r_bin_xbe_obj_t *obj = bf->bo->bin_obj;
+	RBinInfo *ret = R_NEW0 (RBinInfo);
+	ut8 dbg_name[256] = {0};
+	if (obj->header.debug_name_addr >= obj->header.base) {
+		ut64 dbg_off = obj->header.debug_name_addr - obj->header.base;
+		if (dbg_off < bf->size) {
+			r_buf_read_at (bf->buf, dbg_off, dbg_name, sizeof (dbg_name));
+		}
 	}
-
-	ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
-
-	obj = bf->o->bin_obj;
-
-	memset (dbg_name, 0, sizeof (dbg_name));
-	r_buf_read_at (bf->buf, obj->header.debug_name_addr -\
-		obj->header.base, dbg_name, sizeof (dbg_name));
-	dbg_name[sizeof(dbg_name) - 1] = 0;
+	dbg_name[sizeof (dbg_name) - 1] = 0;
 	ret->file = strdup ((char *) dbg_name);
 	ret->bclass = strdup ("program");
 	ret->machine = strdup ("Microsoft Xbox");
@@ -343,29 +421,29 @@ static RBinInfo *info(RBinFile *bf) {
 	ret->arch = strdup ("x86");
 	ret->has_va = 1;
 	ret->bits = 32;
-	ret->big_endian = 0;
-	ret->dbg_info = 0;
-	ret->lang = NULL;
 	return ret;
 }
 
 static ut64 baddr(RBinFile *bf) {
-	r_bin_xbe_obj_t *obj = bf->o->bin_obj;
+	r_bin_xbe_obj_t *obj = bf->bo->bin_obj;
 	return obj->header.base;
 }
 
 RBinPlugin r_bin_plugin_xbe = {
-	.name = "xbe",
-	.desc = "Microsoft Xbox xbe format r_bin plugin",
-	.license = "LGPL3",
-	.load_buffer = &load_buffer,
+	.meta = {
+		.name = "xbe",
+		.author = "TheLemonMan",
+		.desc = "Microsoft XBOX Executables",
+		.license = "LGPL-3.0-only",
+	},
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
 	.binsym = &binsym,
 	.entries = &entries,
-	.sections = &sections,
-	.symbols = &symbols,
+	.sections_vec = &sections_vec,
+	.symbols_vec = &symbols_vec,
 	.info = &info,
 	.libs = &libs,
 };

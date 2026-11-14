@@ -3,7 +3,7 @@
  * Copyright (c) Ian F. Darwin 1986-1995.
  * Software written by Ian F. Darwin and others;
  * maintained 1995-present by Christos Zoulas and others.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -13,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *  
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -27,12 +27,12 @@
  * SUCH DAMAGE.
  */
 /*
- * is_tar() -- figure out whether file is a tar archive.
+ * is_tar () -- figure out whether file is a tar archive.
  *
  * Stolen (by the author!) from the public domain tar program:
  * Public Domain version written 26 Aug 1985 John Gilmore (ihnp4!hoptoad!gnu).
  *
- * @(#)list.c 1.18 9/23/86 Public Domain - gnu
+ * @ (#)list.c 1.18 9/23/86 Public Domain - gnu
  *
  * Comments changed and some code/comments reformatted
  * for file command by Ian Darwin.
@@ -41,10 +41,8 @@
 
 #if !USE_LIB_MAGIC
 
+#include <r_util.h>
 #include "file.h"
-#include <string.h>
-#include <ctype.h>
-#include <sys/types.h>
 #include "tar.h"
 
 static const char tartype[][32] = {
@@ -58,16 +56,16 @@ static const char tartype[][32] = {
  *
  * Result is -1 if the field is invalid (all blank, or nonoctal).
  */
-#define	isodigit(c)	( ((c) >= '0') && ((c) <= '7') )
+#define isodigit(c) (((c) >= '0') && ((c) <= '7'))
 static int from_oct(int digs, const char *where) {
 	int value = 0;
-	while (isspace ((ut8)*where)) {	/* Skip spaces */
+	while (isspace ((ut8)*where)) { /* Skip spaces */
 		where++;
 		if (--digs <= 0) {
 			return -1; /* All blank field */
 		}
 	}
-	while (digs > 0 && isodigit(*where)) {	/* Scan til nonoctal */
+	while (digs > 0 && isodigit (*where)) { /* Scan til nonoctal */
 		value = (value << 3) | (*where++ - '0');
 		--digs;
 	}
@@ -78,30 +76,25 @@ static int from_oct(int digs, const char *where) {
 }
 
 /*
- * Return 
- *	0 if the checksum is bad (i.e., probably not a tar archive), 
+ * Return
+ *	0 if the checksum is bad (i.e., probably not a tar archive),
  *	1 for old UNIX tar file,
  *	2 for Unix Std (POSIX) tar file,
  *	3 for GNU tar file.
  */
 static int is_tar(const ut8 *buf, size_t nbytes) {
-	const union record *header = (const union record *)(const void *)buf;
-	int i, sum, recsum;
-	const char *p;
+	const union record *const header = (const union record *) (const void *)buf;
 
 	if (nbytes < sizeof (union record)) {
 		return 0;
 	}
 
-	recsum = from_oct (8, header->header.chksum);
+	const int recsum = from_oct (8, header->header.chksum);
 
-	sum = 0;
-	p = header->charptr;
-	for (i = sizeof(union record); --i >= 0;) {
-		/*
-		 * We cannot use ut8 here because of old compilers,
-		 * e.g. V7.
-		 */
+	int i, sum = 0;
+	const char *p = header->charptr;
+	for (i = sizeof (union record); --i >= 0;) {
+		// Keep this int-compatible for old compilers.
 		sum += 0xFF & *p++;
 	}
 
@@ -119,16 +112,13 @@ static int is_tar(const ut8 *buf, size_t nbytes) {
 	if (strcmp (header->header.magic, TMAGIC) == 0) {
 		return 2; /* Unix Standard tar archive */
 	}
-	return 1;			/* Old fashioned tar archive */
+	return 1; /* Old fashioned tar archive */
 }
 
-int file_is_tar(RMagic *ms, const ut8 *buf, size_t nbytes) {
-	/*
-	 * Do the tar test first, because if the first file in the tar
-	 * archive starts with a dot, we can confuse it with an nroff file.
-	 */
-	int tar = is_tar(buf, nbytes);
-	int mime = ms->flags & R_MAGIC_MIME;
+int __magic_file_is_tar(RMagic *ms, const ut8 *buf, size_t nbytes) {
+	// Check tar first so dotfiles are not mistaken for nroff.
+	const int tar = is_tar (buf, nbytes);
+	const int mime = ms->flags & R_MAGIC_MIME;
 
 	if (tar < 1 || tar > 3) {
 		return 0;
@@ -136,7 +126,7 @@ int file_is_tar(RMagic *ms, const ut8 *buf, size_t nbytes) {
 	if (mime == R_MAGIC_MIME_ENCODING) {
 		return 0;
 	}
-	if (file_printf (ms, mime ? "application/x-tar" : tartype[tar - 1]) == -1) {
+	if (__magic_file_printf (ms, mime? "application/x-tar": tartype[tar - 1]) == -1) {
 		return -1;
 	}
 	return 1;

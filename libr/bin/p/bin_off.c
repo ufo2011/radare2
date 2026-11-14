@@ -1,4 +1,4 @@
-/* radare2 - MIT - 2021 - pancake */
+/* radare2 - MIT - 2021-2023 - pancake */
 // https://en.wikipedia.org/wiki/OS/360_Object_File_Format
 
 #include <r_bin.h>
@@ -8,8 +8,8 @@ typedef struct {
 	RBuffer *buf;
 } OffObj;
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
-	r_return_val_if_fail (b, false);
+static bool check(RBinFile *bf, RBuffer *b) {
+	R_RETURN_VAL_IF_FAIL (b, false);
 	ut8 sig[4];
 	if (r_buf_read_at (b, 0, sig, sizeof (sig)) != 4) {
 		return false;
@@ -20,19 +20,15 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 	return true;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	OffObj *wo = R_NEW0 (OffObj);
-	r_return_val_if_fail (wo, false);
-	*bin_obj = wo;
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	R_RETURN_VAL_IF_FAIL (bf && buf, false);
+	bf->bo->bin_obj = R_NEW0 (OffObj);
 	return true;
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	r_return_val_if_fail (bf, NULL);
+	R_RETURN_VAL_IF_FAIL (bf, NULL);
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
 	ret->file = strdup (bf->file);
 	ret->type = strdup ("OFF");
 	ret->machine = strdup ("s360");
@@ -49,11 +45,13 @@ static ut64 baddr(RBinFile *bf) {
 	return 0;
 }
 
-// Prints header info using iH
-static void off_header_fields(RBinFile *bf) {
-	PrintfCallback cb_printf = bf->rbin->cb_printf;
-	cb_printf ("pf.off_header @ 0x%08"PFMT64x"\n", (ut64)0);
-	cb_printf ("0x00000000  Magic           0x%x\n", r_buf_read_le32_at (bf->buf, 0));
+static char *off_header_fields(RBinFile *bf, int mode) {
+	RStrBuf *sb = r_strbuf_new ("");
+#define p(f,...) r_strbuf_appendf (sb, f, ##__VA_ARGS__)
+	p ("pf.off_header @ 0x%08"PFMT64x"\n", (ut64)0);
+	p ("0x00000000  Magic           0x%x\n", r_buf_read_le32_at (bf->buf, 0));
+#undef p
+	return r_strbuf_drain (sb);
 }
 
 static RList *off_fields(RBinFile *bf) {
@@ -63,7 +61,7 @@ static RList *off_fields(RBinFile *bf) {
 	}
 	ut64 addr = 0;
 #define ROW(nam,siz,val,fmt) \
-	r_list_append (ret, r_bin_field_new (addr, addr, siz, nam, sdb_fmt ("0x%04"PFMT32x, (ut32)val), fmt, false)); \
+	r_list_append (ret, r_bin_field_new (addr, addr, val, siz, nam, NULL, fmt, false)); \
 	addr += siz;
 	ut32 magic = r_buf_read_le32 (bf->buf);
 	ut32 numlumps = r_buf_read_le32 (bf->buf);
@@ -75,31 +73,29 @@ static RList *off_fields(RBinFile *bf) {
 }
 
 static void destroy(RBinFile *bf) {
-	OffObj *obj = bf->o->bin_obj;
-	r_buf_free (obj->buf);
+	OffObj *obj = bf->bo->bin_obj;
+	r_unref (obj->buf);
 	free (obj);
 }
 
 static RList *entries(RBinFile *bf) {
 	RList *ret = r_list_newf (free);
-	if (ret) {
-		RBinAddr *ptr = R_NEW0 (RBinAddr);
-		if (ptr) {
-			ptr->paddr = ptr->vaddr = 0x1928;
-			r_list_append (ret, ptr);
-		}
-	}
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
+	ptr->paddr = ptr->vaddr = 0x1928;
+	r_list_append (ret, ptr);
 	return ret;
 }
 
 RBinPlugin r_bin_plugin_off = {
-	.name = "off",
-	.desc = "OS/360 Object File Format",
-	.license = "MIT",
-	.author = "pancake",
+	.meta = {
+		.name = "off",
+		.desc = "OS/360 Object Files",
+		.license = "MIT",
+		.author = "pancake",
+	},
 	.entries = entries,
-	.check_buffer = &check_buffer,
-	.load_buffer = &load_buffer,
+	.check = &check,
+	.load = &load,
 	.baddr = &baddr,
 	.info = &info,
 	.header = &off_header_fields,

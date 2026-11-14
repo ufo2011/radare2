@@ -1,13 +1,15 @@
+/* io_r2k - radare2 - LGPL - Copyright 2016-2024 - pancake, SkUaTeR, panda */
+
 #ifndef __GNU__
 
 #include "io_r2k_linux.h"
 
-#define fset(num, shift) ((((num) & (((ut64) 1) << (shift))) == 0) ? 0 : 1)
+#define FSET(num, shift) ((((num) & (((ut64) 1) << (shift))) == 0) ? 0 : 1)
 
 #if __i386__ || __x86_64__
-static void x86_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
-	io->cb_printf ("CR0: 0x%"PFMT64x"\n", (ut64) ctrl.cr0);
-	io->cb_printf (" [*] PG:    %d\n"
+static void append_ctrl_reg_details(RStrBuf *sb, struct r2k_control_reg ctrl) {
+	r_strbuf_appendf (sb, "CR0: 0x%"PFMT64x"\n", (ut64) ctrl.cr0);
+	r_strbuf_appendf (sb, " [*] PG:    %d\n"
 		       " [*] CD:    %d\n"
 		       " [*] NW:    %d\n"
 		       " [*] AM:    %d\n"
@@ -18,24 +20,24 @@ static void x86_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       " [*] EM:    %d\n"
 		       " [*] MP:    %d\n"
 		       " [*] PE:    %d\n",
-		       fset (ctrl.cr0, 31), fset (ctrl.cr0, 30), fset (ctrl.cr0, 29), fset (ctrl.cr0, 18),
-		       fset (ctrl.cr0, 16), fset (ctrl.cr0, 5), fset (ctrl.cr0, 4), fset (ctrl.cr0, 3),
-		       fset (ctrl.cr0, 2), fset (ctrl.cr0, 1), fset (ctrl.cr0, 1));
-	io->cb_printf ("\n");
+		       FSET (ctrl.cr0, 31), FSET (ctrl.cr0, 30), FSET (ctrl.cr0, 29), FSET (ctrl.cr0, 18),
+		       FSET (ctrl.cr0, 16), FSET (ctrl.cr0, 5), FSET (ctrl.cr0, 4), FSET (ctrl.cr0, 3),
+		       FSET (ctrl.cr0, 2), FSET (ctrl.cr0, 1), FSET (ctrl.cr0, 1));
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("CR2: 0x%"PFMT64x"\n", (ut64) ctrl.cr2);
-	io->cb_printf ("Page-Fault Linear Address: 0x%"PFMT64x"\n", (ut64) ctrl.cr2);
-	io->cb_printf ("\n");
+	r_strbuf_appendf (sb, "CR2: 0x%"PFMT64x"\n", (ut64) ctrl.cr2);
+	r_strbuf_appendf (sb, "Page-Fault Linear Address: 0x%"PFMT64x"\n", (ut64) ctrl.cr2);
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("CR3: 0x%"PFMT64x"\n", (ut64) ctrl.cr3);
-	io->cb_printf (" [*] Page-Directory Base:    0x%"PFMT64x"\n"
+	r_strbuf_appendf (sb, "CR3: 0x%"PFMT64x"\n", (ut64) ctrl.cr3);
+	r_strbuf_appendf (sb, " [*] Page-Directory Base:    0x%"PFMT64x"\n"
 		       " [*] PCD:                    %d\n"
 		       " [*] PWT:                    %d\n",
-		       (((ut64) ctrl.cr3) & 0xfffffffffffff000), fset (ctrl.cr3, 4), fset (ctrl.cr3, 3));
-	io->cb_printf ("\n");
+		       (((ut64) ctrl.cr3) & 0xfffffffffffff000), FSET (ctrl.cr3, 4), FSET (ctrl.cr3, 3));
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("CR4: 0x%"PFMT64x"\n", (ut64) ctrl.cr4);
-	io->cb_printf (" [*] PKE:         %d\n"
+	r_strbuf_appendf (sb, "CR4: 0x%"PFMT64x"\n", (ut64) ctrl.cr4);
+	r_strbuf_appendf (sb, " [*] PKE:         %d\n"
 		       " [*] SMAP:        %d\n"
 		       " [*] SMEP:        %d\n"
 		       " [*] OSXSAVE:     %d\n"
@@ -55,23 +57,23 @@ static void x86_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       " [*] TSD:         %d\n"
 		       " [*] PVI:         %d\n"
 		       " [*] VME:         %d\n",
-		       fset (ctrl.cr4, 22), fset (ctrl.cr4, 21), fset (ctrl.cr4, 20), fset (ctrl.cr4, 18),
-		       fset (ctrl.cr4, 17), fset (ctrl.cr4, 16), fset (ctrl.cr4, 14), fset (ctrl.cr4, 13),
-		       fset (ctrl.cr4, 11), fset (ctrl.cr4, 10), fset (ctrl.cr4, 9), fset (ctrl.cr4, 8),
-		       fset (ctrl.cr4, 7), fset (ctrl.cr4, 6), fset (ctrl.cr4, 5), fset (ctrl.cr4, 4),
-		       fset (ctrl.cr4, 3), fset (ctrl.cr4, 2), fset (ctrl.cr4, 1), fset (ctrl.cr4, 0));
-	io->cb_printf ("\n");
+		       FSET (ctrl.cr4, 22), FSET (ctrl.cr4, 21), FSET (ctrl.cr4, 20), FSET (ctrl.cr4, 18),
+		       FSET (ctrl.cr4, 17), FSET (ctrl.cr4, 16), FSET (ctrl.cr4, 14), FSET (ctrl.cr4, 13),
+		       FSET (ctrl.cr4, 11), FSET (ctrl.cr4, 10), FSET (ctrl.cr4, 9), FSET (ctrl.cr4, 8),
+		       FSET (ctrl.cr4, 7), FSET (ctrl.cr4, 6), FSET (ctrl.cr4, 5), FSET (ctrl.cr4, 4),
+		       FSET (ctrl.cr4, 3), FSET (ctrl.cr4, 2), FSET (ctrl.cr4, 1), FSET (ctrl.cr4, 0));
+	r_strbuf_append (sb, "\n");
 
 #if __x86_64__
-	io->cb_printf ("CR8: 0x%"PFMT64x"\n", (ut64) ctrl.cr8);
-	io->cb_printf (" [*] TPL:    %zu\n", ctrl.cr8 & 0xf);
+	r_strbuf_appendf (sb, "CR8: 0x%"PFMT64x"\n", (ut64) ctrl.cr8);
+	r_strbuf_appendf (sb, " [*] TPL:    %u\n", (ut32)(ctrl.cr8 & 0xf));
 #endif
 }
 
 #elif __arm__
-static void arm_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
-	io->cb_printf ("TTBR0: 0x%"PFMT64x"\n", (ut64) ctrl.ttbr0);
-	io->cb_printf (" [*] Translation table base 0:  0x%"PFMT64x"\n"
+static void append_ctrl_reg_details(RStrBuf *sb, struct r2k_control_reg ctrl) {
+	r_strbuf_appendf (sb, "TTBR0: 0x%"PFMT64x"\n", (ut64) ctrl.ttbr0);
+	r_strbuf_appendf (sb, " [*] Translation table base 0:  0x%"PFMT64x"\n"
 		       " [*] UNP/SBZ:                   0x%"PFMT64x"\n"
 		       " [*] RGN:                       0x%"PFMT64x"\n"
 		       " [*] P:                         %d\n"
@@ -79,26 +81,26 @@ static void arm_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       " [*] C:                         %d\n",
 		       (ut64) ((ctrl.ttbr0 & (0xffffffff << (14 - (ctrl.ttbcr & 7)))) >> (14 - (ctrl.ttbcr & 7))),
 		       (ut64) ((ctrl.ttbr0 & ((1 << (13 - (ctrl.ttbcr & 7) + 1)) - (1 << 5))) >> 6),
-		       (ut64) ((ctrl.ttbr0 & 0x18) >> 3), fset (ctrl.ttbr0, 2), fset (ctrl.ttbr0, 1), fset (ctrl.ttbr0, 0));
-	io->cb_printf ("\n");
+		       (ut64) ((ctrl.ttbr0 & 0x18) >> 3), FSET (ctrl.ttbr0, 2), FSET (ctrl.ttbr0, 1), FSET (ctrl.ttbr0, 0));
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("TTBR1: 0x%"PFMT64x"\n", (ut64) ctrl.ttbr1);
-	io->cb_printf (" [*] Translation table base 1:  0x%"PFMT64x"\n"
+	r_strbuf_appendf (sb, "TTBR1: 0x%"PFMT64x"\n", (ut64) ctrl.ttbr1);
+	r_strbuf_appendf (sb, " [*] Translation table base 1:  0x%"PFMT64x"\n"
 		       " [*] UNP/SBZ:                   0x%"PFMT64x"\n"
 		       " [*] RGN:                       0x%"PFMT64x"\n"
 		       " [*] P:                         %d\n"
 		       " [*] S:                         %d\n"
 		       " [*] C:                         %d\n",
 		       (ut64) ((ctrl.ttbr1 & (0xffffffff << 14)) >> 14), (ut64) ((ctrl.ttbr1 & ((1 << (13 + 1)) - (1 << 5))) >> 6),
-		       (ut64) ((ctrl.ttbr1 & 0x18) >> 3), fset (ctrl.ttbr1, 2), fset (ctrl.ttbr1, 1), fset (ctrl.ttbr1, 0));
-	io->cb_printf ("\n");
+		       (ut64) ((ctrl.ttbr1 & 0x18) >> 3), FSET (ctrl.ttbr1, 2), FSET (ctrl.ttbr1, 1), FSET (ctrl.ttbr1, 0));
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("TTBCR: 0x%"PFMT64x"\n", (ut64) ctrl.ttbcr);
-	io->cb_printf (" [*] N:    %d\n", ctrl.ttbcr & 7);
-	io->cb_printf ("\n");
+	r_strbuf_appendf (sb, "TTBCR: 0x%"PFMT64x"\n", (ut64) ctrl.ttbcr);
+	r_strbuf_appendf (sb, " [*] N:    %d\n", ctrl.ttbcr & 7);
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("C1: 0x%"PFMT64x"\n", (ut64) ctrl.c1);
-	io->cb_printf (" [*] AFE:    %d\n"
+	r_strbuf_appendf (sb, "C1: 0x%"PFMT64x"\n", (ut64) ctrl.c1);
+	r_strbuf_appendf (sb, " [*] AFE:    %d\n"
 		       " [*] TRE:    %d\n"
 		       " [*] EE:     %d\n"
 		       " [*] VE:     %d\n"
@@ -120,22 +122,22 @@ static void arm_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       " [*] C:      %d\n"
 		       " [*] A:      %d\n"
 		       " [*] M:      %d\n",
-		       fset (ctrl.c1, 29), fset (ctrl.c1, 28), fset (ctrl.c1, 25), fset (ctrl.c1, 24),
-		       fset (ctrl.c1, 23), fset (ctrl.c1, 22), fset (ctrl.c1, 21), fset (ctrl.c1, 18),
-		       fset (ctrl.c1, 16), fset (ctrl.c1, 15), fset (ctrl.c1, 14), fset (ctrl.c1, 13),
-		       fset (ctrl.c1, 12), fset (ctrl.c1, 11), fset (ctrl.c1, 10), fset (ctrl.c1, 9),
-		       fset (ctrl.c1, 8), fset (ctrl.c1, 7), fset (ctrl.c1, 3), fset (ctrl.c1, 2),
-		       fset (ctrl.c1, 1), fset (ctrl.c1, 0));
-	io->cb_printf ("\n");
+		       FSET (ctrl.c1, 29), FSET (ctrl.c1, 28), FSET (ctrl.c1, 25), FSET (ctrl.c1, 24),
+		       FSET (ctrl.c1, 23), FSET (ctrl.c1, 22), FSET (ctrl.c1, 21), FSET (ctrl.c1, 18),
+		       FSET (ctrl.c1, 16), FSET (ctrl.c1, 15), FSET (ctrl.c1, 14), FSET (ctrl.c1, 13),
+		       FSET (ctrl.c1, 12), FSET (ctrl.c1, 11), FSET (ctrl.c1, 10), FSET (ctrl.c1, 9),
+		       FSET (ctrl.c1, 8), FSET (ctrl.c1, 7), FSET (ctrl.c1, 3), FSET (ctrl.c1, 2),
+		       FSET (ctrl.c1, 1), FSET (ctrl.c1, 0));
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("C3: 0x%"PFMT64x"\n", (ut64) ctrl.c3);
+	r_strbuf_appendf (sb, "C3: 0x%"PFMT64x"\n", (ut64) ctrl.c3);
 }
 
 #elif __arm64__ || __aarch64__
 /*ARM Cortex-A57 and ARM Cortex-A72. This might show some wrong values for other processor.*/
-static void arm64_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
-	io->cb_printf ("SCTLR_EL1: 0x%"PFMTSZx"\n", ctrl.sctlr_el1);
-	io->cb_printf (" [*] UCI:     %d\n"
+static void append_ctrl_reg_details(RStrBuf *sb, struct r2k_control_reg ctrl) {
+	r_strbuf_appendf (sb, "SCTLR_EL1: 0x%"PFMTSZx"\n", ctrl.sctlr_el1);
+	r_strbuf_appendf (sb, " [*] UCI:     %d\n"
 		       " [*] EE:      %d\n"
 		       " [*] E0E:     %d\n"
 		       " [*] WXN:     %d\n"
@@ -154,27 +156,27 @@ static void arm64_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       " [*] C:       %d\n"
 		       " [*] A:       %d\n"
 		       " [*] M:       %d\n",
-		       fset (ctrl.sctlr_el1, 26), fset (ctrl.sctlr_el1, 25), fset (ctrl.sctlr_el1, 24), fset (ctrl.sctlr_el1, 19),
-		       fset (ctrl.sctlr_el1, 18), fset (ctrl.sctlr_el1, 16), fset (ctrl.sctlr_el1, 15), fset (ctrl.sctlr_el1, 14),
-		       fset (ctrl.sctlr_el1, 12), fset (ctrl.sctlr_el1, 9), fset (ctrl.sctlr_el1, 8), fset (ctrl.sctlr_el1, 7),
-		       fset (ctrl.sctlr_el1, 6), fset (ctrl.sctlr_el1, 5), fset (ctrl.sctlr_el1, 4), fset (ctrl.sctlr_el1, 3),
-		       fset (ctrl.sctlr_el1, 2), fset (ctrl.sctlr_el1, 1), fset (ctrl.sctlr_el1, 0));
-	io->cb_printf ("\n");
+		       FSET (ctrl.sctlr_el1, 26), FSET (ctrl.sctlr_el1, 25), FSET (ctrl.sctlr_el1, 24), FSET (ctrl.sctlr_el1, 19),
+		       FSET (ctrl.sctlr_el1, 18), FSET (ctrl.sctlr_el1, 16), FSET (ctrl.sctlr_el1, 15), FSET (ctrl.sctlr_el1, 14),
+		       FSET (ctrl.sctlr_el1, 12), FSET (ctrl.sctlr_el1, 9), FSET (ctrl.sctlr_el1, 8), FSET (ctrl.sctlr_el1, 7),
+		       FSET (ctrl.sctlr_el1, 6), FSET (ctrl.sctlr_el1, 5), FSET (ctrl.sctlr_el1, 4), FSET (ctrl.sctlr_el1, 3),
+		       FSET (ctrl.sctlr_el1, 2), FSET (ctrl.sctlr_el1, 1), FSET (ctrl.sctlr_el1, 0));
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("TTBR0_EL1: 0x%"PFMTSZx"\n", ctrl.ttbr0_el1);
-	io->cb_printf (" [*] ASID [63:48]:    0x%"PFMT64x"\n"
+	r_strbuf_appendf (sb, "TTBR0_EL1: 0x%"PFMTSZx"\n", ctrl.ttbr0_el1);
+	r_strbuf_appendf (sb, " [*] ASID [63:48]:    0x%"PFMT64x"\n"
 		       " [*] BADDR [47:10]:   0x%"PFMT64x"\n",
-		       (ctrl.ttbr0_el1 & 0xffff000000000000LLU) >> 48, (ctrl.ttbr0_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
-	io->cb_printf ("\n");
+		       (ut64)(ctrl.ttbr0_el1 & 0xffff000000000000LLU) >> 48, (ctrl.ttbr0_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("TTBR1_EL1: 0x%"PFMTSZx"\n", ctrl.ttbr1_el1);
-	io->cb_printf (" [*] ASID [63:48]:    0x%"PFMT64x"\n"
+	r_strbuf_appendf (sb, "TTBR1_EL1: 0x%"PFMTSZx"\n", ctrl.ttbr1_el1);
+	r_strbuf_appendf (sb, " [*] ASID [63:48]:    0x%"PFMT64x"\n"
 		       " [*] BADDR [47:10]:   0x%"PFMT64x"\n",
-		       (ctrl.ttbr1_el1 & 0xffff000000000000LLU) >> 48, (ctrl.ttbr1_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
-	io->cb_printf ("\n");
+		       (ut64)(ctrl.ttbr1_el1 & 0xffff000000000000LLU) >> 48, (ctrl.ttbr1_el1 & ((((ut64) 1) << (47 + 1)) - (1 << 10))) >> 10);
+	r_strbuf_append (sb, "\n");
 
-	io->cb_printf ("TCR_EL1: 0x%"PFMTSZx"\n", ctrl.tcr_el1);
-	io->cb_printf (" [*] TBI1:    %d\n"
+	r_strbuf_appendf (sb, "TCR_EL1: 0x%"PFMTSZx"\n", ctrl.tcr_el1);
+	r_strbuf_appendf (sb, " [*] TBI1:    %d\n"
 		       " [*] TBI0:    %d\n"
 		       " [*] AS:      %d\n"
 		       " [*] IPS:     %d\n"
@@ -191,75 +193,63 @@ static void arm64_ctrl_reg_pretty_print (RIO *io, struct r2k_control_reg ctrl) {
 		       " [*] IRGN0:   %d\n"
 		       " [*] EPD0:    %d\n"
 		       " [*] T0SZ:    %d\n",
-		       fset (ctrl.tcr_el1, 38), fset (ctrl.tcr_el1, 37), fset (ctrl.tcr_el1, 36),
-		       (int)(ctrl.tcr_el1 >> 32) & 0x7, fset (ctrl.tcr_el1, 30), (int)(ctrl.tcr_el1 >> 28) & 0x3,
-		       (int)(ctrl.tcr_el1 >> 26) & 0x3, (int)(ctrl.tcr_el1 >> 24) & 0x3, fset (ctrl.tcr_el1, 23),
-		       fset (ctrl.tcr_el1, 22), (int)(ctrl.tcr_el1 >> 16) & 0x3f, fset (ctrl.tcr_el1, 14),
+		       FSET (ctrl.tcr_el1, 38), FSET (ctrl.tcr_el1, 37), FSET (ctrl.tcr_el1, 36),
+		       (int)(ctrl.tcr_el1 >> 32) & 0x7, FSET (ctrl.tcr_el1, 30), (int)(ctrl.tcr_el1 >> 28) & 0x3,
+		       (int)(ctrl.tcr_el1 >> 26) & 0x3, (int)(ctrl.tcr_el1 >> 24) & 0x3, FSET (ctrl.tcr_el1, 23),
+		       FSET (ctrl.tcr_el1, 22), (int)(ctrl.tcr_el1 >> 16) & 0x3f, FSET (ctrl.tcr_el1, 14),
 		       (int)(ctrl.tcr_el1 >> 12) & 0x3, (int)(ctrl.tcr_el1 >> 10) & 0x3, (int)(ctrl.tcr_el1 >> 8) & 0x3,
-		       fset (ctrl.tcr_el1, 7), (int)ctrl.tcr_el1 & 0x3f);
+		       FSET (ctrl.tcr_el1, 7), (int)ctrl.tcr_el1 & 0x3f);
 }
 #endif
 
-static const char* getargpos (const char *buf, int pos) {
-	int i;
-	for (i = 0; buf && i < pos; i++) {
-		buf = strchr (buf, ' ');
-		if (!buf) {
-			break;
-		}
-		buf = r_str_ichr ((char *) buf, ' ');
+// Consume one integer token without narrowing native-width kernel addresses.
+static bool parse_number(const char **args, size_t *value, size_t max) {
+	const char *str = r_str_trim_head_ro (*args);
+	char *end;
+	errno = 0;
+	ut64 number = strtoull (str, &end, 0);
+	if (!*str || *str == '-' || end == str || errno == ERANGE || number > max || (*end && !IS_WHITECHAR (*end))) {
+		return false;
 	}
-	return buf;
+	*value = number;
+	*args = r_str_trim_head_ro (end);
+	return true;
 }
 
-static size_t getvalue (const char *buf, int pos) {
-	size_t ret;
-	buf = getargpos (buf, pos);
-	if (buf) {
-		ret = strtoul (buf, 0, 0);
-	} else {
-		ret = -1;
-	}
-	return ret;
-}
-
-static void print_help(RIO *io, char *cmd, int p_usage) {
-	int i = 0;
-	int cmd_len = cmd ? strlen (cmd) : 0;
-	const char* usage = "Usage:   \\[MprRw][lpP] [args...]";
-	const char* help_msg[] = {
-		"\\dm              Print kernel memory map (or process if r2k.io==1)",
-		"\\dr              Print control registers",
-		"\\dR              Print control registers in detailed mode",
-		"\\dp [pid]        Print current selected pid or change it",
-		"\\e r2k.io=[012]  Read/Write from 0: Linear, 1: Process, 2: Physical addresses"
-	};
-	const char *help_msg_old[] = {
-		"\\M                      Print kernel memory map",
-		"\\b      beid [pid]      Change r2k backend. pid is required when beid is 1.",
+static void append_help(RStrBuf *sb, const char *cmd, bool p_usage) {
+	size_t i, cmd_len = cmd? strlen (cmd): 0;
+	const char *help[] = {
+		":dm [pid]        Print kernel memory map (or process if r2k.io==1)",
+		":dr              Print control registers",
+		":dR              Print control registers in detailed mode",
+		":dp [pid]        Print current selected pid or change it",
+		":e r2k.io=[012]  Read/Write from 0: Linear, 1: Process, 2: Physical addresses",
+		":e r2k.wp=[01]   Honor arch write protection (enabled by default)",
+		":M                      Print kernel memory map",
+		":b      beid [pid]      Change r2k backend. pid is required when beid is 1.",
 		"                         0: linear address; 1: process address; 2: physical address",
-		"\\p      pid             Print process information",
-		"\\rl     addr len        Read from linear address",
-		"\\rp     pid addr len    Read from process address",
-		"\\rP     addr len        Read physical address",
-		"\\R[p]                   Print control registers. Use =!Rp for detailed description",
-		"\\wl[x]  addr input      Write at linear address. Use =!wlx for input in hex",
-		"\\wp[x]  pid addr input  Write at process address. Use =!wpx for input in hex",
-		"\\wP[x]  addr input      Write at physical address. Use =!wPx for input in hex",
-		"\\W      1|0             Honor arch write protect (1 enable WP, 0 disable WP)"
+		":p[*]   pid             Print process information (or flags with *)",
+		":rl     addr len        Read from linear address",
+		":rp     pid addr len    Read from process address",
+		":rP     addr len        Read physical address",
+		":R[p]                   Print control registers. Use :Rp for detailed description",
+		":wl[x]  addr input      Write at linear address. Use :wlx for input in hex",
+		":wp[x]  pid addr input  Write at process address. Use :wpx for input in hex",
+		":wP[x]  addr input      Write at physical address. Use :wPx for input in hex",
+		":W      1|0             Honor arch write protect (1 enable WP, 0 disable WP)"
 	};
 	if (p_usage) {
-		io->cb_printf ("%s\n", usage);
+		r_strbuf_append (sb, "Usage: :command [args...]\n");
 	}
-	for (i = 0; i < (sizeof (help_msg) / sizeof (char*)); i++) {
-		if (!cmd || !strncmp (cmd, help_msg[i]+1, cmd_len)) {
-			io->cb_printf ("%s\n", help_msg[i]);
-		}
+	if (cmd_len == 3 && cmd[0] == 'w' && cmd[2] == 'x') {
+		cmd_len = 2;
 	}
-	io->cb_printf ("\nOld Commands: (deprecated)\n");
-	for (i = 0; i < (sizeof (help_msg_old) / sizeof (char*)); i++) {
-		if (!cmd || !strncmp (cmd, help_msg_old[i]+1, cmd_len)) {
-			io->cb_printf ("%s\n", help_msg_old[i]);
+	if (cmd_len == 2 && !strcmp (cmd, "p*")) {
+		cmd_len = 1;
+	}
+	for (i = 0; i < R_ARRAY_SIZE (help); i++) {
+		if (!cmd || !strncmp (cmd, help[i] + 1, cmd_len)) {
+			r_strbuf_appendf (sb, "%s\n", help[i]);
 		}
 	}
 }
@@ -277,7 +267,7 @@ int ReadMemory(RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, size_t address
 		data.pid = pid;
 		data.addr = address;
 		data.len = len;
-		data.buff = (ut8 *) calloc (len + 1, 1);
+		data.buff = (ut8 *) calloc (len, 1);
 		if (!data.buff) {
 			return -1;
 		}
@@ -336,9 +326,9 @@ int ReadMemory(RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, size_t address
 
 		free (data.buff);
 	} else if (!buf) {
-		io->cb_printf ("Invalid input buffer.\n");
+		R_LOG_ERROR ("Invalid input buffer");
 	} else {
-		io->cb_printf ("IOCTL device not initialized.\n");
+		R_LOG_WARN ("IOCTL device not initialized");
 	}
 	return ret;
 }
@@ -352,7 +342,7 @@ int WriteMemory(RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, ut64 address,
 		data.pid = pid;
 		data.addr = address;
 		data.len = len;
-		data.buff = (ut8 *) calloc (len + 1, 1);
+		data.buff = (ut8 *) calloc (len, 1);
 		data.wp = r2k_struct.wp;
 
 		if (!data.buff) {
@@ -364,493 +354,311 @@ int WriteMemory(RIO *io, RIODesc *iodesc, int ioctl_n, size_t pid, ut64 address,
 		if (!ret) {
 			ret = len;
 		} else {
-			io->cb_printf ("Write failed. ioctl err: %s\n", strerror (errno));
+			R_LOG_ERROR ("Write failed. ioctl err: %s", strerror (errno));
 			ret = -1;
 		}
 
 		free (data.buff);
 	} else if (!buf) {
-		io->cb_printf ("Invalid input buffer.\n");
+		R_LOG_ERROR ("Invalid input buffer");
 	} else {
-		io->cb_printf ("IOCTL device not initialized.\n");
+		R_LOG_WARN ("IOCTL device not initialized");
 	}
 	return ret;
 }
 
-int run_old_command(RIO *io, RIODesc *iodesc, const char *buf) {
-	int ret, inphex, ioctl_n;
-	size_t pid, addr, len;
-	ut8 *databuf = NULL;
-	switch (*buf) {
-	case 'W':
-		{
-			if (buf[1] != ' ') {
-				io->cb_printf ("Write Protect: %d\n", r2k_struct.wp);
-				io->cb_printf ("Usage:\n");
-				print_help (io, "W", 0);
-				break;
-			}
-
-			int wp = getvalue (buf, 1);
-			if (wp < 0 || wp > 1) {
-				io->cb_printf ("Invalid usage of W\n");
-				print_help (io, "W", 0);
-				break;
-			}
-			r2k_struct.wp = (ut8)wp;
-		}
-		break;
-	case 'b':
-		{
-			char *cmd = NULL;
-			if (buf[1] != ' ') {
-				io->cb_printf ("beid: %d\n", r2k_struct.beid);
-				io->cb_printf ("pid:  %d\n", r2k_struct.pid);
-				io->cb_printf ("Usage:\n");
-				print_help (io, "b", 0);
-				goto end;
-			}
-			int beid = getvalue (buf, 1);
-			int pid = getvalue (buf, 2);
-			if (beid < 0 || beid > 2) {
-				io->cb_printf ("Invalid usage of b\n");
-				print_help (io, "b", 0);
-				break;
-			}
-			if (beid == 1 && pid < 0) {
-				io->cb_printf ("Invalid pid read.\n");
-				print_help (io, "b", 0);
-				break;
-			}
-			r2k_struct.beid = beid;
-			r2k_struct.pid = (beid == 1) ? pid : 0;
-
-			cmd = (char *) malloc (27);
-			if (!cmd) {
-				io->cb_printf ("io_r2k_linux : Malloc failed. Seeking to 0x0\n");
-				io->corebind.cmd (io->corebind.core, "s 0");
-			} else {
-				sprintf (cmd, "s 0x%"PFMT64x, io->off);
-				io->corebind.cmd (io->corebind.core, cmd);
-				free (cmd);
-			}
-		}
-		break;
-	case 'r':
-		{
-			RPrint *print = r_print_new ();
-			switch (buf[1]) {
-			case 'l':
-				//read linear address
-				//=! rl addr len
-				if (buf[2] != ' ') {
-					print_help (io, "rl", 0);
-					goto end;
-				}
-				pid = 0;
-				addr = getvalue (buf, 1);
-				len = getvalue (buf, 2);
-				if (addr == -1 || len == -1) {
-					io->cb_printf ("Invalid number of arguments.\n");
-					print_help (io, "rl", 0);
-					goto end;
-				}
-				ioctl_n = IOCTL_READ_KERNEL_MEMORY;
-				break;
-			case 'p':
-				//read process address
-				//=! rp pid address len
-				if (buf[2] != ' ') {
-					print_help (io, "rp", 0);
-					goto end;
-				}
-				pid = getvalue (buf, 1);
-				addr = getvalue (buf, 2);
-				len = getvalue (buf, 3);
-				if (pid == -1 || addr == -1 || len == -1) {
-					io->cb_printf ("Invalid number of arguments.\n");
-					print_help (io, "rp", 0);
-					goto end;;
-				}
-				ioctl_n = IOCTL_READ_PROCESS_ADDR;
-				break;
-			case 'P':
-				//read physical address
-				//=! rP address len
-				if (buf[2] != ' ') {
-					print_help (io, "rP", 0);
-					goto end;
-				}
-				pid = 0;
-				addr = getvalue (buf, 1);
-				len = getvalue (buf, 2);
-				if (addr == -1 || len == -1) {
-					io->cb_printf ("Invalid number of arguments.\n");
-					print_help (io, "rP", 0);
-					goto end;
-				}
-				ioctl_n = IOCTL_READ_PHYSICAL_ADDR;
-				break;
-			default:
-				print_help(io, "r", 0);
-				r_print_free (print);
-				goto end;
-			}
-			databuf = (ut8 *) calloc (len + 1, 1);
-			if (databuf) {
-				ret = ReadMemory (io, iodesc, ioctl_n, pid, addr, databuf, len);
-				if (ret > 0) {
-					r_print_hexdump (print, addr, (const ut8 *) databuf, ret, 16, 1, 1);
-				}
-			} else {
-				io->cb_printf ("Failed to allocate buffer\n");
-			}
-			r_print_free (print);
-		}
-		break;
-	case 'w':
-		inphex = (buf[2] == 'x') ? 1 : 0;
-		switch (buf[1]) {
-		case 'l':
-			//write linear address
-			//=! wl addr str
-			if ((inphex && buf[3] != ' ') || (!inphex && buf[2] != ' ')) {
-				print_help (io, "wl", 0);
-				goto end;
-			}
-			pid = 0;
-			addr = getvalue (buf, 1);
-			buf = getargpos (buf, 2);
-			if (addr == -1 || !buf) {
-				io->cb_printf ("Invalid number of arguments.\n");
-				print_help (io, "wl", 0);
-				goto end;
-			}
-			ioctl_n = IOCTL_WRITE_KERNEL_MEMORY;
-			break;
-		case 'p':
-			//write process address
-			//=! wp pid address str
-			if ((inphex && buf[3] != ' ') || (!inphex && buf[2] != ' ')) {
-				print_help (io, "wp", 0);
-				goto end;
-			}
-			pid = getvalue (buf, 1);
-			addr = getvalue (buf, 2);
-			buf = getargpos (buf, 3);
-			if (pid == -1 || addr == -1 || !buf) {
-				io->cb_printf ("Invalid number of arguments.\n");
-				print_help (io, "wp", 0);
-				goto end;
-			}
-			ioctl_n = IOCTL_WRITE_PROCESS_ADDR;
-			break;
-		case 'P':
-			//write physical address
-			//=! wP address str
-			if ((inphex && buf[3] != ' ') || (!inphex && buf[2] != ' ')) {
-				print_help (io, "wP", 0);
-				goto end;
-			}
-			pid = 0;
-			addr = getvalue (buf, 1);
-			buf = getargpos (buf, 2);
-			if (addr == -1 || !buf) {
-				io->cb_printf ("Invalid number of arguments.\n");
-				print_help (io, "wP", 0);
-				goto end;
-			}
-			ioctl_n = IOCTL_WRITE_PHYSICAL_ADDR;
-			break;
-		default:
-			print_help (io, "w", 0);
-			goto end;
-		}
-		// coverity says this cant happen, but it doesnt hurts to add a check
-		if (!buf) {
+static void append_process_info(int fd, RStrBuf *sb, int pid, bool fflag) {
+	struct r2k_proc_info data = { .pid = pid };
+	if (ioctl (fd, IOCTL_PRINT_PROC_INFO, &data)) {
+		R_LOG_ERROR ("ioctl: %s", strerror (errno));
+		return;
+	}
+	struct r2k_proc_info *pd = &data;
+	const ut64 count = R_ARRAY_SIZE (pd->vmareastruct);
+	if (!fflag) {
+		r_strbuf_appendf (sb, "pid = %d\nprocess name = %.16s\n", pd->pid, pd->comm);
+		r_strbuf_appendf (sb, "task_struct = 0x%08"PFMT64x"\n", (ut64)pd->task);
+	}
+	ut64 i = 0;
+	int j = 0;
+	while (i + 7 < count) {
+		if (!pd->vmareastruct[i] && !pd->vmareastruct[i + 1]) {
 			break;
 		}
-		len = strlen (buf);
-		databuf = (ut8 *) calloc (len + 1, 1);
-		if (databuf) {
-			if (inphex) {
-				len = r_hex_str2bin (buf, databuf);
-			} else {
-				memcpy (databuf, buf, strlen (buf) + 1);
-				len = r_str_unescape ((char *) databuf);
-			}
-			ret = WriteMemory (io, iodesc, ioctl_n, pid, addr, (const ut8 *) databuf, len);
+		const char *name = (const char *)&pd->vmareastruct[i + 7];
+		const size_t maxbytes = (count - (i + 7)) * sizeof (size_t);
+		const size_t namelen = r_str_nlen (name, maxbytes);
+		if (namelen == 0 || namelen >= maxbytes) {
+			break;
+		}
+		const ut64 nextstart = i + 7 + (namelen - 1 + sizeof (size_t)) / sizeof (size_t);
+		if (nextstart <= i || nextstart > count) {
+			break;
+		}
+		if (fflag) {
+			r_strbuf_appendf (sb, "'f pid.%d.%s.%d.start=0x%"PFMT64x"\n", pd->pid, name, j, (ut64) pd->vmareastruct[i]);
+			r_strbuf_appendf (sb, "'f pid.%d.%s.%d.end=0x%"PFMT64x"\n", pd->pid, name, j, (ut64) pd->vmareastruct[i + 1]);
 		} else {
-			eprintf ("Failed to allocate buffer.\n");
+			const size_t flags = pd->vmareastruct[i + 2];
+			r_strbuf_appendf (sb, "0x%08"PFMT64x" - 0x%08"PFMT64x" %c%c%c%c 0x%08"PFMT64x" %02zu:%02zu %-8"PFMT64u"  %s\n",
+				(ut64) pd->vmareastruct[i], (ut64) pd->vmareastruct[i + 1],
+				(flags & VM_READ) ? 'r' : '-',
+				(flags & VM_WRITE) ? 'w' : '-',
+				(flags & VM_EXEC) ? 'x' : '-',
+				(flags & VM_MAYSHARE) ? 's' : 'p',
+				(ut64) pd->vmareastruct[i + 3], pd->vmareastruct[i + 4],
+				pd->vmareastruct[i + 5], (ut64) pd->vmareastruct[i + 6], name);
 		}
-		break;
-	case 'M':
-		{
-			//Print kernel memory map.
-			//=! M
-			int i, j;
-			struct r2k_kernel_maps map_data;
-			struct r2k_kernel_map_info *info;
-			long page_size = sysconf (_SC_PAGESIZE);
+		j++;
+		i = nextstart;
+	}
+	if (fflag) {
+		r_strbuf_appendf (sb, "'f pid.%d.task_struct = 0x%08"PFMT64x"\n", pd->pid, (ut64)pd->task);
+	} else {
+		r_strbuf_appendf (sb, "STACK BASE ADDRESS = 0x%"PFMT64x"\n", (ut64)pd->stack);
+	}
+}
 
-			ioctl_n = IOCTL_GET_KERNEL_MAP;
-			ret = ioctl ((int)(size_t)iodesc->data, ioctl_n, &map_data);
+static void append_kernel_map(int fd, RStrBuf *sb) {
+	int i, j;
+	struct r2k_kernel_maps map_data = {0};
+	struct r2k_kernel_map_info *info;
+	long page_size = sysconf (_SC_PAGESIZE);
 
-			if (ret < 0) {
-				io->cb_printf ("ioctl err: %s\n", strerror (errno));
-				break;
-			}
+	int ret = ioctl (fd, IOCTL_GET_KERNEL_MAP, &map_data);
+	if (ret < 0) {
+		R_LOG_ERROR ("ioctl: %s", strerror (errno));
+		return;
+	}
+	r_strbuf_appendf (sb, "map_data.size: %d, map_data.n_entries: %d\n", map_data.size, map_data.n_entries);
+	if (map_data.size <= 0 || map_data.n_entries < 0 ||
+			(size_t)map_data.n_entries > (size_t)map_data.size / sizeof (*info)) {
+		R_LOG_ERROR ("Invalid kernel map size");
+		return;
+	}
+	info = mmap (0, map_data.size, PROT_READ, MAP_SHARED, fd, 0);
+	if (info == MAP_FAILED) {
+		R_LOG_ERROR ("mmap: %s", strerror (errno));
+		return;
+	}
 
-			io->cb_printf ("map_data.size: %d, map_data.n_entries: %d\n", map_data.size, map_data.n_entries);
-			info = mmap (0, map_data.size, PROT_READ, MAP_SHARED, (int)(size_t)iodesc->data, 0);
-			if (info == MAP_FAILED) {
-				io->cb_printf ("mmap err: %s\n", strerror (errno));
-				break;
-			}
-
-			for (i = 0; i < map_data.n_entries; i++) {
-				struct r2k_kernel_map_info *in = &info[i];
-				io->cb_printf ("start_addr: 0x%"PFMT64x"\n", (ut64) in->start_addr);
-				io->cb_printf ("end_addr: 0x%"PFMT64x"\n", (ut64) in->end_addr);
-				io->cb_printf ("n_pages: %d (%ld Kbytes)\n", in->n_pages, (in->n_pages * page_size) / 1024);
-				io->cb_printf ("n_phys_addr: %d\n", in->n_phys_addr);
-				for (j = 0; j < in->n_phys_addr; j++) {
-					io->cb_printf ("  phys_addr: 0x%"PFMT64x"\n", (ut64) in->phys_addr[j]);
-				}
-				io->cb_printf ("\n");
-			}
-
-			if (munmap (info, map_data.size) == -1) {
-				io->cb_printf ("munmap failed.\n");
-			}
+	for (i = 0; i < map_data.n_entries; i++) {
+		struct r2k_kernel_map_info *in = &info[i];
+		r_strbuf_appendf (sb, "start_addr: 0x%"PFMT64x"\n", (ut64) in->start_addr);
+		r_strbuf_appendf (sb, "end_addr: 0x%"PFMT64x"\n", (ut64) in->end_addr);
+		r_strbuf_appendf (sb, "n_pages: %d (%ld Kbytes)\n", in->n_pages, (in->n_pages * page_size) / 1024);
+		r_strbuf_appendf (sb, "n_phys_addr: %d\n", in->n_phys_addr);
+		for (j = 0; j < R_MIN (in->n_phys_addr, MAX_PHYS_ADDR); j++) {
+			r_strbuf_appendf (sb, "  phys_addr: 0x%"PFMT64x"\n", (ut64) in->phys_addr[j]);
 		}
-		break;
-	case 'R':
-		{
-			//Read control registers
-			//=! R[p]
-			struct r2k_control_reg reg_data;
-			ioctl_n = IOCTL_READ_CONTROL_REG;
-			ret = ioctl ((int)(size_t)iodesc->data, ioctl_n, &reg_data);
+		r_strbuf_append (sb, "\n");
+	}
 
-			if (ret) {
-				io->cb_printf ("ioctl err: %s\n", strerror (errno));
-				break;
-			}
+	if (munmap (info, map_data.size) == -1) {
+		R_LOG_ERROR ("munmap failed");
+	}
+}
+
+static void append_ctrl_regs(int fd, RStrBuf *sb, bool pretty) {
+	struct r2k_control_reg reg_data = {0};
+	int ret = ioctl (fd, IOCTL_READ_CONTROL_REG, &reg_data);
+	if (ret) {
+		R_LOG_ERROR ("ioctl err: %s", strerror (errno));
+		return;
+	}
 
 #if __i386__ || __x86_64__
-			//Print cr1 as null instead of random value from kernel land.
-			reg_data.cr1 = 0;
-			if (buf[1] != 0 && buf[1] == 'p') {
-				x86_ctrl_reg_pretty_print (io, reg_data);
-			} else {
-				io->cb_printf ("cr0 = 0x%"PFMT64x"\n", (ut64) reg_data.cr0);
-				io->cb_printf ("cr1 = 0x%"PFMT64x"\n", (ut64) reg_data.cr1);
-				io->cb_printf ("cr2 = 0x%"PFMT64x"\n", (ut64) reg_data.cr2);
-				io->cb_printf ("cr3 = 0x%"PFMT64x"\n", (ut64) reg_data.cr3);
-				io->cb_printf ("cr4 = 0x%"PFMT64x"\n", (ut64) reg_data.cr4);
+	//Print cr1 as null instead of random value from kernel land.
+	reg_data.cr1 = 0;
+	if (pretty) {
+		append_ctrl_reg_details (sb, reg_data);
+	} else {
+		r_strbuf_appendf (sb, "cr0 = 0x%"PFMT64x"\n", (ut64) reg_data.cr0);
+		r_strbuf_appendf (sb, "cr1 = 0x%"PFMT64x"\n", (ut64) reg_data.cr1);
+		r_strbuf_appendf (sb, "cr2 = 0x%"PFMT64x"\n", (ut64) reg_data.cr2);
+		r_strbuf_appendf (sb, "cr3 = 0x%"PFMT64x"\n", (ut64) reg_data.cr3);
+		r_strbuf_appendf (sb, "cr4 = 0x%"PFMT64x"\n", (ut64) reg_data.cr4);
 #if __x86_64__
-				io->cb_printf ("cr8 = 0x%"PFMT64x"\n", (ut64) reg_data.cr8);
+		r_strbuf_appendf (sb, "cr8 = 0x%"PFMT64x"\n", (ut64) reg_data.cr8);
 #endif
-			}
+	}
 #elif __arm__
-			if (buf[1] != 0 && buf[1] == 'p') {
-				arm_ctrl_reg_pretty_print(io, reg_data);
-			} else {
-				io->cb_printf ("ttbr0 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr0);
-				io->cb_printf ("ttbr1 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr1);
-				io->cb_printf ("ttbcr = 0x%"PFMT64x"\n", (ut64) reg_data.ttbcr);
-				io->cb_printf ("c1    = 0x%"PFMT64x"\n", (ut64) reg_data.c1);
-				io->cb_printf ("c3    = 0x%"PFMT64x"\n", (ut64) reg_data.c3);
-			}
+	if (pretty) {
+		append_ctrl_reg_details (sb, reg_data);
+	} else {
+		r_strbuf_appendf (sb, "ttbr0 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr0);
+		r_strbuf_appendf (sb, "ttbr1 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr1);
+		r_strbuf_appendf (sb, "ttbcr = 0x%"PFMT64x"\n", (ut64) reg_data.ttbcr);
+		r_strbuf_appendf (sb, "c1    = 0x%"PFMT64x"\n", (ut64) reg_data.c1);
+		r_strbuf_appendf (sb, "c3    = 0x%"PFMT64x"\n", (ut64) reg_data.c3);
+	}
 #elif __arm64__ || __aarch64__
-			if (buf[1] != 0 && buf[1] == 'p') {
-				arm64_ctrl_reg_pretty_print(io, reg_data);
-			} else {
-				io->cb_printf ("sctlr_el1 = 0x%"PFMT64x"\n", (ut64) reg_data.sctlr_el1);
-				io->cb_printf ("ttbr0_el1 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr0_el1);
-				io->cb_printf ("ttbr1_el1 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr1_el1);
-				io->cb_printf ("tcr_el1   = 0x%"PFMT64x"\n", (ut64) reg_data.tcr_el1);
-			}
+	if (pretty) {
+		append_ctrl_reg_details (sb, reg_data);
+	} else {
+		r_strbuf_appendf (sb, "sctlr_el1 = 0x%"PFMT64x"\n", (ut64) reg_data.sctlr_el1);
+		r_strbuf_appendf (sb, "ttbr0_el1 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr0_el1);
+		r_strbuf_appendf (sb, "ttbr1_el1 = 0x%"PFMT64x"\n", (ut64) reg_data.ttbr1_el1);
+		r_strbuf_appendf (sb, "tcr_el1   = 0x%"PFMT64x"\n", (ut64) reg_data.tcr_el1);
+	}
 #endif
+}
+
+static void run_command(RIO *io, RIODesc *iodesc, RStrBuf *sb, const char *cmd, const char *args) {
+	int fd = (int)(size_t)iodesc->data;
+	size_t value, pid = r2k_struct.pid;
+	if (!strcmp (cmd, "M") || (!strcmp (cmd, "dm") && !*args && r2k_struct.beid != 1)) {
+		if (*args) {
+			goto invalid;
 		}
-		break;
-	case 'p':
-		{
-			//Print process info
-			//=! p pid
-			ut64 i;
-			ut64 nextstart;
-			ut64 buffsize;
-			bool fflag = 0;
-			struct r2k_proc_info proc_data;
-
-			if (*(buf + 1) == '*') {
-				fflag = 1;
+		append_kernel_map (fd, sb);
+	} else if (!strcmp (cmd, "p") || !strcmp (cmd, "p*") || !strcmp (cmd, "dm")) {
+		if ((*args || strcmp (cmd, "dm")) && !parse_number (&args, &pid, INT_MAX)) {
+			goto invalid;
+		}
+		if (*args) {
+			goto invalid;
+		}
+		append_process_info (fd, sb, pid, !strcmp (cmd, "p*"));
+	} else if (!strcmp (cmd, "R") || !strcmp (cmd, "Rp") || !strcmp (cmd, "dr") || !strcmp (cmd, "dR")) {
+		if (*args) {
+			goto invalid;
+		}
+		append_ctrl_regs (fd, sb, !strcmp (cmd, "Rp") || !strcmp (cmd, "dR"));
+	} else if (!strcmp (cmd, "dp")) {
+		if (*args) {
+			if (!parse_number (&args, &pid, INT_MAX) || *args) {
+				goto invalid;
 			}
-			switch (*(buf + 1)) {
-			case '*':
-				fflag = 1;
-				if (*(buf + 2) != ' ') {
-					print_help (io, "p*", 0);
-					goto end;
-				}
-				break;
-			case ' ':
-				break;
-			default:
-				print_help (io, "p", 0);
-				goto end;
+			r2k_struct.pid = pid;
+		}
+		r_strbuf_appendf (sb, "%d\n", r2k_struct.pid);
+	} else if (!strcmp (cmd, "b")) {
+		if (!*args) {
+			r_strbuf_appendf (sb, "beid: %d\npid:  %d\nUsage:\n", r2k_struct.beid, r2k_struct.pid);
+			append_help (sb, cmd, false);
+			return;
+		}
+		if (!parse_number (&args, &value, 2) ||
+				((value == 1 || *args) && !parse_number (&args, &pid, INT_MAX)) || *args) {
+			goto invalid;
+		}
+		r2k_struct.beid = value;
+		r2k_struct.pid = value == 1? pid: 0;
+		io->coreb.cmdf (io->coreb.core, "s 0x%"PFMT64x, io->off);
+	} else if (!strcmp (cmd, "W")) {
+		if (!*args) {
+			r_strbuf_appendf (sb, "Write Protect: %d\nUsage:\n", r2k_struct.wp);
+			append_help (sb, cmd, false);
+		} else if (parse_number (&args, &value, 1) && !*args) {
+			r2k_struct.wp = value;
+		} else {
+			goto invalid;
+		}
+	} else if (!strcmp (cmd, "e")) {
+		bool wp = r_str_startswith (args, "r2k.wp");
+		if (!wp && !r_str_startswith (args, "r2k.io")) {
+			goto invalid;
+		}
+		args = r_str_trim_head_ro (args + 6);
+		if (*args == '?' && !*r_str_trim_head_ro (args + 1)) {
+			r_strbuf_append (sb, wp
+				? "<bool> enable write protection (enabled by default)\n"
+				: "0: Linear memory\n1: Process memory\n2: Physical memory\n");
+			return;
+		}
+		if (*args) {
+			if (*args++ != '=' || !parse_number (&args, &value, wp? 1: 2) || *args) {
+				goto invalid;
 			}
-
-			pid = getvalue (buf, 1);
-			if (pid == -1) {
-				io->cb_printf ("Invalid number of arguments.\n");
-				print_help (io, "p", 0);
-				break;
-			}
-			proc_data.pid = pid;
-			ioctl_n = IOCTL_PRINT_PROC_INFO;
-
-			ret = ioctl ((int)(size_t)iodesc->data, ioctl_n, &proc_data);
-			if (ret) {
-				io->cb_printf ("ioctl err: %s\n", strerror (errno));
-				break;
-			}
-
-			buffsize = (ut64) (sizeof (proc_data.vmareastruct) / sizeof (proc_data.vmareastruct[0]));
-			if (fflag) {
-				int j = 0;
-				for (i = 0; i + 1 < buffsize;) {
-					nextstart = 0;
-					if (i + 7 < buffsize) {
-						nextstart = i + 7 + (strlen ((const char *)&(proc_data.vmareastruct[i + 7])) - 1 + sizeof (size_t)) / sizeof (size_t);
-					}
-					if (!proc_data.vmareastruct[i] && (i + 1 < buffsize) &&
-						!proc_data.vmareastruct[i + 1] &&
-					    nextstart > 0 && nextstart - 1 < buffsize) {
-						break;
-					}
-					io->cb_printf ("f pid.%d.%s.%d.start=0x%"PFMT64x"\n", proc_data.pid, (char*)&(proc_data.vmareastruct[i + 7]), j, (ut64) proc_data.vmareastruct[i]);
-					io->cb_printf ("f pid.%d.%s.%d.end=0x%"PFMT64x"\n", proc_data.pid, (char*)&(proc_data.vmareastruct[i + 7]), j, (ut64) proc_data.vmareastruct[i + 1]);
-					j += 1;
-					i = nextstart;
-				}
-				io->cb_printf ("f pid.%d.task_struct = 0x%08zu\n", proc_data.pid, proc_data.task);
+			if (wp) {
+				r2k_struct.wp = value;
 			} else {
-				io->cb_printf ("pid = %d\nprocess name = %s\n", proc_data.pid, proc_data.comm);
-				io->cb_printf ("task_struct = 0x%08zu\n", proc_data.task);
-				for (i = 0; i < buffsize && i  + 8 < sizeof (proc_data.vmareastruct) ;) {
-					nextstart = 0;
-					if (i + 7 < buffsize) {
-						nextstart = i + 7 + (strlen ((const char *)&(proc_data.vmareastruct[i + 7])) - 1 + sizeof (size_t)) / sizeof (size_t);
-					}
-					if (!proc_data.vmareastruct[i] && !proc_data.vmareastruct[i + 1] &&
-					    nextstart > 0 && nextstart - 1 < buffsize) {
-						break;
-					}
-					io->cb_printf ("0x%08"PFMT64x" - 0x%08"PFMT64x" %c%c%c%c 0x%08"PFMT64x" %02zu:%02zu %-8"PFMT64u"",
-							(ut64) proc_data.vmareastruct[i], (ut64) proc_data.vmareastruct[i+1],
-							proc_data.vmareastruct[i + 2] & VM_READ ? 'r' : '-',
-							proc_data.vmareastruct[i + 2] & VM_WRITE ? 'w' : '-',
-							proc_data.vmareastruct[i + 2] & VM_EXEC ? 'x' : '-',
-							proc_data.vmareastruct[i + 2] & VM_MAYSHARE ? 's' : 'p',
-							(ut64) proc_data.vmareastruct[i + 3], proc_data.vmareastruct[i + 4],
-							proc_data.vmareastruct[i + 5], (ut64) proc_data.vmareastruct[i + 6]);
-					io->cb_printf ("  %s\n", (char*)&(proc_data.vmareastruct[i + 7]));
-					i = nextstart;
+				r2k_struct.beid = value;
+				if (value != 1) {
+					r2k_struct.pid = 0;
 				}
-				io->cb_printf ("STACK BASE ADDRESS = 0x%zx\n", proc_data.stack);
+				io->coreb.cmdf (io->coreb.core, "s 0x%"PFMT64x, io->off);
 			}
 		}
-		break;
-	default:
-		{
-			print_help (io, NULL, 1);
+		if (wp) {
+			r_strbuf_appendf (sb, "%s\n", r_str_bool (r2k_struct.wp));
+		} else {
+			r_strbuf_appendf (sb, "%d\n", r2k_struct.beid);
 		}
+	} else if ((*cmd == 'r' || *cmd == 'w') && cmd[1]) {
+		bool write = *cmd == 'w';
+		bool hex = write && cmd[2] == 'x';
+		int request;
+		switch (cmd[1]) {
+		case 'l': request = write? IOCTL_WRITE_KERNEL_MEMORY: IOCTL_READ_KERNEL_MEMORY; break;
+		case 'p': request = write? IOCTL_WRITE_PROCESS_ADDR: IOCTL_READ_PROCESS_ADDR; break;
+		case 'P': request = write? IOCTL_WRITE_PHYSICAL_ADDR: IOCTL_READ_PHYSICAL_ADDR; break;
+		default: goto invalid;
+		}
+		size_t addr, len;
+		pid = 0;
+		if (cmd[hex? 3: 2] || (cmd[1] == 'p' && !parse_number (&args, &pid, INT_MAX)) ||
+				!parse_number (&args, &addr, SIZE_MAX) || !*args) {
+			goto invalid;
+		}
+		if (write) {
+			if (strlen (args) > INT_MAX) {
+				goto invalid;
+			}
+			ut8 *data = (ut8 *)strdup (args);
+			if (!data) {
+				return;
+			}
+			int count = hex? r_hex_str2bin (args, data): r_str_unescape ((char *)data);
+			bool valid = count > 0 && (size_t)count - 1 <= SIZE_MAX - addr;
+			if (valid) {
+				WriteMemory (io, iodesc, request, pid, addr, data, count);
+			}
+			free (data);
+			if (!valid) {
+				goto invalid;
+			}
+		} else {
+			if (!parse_number (&args, &len, INT_MAX) || !len || *args || len - 1 > SIZE_MAX - addr) {
+				goto invalid;
+			}
+			ut8 *data = malloc (len);
+			if (!data) {
+				R_LOG_ERROR ("Failed to allocate buffer");
+				return;
+			}
+			int count = ReadMemory (io, iodesc, request, pid, addr, data, len);
+			if (count > 0) {
+				RPrint *print = r_print_new ();
+				print->flags &= ~R_PRINT_FLAGS_COLOR;
+				r_print_hexdump_strbuf (print, sb, addr, data, count, 16, 1, 1);
+				r_print_free (print);
+			}
+			free (data);
+		}
+	} else {
+		append_help (sb, NULL, true);
 	}
- end:
-	free (databuf);
-	return 0;
+	return;
+invalid:
+	R_LOG_ERROR ("Invalid r2k command arguments");
+	append_help (sb, cmd, false);
 }
 
-int run_new_command(RIO *io, RIODesc *iodesc, const char *buf) {
-	if (r_str_startswith (buf, "dm")) {
-		if (buf[2] == ' ') {
-			// use \p pid
-			char *cmd = r_str_newf ("p %d", atoi (buf + 2));
-			run_old_command (io, iodesc, cmd);
-			free (cmd);
-		} else if (r2k_struct.beid == 1) {
-			// use \p pid
-			char *cmd = r_str_newf ("p %d", r2k_struct.pid);
-			run_old_command (io, iodesc, cmd);
-			free (cmd);
-		} else {
-			// use \M
-			run_old_command (io, iodesc, "M");
-		}
-		return 1;
+char *run_ioctl_command(RIO *io, RIODesc *iodesc, const char *buf) {
+	char *cmd = strdup (r_str_trim_head_ro (buf));
+	if (!cmd) {
+		return NULL;
 	}
-	if (r_str_startswith (buf, "dr")) {
-		run_old_command (io, iodesc, "R");
-		return 1;
+	char *args = cmd + strcspn (cmd, " \t\r\n");
+	if (*args) {
+		*args++ = 0;
 	}
-	if (r_str_startswith (buf, "dR")) {
-		run_old_command (io, iodesc, "Rp");
-		return 1;
-	}
-	if (r_str_startswith (buf, "dp")) {
-		if (buf[2] == ' ') {
-			r2k_struct.pid = atoi (buf + 3);
-		} else {
-			io->cb_printf ("%d\n", r2k_struct.pid);
-		}
-		return 1;
-	}
-	if (r_str_startswith (buf, "e r2k.io")) {
-		if (strchr (buf, '?')) {
-			io->cb_printf ("0: Linear memory\n");
-			io->cb_printf ("1: Process memory\n");
-			io->cb_printf ("2: Physical memory\n");
-			return 1;
-		}
-		const char *eq = strchr (buf, '=');
-		if (eq) {
-			int v = atoi (eq + 1);
-			int p = r2k_struct.pid;
-			char *cmd = r_str_newf ("b %d %d", v, p);
-			run_old_command (io, iodesc, cmd);
-			free (cmd);
-		} else {
-			run_new_command (io, iodesc, "dp");
-		}
-		return 1;
-	}
-	if (r_str_startswith (buf, "e r2k.wp")) {
-		if (strchr (buf, '?')) {
-			io->cb_printf ("<bool> enable write protection (disabled by default)\n");
-			return 1;
-		}
-		const char *eq = strchr (buf, '=');
-		if (eq) {
-			int v = atoi (eq + 1);
-			r2k_struct.wp = (ut8)v;
-		} else {
-			io->cb_printf ("%s", r_str_bool (r2k_struct.wp));
-		}
-		return 1;
-	}
-	return 0;
-}
-
-int run_ioctl_command(RIO *io, RIODesc *iodesc, const char *buf) {
-	buf = r_str_ichr ((char *) buf, ' ');
-
-	if (!run_new_command (io, iodesc, buf)) {
-		return run_old_command (io, iodesc, buf);
-	}
-	return 0;
+	RStrBuf *sb = r_strbuf_new ("");
+	run_command (io, iodesc, sb, cmd, r_str_trim_head_ro (args));
+	free (cmd);
+	return r_strbuf_drain (sb);
 }
 
 #endif

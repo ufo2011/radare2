@@ -1,0 +1,348 @@
+/* radare - LGPL - Copyright 2012-2024 - pancake */
+
+#include <r_lib.h>
+#include <r_flag.h>
+#include <r_anal.h>
+#include <r_asm.h>
+
+static int can_replace(const char *str, int idx, int max_operands) {
+	if (str[idx] > '9' || str[idx] < '1') {
+		return false;
+	}
+	if (str[idx + 1] != '\x00' && str[idx + 1] <= '9' && str[idx + 1] >= '1') {
+		return false;
+	}
+	if ((int)((int)str[idx] - 0x30) > max_operands) {
+		return false;
+	}
+	return true;
+}
+
+static char *replace(int argc, const char *argv[]) {
+	int i, j;
+	struct {
+		const char *op;
+		const char *str;
+		int max_operands;
+	} ops[] = {
+		{ "add", "1 = 2 + 3", 3},
+		{ "addi",  "1 = 2 + 3", 3},
+		{ "addiu",  "1 = 2 + 3", 3},
+		{ "addu",  "1 = 2 + 3", 3},
+		{ "and",  "1 = 2 & 3", 3},
+		{ "andi",  "1 = 2 & 3", 3},
+		{ "b",  "goto 1", 1},
+		{ "bal",  "call 1", 1},
+		{ "begzal", "if (1 >= 0) call 2", 2},
+		{ "beq",  "if (1 == 2) goto 3", 3},
+		{ "beqz",  "if (!1) goto 2", 2},
+		{ "bgez", "if (1 >= 0) goto 2", 2},
+		{ "bgtz", "if (1 > 0) goto 2", 2},
+		{ "blez", "if (1 <= 0) goto 2", 2},
+		{ "bltz", "if (1 < 0) goto 2", 2},
+		{ "bltzal", "if (1 < 0) call 2", 2},
+		{ "bne",  "if (1 != 2) goto 3", 3},
+		{ "bnez",  "if (1) goto 2", 2},
+		{ "j",   "goto 1", 1},
+		{ "jal",   "call 1", 1},
+		{ "jalr",  "call 1", 1},
+		{ "jr",   "goto 1", 1},
+		{ "lb",  "1 = byte [3 + 2]", 3},
+		{ "lbu",  "1 = (unsigned) byte [3 + 2]", 3},
+		{ "lh",  "1 = halfword [3 + 2]", 3},
+		{ "lhu",  "1 = (unsigned) halfword [3 + 2]", 3},
+		{ "li",   "1 = 2", 2},
+		{ "lui",  "1 = 2 << 16", 2},
+		{ "lw",  "1 = [3 + 2]", 3},
+		{ "mfhi",  "1 = hi", 1},
+		{ "mflo",  "1 = lo", 1},
+		{ "move",  "1 = 2", 2},
+		{ "movn",  "if (3) 1 = 2", 3},
+		{ "movz",  "if (!3) 1 = 2", 3},
+		{ "mult",  "(hi,lo) = 1 * 2", 2},
+		{ "multu",  "unsigned (hi,lo) = 1 * 2", 2},
+		{ "mul",  "1 = 2 * 3", 3},
+		{ "mulu",  "1 = 2 * 3", 3},
+		{ "negu",  "1 = ~2", 2},
+		{ "nop",   "", 0},
+		{ "nor",   "1 = ~(2 | 3)", 3},
+		{ "or",   "1 = 2 | 3", 3},
+		{ "ori",   "1 = 2 | 3", 3},
+		{ "sb",  "byte [3 + 2] = 1", 3},
+		{ "sh",  "halfword [3 + 2] = 1", 3},
+		{ "sll",  "1 = 2 << 3", 3},
+		{ "sllv",  "1 = 2 << 3", 3},
+		{ "slr",  "1 = 2 >> 3", 3}, // logic
+		{ "slt",  "1 = (2 < 3)", 3},
+		{ "slti",  "1 = (2 < 3)", 3},
+		{ "sltiu",  "1 = (unsigned) (2 < 3)", 3},
+		{ "sltu",  "1 = (unsigned) (2 < 3)", 3},
+		{ "sra",  "1 = (signed) 2 >> 3", 3}, // arithmetic
+		{ "srl",  "1 = 2 >> 3", 3},
+		{ "srlv",  "1 = 2 >> 3", 3},
+		{ "subu",  "1 = 2 - 3", 3},
+		{ "sub",  "1 = 2 - 3", 3},
+		{ "sw",  "[3 + 2] = 1", 3},
+		{ "syscall",  "syscall", 0},
+		{ "xor",  "1 = 2 ^ 3", 3},
+		{ "xori",  "1 = 2 ^ 3", 3},
+		{ NULL }
+	};
+	RStrBuf *sb = r_strbuf_new ("");
+	for (i = 0; ops[i].op; i++) {
+		if (!strcmp (ops[i].op, argv[0])) {
+			const char *str = ops[i].str;
+			for (j = 0; str[j]; j++) {
+				if (can_replace (str, j, ops[i].max_operands)) {
+					const char *w = argv[str[j] - '0'];
+					if (w) {
+						r_strbuf_append (sb, w);
+					}
+				} else {
+					r_strbuf_append_n (sb, str + j, 1);
+				}
+			}
+			return r_strbuf_drain (sb);
+		}
+	}
+
+	for (i = 0; i < argc; i++) {
+		r_strbuf_append (sb, argv[i]);
+		r_strbuf_append (sb, (i == 0 || i == argc - 1)? " ": ", ");
+	}
+	return r_strbuf_drain (sb);
+}
+
+#define REPLACE(x,y) do { \
+	int snprintf_len1_ = snprintf (a, 32, x, w1, w1); \
+	int snprintf_len2_ = snprintf (b, 32, y, w1);	\
+	if (snprintf_len1_ < 32 && snprintf_len2_ < 32) { \
+		p = r_str_replace (p, a, b, 0); \
+	} \
+} while (0)
+#define WSZ 64
+
+static char *parse(RAsmPluginSession *aps, const char *data) {
+	int len = strlen (data);
+	char w0[WSZ];
+	char w1[WSZ];
+	char w2[WSZ];
+	char w3[WSZ];
+	char w4[WSZ];
+	char *buf, *ptr, *optr;
+
+	if (!strcmp (data, "jr ra")) {
+		return strdup ("ret");
+	}
+
+	// malloc can be slow here :?
+	if (!(buf = malloc (len + 1))) {
+		return NULL;
+	}
+	memcpy (buf, data, len + 1);
+
+	r_str_replace_char (buf, '(', ',');
+	r_str_replace_char (buf, ')', ' ');
+	r_str_trim (buf);
+	char *str = NULL;
+	if (*buf) {
+		w0[0]='\0';
+		w1[0]='\0';
+		w2[0]='\0';
+		w3[0]='\0';
+		w4[0]='\0';
+		ptr = strchr (buf, ' ');
+		if (!ptr) {
+			ptr = strchr (buf, '\t');
+		}
+		if (ptr) {
+			*ptr = '\0';
+			for (ptr++; *ptr == ' '; ptr++) {
+				;
+			}
+			r_str_ncpy (w0, buf, WSZ);
+			r_str_ncpy (w1, ptr, WSZ);
+
+			optr=ptr;
+			ptr = strchr (ptr, ',');
+			if (ptr) {
+				*ptr = '\0';
+				for (ptr++; *ptr == ' '; ptr++) {
+					;
+				}
+				r_str_ncpy (w1, optr, WSZ);
+				r_str_ncpy (w2, ptr, WSZ);
+				optr = ptr;
+				ptr = strchr (ptr, ',');
+				if (ptr) {
+					*ptr = '\0';
+					for (ptr++; *ptr == ' '; ptr++) {
+						;
+					}
+					r_str_ncpy (w2, optr, WSZ);
+					r_str_ncpy (w3, ptr, WSZ);
+					optr=ptr;
+// bonus
+					ptr = strchr (ptr, ',');
+					if (ptr) {
+						*ptr = '\0';
+						for (ptr++; *ptr == ' '; ptr++) {
+							;
+						}
+						r_str_ncpy (w3, optr, WSZ);
+						r_str_ncpy (w4, ptr, WSZ);
+					}
+				}
+			}
+		} else {
+			r_str_ncpy (w0, buf, WSZ);
+		}
+		{
+			const char *wa[] = { w0, w1, w2, w3, w4 };
+			size_t i, nw = 0;
+			for (i = 0; i < R_ARRAY_SIZE (wa); i++) {
+				if (wa[i][0] != '\0') {
+					nw++;
+				}
+			}
+			{
+				char *p = replace (nw, wa);
+				p = r_str_replace (p, "+ -", "- ", 0);
+				p = r_str_replace (p, " + ]", " + 0]", 0);
+
+				p = r_str_replace (p, "zero", "0", 1);
+				if (!strncmp (p, "0 = ", 4)) {
+					*p = 0; // nop
+				}
+				if (!strcmp (w1, w2)) {
+					char a[32], b[32];
+
+					// TODO: optimize
+					REPLACE ("%s = %s +", "%s +=");
+					REPLACE ("%s = %s -", "%s -=");
+					REPLACE ("%s = %s &", "%s &=");
+					REPLACE ("%s = %s |", "%s |=");
+					REPLACE ("%s = %s ^", "%s ^=");
+					REPLACE ("%s = %s >>", "%s >>=");
+					REPLACE ("%s = %s <<", "%s <<=");
+				}
+				str = p;
+			}
+		}
+	}
+	free (buf);
+	return str;
+}
+
+static char *subvar(RAsmPluginSession *aps, RAnalFunction *f, ut64 addr, int oplen, const char *data) {
+	RAsm *a = aps->rasm;
+	RParse *p = a->parse;
+	RListIter *iter;
+	char *oldstr;
+	char *tstr = strdup (data);
+	RAnal *anal = a->analb.anal;
+
+	if (f && p->varlist) {
+		RList *bpargs = p->varlist (f, 'b');
+		RList *spargs = p->varlist (f, 's');
+		const bool ucase = isupper (*tstr);
+		RAnalVarField *var;
+		r_list_foreach (spargs, iter, var) {
+			st64 delta = p->get_ptr_at
+				? p->get_ptr_at (f, var->delta, addr)
+				: ST64_MAX;
+			if (delta == ST64_MAX && var->field) {
+				delta = var->delta;
+			} else if (delta == ST64_MAX) {
+				continue;
+			}
+			const char *reg = NULL;
+			if (p->get_reg_at) {
+				reg = p->get_reg_at (f, var->delta, addr);
+			}
+			if (!reg) {
+				reg = anal->reg->alias[R_REG_ALIAS_SP];
+			}
+			//TODO: honor asm pseudo
+			const ut64 adelta = R_ABS (delta);
+			oldstr = r_str_newf ((adelta < 10)? "%s%" PFMT64u "(%s)": "%s0x%" PFMT64x "(%s)", delta < 0? "-": "", adelta, reg);
+			if (ucase) {
+				char *comma = strchr (oldstr, ',');
+				if (comma) {
+					*comma = 0;
+					r_str_case (oldstr, true);
+					*comma = ',';
+				}
+			}
+			if (strstr (tstr, oldstr)) {
+				char *newstr = (p->localvar_only)
+					? r_str_newf ("(%s)", var->name)
+					: r_str_newf ("%s%s(%s)", delta > 0 ? "" : "-", var->name, reg);
+				tstr = r_str_replace (tstr, oldstr, newstr, 1);
+				free (newstr);
+				free (oldstr);
+				break;
+			}
+			free (oldstr);
+		}
+		r_list_foreach (bpargs, iter, var) {
+			st64 delta = p->get_ptr_at
+				? p->get_ptr_at (f, var->delta, addr)
+				: ST64_MAX;
+			if (delta == ST64_MAX && var->field) {
+				delta = var->delta + f->bp_off;
+			} else if (delta == ST64_MAX) {
+				continue;
+			}
+			const char *reg = NULL;
+			if (p->get_reg_at) {
+				reg = p->get_reg_at (f, var->delta, addr);
+			}
+			if (!reg) {
+				reg = anal->reg->alias[R_REG_ALIAS_BP];
+			}
+			const ut64 adelta = R_ABS (delta);
+			oldstr = r_str_newf ((adelta < 10)? "%s%" PFMT64u "(%s)": "%s0x%" PFMT64x "(%s)", delta < 0? "-": "", adelta, reg);
+			if (ucase) {
+				char *comma = strchr (oldstr, ',');
+				if (comma) {
+					*comma = 0;
+					r_str_case (oldstr, true);
+					*comma = ',';
+				}
+			}
+			if (strstr (tstr, oldstr)) {
+				char *newstr = (p->localvar_only)
+					? r_str_newf ("(%s)", var->name)
+					: r_str_newf ("%s%s(%s)", delta > 0 ? "" : "-", var->name, reg);
+				tstr = r_str_replace (tstr, oldstr, newstr, 1);
+				free (newstr);
+				free (oldstr);
+				break;
+			}
+			free (oldstr);
+		}
+		r_list_free (bpargs);
+		r_list_free (spargs);
+	}
+	return tstr;
+}
+
+RAsmPlugin r_asm_plugin_mips = {
+	.meta = {
+		.name = "mips",
+		.desc = "MIPS pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
+	.parse = parse,
+	.subvar = subvar,
+};
+
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_mips,
+	.version = R2_VERSION
+};
+#endif

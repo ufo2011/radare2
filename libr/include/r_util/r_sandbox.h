@@ -22,7 +22,7 @@ extern "C" {
  * Paths pointing into the webroot are an exception: For reaching the webroot, .. and absolute
  * path are ok.
  */
-#if __WINDOWS__
+#if R2__WINDOWS__
 R_API HANDLE r_sandbox_opendir(const char *path, WIN32_FIND_DATAW *entry);
 #else
 #include <dirent.h>
@@ -33,15 +33,39 @@ R_API int r_sandbox_lseek(int fd, ut64 addr, int mode);
 R_API int r_sandbox_close(int fd);
 R_API int r_sandbox_read(int fd, ut8 *buf, int len);
 R_API int r_sandbox_write(int fd, const ut8 *buf, int len);
-R_API bool r_sandbox_enable(bool e);
-R_API bool r_sandbox_disable(bool e);
 R_API int r_sandbox_system(const char *x, int fork);
+R_API FILE *r_sandbox_popen(const char *cmd, const char *mode);
 R_API bool r_sandbox_creat(const char *path, int mode);
 R_API int r_sandbox_open(const char *path, int mode, int perm);
 R_API FILE *r_sandbox_fopen(const char *path, const char *mode);
 R_API int r_sandbox_chdir(const char *path);
 R_API bool r_sandbox_check_path(const char *path);
 R_API int r_sandbox_kill(int pid, int sig);
+
+/* management */
+#define R_SANDBOX_GRAIN_NONE (0)
+#define R_SANDBOX_GRAIN_SOCKET (1)
+#define R_SANDBOX_GRAIN_DISK (2)
+#define R_SANDBOX_GRAIN_FILES (4)
+#define R_SANDBOX_GRAIN_EXEC (8)
+#define R_SANDBOX_GRAIN_ENVIRON (16)
+#define R_SANDBOX_GRAIN_NETWORK (32)
+#define R_SANDBOX_GRAIN_HIDDEN (64)
+#define R_SANDBOX_GRAIN_SCRIPT (128)
+#define R_SANDBOX_GRAIN_ALL UT32_MAX
+
+R_API bool r_sandbox_enable(bool e);
+R_API bool r_sandbox_disable(bool e);
+R_API int r_sandbox_grain(int mask);
+// Parse without changing sandbox state; leave mask unchanged on failure.
+R_API bool r_sandbox_grain_parse(const char *R_NONNULL expr, int *R_NONNULL mask);
+R_API bool r_sandbox_check(int mask);
+R_API bool r_sandbox_check_localhost(const char *str);
+R_API bool r_sandbox_check_connect(const char *str);
+typedef void *(*RSandboxCallback)(void *user);
+R_API void *r_sandbox_run(int grain, RSandboxCallback callback, void *user);
+R_API void *r_sandbox_run_path(int grain, R_UNOWNED const char *path, RSandboxCallback callback, void *user);
+R_API bool r_sandbox_check_writepath(const char *path);
 
 #ifdef __cplusplus
 }

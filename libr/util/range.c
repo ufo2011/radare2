@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008-2020 pancake<nopcode.org> */
+/* radare - LGPL - Copyright 2008-2025 - pancake */
 
 #include <r_util.h>
 
@@ -10,15 +10,14 @@
 
 R_API RRange *r_range_new(void) {
 	RRange *r = R_NEW0 (RRange);
-	if (r) {
-		r->count = r->changed = 0;
-		r->ranges = r_list_new ();
-		if (!r->ranges) {
-			r_range_free (r);
-			return NULL;
-		}
-		r->ranges->free = free;
+	r->count = r->changed = 0;
+	r->ranges = r_list_new ();
+	if (!r->ranges) {
+		r_range_free (r);
+		return NULL;
 	}
+	r->ranges->free = free;
+	r->ranges->sorted = true;
 	return r;
 }
 
@@ -84,6 +83,22 @@ R_API RRange *r_range_new_from_string(const char *string) {
 	return rgs;
 }
 
+R_API char *r_range_tostring(RRange *rgs) {
+	RStrBuf *sb = r_strbuf_new ("");
+	// squash and then walk the thingk
+	RListIter *iter;
+	RRangeItem *r;
+	bool second = false;
+	r_list_foreach_prev (rgs->ranges, iter, r) {
+		if (second) {
+			r_strbuf_append (sb, ",");
+		}
+		r_strbuf_appendf (sb, "0x%08"PFMT64x"-0x%08"PFMT64x, r->fr, r->to);
+		second = true;
+	}
+	return r_strbuf_drain (sb);
+}
+
 R_API int r_range_add_from_string(RRange *rgs, const char *string) {
 	ut64 addr, addr2;
 	int i, len = strlen (string) + 1;
@@ -107,7 +122,7 @@ R_API int r_range_add_from_string(RRange *rgs, const char *string) {
 			if (p2) {
 				addr = r_num_get (NULL, p);
 				addr2 = r_num_get (NULL, p2);
-				r_range_add(rgs, addr, addr2, 1);
+				r_range_add (rgs, addr, addr2, 1);
 				p2 = NULL;
 			} else {
 				addr = r_num_get (NULL, p);
@@ -122,8 +137,7 @@ R_API int r_range_add_from_string(RRange *rgs, const char *string) {
 		addr = r_num_get (NULL, p);
 		addr2 = r_num_get (NULL, p2);
 		r_range_add (rgs, addr, addr2, 1);
-	} else
-	if (p) {
+	} else if (p) {
 		addr = r_num_get (NULL, p);
 		r_range_add (rgs, addr, addr + 1, 1);
 	}
@@ -132,12 +146,12 @@ R_API int r_range_add_from_string(RRange *rgs, const char *string) {
 }
 
 #if 0
-    update to      new one     update fr   update fr/to  ignore
+	    update to      new one     update fr   update fr/to  ignore
 
-   |______|        |___|           |_____|      |____|      |_______|  range_t
-+     |______|   +      |__|   + |___|      + |_________|  +  |__|     fr/to
-  ------------   -----------   -----------  -------------  -----------
-=  |_________|   = |___||__|   = |_______|  = |_________|   |_______|  result
+	   |______|        |___|           |_____|      |____|      |_______|  range_t
+	+     |______|   +      |__|   + |___|      + |_________|  +  |__|     fr/to
+	  ------------   -----------   -----------  -------------  -----------
+	=  |_________|   = |___||__|   = |_______|  = |_________|   |_______|  result
 #endif
 
 RRangeItem *r_range_add(RRange *rgs, ut64 fr, ut64 to, int rw) {
@@ -146,25 +160,35 @@ RRangeItem *r_range_add(RRange *rgs, ut64 fr, ut64 to, int rw) {
 	int add = 1;
 
 	r_num_minmax_swap (&fr, &to);
-	r_list_foreach (rgs->ranges, iter, r) {
-		if (r->fr == fr && r->to == to) {
-			add = 0;
-		} else if (r->fr <= fr && r->fr <= to && r->to >= fr && r->to <= to) {
-			r->to = to;
-			ret = r;
-			add = 0;
-		} else if (r->fr >= fr && r->fr <= to && r->to >= fr && r->to >= to) {
-			r->fr = fr;
-			ret = r;
-			add = 0;
-		} else if (r->fr <= fr && r->fr <= to && r->to >= fr && r->to >= to) {
-			/* ignore */
-			add = 0;
-		} else if (r->fr >= fr && r->fr <= to && r->to >= fr && r->to <= to) {
-			r->fr = fr;
-			r->to = to;
-			ret = r;
-			add = 0;
+	// while ranges arrive in ascending order the list stays sorted and disjoint, so only the tail matters
+	RRangeItem *last = r_list_last (rgs->ranges);
+	const bool ascending = rgs->ranges->sorted && (!last || fr >= last->to);
+	if (ascending && last && fr == last->to) {
+		last->to = to;
+		return last;
+	}
+	if (!ascending) {
+		rgs->ranges->sorted = false;
+		r_list_foreach (rgs->ranges, iter, r) {
+			if (r->fr == fr && r->to == to) {
+				add = 0;
+			} else if (r->fr <= fr && r->fr <= to && r->to >= fr && r->to <= to) {
+				r->to = to;
+				ret = r;
+				add = 0;
+			} else if (r->fr >= fr && r->fr <= to && r->to >= fr && r->to >= to) {
+				r->fr = fr;
+				ret = r;
+				add = 0;
+			} else if (r->fr <= fr && r->fr <= to && r->to >= fr && r->to >= to) {
+				/* ignore */
+				add = 0;
+			} else if (r->fr >= fr && r->fr <= to && r->to >= fr && r->to <= to) {
+				r->fr = fr;
+				r->to = to;
+				ret = r;
+				add = 0;
+			}
 		}
 	}
 
@@ -175,6 +199,7 @@ RRangeItem *r_range_add(RRange *rgs, ut64 fr, ut64 to, int rw) {
 		ret->datalen = 0;
 		ret->data = NULL;
 		r_list_append (rgs->ranges, ret);
+		rgs->ranges->sorted = ascending;
 		rgs->changed = 1;
 	}
 
@@ -182,12 +207,12 @@ RRangeItem *r_range_add(RRange *rgs, ut64 fr, ut64 to, int rw) {
 }
 
 #if 0
-    update to      ignore      update fr      delete        split
+	    update to      ignore      update fr      delete        split
 
-   |______|        |___|           |_____|      |____|       |________|  range_t
--     |______|   -      |__|   - |___|      - |_________|  -    |__|     fr/to
-  ------------   -----------   -----------  -------------  ------------
-=  |__|          =             =     |___|  =                |__|  |__|   result
+	   |______|        |___|           |_____|      |____|       |________|  range_t
+	-     |______|   -      |__|   - |___|      - |_________|  -    |__|     fr/to
+	  ------------   -----------   -----------  -------------  ------------
+	=  |__|          =             =     |___|  =                |__|  |__|   result
 #endif
 
 R_API int r_range_sub(RRange *rgs, ut64 fr, ut64 to) {
@@ -345,10 +370,10 @@ int r_range_get_n(RRange *rgs, int n, ut64 *fr, ut64 *to) {
 }
 
 #if 0
-     .....|______________________|...
-      |_____|  |____|  |_______|
-    ---------------------------------
-            |__|    |__|       |_|
+	 .....|______________________|...
+	  |_____|  |____|  |_______|
+	---------------------------------
+		|__|    |__|       |_|
 #endif
 RRange *r_range_inverse(RRange *rgs, ut64 fr, ut64 to, int flags) {
 	// ut64 total = 0;
@@ -379,24 +404,15 @@ RRange *r_range_inverse(RRange *rgs, ut64 fr, ut64 to, int flags) {
 	return true if overlap
 	in *d
 */
-// TODO: make it a macro
 // TODO: move to num.c ?
 R_API int r_range_overlap(ut64 a0, ut64 a1, ut64 b0, ut64 b1, int *d) {
-	// TODO: ensure ranges minmax .. innecesary at runtime?
-	//r_num_minmax_swap (&a0, &a1);
-	//r_num_minmax_swap (&b0, &b1);
-	return *d = (b0 - a0), !(a1 < b0 || a0 > b1);
-#if 0
 	// does not overlap
 	// a  |__|           |__|
 	// b      |__|   |__|
-	if (a1<b0 || a0>b1)
-		return 0;
-
+	//
 	// a     |____|   |_____|  |____|     |_____|
 	// b  |____|        |_|       |____| |_______|
 	//      b needs    a needs   a needs   b needs
 	// delta required
-	return (b0-a0);
-#endif
+	return *d = (b0 - a0), R_INBETWEEN (a0, a1, b0, b1);
 }

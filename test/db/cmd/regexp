@@ -29,40 +29,17 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME="/e /t\wst\d\d\d\s\w\w/i" - oldshell
-ARGS=-ecfg.newshell=false
-BROKEN=1
-FILE=malloc://1024
+NAME=/e /t\wst\d\d\d\s\w\w/i
 CMDS=<<EOF
-w "test123 ab"
-w "Test123 ab" @444
-?e
+w test123 ab
+w Test123 ab @444
 e search.in=block
 b 777
-"/e /t\wst\d\d\d\s\w\w/i"
+/e /t\wst\d\d\d\s\w\w/i
 EOF
 EXPECT=<<EOF
-
-0x00000001 hit0_0 ""test123 ab""
-0x000001bd hit0_1 ""Test123 ab""
-EOF
-RUN
-
-NAME="/e /t\wst\d\d\d\s\w\w/i" - newshell
-ARGS=-ecfg.newshell=true
-FILE=malloc://1024
-CMDS=<<EOF
-w '"test123 ab"'
-w '"Test123 ab"' @444
-?e
-e search.in=block
-b 777
-"/e /t\wst\d\d\d\s\w\w/i"
-EOF
-EXPECT=<<EOF
-
-0x00000001 hit0_0 ""test123 ab""
-0x000001bd hit0_1 ""Test123 ab""
+0x00000000 hit0_0 "test123 ab"
+0x000001bc hit0_1 "Test123 ab"
 EOF
 RUN
 
@@ -72,4 +49,31 @@ CMDS=<<EOF
 ?e hello world
 EOF
 REGEXP_OUT=wor
+RUN
+
+NAME=/ej json
+FILE=malloc://1024
+CMDS=<<EOF
+w HELLO WORLD
+/ej /[A-Z]*/
+EOF
+EXPECT=<<EOF
+[{"addr":0,"type":"string","data":"HELLO WORLD"}]
+EOF
+RUN
+
+NAME=regex nested bounded repetitions do not expand without limit
+FILE=malloc://64
+TIMEOUT=10
+CMDS=<<EOF
+wx 61616162630a
+/e /(((a{255}){255}){255}){255}/
+/e /ab+c/
+EOF
+EXPECT=<<EOF
+0x00000002 hit1_0 "aaabc"
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot compile '(((a{255}){255}){255}){255}' regexp
+EOF
 RUN

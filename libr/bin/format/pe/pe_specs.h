@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008 nibble */
+/* radare - LGPL - Copyright 2008-2025 nibble */
 
 #undef PE_
 #undef ILT_MASK1
@@ -66,11 +66,15 @@ typedef struct {
 #define PE_IMAGE_FILE_MACHINE_AM33             0x01d3
 #define PE_IMAGE_FILE_MACHINE_AMD64            0x8664
 #define PE_IMAGE_FILE_MACHINE_ARM              0x01c0
+#define PE_IMAGE_FILE_MACHINE_THUMB            0x01c2
+#define PE_IMAGE_FILE_MACHINE_THUMB2           0x01c4 /* also known as IMAGE_FILE_MACHINE_ARMNT */
 #define PE_IMAGE_FILE_MACHINE_ARM64            0xaa64
+#define PE_IMAGE_FILE_MACHINE_ARM64EC          0xa641
+#define PE_IMAGE_FILE_MACHINE_ARM64X           0xa64e
 #define PE_IMAGE_FILE_MACHINE_AXP64            PE_IMAGE_FILE_MACHINE_ALPHA64
 #define PE_IMAGE_FILE_MACHINE_CEE              0xc0ee
 #define PE_IMAGE_FILE_MACHINE_CEF              0x0cef
-#define PE_IMAGE_FILE_MACHINE_EBC              0x0ebc
+#define PE_IMAGE_FILE_MACHINE_EBC              0x0ebc /* EFI Bytecode */
 #define PE_IMAGE_FILE_MACHINE_I386             0x014c
 #define PE_IMAGE_FILE_MACHINE_IA64             0x0200
 #define PE_IMAGE_FILE_MACHINE_M32R             0x9041
@@ -80,6 +84,7 @@ typedef struct {
 #define PE_IMAGE_FILE_MACHINE_MIPSFPU16        0x0466
 #define PE_IMAGE_FILE_MACHINE_POWERPC          0x01f0
 #define PE_IMAGE_FILE_MACHINE_POWERPCFP        0x01f1
+#define PE_IMAGE_FILE_MACHINE_POWERPCBE        0x01f2
 #define PE_IMAGE_FILE_MACHINE_R10000           0x0168
 #define PE_IMAGE_FILE_MACHINE_R3000            0x0162
 #define PE_IMAGE_FILE_MACHINE_R4000            0x0166
@@ -88,12 +93,13 @@ typedef struct {
 #define PE_IMAGE_FILE_MACHINE_SH3E             0x01a4
 #define PE_IMAGE_FILE_MACHINE_SH4              0x01a6
 #define PE_IMAGE_FILE_MACHINE_SH5              0x01a8
-#define PE_IMAGE_FILE_MACHINE_THUMB            0x01c2
 #define PE_IMAGE_FILE_MACHINE_TRICORE          0x0520
 #define PE_IMAGE_FILE_MACHINE_WCEMIPSV2        0x0169
 #define PE_IMAGE_FILE_MACHINE_RISCV32          0x5032
 #define PE_IMAGE_FILE_MACHINE_RISCV64          0x5064
 #define PE_IMAGE_FILE_MACHINE_RISCV128         0x5128
+#define PE_IMAGE_FILE_MACHINE_LOONGARCH32      0x6232
+#define PE_IMAGE_FILE_MACHINE_LOONGARCH64      0x6264
 
 #define PE_IMAGE_FILE_RELOCS_STRIPPED          0x0001
 #define PE_IMAGE_FILE_EXECUTABLE_IMAGE         0x0002
@@ -112,17 +118,17 @@ typedef struct {
 #define PE_IMAGE_FILE_UP_SYSTEM_ONLY           0x4000
 #define PE_IMAGE_FILE_BYTES_REVERSED_HI        0x8000
 
-#define IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA        0x0020
+#define IMAGE_DLL_CHARACTERISTICS_HIGH_ENTROPY_VA        0x0020
 #define IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE          0x0040
 #define IMAGE_DLL_CHARACTERISTICS_FORCE_INTEGRITY       0x0080
 #define IMAGE_DLL_CHARACTERISTICS_NX_COMPAT             0x0100
-#define IMAGE_DLLCHARACTERISTICS_NO_ISOLATION           0x0200
-#define IMAGE_DLLCHARACTERISTICS_NO_SEH                 0x0400
-#define IMAGE_DLLCHARACTERISTICS_NO_BIND                0x0800
-#define IMAGE_DLLCHARACTERISTICS_APPCONTAINER           0x1000
-#define IMAGE_DLLCHARACTERISTICS_WDM_DRIVER             0x2000
-#define IMAGE_DLLCHARACTERISTICS_GUARD_CF               0x4000
-#define IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE  0x8000
+#define IMAGE_DLL_CHARACTERISTICS_NO_ISOLATION           0x0200
+#define IMAGE_DLL_CHARACTERISTICS_NO_SEH                 0x0400
+#define IMAGE_DLL_CHARACTERISTICS_NO_BIND                0x0800
+#define IMAGE_DLL_CHARACTERISTICS_APPCONTAINER           0x1000
+#define IMAGE_DLL_CHARACTERISTICS_WDM_DRIVER             0x2000
+#define IMAGE_DLL_CHARACTERISTICS_GUARD_CF               0x4000
+#define IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE  0x8000
 
 #define IMAGE_DEBUG_TYPE_CODEVIEW 2
 #define IMAGE_DEBUG_TYPE_MISC 4
@@ -449,7 +455,16 @@ typedef struct {
 	ut32 AddressOfCallBacks;
 	ut32 SizeOfZeroFill;
 	ut32 Characteristics;
-} Pe32_image_tls_directory, Pe64_image_tls_directory;
+} Pe32_image_tls_directory;
+
+typedef struct {
+	ut64 StartAddressOfRawData;
+	ut64 EndAddressOfRawData;
+	ut64 AddressOfIndex;
+	ut64 AddressOfCallBacks;
+	ut32 SizeOfZeroFill;
+	ut32 Characteristics;
+} Pe64_image_tls_directory;
 
 typedef struct {
 	ut32 dwLength;
@@ -545,6 +560,8 @@ typedef struct {
 
 //resource types
 #define R_PE_MAX_RESOURCES 2056
+// real resource trees are 3 levels deep (type/name/language)
+#define R_PE_MAX_RESOURCE_DEPTH 32
 #define PE_RESOURCE_ENTRY_CURSOR          1
 #define PE_RESOURCE_ENTRY_BITMAP          2
 #define PE_RESOURCE_ENTRY_ICON            3
@@ -572,10 +589,10 @@ typedef struct {
 #define VARFILEINFO_TEXT     "VarFileInfo"
 #define VS_VERSION_INFO_TEXT "VS_VERSION_INFO"
 
-#define STRINGFILEINFO_TEXT_LEN  sizeof(STRINGFILEINFO_TEXT)
-#define TRANSLATION_TEXT_LEN     sizeof(TRANSLATION_TEXT)
-#define VARFILEINFO_TEXT_LEN     sizeof(VARFILEINFO_TEXT)
-#define VS_VERSION_INFO_TEXT_LEN sizeof(VS_VERSION_INFO_TEXT)
+#define STRINGFILEINFO_TEXT_LEN  sizeof (STRINGFILEINFO_TEXT)
+#define TRANSLATION_TEXT_LEN     sizeof (TRANSLATION_TEXT)
+#define VARFILEINFO_TEXT_LEN     sizeof (VARFILEINFO_TEXT)
+#define VS_VERSION_INFO_TEXT_LEN sizeof (VS_VERSION_INFO_TEXT)
 
 #define EIGHT_HEX_DIG_UTF_16_LEN ((8 + 1) * 2)
 

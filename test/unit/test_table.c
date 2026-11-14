@@ -5,7 +5,7 @@
 //TODO test r_str_chop_path
 
 bool test_r_table(void) {
-	RTable *t = r_table_new ("test1");
+	RTable *t = r_table_new ("test1", NULL);
 
 	// r_table_fromcsv (t, csv);
 	RTableColumnType *typeString = r_table_type ("string");
@@ -31,8 +31,8 @@ bool test_r_table(void) {
 	mu_end;
 }
 
-RTable *__table_test_data1() {
-	RTable *t = r_table_new ("test2");
+RTable *__table_test_data1(void) {
+	RTable *t = r_table_new ("test2", NULL);
 
 	r_table_add_column (t, r_table_type ("string"), "ascii", 0);
 	r_table_add_column (t, r_table_type ("number"), "code", 0);
@@ -246,11 +246,11 @@ bool test_r_table_group (void) {
 	mu_end;
 }
 
-bool test_r_table_columns () {
+bool test_r_table_columns (void) {
 	RTable *t = NULL;
 #define CREATE_TABLE                                                   \
 	r_table_free (t);                                              \
-	t = r_table_new ("test");                                      \
+	t = r_table_new ("test", NULL);                                \
 	r_table_add_column (t, r_table_type ("number"), "name", 0);    \
 	r_table_add_column (t, r_table_type ("number"), "address", 0); \
 	r_table_add_row (t, "hello", "100", NULL);                     \
@@ -304,13 +304,270 @@ bool test_r_table_columns () {
 		"20000,namings,namings,20000\n", "replicate");
 	free (s);
 
+	CREATE_TABLE
+	r_table_add_rowf (t, "sss", "extra", "300", "unused");
+	r_table_columns (t, newcols);
+	s = r_table_tocsv (t);
+	mu_assert_streq (s,
+		"address,name,name,address\n"
+		"100,hello,hello,100\n"
+		"20000,namings,namings,20000\n"
+		"300,extra,extra,300\n", "ignore extra row cells");
+	free (s);
+
 	r_list_free (newcols);
 	r_table_free (t);
 	mu_end;
 #undef CREATE_TABLE
 }
 
-bool all_tests() {
+bool test_r_table_tocsv_escape(void) {
+	RTable *t = r_table_new ("csv_escape", NULL);
+	RTableColumnType *typeString = r_table_type ("string");
+	r_table_add_column (t, typeString, "name", 0);
+	r_table_add_column (t, typeString, "value", 0);
+
+	// field with embedded double quote
+	r_table_add_row (t, "he said \"hello\"", "normal", NULL);
+	char *s = r_table_tocsv (t);
+	mu_assert_notnull (s, "csv with quotes not null");
+	mu_assert_streq (s,
+		"name,value\n"
+		"he said \\\"hello\\\",normal\n",
+		"csv escapes double quotes");
+	free (s);
+	r_table_free (t);
+
+	// field with embedded newline
+	t = r_table_new ("csv_newline", NULL);
+	r_table_add_column (t, typeString, "col1", 0);
+	r_table_add_column (t, typeString, "col2", 0);
+	r_table_add_row (t, "line1\nline2", "ok", NULL);
+	s = r_table_tocsv (t);
+	mu_assert_notnull (s, "csv with newline not null");
+	mu_assert_streq (s,
+		"col1,col2\n"
+		"line1\\nline2,ok\n",
+		"csv escapes newlines");
+	free (s);
+	r_table_free (t);
+
+	// field with embedded tab
+	t = r_table_new ("csv_tab", NULL);
+	r_table_add_column (t, typeString, "col1", 0);
+	r_table_add_column (t, typeString, "col2", 0);
+	r_table_add_row (t, "a\tb", "ok", NULL);
+	s = r_table_tocsv (t);
+	mu_assert_notnull (s, "csv with tab not null");
+	mu_assert_streq (s,
+		"col1,col2\n"
+		"a\\tb,ok\n",
+		"csv escapes tabs");
+	free (s);
+	r_table_free (t);
+
+	// field with embedded comma (separator) gets quoted
+	t = r_table_new ("csv_comma", NULL);
+	r_table_add_column (t, typeString, "col1", 0);
+	r_table_add_column (t, typeString, "col2", 0);
+	r_table_add_row (t, "a,b", "ok", NULL);
+	s = r_table_tocsv (t);
+	mu_assert_notnull (s, "csv with comma not null");
+	mu_assert_streq (s,
+		"col1,col2\n"
+		"\"a,b\",ok\n",
+		"csv quotes fields containing separator");
+	free (s);
+	r_table_free (t);
+
+	// field with backslash
+	t = r_table_new ("csv_backslash", NULL);
+	r_table_add_column (t, typeString, "col1", 0);
+	r_table_add_column (t, typeString, "col2", 0);
+	r_table_add_row (t, "c:\\path\\file", "ok", NULL);
+	s = r_table_tocsv (t);
+	mu_assert_notnull (s, "csv with backslash not null");
+	mu_assert_streq (s,
+		"col1,col2\n"
+		"c:\\\\path\\\\file,ok\n",
+		"csv escapes backslashes");
+	free (s);
+	r_table_free (t);
+
+	mu_end;
+}
+
+bool test_r_table_fancy_emoji_width(void) {
+	RTableOptions options = {
+		.utf8 = true,
+	};
+	RTable *t = r_table_new ("emoji_width", &options);
+	RTableColumnType *typeString = r_table_type ("string");
+	r_table_add_column (t, typeString, "emoji", 0);
+	r_table_add_column (t, typeString, "value", 0);
+	r_table_add_row (t, "\xe2\x9c\x85", "check", NULL);
+	r_table_add_row (t, "\xe2\x9a\xa0\xef\xb8\x8f", "warn", NULL);
+	r_table_add_row (t, "\xe2\x9d\x8c", "cross", NULL);
+	r_table_add_row (t, "\xf0\x9f\x93\x8a", "chart", NULL);
+
+	char *s = r_table_tofancystring (t);
+	mu_assert_notnull (s, "fancy emoji table not null");
+	char *dup = strdup (s);
+	char *p = dup;
+	int expected_width = -1;
+	while (p && *p) {
+		char *nl = strchr (p, '\n');
+		if (nl) {
+			*nl = 0;
+		}
+		if (*p) {
+			int width = r_str_display_width (p);
+			if (expected_width < 0) {
+				expected_width = width;
+			}
+			mu_assert_eq (width, expected_width, "all fancy emoji table lines have equal display width");
+		}
+		if (!nl) {
+			break;
+		}
+		p = nl + 1;
+	}
+	free (dup);
+	free (s);
+	r_table_free (t);
+	mu_end;
+}
+
+bool test_r_table_fancy_wrap(void) {
+	RTableOptions options = {
+		.utf8 = true,
+		.wrap = true,
+	};
+	RTable *t = r_table_new ("wrap", &options);
+	r_table_set_width (t, 12, false);
+	RTableColumnType *typeString = r_table_type ("string");
+	r_table_add_column (t, typeString, "key", 0);
+	r_table_add_column (t, typeString, "why", 0);
+	r_table_add_row (t, "x", "abcdefghijklmnopqrstuvwxyz", NULL);
+
+	char *s = r_table_tofancystring (t);
+	mu_assert_notnull (s, "wrapped fancy table not null");
+	char *dup = strdup (s);
+	char *p = dup;
+	int expected_width = -1;
+	int lines = 0;
+	while (p && *p) {
+		char *nl = strchr (p, '\n');
+		if (nl) {
+			*nl = 0;
+		}
+		if (*p) {
+			lines++;
+			int width = r_str_display_width (p);
+			if (expected_width < 0) {
+				expected_width = width;
+			}
+			mu_assert_eq (width, expected_width, "all wrapped fancy table lines have equal display width");
+		}
+		if (!nl) {
+			break;
+		}
+		p = nl + 1;
+	}
+	mu_assert ("wrapped table uses more than one row line", lines > 5);
+	free (dup);
+	free (s);
+	r_table_free (t);
+	mu_end;
+}
+
+bool test_r_table_trim_ascii(void) {
+	RTableOptions options = {
+		.trim = true,
+	};
+	RTable *t = r_table_new ("trim_ascii", &options);
+	r_table_set_width (t, 8, false);
+	RTableColumnType *typeString = r_table_type ("string");
+	r_table_add_column (t, typeString, "key", 0);
+	r_table_add_column (t, typeString, "value", 0);
+	r_table_add_row (t, "short", "abcdefghijklmnopqrstuvwxyz", NULL);
+	r_table_add_row (t, "abcdefghijklmnopqrstuvwxyz", "ok", NULL);
+
+	char *s = r_table_tostring (t);
+	mu_assert_streq (s,
+		"key     value\n"
+		"-------------\n"
+		"short   abcde...\n"
+		"abcd... ok\n",
+		"simple table trims long cells with ascii ellipsis");
+	free (s);
+	r_table_free (t);
+	mu_end;
+}
+
+bool test_r_table_trim_utf8_fancy(void) {
+	RTableOptions options = {
+		.utf8 = true,
+		.trim = true,
+	};
+	RTable *t = r_table_new ("trim_utf8", &options);
+	r_table_set_width (t, 6, false);
+	RTableColumnType *typeString = r_table_type ("string");
+	r_table_add_column (t, typeString, "key", 0);
+	r_table_add_column (t, typeString, "value", 0);
+	r_table_add_row (t, "x", "abcdefghijklmnopqrstuvwxyz", NULL);
+
+	char *s = r_table_tofancystring (t);
+	mu_assert_notnull (s, "trimmed fancy table not null");
+	mu_assert ("fancy table uses utf8 ellipsis", strstr (s, "abcde\xe2\x80\xa6"));
+	char *dup = strdup (s);
+	char *p = dup;
+	int expected_width = -1;
+	while (p && *p) {
+		char *nl = strchr (p, '\n');
+		if (nl) {
+			*nl = 0;
+		}
+		if (*p) {
+			int width = r_str_display_width (p);
+			if (expected_width < 0) {
+				expected_width = width;
+			}
+			mu_assert_eq (width, expected_width, "all trimmed fancy table lines have equal display width");
+		}
+		if (!nl) {
+			break;
+		}
+		p = nl + 1;
+	}
+	free (dup);
+	free (s);
+	r_table_free (t);
+	mu_end;
+}
+
+bool test_r_table_per_column_maxwidth(void) {
+	RTable *t = r_table_new ("percolmax", NULL);
+	RTableColumnType *typeString = r_table_type ("string");
+	// col "name" has maxWidth=5, col "value" has no limit (0)
+	r_table_add_column (t, typeString, "name", 5);
+	r_table_add_column (t, typeString, "value", 0);
+	r_table_add_row (t, "hello", "short", NULL);
+	r_table_add_row (t, "toolongname", "anotherlongvalue", NULL);
+	char *s = r_table_tostring (t);
+	mu_assert_notnull (s, "per-column maxwidth tostring");
+	// "name" column width should be clamped to 5
+	RTableColumn *c = r_list_get_n (t->cols, 0);
+	mu_assert_eq (c->width, 5, "name column clamped to maxWidth=5");
+	// "value" column should be unconstrained
+	RTableColumn *c2 = r_list_get_n (t->cols, 1);
+	mu_assert ("value column wider than 5", c2->width > 5);
+	free (s);
+	r_table_free (t);
+	mu_end;
+}
+
+bool all_tests(void) {
 	mu_run_test(test_r_table);
 	mu_run_test(test_r_table_column_type);
 	mu_run_test(test_r_table_tostring);
@@ -318,6 +575,12 @@ bool all_tests() {
 	mu_run_test(test_r_table_uniq);
 	mu_run_test(test_r_table_group);
 	mu_run_test (test_r_table_columns);
+	mu_run_test (test_r_table_tocsv_escape);
+	mu_run_test (test_r_table_fancy_emoji_width);
+	mu_run_test (test_r_table_fancy_wrap);
+	mu_run_test (test_r_table_trim_ascii);
+	mu_run_test (test_r_table_trim_utf8_fancy);
+	mu_run_test (test_r_table_per_column_maxwidth);
 	return tests_passed != tests_run;
 }
 

@@ -1,12 +1,8 @@
-/* radare - LGPL - Copyright 2018 pancake */
+/* radare - LGPL - Copyright 2018-2024 pancake */
 
-#include <r_lib.h>
 #include <r_core.h>
-#include <r_lang.h>
 
-static bool lang_zig_file(RLang *lang, const char *file) {
-	void *lib;
-	char *a, *cc, *p;
+static bool lang_zig_file(RLangSession *s, const char *file) {
 	const char *libpath, *libname;
 
 	if (!r_file_exists (file)) {
@@ -15,20 +11,20 @@ static bool lang_zig_file(RLang *lang, const char *file) {
 	}
 	char *name = strdup (file);
 
-	a = (char*)r_str_lchr (name, '/');
+	char *a = (char*)r_str_lchr (name, '/');
 	if (a) {
 		*a = 0;
 		libpath = name;
-		libname = a+1;
+		libname = a + 1;
 	} else {
 		libpath = ".";
 		libname = name;
 	}
-	p = strstr (name, ".zig");
+	char *p = strstr (name, ".zig");
 	if (p) {
 		*p = 0;
 	}
-	cc = r_sys_getenv ("ZIG");
+	char *cc = r_sys_getenv ("ZIG");
 	if (cc && !*cc) {
 		R_FREE (cc);
 	}
@@ -45,34 +41,39 @@ static bool lang_zig_file(RLang *lang, const char *file) {
 	free (cmd);
 
 	char *path = r_str_newf ("%s/%s.%s", libpath, libname, R_LIB_EXT);
-	lib = r_lib_dl_open (path);
+	void *lib = r_lib_dl_open (path, false);
 	if (lib) {
 		void (*fcn)(RCore *);
 		fcn = r_lib_dl_sym (lib, "entry");
 		if (fcn) {
-			fcn (lang->user);
+			fcn (s->lang->user);
 		} else {
-			eprintf ("Cannot find 'entry' symbol in library\n");
+			R_LOG_ERROR ("Cannot find 'entry' symbol in library");
 		}
 		r_lib_dl_close (lib);
 	} else {
-		eprintf ("Cannot open library\n");
+		R_LOG_ERROR ("Cannot open library");
+		free (name);
 		free (path);
 		free (cc);
 		return false;
 	}
 	r_file_rm (path); // remove lib
+	free (name);
 	free (path);
 	free (cc);
 	return true;
 }
 
-static bool lang_zig_init(void *user) {
+static void *lang_zig_init(void *user) {
 	// TODO: check if "valac" is found in path
-	return true;
+	char *zig = r_file_path ("zig");
+	bool found = (zig && *zig != 'z');
+	free (zig);
+	return (void*)(size_t)found;
 }
 
-static bool lang_zig_run(RLang *lang, const char *code, int len) {
+static bool lang_zig_run(RLangSession *s, const char *code, int len) {
 	const char *file = "_tmp.zig";
 	FILE *fd = r_sandbox_fopen (file, "w");
 	if (fd) {
@@ -92,19 +93,22 @@ static bool lang_zig_run(RLang *lang, const char *code, int len) {
 		fputs (code, fd);
 		fputs (zig_footer, fd);
 		fclose (fd);
-		lang_zig_file (lang, file);
+		lang_zig_file (s, file);
 		r_file_rm (file);
 	} else {
-		eprintf ("Cannot open %s\n", file);
+		R_LOG_ERROR ("Cannot open %s", file);
 	}
 	return true;
 }
 
 static RLangPlugin r_lang_plugin_zig = {
-	.name = "zig",
+	.meta = {
+		.name = "zig",
+		.author = "pancake",
+		.license = "MIT",
+		.desc = "Zig language extension",
+	},
 	.ext = "zig",
-	.license = "MIT",
-	.desc = "Zig language extension",
 	.run = lang_zig_run,
 	.init = (void*)lang_zig_init,
 	.run_file = (void*)lang_zig_file,

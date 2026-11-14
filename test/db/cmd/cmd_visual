@@ -1,3 +1,167 @@
+NAME=visual marks scroll with arrows page keys and mouse wheel before deletion
+FILE=-
+CMDS=<<EOF
+e scr.wheel=false
+e scr.wheel.speed=2
+e scr.cols=80
+e scr.rows=5
+fv J 0x10
+fv K 0x20
+fv a 0x30
+fv b 0x40
+fv c 0x50
+fv j 0x60
+fv k 0x70
+fv q 0x80
+"<\x1b[B\x1b[A\x1b[6~\x1b[6~\x1b[6~\x1b[5~\x1b[<65;1;1M\x1b[<64;1;1Mq"
+VMq @e:scr.interactive=true > $marks
+cat $marks~1-3/8~?
+cat $marks~2-4/8~?
+cat $marks~4-6/8~?
+cat $marks~6-8/8~?
+cat $marks~7-8/8~?
+cat $marks~3-5/8~?
+cat $marks~5-7/8~?
+fvj
+EOF
+EXPECT=<<EOF
+1
+1
+1
+1
+0
+1
+1
+[{"ord":74,"key":"J","addr":16},{"ord":75,"key":"K","addr":32},{"ord":97,"key":"a","addr":48},{"ord":98,"key":"b","addr":64},{"ord":99,"key":"c","addr":80},{"ord":106,"key":"j","addr":96},{"ord":107,"key":"k","addr":112}]
+EOF
+RUN
+
+NAME=visual marks preserve letter shortcuts and seek after scrolling
+FILE=-
+CMDS=<<EOF
+e scr.wheel=false
+e scr.feedback=0
+e scr.cols=80
+e scr.rows=5
+e cmd.vprompt=f vmark_target=$$
+fv J 0x10
+fv K 0x20
+fv j 0x30
+fv k 0x40
+fv q 0x50
+"<'jQ"
+Vp @e:scr.interactive=true > /dev/null
+?v vmark_target
+"<'kQ"
+Vp @e:scr.interactive=true > /dev/null
+?v vmark_target
+"<'JQ"
+Vp @e:scr.interactive=true > /dev/null
+?v vmark_target
+"<'KQ"
+Vp @e:scr.interactive=true > /dev/null
+?v vmark_target
+"<'\x1b[B\x1b[6~\x1b[<64;1;1MqQ"
+Vp @e:scr.interactive=true > /dev/null
+?v vmark_target
+EOF
+EXPECT=<<EOF
+0x30
+0x40
+0x10
+0x20
+0x50
+EOF
+RUN
+
+NAME=visual marks crop narrow and one-row terminals
+FILE=-
+CMDS=<<EOF
+e scr.wheel=false
+e scr.cols=24
+e scr.rows=3
+f abcdefghijklmnopqrstuvwxyz @ 0x10
+fv a 0x10
+fv b 0x20
+<z
+VMq @e:scr.interactive=true > $marks
+cat $marks~1-1/2~?
+cat $marks~abcdef~?
+cat $marks~abcdefg~?
+cat $marks~0x00000020~?
+e scr.cols=8
+e scr.rows=1
+<z
+VMq @e:scr.interactive=true > $marks
+cat $marks~vmarks~?
+cat $marks~0x0000~?
+fvj
+EOF
+EXPECT=<<EOF
+1
+1
+0
+0
+0
+0
+[{"ord":97,"key":"a","addr":16},{"ord":98,"key":"b","addr":32}]
+EOF
+RUN
+
+NAME=visual exception hint jumps from inside a protected region
+FILE=bins/elf/ClassCpp.out
+CMDS=<<EOF
+e asm.hint.jmp=true
+e asm.hint.call=false
+e scr.wheel=false
+e scr.feedback=0
+e cmd.vprompt=f hint_target=$$
+s 0x12af
+<1q
+Vp @e:scr.interactive=true > /dev/null
+?v hint_target
+EOF
+EXPECT=<<EOF
+0x132c
+EOF
+RUN
+
+NAME=visual exception hints honor asm.hints
+FILE=bins/elf/ClassCpp.out
+CMDS=<<EOF
+e asm.hint.jmp=true
+e asm.hints=false
+e scr.wheel=false
+e scr.feedback=0
+e cmd.vprompt=f hint_target=$$
+s 0x12af
+<1q
+Vp @e:scr.interactive=true > /dev/null
+?v hint_target
+EOF
+EXPECT=<<EOF
+0x12af
+EOF
+RUN
+
+NAME=visual exception hint jumps to a shared catch handler
+FILE=bins/elf/0pack
+CMDS=<<EOF
+e asm.hint.jmp=true
+e asm.hint.call=false
+e scr.wheel=false
+e scr.feedback=0
+e cmd.vprompt=f hint_target=$$
+s 0x4779d0
+<1q
+Vp @e:scr.interactive=true > /dev/null
+?v hint_target
+EOF
+EXPECT=<<EOF
+0x4779d8
+EOF
+RUN
+
 NAME=visual_dw
 FILE=-
 CMDS=<<EOF
@@ -51,6 +215,252 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=visual arm64 op scroll up aligns
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+s 7
+Vpkq
+s
+EOF
+EXPECT=<<EOF
+0x0
+EOF
+RUN
+
+NAME=visual invalid arm64 instructions keep scrolling
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+Vpjjjjjjq
+s
+EOF
+EXPECT=<<EOF
+0x18
+EOF
+RUN
+
+NAME=visual short instructions respect code alignment
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+wx 90909090909090909090909090909090909090909090909090909090
+Vpjjjjjjq
+s
+EOF
+EXPECT=<<EOF
+0x18
+EOF
+RUN
+
+NAME=visual folded function scrolls to its end
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e scr.interactive=true
+af+ 0x100 fcn
+afb+ 0x100 0x100 16
+s 0x100
+afF 1
+Vpjq
+s
+EOF
+EXPECT=<<EOF
+0x110
+EOF
+RUN
+
+NAME=panels invalid arm64 instructions keep scrolling
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+"$capture=v @e:scr.interactive=true > $panel"
+e scr.wheel=false
+e scr.cols=100
+e scr.rows=20
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+<jjjjjjQ
+$capture > /dev/null
+cat $panel~0x00000018]~?
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=visual arm64 string meta scroll down aligns after end
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+Cs 5 @ 4
+Cs 6 @ 0x14
+Cs 7 @ 0x24
+s 4
+Vpjjq
+s
+s 0x14
+Vjjq
+s
+s 0x24
+Vjjq
+s
+EOF
+EXPECT=<<EOF
+0xc
+0x1c
+0x2c
+EOF
+RUN
+
+NAME=visual arm64 string meta scroll up from aligned code
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+Cs 7 @ 4
+Cs 6 @ 0x14
+Cs 5 @ 0x24
+s 0xc
+Vpkq
+s
+s 0x1c
+Vkq
+s
+s 0x2c
+Vkq
+s
+EOF
+EXPECT=<<EOF
+0xb
+0x1a
+0x29
+EOF
+RUN
+
+NAME=visual cmd.visual disasm scroll aligns
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+e cmd.visual=pd 8
+s 1
+Vjq
+s
+EOF
+EXPECT=<<EOF
+0x4
+EOF
+RUN
+
+NAME=visual arm32 middle flag disasm scroll
+FILE=-
+ARGS=-a arm -b 32
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+e asm.flags.middle=2
+f class.Class1 @ 5
+s 4
+Vpjjq
+s
+s 5
+Vpkq
+s
+s 8
+Vkq
+s
+EOF
+EXPECT=<<EOF
+0x8
+0x4
+0x5
+EOF
+RUN
+
+NAME=visual arm32 middle bb disasm scroll
+FILE=-
+ARGS=-a arm -b 32
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+e asm.flags.middle=0
+e asm.bbmiddle=true
+af+ 0 fcn
+afb+ 0 0 5
+afb+ 0 5 3
+s 4
+Vpjjq
+s
+s 5
+Vpkq
+s
+s 8
+Vkq
+s
+EOF
+EXPECT=<<EOF
+0x8
+0x4
+0x5
+EOF
+RUN
+
+NAME=visual arm32 metadata and middle flag scroll up
+FILE=-
+ARGS=-a arm -b 32
+CMDS=<<EOF
+e scr.interactive=true
+e arch.codealign=4
+e asm.flags.middle=2
+Cs 5 @ 4
+f mid.flag @ 0xa
+s 0xa
+Vpkq
+s
+s 0xc
+Vkq
+s
+EOF
+EXPECT=<<EOF
+0x9
+0xa
+EOF
+RUN
+
+NAME=visual string meta scroll up rows
+FILE=-
+CMDS=<<EOF
+e scr.interactive=true
+e asm.arch=x86
+e asm.bits=64
+e asm.hints=false
+e hex.cols=16
+wx 909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090
+Cs 32 @ 0x10
+s 0x20
+Vpkq
+s
+s 0x30
+Vpkq
+s
+EOF
+EXPECT=<<EOF
+0x10
+0x20
+EOF
+RUN
+
 NAME=visual hex pP scroll
 FILE=-
 CMDS=<<EOF
@@ -74,7 +484,365 @@ V
 v
 EOF
 EXPECT_ERR=<<EOF
-Visual mode requires scr.interactive=true.
-Panel mode requires scr.interactive=true.
+ERROR: Visual mode requires scr.interactive=true
+ERROR: Panel mode requires scr.interactive=true
+EOF
+RUN
+
+NAME=panels edit menu skips separator and toggles io.cache
+FILE=-
+TIMEOUT=10
+CMDS=<<EOF
+e scr.wheel=false
+e io.cache=false
+<Mljjjjjjjjjjl xQ
+v @e:scr.interactive=true > /dev/null
+e io.cache
+<Mljjjjjjjjjjlj xQ
+v @e:scr.interactive=true > /dev/null
+e io.cache
+EOF
+EXPECT=<<EOF
+true
+false
+EOF
+RUN
+
+NAME=panels settings submenu preserves order and callbacks
+FILE=-
+TIMEOUT=10
+CMDS=<<EOF
+e scr.wheel=false
+e scr.bgfill=false
+<Mljljjjjl qqqqQ
+v @e:scr.interactive=true > /dev/null
+e scr.bgfill
+EOF
+EXPECT=<<EOF
+true
+EOF
+RUN
+
+NAME=panels graph analysis recovers missing function and switches to tiny
+FILE=-
+TIMEOUT=10
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"$capture=v @e:scr.interactive=true > $panel"
+e scr.wheel=false
+e scr.cols=100
+e scr.rows=30
+e scr.utf8=false
+e log.level=0
+wx 85c0740290c3c3
+<Mlljljjjjj Q
+$capture > /dev/null
+cat $panel~No function~?
+aflc
+"<\x1b[<2;10;6M Q"
+v @e:scr.interactive=true > /dev/null
+aflc
+<Q
+$capture > /dev/null
+cat $panel~No function~?
+cat $panel~test eax, eax~?
+<=qQ
+$capture > /dev/null
+cat $panel~Graph options~?
+cat $panel~Analyze function~?
+cat $panel~Refresh~?
+"<\x1b[<2;10;6Mjl Q"
+v @e:scr.interactive=true > /dev/null
+<Q
+$capture > /dev/null
+cat $panel~*  *~?
+EOF
+EXPECT=<<EOF
+1
+0
+1
+0
+1
+0
+0
+1
+1
+EOF
+RUN
+
+NAME=panels graph options refresh cached output and preserve cache preference
+FILE=-
+TIMEOUT=10
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"$capture=v @e:scr.interactive=true > $panel"
+e scr.wheel=false
+e scr.cols=100
+e scr.rows=30
+e scr.utf8=false
+e graph.layout=0
+e graph.body=true
+e graph.edges=1
+wx 85c0740290c3c3
+af
+"<Mlljljjjjj \x1b[<2;10;25MjlqqQ"
+$capture > /dev/null
+cat $panel~Edges (simple)~?
+"<\x1b[<2;10;6Mjljj Q"
+v @e:scr.interactive=true > /dev/null
+e graph.body
+<Q
+$capture > /dev/null
+cat $panel~test eax, eax~?
+"<\x1b[<2;10;6Mjlj Q"
+v @e:scr.interactive=true > /dev/null
+e graph.layout
+<=jqQ
+$capture > /dev/null
+cat $panel~Cache (on)~?
+EOF
+EXPECT=<<EOF
+1
+false
+0
+1
+1
+EOF
+RUN
+
+NAME=panels custom graph command keeps its explicit address
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"$capture=v @e:scr.interactive=true > $panel"
+e scr.wheel=false
+e scr.cols=100
+e scr.rows=30
+e scr.utf8=false
+wx 85c0740290c3c3 @ 0x100
+af @ 0x100
+"<eagf @ 0x100\nQ"
+$capture > /dev/null
+cat $panel~No function~?
+cat $panel~test eax, eax~?
+<=qQ
+$capture > /dev/null
+cat $panel~Graph options~?
+EOF
+EXPECT=<<EOF
+0
+1
+0
+EOF
+RUN
+
+NAME=panels refresh reruns a cached command once without changing cache mode
+FILE=-
+CMDS=<<EOF
+"$capture=v @e:scr.interactive=true > $panel"
+e scr.wheel=false
+e scr.cols=100
+e scr.rows=30
+f counter=0
+"$probe=f counter=counter+1;?v counter"
+<e$probe\n=j qQ
+v @e:scr.interactive=true > /dev/null
+f before=counter
+<Q
+v @e:scr.interactive=true > /dev/null
+?v counter-before
+<=jj Q
+$capture > /dev/null
+?v counter-before
+cat $panel~Cache (on)~?
+f before=counter
+<Q
+v @e:scr.interactive=true > /dev/null
+?v counter-before
+<=j qQ
+v @e:scr.interactive=true > /dev/null
+f before=counter
+<=jj Q
+$capture > /dev/null
+"?v counter>before"
+cat $panel~Cache (off)~?
+EOF
+EXPECT=<<EOF
+0x0
+0x1
+1
+0x0
+0x1
+1
+EOF
+RUN
+
+NAME=panels functions menu analyzes program and refreshes cached functions
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"$capture=v @e:scr.interactive=true > $panel"
+e scr.wheel=false
+e scr.cols=100
+e scr.rows=30
+e log.level=0
+wx 85c0740290c3c3
+"<\t=j q\x1b[<2;70;6M Q"
+v @e:scr.interactive=true > /dev/null
+aflc
+<Q
+$capture > /dev/null
+cat $panel~0x00000000    3      7~?
+s
+EOF
+EXPECT=<<EOF
+1
+1
+0x0
+EOF
+RUN
+
+NAME=panels graph follows selected block and preserves manual scrolling
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+"$capture=v @e:scr.interactive=true > $panel"
+e scr.wheel=false
+e scr.utf8=false
+e scr.cols=100
+e scr.rows=20
+wx 85c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c385c0740290c3c3
+af
+s 221
+<eagf\nQ
+v @e:scr.interactive=true > /dev/null
+<Q
+$capture > /dev/null
+cat $panel~0xdc ~?
+<jjjjQ
+v @e:scr.interactive=true > /dev/null
+<Q
+$capture > /dev/null
+cat $panel~0xdc ~?
+s 0
+<Q
+$capture > /dev/null
+cat $panel~0x0 ~?
+"<\x1b[<2;10;6Mjl Q"
+v @e:scr.interactive=true > /dev/null
+s 221
+<Q
+$capture > /dev/null
+cat $panel~                                        *~?
+s 0
+<Q
+$capture > /dev/null
+cat $panel~                                        *~?
+s 221
+"<\x1b[<2;10;6Mjl Q"
+v @e:scr.interactive=true > /dev/null
+<exc $r*16\nQ
+v @e:scr.interactive=true > /dev/null
+<Q
+$capture > /dev/null
+cat $panel~c385 c074~?
+EOF
+EXPECT=<<EOF
+1
+0
+1
+1
+0
+1
+EOF
+RUN
+
+NAME=panels hexdump mouse selects ASCII and hexadecimal editing columns
+FILE=-
+CMDS=<<EOF
+e scr.wheel=false
+e scr.utf8=false
+e scr.cols=80
+e scr.rows=20
+e hex.cols=8
+wx 4142434445464748494a4b4c4d4e4f50
+<exc 32\nQ
+v @e:scr.interactive=true > /dev/null
+"<\x1b[<0;38;5M\x1b[<0;38;5mi5a\nQQ"
+v @e:scr.interactive=true > /dev/null
+p8 8
+wx 4142434445464748
+"<\x1b[<0;20;5M\x1b[<0;20;5mi5a\nQQ"
+v @e:scr.interactive=true > /dev/null
+p8 8
+EOF
+EXPECT=<<EOF
+4142356145464748
+41425a4445464748
+EOF
+RUN
+
+NAME=panels hexdump context preserves selected range when cancelled and copied
+FILE=-
+CMDS=<<EOF
+e scr.wheel=false
+e scr.utf8=false
+e scr.cols=80
+e scr.rows=20
+e hex.cols=8
+wx 4142434445464748494a4b4c4d4e4f50
+<exc 32\nQ
+v @e:scr.interactive=true > /dev/null
+"<\x1b[<0;25;5M\x1b[<32;17;5M\x1b[<0;17;5m\x1b[<2;40;6M\x1b[<2;40;6mq\x1b[<2;15;6M QQ"
+v @e:scr.interactive=true > /dev/null
+y8
+"<\x1b[<2;20;6M\x1b[<2;20;6mj QQ"
+v @e:scr.interactive=true > /dev/null
+p8 8 @ 8
+EOF
+EXPECT=<<EOF
+42434445
+494a424344454f50
+EOF
+RUN
+
+NAME=panels hexdump context Insert preserves ASCII selection
+FILE=-
+CMDS=<<EOF
+e scr.wheel=false
+e scr.utf8=false
+e scr.cols=80
+e scr.rows=20
+e hex.cols=8
+wx 4142434445464748
+<exc 16\nQ
+v @e:scr.interactive=true > /dev/null
+"<\x1b[<0;39;5M\x1b[<0;39;5m\x1b[<2;15;6Mjj 5a\nQQ"
+v @e:scr.interactive=true > /dev/null
+p8 8
+EOF
+EXPECT=<<EOF
+4142433561464748
+EOF
+RUN
+
+NAME=panels opening a new panel clears the previous byte selection
+FILE=-
+TIMEOUT=10
+CMDS=<<EOF
+e scr.wheel=false
+e scr.utf8=false
+e scr.cols=80
+e scr.rows=20
+e hex.cols=8
+wx 4142434445464748
+<exc 16\nQ
+v @e:scr.interactive=true > /dev/null
+"<\x1b[<0;39;5M\x1b[<0;39;5mMlljljjjjj i5a\nQQ"
+v @e:scr.interactive=true > /dev/null
+p8 8
+EOF
+EXPECT=<<EOF
+5a42434445464748
 EOF
 RUN

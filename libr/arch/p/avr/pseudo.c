@@ -1,0 +1,222 @@
+/* radare - LGPL - Copyright 2017-2024 - wargio */
+
+#include <r_asm.h>
+
+static char *replace(int argc, const char *argv[]) {
+	int i, j;
+	struct {
+		const char *op;
+		const char *str;
+	} ops[] = {
+		{ "add",     "A += B" },
+		{ "adc",     "A += B + carry" },
+		{ "adiw",    "A+1:A += B" },
+		{ "sub",     "A -= B" },
+		{ "subi",    "A -= B" },
+		{ "sbc",     "A -= (B + carry)" },
+		{ "sbci",    "A -= (B + carry)" },
+		{ "sbiw",    "A+1:A -= B" },
+		{ "and",     "A &= B" },
+		{ "andi",    "A &= B" },
+		{ "or",      "A |= B" },
+		{ "ori",     "A |= B" },
+		{ "eor",     "A ^= B" },
+		{ "com",     "A = 0xff - A" },
+		{ "neg",     "A = -A" },
+		{ "sbr",     "A |= B" },
+		{ "cbr",     "A &= (0xff - B)" },
+		{ "inc",     "A++" },
+		{ "dec",     "A--" },
+		{ "tst",     "A &= A" },
+		{ "clr",     "A ^= A" },
+		{ "ser",     "A = 0xff" },
+		{ "mul",     "r1:r0 = A * B" },
+		{ "rjmp",    "goto A" },
+		{ "ijmp",    "goto z" },
+		{ "jmp",     "goto A" },
+		{ "rcall",   "goto A" },
+		{ "icall",   "goto z" },
+		{ "call",    "goto A" },
+		{ "ret",     "return" },
+		{ "iret",    "return_interrupt()" },
+		{ "cp",      "var = A - B" },
+		{ "cpc",     "var = A - B - carry" },
+		{ "cpi",     "var = A - B" },
+		{ "breq",    "if (!var) goto A" },
+		{ "brne",    "if (var) goto A" },
+		{ "brsh",    "if (var >= 0) goto A" },
+		{ "brlo",    "if (var < 0) goto A" },
+		{ "brmi",    "if (var < 0) goto A" },
+		{ "brpl",    "if (var > 0) goto A" },
+		{ "brge",    "if (var >= 0) goto A" },
+		{ "brlt",    "if (var < 0) goto A" },
+		{ "mov",     "A = B" },
+		{ "movw",    "A+1:A = B+1:B" },
+		{ "ldi",     "A = B" },
+		{ "lds",     "A = *(B)" },
+		{ "ld",      "A = *(B)" },
+		{ "ldd",     "A = *(B)" },
+		{ "lpm",     "r0 = z" },
+		{ "in",      "A = B" },
+		{ "out",     "A = B" },
+		{ "push",    "push(A)" },
+		{ "pop",     "A = pop()" },
+		{ "lsl",     "A <<= 1" },
+		{ "lsr",     "A >>= 1" },
+		{ "rol",     "A = (A << 1) | (A >> 7)" },
+		{ "ror",     "A = (A << 7) | (A >> 1)" },
+		{ "asr",     "A >>= 1" },
+		{ "swap",    "A = ((A & 0xf0) >> 4) | ((A & 0x0f) << 4)" },
+		{ "sec",     "c = 1" },
+		{ "clc",     "c = 0" },
+		{ "sen",     "n = 1" },
+		{ "cln",     "n = 0" },
+		{ "sez",     "z = 1" },
+		{ "clz",     "z = 0" },
+		{ "sei",     "i = 1" },
+		{ "cli",     "i = 0" },
+		{ "ses",     "s = 1" },
+		{ "cls",     "s = 0" },
+		{ "sev",     "v = 1" },
+		{ "clv",     "v = 0" },
+		{ "set",     "t = 1" },
+		{ "clt",     "t = 0" },
+		{ "seh",     "h = 1" },
+		{ "clh",     "h = 0" },
+		{ "nop",     "" },
+		{ "halt",    "_halt()" },
+		{ "wdr",     "_watchdog_reset()" },
+		{ "std",     "*(A) = B" },
+		{ "st",      "*(A) = B" },
+		{ "sts",     "*(A) = B" },
+		{ NULL }
+	};
+
+	RStrBuf *sb = r_strbuf_new ("");
+	for (i = 0; ops[i].op; i++) {
+		if (!strcmp (ops[i].op, argv[0])) {
+			const char *str = ops[i].str;
+			for (j = 0; str[j]; j++) {
+				if (str[j] >= 'A' && str[j] <= 'J') {
+					const char *w = argv[str[j] - '@'];
+					if (w) {
+						r_strbuf_append (sb, w);
+					}
+				} else {
+					r_strbuf_append_n (sb, str + j, 1);
+				}
+			}
+			return r_strbuf_drain (sb);
+		}
+	}
+	for (i = 0; i < argc; i++) {
+		r_strbuf_append (sb, argv[i]);
+		r_strbuf_append (sb, (i == 0 || i == argc - 1)? " ": ", ");
+	}
+	return r_strbuf_drain (sb);
+}
+
+#define WSZ 128
+static char *parse(RAsmPluginSession *aps, const char *data) {
+	int i, len = strlen (data);
+	char w0[WSZ];
+	char w1[WSZ];
+	char w2[WSZ];
+	char w3[WSZ];
+	char w4[WSZ];
+	char *buf, *ptr, *optr;
+
+	// malloc can be slow here :?
+	if (!(buf = malloc (len + 1))) {
+		return NULL;
+	}
+	memcpy (buf, data, len + 1);
+
+	r_str_trim (buf);
+	char *str = NULL;
+	if (*buf) {
+		w0[0] = '\0';
+		w1[0] = '\0';
+		w2[0] = '\0';
+		w3[0] = '\0';
+		w4[0] = '\0';
+		ptr = strchr (buf, ' ');
+		if (!ptr) {
+			ptr = strchr (buf, '\t');
+		}
+		if (ptr) {
+			*ptr = '\0';
+			for (ptr++; *ptr == ' '; ptr++) {
+				//nothing to see here
+			}
+			r_str_ncpy (w0, buf, WSZ);
+			r_str_ncpy (w1, ptr, WSZ);
+
+			optr = ptr;
+			ptr = strchr (ptr, ',');
+			if (ptr) {
+				*ptr = '\0';
+				for (ptr++; *ptr == ' '; ptr++) {
+					//nothing to see here
+				}
+				r_str_ncpy (w1, optr, WSZ);
+				r_str_ncpy (w2, ptr, WSZ);
+				optr = ptr;
+				ptr = strchr (ptr, ',');
+				if (ptr) {
+					*ptr = '\0';
+					for (ptr++; *ptr == ' '; ptr++) {
+						//nothing to see here
+					}
+					r_str_ncpy (w2, optr, WSZ);
+					r_str_ncpy (w3, ptr, WSZ);
+					optr = ptr;
+					// bonus
+					ptr = strchr (ptr, ',');
+					if (ptr) {
+						*ptr = '\0';
+						for (ptr++; *ptr == ' '; ptr++) {
+							//nothing to see here
+						}
+						r_str_ncpy (w3, optr, WSZ);
+						r_str_ncpy (w4, ptr, WSZ);
+					}
+				}
+			}
+		} else {
+			r_str_ncpy (w0, buf, WSZ);
+		}
+		{
+			const char *wa[] = { w0, w1, w2, w3, w4 };
+			int nw = 0;
+			for (i = 0; i < 5; i++) {
+				if (wa[i][0] != '\0') {
+					nw++;
+				}
+			}
+			str = replace (nw, wa);
+		}
+	} else {
+		str = strdup (data);
+	}
+	free (buf);
+	return str;
+}
+
+RAsmPlugin r_asm_plugin_avr = {
+	.meta = {
+		.name = "avr",
+		.desc = "AVR pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
+	.parse = parse
+};
+
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_avr,
+	.version = R2_VERSION
+};
+#endif

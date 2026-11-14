@@ -1,0 +1,1042 @@
+/* radare - LGPL - Copyright 2025-2026 - elliotnunn */
+
+#include <r_lib.h>
+#include <r_bin.h>
+
+typedef struct {
+	ut32 offset;
+	ut32 target; // either section or import
+	bool isimport;
+} PEFReloc;
+
+typedef struct {
+	ut64 addr;
+	void *unpack;
+	RList /*<myreloc>*/ *relocs;
+	ut32 defAddress;
+	ut32 lenTotal, lenUnpack, lenDisk;
+	ut32 offset;
+	ut8 kind, share, align;
+} PEFSection;
+
+typedef struct {
+	ut16 nsec;
+	ut32 ldrsec;
+	ut32 totalImportedSymbolCount;
+	ut32 relocSecCount;
+	ut32 relocTable;
+	ut32 relocBase;
+	bool relocsDecoded;
+	PEFSection sec[];
+} RBinPEFObj;
+
+#define PEF_MAX_RELOC_INSTRUCTIONS 0x100000
+#define PEF_MAX_RELOCATIONS 0x100000
+#define PEF_MAX_PIDATA_SIZE 0x4000000
+
+static const char *class2string(ut8 class) {
+	switch (class & 0xf) {
+	case 0: return R_BIN_TYPE_FUNC_STR; // code
+	case 1: return R_BIN_TYPE_OBJECT_STR; // data
+	case 2: return R_BIN_TYPE_OBJECT_STR; // tvector
+	case 3: return R_BIN_TYPE_SECTION_STR; // toc
+	case 4: return R_BIN_TYPE_FUNC_STR; // glue
+	default: return R_BIN_TYPE_UNKNOWN_STR;
+	}
+}
+
+static bool pidata_getcount(const char **ptr, const char *limit, ut32 *ret) {
+	*ret = 0;
+	for (;;) {
+		if (*ptr >= limit) {
+			return true; // fail
+		}
+		ut8 byte = *(*ptr)++;
+		*ret = (*ret << 7) | (byte & 0x7f);
+		if (*ret & 0x80000000) {
+			return true; // unrealistically large, prevent oflow when used as int
+		}
+		if ((byte & 0x80) == 0) {
+			return false; // OK
+		}
+	}
+}
+
+// Do a bounds check for every single byte that is read/written,
+// to guard against overflow in pointer arithmetic.
+// Return nonzero on failure.
+static int unpack_pidata(char *dest, size_t dlen, const char *src, size_t slen) {
+	char *dlim = dest + dlen;
+	const char *slim = src + slen;
+	int i, j;
+
+	while (src < slim) {
+		ut8 firstbyte = *src++;
+		ut8 opcode = firstbyte >> 5;
+		ut32 arg = firstbyte & 0x1f;
+		if (arg == 0) {
+			if (pidata_getcount (&src, slim, &arg)) {
+				return 1;
+			}
+		}
+
+		if (opcode == 0) { // put zeros
+			for (i = 0; i < arg; i++) {
+				if (dest >= dlim) {
+					return 2;
+				}
+				*dest++ = 0;
+			}
+		} else if (opcode == 1) { // copy block
+			for (i = 0; i < arg; i++) {
+				if (src >= slim || dest >= dlim) {
+					return 3;
+				}
+				*dest++ = *src++;
+			}
+		} else if (opcode == 2) { // repeated block
+			ut32 blockSize = arg;
+			ut32 repeatCountMin1;
+			if (pidata_getcount (&src, slim, &repeatCountMin1)) {
+				return 4;
+			}
+			if (!blockSize) {
+				continue;
+			}
+			do {
+				for (i = 0; i < blockSize; i++) {
+					if (src + i >= slim || dest >= dlim) {
+						return 5;
+					}
+					*dest++ = src[i];
+				}
+			} while (repeatCountMin1--);
+			src += blockSize;
+		} else if (opcode == 3) { // interleave repeatblock with customblock
+			ut32 commonSize = arg;
+			ut32 customSize, repeatCount;
+			if (pidata_getcount (&src, slim, &customSize)) {
+				return 6;
+			}
+			if (pidata_getcount (&src, slim, &repeatCount)) {
+				return 7;
+			}
+			if (!commonSize && !customSize) {
+				continue;
+			}
+
+			const char *common = src;
+			for (i = 0; i < commonSize; i++) {
+				if (src >= slim || dest >= dlim) {
+					return 8;
+				}
+				*dest++ = *src++;
+			}
+
+			for (i = 0; i < repeatCount; i++) {
+				for (j = 0; j < customSize; j++) {
+					if (src >= slim || dest >= dlim) {
+						return 9;
+					}
+					*dest++ = *src++;
+				}
+				const char *comcopy = common;
+				for (j = 0; j < commonSize; j++) {
+					if (dest >= dlim) {
+						return 10;
+					}
+					*dest++ = *comcopy++;
+				}
+			}
+		} else if (opcode == 4) { // interleave repeatblock with zeroblock
+			ut32 commonSize = arg;
+			ut32 customSize, repeatCount;
+			if (pidata_getcount (&src, slim, &customSize)) {
+				return 11;
+			}
+			if (pidata_getcount (&src, slim, &repeatCount)) {
+				return 12;
+			}
+			if (!commonSize && !customSize) {
+				continue;
+			}
+
+			for (i = 0; i < commonSize; i++) {
+				if (dest >= dlim) {
+					return 13;
+				}
+				*dest++ = 0;
+			}
+
+			for (i = 0; i < repeatCount; i++) {
+				for (j = 0; j < customSize; j++) {
+					if (src >= slim || dest >= dlim) {
+						return 14;
+					}
+					*dest++ = *src++;
+				}
+				for (j = 0; j < commonSize; j++) {
+					if (dest >= dlim) {
+						return 15;
+					}
+					*dest++ = 0;
+				}
+			}
+		} else {
+			return 16; // illegal opcode
+		}
+	}
+	if (dest != dlim) {
+		return 1;
+	}
+	return 0; // ok
+}
+
+static int reloc_comparator(const PEFReloc *a, const PEFReloc *b) {
+	return (a->offset > b->offset) - (a->offset < b->offset);
+}
+
+typedef struct {
+	ut16 section_count;
+	ut32 import_count;
+	ut32 section_size;
+} PEFRelocDecodeConfig;
+
+static bool pef_reloc_addr_add(ut32 *addr, ut32 delta) {
+	if (*addr > UT32_MAX - delta) {
+		return false;
+	}
+	*addr += delta;
+	return true;
+}
+
+static bool pef_push_reloc(RList *ret, size_t *reloc_count, const PEFRelocDecodeConfig *cfg, ut32 *offset, ut32 target, bool isimport, ut32 step) {
+	if (*reloc_count >= PEF_MAX_RELOCATIONS || cfg->section_size < 4 || *offset > cfg->section_size - 4) {
+		return false;
+	}
+	const ut32 target_count = isimport ? cfg->import_count : cfg->section_count;
+	if (target >= target_count) {
+		return false;
+	}
+	PEFReloc *r = R_NEW0 (PEFReloc);
+	r->offset = *offset;
+	r->target = target;
+	r->isimport = isimport;
+	r_list_append (ret, r);
+	(*reloc_count)++;
+	return pef_reloc_addr_add (offset, step);
+}
+
+static RList *pef_decode_reloc_bytecode(RBuffer *b, ut32 at, ut32 instCount, const PEFRelocDecodeConfig *cfg) {
+	size_t reloc_count = 0;
+	RList *ret = r_list_newf ((RListFree)free);
+	ut32 codeA = 0, dataA = 1, rSymI = 0, rAddr = 0;
+	ut32 loopInstruct = UT32_MAX;
+	ut32 loopDone = 0;
+	ut32 executedInstructions = 0;
+	int i;
+
+#define dbg(name, format, ...) \
+	if (0) { \
+		char buf[50]; \
+		snprintf (buf, sizeof (buf), format, __VA_ARGS__); \
+			printf ("%05X [% 2d] %04X      %-5s %-19s %d %5d %5d   %08X\n", \
+				at + 2 * printpc, printpc, r_buf_read_be16_at (b, at + 2 * printpc), name, buf, codeA, dataA, rSymI, rAddr); \
+	}
+
+#define PUSH_RELOC_OR_FAIL(target, isimport, step) \
+	do { \
+		if (!pef_push_reloc (ret, &reloc_count, cfg, &rAddr, target, isimport, step)) { \
+			goto fail; \
+		} \
+	} while (0)
+
+	ut32 pc = 0;
+	while (pc < instCount) {
+		if (executedInstructions++ >= PEF_MAX_RELOC_INSTRUCTIONS) {
+			goto fail;
+		}
+		ut32 printpc = pc;
+		ut16 op = r_buf_read_be16_at (b, at + 2 * pc++);
+
+		// Some instructions take a wider argument
+		ut32 longop = 0;
+		if (op >= 0xa000) {
+			if (pc >= instCount) {
+				goto fail;
+			}
+			longop = ((ut32)op << 16) | r_buf_read_be16_at (b, at + 2 * pc++);
+		}
+
+		if (op <= 0x3fff) {
+			// RelocBySectDWithSkip (DDAT)
+			ut8 skipCount = (op >> 6) & 0xff;
+			ut8 relocCount = op & 0x3f;
+			dbg ("DDAT", "delta=%d,n=%d", skipCount * 4, relocCount);
+
+			if (!pef_reloc_addr_add (&rAddr, 4 * skipCount)) {
+				goto fail;
+			}
+			for (i = 0; i < relocCount; i++) {
+				PUSH_RELOC_OR_FAIL (dataA, false, 4);
+			}
+		} else if (op >= 0x4000 && op <= 0x41ff) {
+			// RelocBySectC (CODE)
+			// DumpPEF sometimes gets rAddr wrong for large runLength!
+			ut16 runLength = (op & 0x1ff) + 1;
+			dbg ("CODE", "cnt=%d", runLength);
+			for (i = 0; i < runLength; i++) {
+				PUSH_RELOC_OR_FAIL (codeA, false, 4);
+			}
+		} else if (op >= 0x4200 && op <= 0x43ff) {
+			// RelocBySectD (DATA)
+			ut16 runLength = (op & 0x1ff) + 1;
+			dbg ("DATA", "cnt=%d", runLength);
+			for (i = 0; i < runLength; i++) {
+				PUSH_RELOC_OR_FAIL (dataA, false, 4);
+			}
+		} else if (op >= 0x4400 && op <= 0x45ff) {
+			// RelocTVector12 (DESC)
+			ut16 runLength = (op & 0x1ff) + 1;
+			dbg ("DESC", "cnt=%d", runLength);
+			for (i = 0; i < runLength; i++) {
+				PUSH_RELOC_OR_FAIL (codeA, false, 4);
+				PUSH_RELOC_OR_FAIL (dataA, false, 8);
+			}
+		} else if (op >= 0x4600 && op <= 0x47ff) {
+			// RelocTVector8 (DSC2)
+			ut16 runLength = (op & 0x1ff) + 1;
+			dbg ("DSC2", "cnt=%d", runLength);
+			for (i = 0; i < runLength; i++) {
+				PUSH_RELOC_OR_FAIL (codeA, false, 4);
+				PUSH_RELOC_OR_FAIL (dataA, false, 4);
+			}
+		} else if (op >= 0x4800 && op <= 0x49ff) {
+			// RelocVTable8 (VTBL)
+			ut16 runLength = (op & 0x1ff) + 1;
+			dbg ("VTBL", "cnt=%d", runLength);
+			for (i = 0; i < runLength; i++) {
+				PUSH_RELOC_OR_FAIL (dataA, false, 8);
+			}
+		} else if (op >= 0x4a00 && op <= 0x4bff) {
+			// RelocImportRun (SYMR)
+			ut16 runLength = (op & 0x1ff) + 1;
+			dbg ("SYMR", "cnt=%d", runLength);
+			for (i = 0; i < runLength; i++) {
+				PUSH_RELOC_OR_FAIL (rSymI, true, 4);
+				if (!pef_reloc_addr_add (&rSymI, 1)) {
+					goto fail;
+				}
+			}
+		} else if (op >= 0x6000 && op <= 0x61ff) {
+			// RelocSmByImport (SYMB)
+			ut16 index = op & 0x1ff;
+			dbg ("SYMB", "idx=%d", index);
+			PUSH_RELOC_OR_FAIL (index, true, 4);
+			rSymI = index + 1;
+		} else if (op >= 0x6200 && op <= 0x63ff) {
+			// RelocSmSetSectC (CDIS)
+			ut16 index = op & 0x1ff;
+			dbg ("CDIS", "sct=%d", index);
+			codeA = index;
+		} else if (op >= 0x6400 && op <= 0x65ff) {
+			// RelocSmSetSectD (DTIS)
+			ut16 index = op & 0x1ff;
+			dbg ("DTIS", "sct=%d", index);
+			dataA = index;
+		} else if (op >= 0x6600 && op <= 0x67ff) {
+			// RelocSmBySection (SECN)
+			ut16 index = op & 0x1ff;
+			dbg ("SECN", "sct=%d", index);
+			PUSH_RELOC_OR_FAIL (index, false, 4);
+		} else if (op >> 12 == 0b1000) {
+			// RelocIncrPosition (DELT)
+			ut16 offset = (op & 0x0fff) + 1;
+			dbg ("DELT", "delta=%d", offset);
+			if (!pef_reloc_addr_add (&rAddr, offset)) {
+				goto fail;
+			}
+		} else if (op >= 0x9000 && op <= 0x9fff) {
+			// RelocSmRepeat (RPT)
+			ut8 blockCount = ((op >> 8) & 0xf) + 1;
+			ut16 repeatCount = (op & 0xff) + 1;
+			dbg ("RPT", "i=%d,rpt=%d", blockCount, repeatCount);
+
+			if (loopInstruct != UT32_MAX && loopInstruct != pc) {
+				goto fail; // nested loop
+			}
+			loopInstruct = pc;
+
+			if (loopDone == repeatCount) {
+				loopDone = 0;
+			} else {
+				loopDone++;
+				pc--; // rewind over "op"
+				if (blockCount > pc) {
+					goto fail; // can't go back this far
+				}
+				pc -= blockCount;
+			}
+		} else if (op >= 0xa000 && op <= 0xa3ff) {
+			// RelocSetPosition (LABS)
+			ut32 offset = longop & 0x3ffffff;
+			dbg ("LABS", "offset=%d", offset);
+			rAddr = offset;
+		} else if (op >= 0xa400 && op <= 0xa7ff) {
+			// RelocLgByImport (LSYM)
+			ut32 index = longop & 0x3ffffff;
+			dbg ("LSYM", "idx=%d", index);
+			PUSH_RELOC_OR_FAIL (index, true, 4);
+			rSymI = index + 1;
+		} else if (op >= 0xb000 && op <= 0xb3ff) {
+			// RelocLgRepeat (LRPT)
+			ut8 blockCount = ((op >> 8) & 0xf) + 1;
+			ut32 repeatCount = (longop & 0x3fffff) + 1;
+			dbg ("LRPT", "i=%d,rpt=%d", blockCount, repeatCount);
+
+			if (loopInstruct != UT32_MAX && loopInstruct != pc) {
+				goto fail; // nested loop
+			}
+			loopInstruct = pc;
+
+			if (loopDone == repeatCount) {
+				loopDone = 0;
+			} else {
+				loopDone++;
+				pc -= 2; // rewind over "longop"
+				if (blockCount > pc) {
+					goto fail; // can't go back this far
+				}
+				pc -= blockCount;
+			}
+		} else if (op >= 0xb400 && op <= 0xb43f) {
+			// Same as RelocSmBySection (LSEC LSECN)
+			ut32 index = longop & 0x3fffff;
+			dbg ("LSEC", "LSECN,sct=%d", index);
+			PUSH_RELOC_OR_FAIL (index, false, 4);
+		} else if (op >= 0xb440 && op <= 0xb47f) {
+			// Same as RelocSmSetSectC (LSEC LDIS)
+			ut32 index = longop & 0x3fffff;
+			dbg ("LSEC", "LCDIS,sct=%d", index);
+			codeA = index;
+		} else if (op >= 0xb480 && op <= 0xb4bf) {
+			// Same as RelocSmSetSectD (LSEC LTIS)
+			ut32 index = longop & 0x3fffff;
+			dbg ("LSEC", "LDTIS,sct=%d", index);
+			dataA = index;
+		} else {
+			goto fail;
+		}
+	}
+#undef PUSH_RELOC_OR_FAIL
+	if (r_list_length (ret) == 0) {
+		goto fail;
+	}
+	r_list_sort (ret, (RListComparator)reloc_comparator);
+	return ret;
+
+fail:
+	r_list_free (ret);
+	return NULL;
+}
+
+static bool check(RBinFile *bf, RBuffer *b) {
+	char tmp[8];
+	int r = r_buf_read_at (b, 0, (ut8 *)tmp, sizeof (tmp));
+	return r == sizeof (tmp) && !memcmp (tmp, "Joy!peff", sizeof (tmp));
+}
+
+static bool pef_read_reloc_blocks(RBinFile *bf, RBinPEFObj *pef) {
+	const ut32 importedLibraryCount = r_buf_read_be32_at (bf->buf, pef->ldrsec + 24);
+	pef->totalImportedSymbolCount = r_buf_read_be32_at (bf->buf, pef->ldrsec + 28);
+	pef->relocSecCount = r_buf_read_be32_at (bf->buf, pef->ldrsec + 32);
+	const ut32 relocInstrOffset = r_buf_read_be32_at (bf->buf, pef->ldrsec + 36);
+	if (importedLibraryCount > 0x10000000 || pef->totalImportedSymbolCount > 0x10000000 || pef->relocSecCount > 0x10000000) {
+		// integer overflow prevented
+		return false;
+	}
+	if (pef->relocSecCount > pef->nsec) {
+		return false;
+	}
+
+	const ut64 bsz = r_buf_size (bf->buf);
+	ut64 reloc_table = 56;
+	ut64 n = 0;
+	if (r_add_overflow ((ut64)pef->ldrsec, reloc_table, &n) || n > bsz) {
+		return false;
+	}
+	ut64 reloc_base = 0;
+	if (r_mul_overflow ((ut64)importedLibraryCount, (ut64)24, &n) ||
+		r_add_overflow (reloc_table, n, &reloc_table) ||
+		r_mul_overflow ((ut64)pef->totalImportedSymbolCount, (ut64)4, &n) ||
+		r_add_overflow (reloc_table, n, &reloc_table) ||
+		r_add_overflow ((ut64)pef->ldrsec, reloc_table, &reloc_table) ||
+		r_add_overflow ((ut64)pef->ldrsec, (ut64)relocInstrOffset, &reloc_base) ||
+		reloc_table > bsz ||
+		reloc_table > UT32_MAX ||
+		reloc_base > UT32_MAX) {
+		return false;
+	}
+	if ((ut64)pef->relocSecCount > (bsz - reloc_table) / 12) {
+		return false;
+	}
+	pef->relocTable = (ut32)reloc_table;
+	pef->relocBase = (ut32)reloc_base;
+	return true;
+}
+
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	if (!check (bf, buf)) {
+		return false;
+	}
+	ut16 nsec = r_buf_read_be16_at (bf->buf, 32);
+	if (nsec > 1024) {
+		return false;
+	}
+	RBinPEFObj *pef = bf->bo->bin_obj = calloc (1, sizeof (RBinPEFObj) + sizeof (PEFSection) * nsec);
+	if (!pef) {
+		return false;
+	}
+	pef->nsec = nsec;
+	ut64 climb = loadaddr;
+	ut64 pidata_size = 0;
+	int i;
+	for (i = 0; i < nsec; i++) {
+		PEFSection *sec = &pef->sec[i];
+		size_t offset = 40 + 28 * i;
+		sec->defAddress = r_buf_read_be32_at (buf, offset + 4);
+		sec->lenTotal = r_buf_read_be32_at (buf, offset + 8);
+		sec->lenUnpack = r_buf_read_be32_at (buf, offset + 12);
+		sec->lenDisk = r_buf_read_be32_at (buf, offset + 16);
+		sec->offset = r_buf_read_be32_at (buf, offset + 20);
+		r_buf_read_at (buf, offset + 24, &sec->kind, 1);
+		r_buf_read_at (buf, offset + 25, &sec->share, 1);
+		r_buf_read_at (buf, offset + 26, &sec->align, 1);
+
+		if (sec->kind <= 3 || sec->kind == 6) { // exists in memory
+			ut64 alignmask = (1ULL << sec->align) - 1;
+			sec->addr = climb = (climb + alignmask) & ~alignmask;
+			climb += sec->lenTotal;
+		}
+
+		if (sec->kind == 4) {
+			pef->ldrsec = sec->offset;
+		}
+
+		if (sec->kind == 2) { // pidata, extract now
+			ut64 fsize = r_buf_size (buf);
+			if (fsize == UT64_MAX || sec->lenDisk == UT32_MAX || sec->lenUnpack == UT32_MAX) {
+				return false;
+			}
+			if (sec->lenDisk > fsize || sec->lenUnpack > 0x10000000) {
+				return false;
+			}
+			if (sec->lenUnpack > PEF_MAX_PIDATA_SIZE - pidata_size) {
+				R_LOG_WARN ("Not expanding pidata section %d: %" PFMT32u " bytes exceed the remaining budget", i, sec->lenUnpack);
+				continue;
+			}
+			pidata_size += sec->lenUnpack;
+			size_t paclen = sec->lenDisk;
+			void *pac = malloc (paclen);
+			sec->unpack = sec->lenUnpack > 0 ? malloc (sec->lenUnpack) : NULL;
+			if (!pac || (sec->lenUnpack > 0 && !sec->unpack)) {
+				free (pac);
+				free (sec->unpack);
+				return false;
+			}
+			st64 n = r_buf_read_at (bf->buf, sec->offset, pac, paclen);
+			if (n != paclen) {
+				free (pac);
+				free (sec->unpack);
+				return false;
+			}
+			if (unpack_pidata (sec->unpack, sec->lenUnpack, pac, paclen)) {
+				free (pac);
+				free (sec->unpack);
+				return false;
+			}
+			free (pac);
+		}
+	}
+
+	if (!pef_read_reloc_blocks (bf, pef)) {
+		return false;
+	}
+	return true;
+}
+
+static void destroy(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	int i;
+	for (i = 0; i < pef->nsec; i++) {
+		free (pef->sec[i].unpack);
+		r_list_free (pef->sec[i].relocs);
+	}
+	free (pef);
+}
+
+static RBinInfo *info(RBinFile *bf) {
+	char hdr[40];
+	const int r = r_buf_read_at (bf->buf, 0, (ut8 *)hdr, sizeof (hdr));
+	if (r != sizeof (hdr)) {
+		return NULL;
+	}
+
+	RBinInfo *ret = R_NEW0 (RBinInfo);
+	ret->file = strdup (bf->file);
+	ret->type = strdup ("PEF");
+	if (!memcmp (hdr + 8, "pwpc", 4)) {
+		ret->arch = strdup ("ppc");
+		ret->machine = strdup ("Power Macintosh/BeBox");
+	} else if (!memcmp (hdr + 8, "m68k", 4)) {
+		ret->arch = strdup ("m68k");
+		ret->cpu = strdup ("68040");
+		ret->machine = strdup ("Macintosh");
+	}
+	ret->bits = 32;
+	ret->has_pi = true;
+	ret->big_endian = true;
+	ret->rclass = strdup ("cfm");
+	ret->has_va = true;
+	return ret;
+}
+
+static RList *fields(RBinFile *bf) {
+	RList *ret = r_list_newf ((RListFree)free);
+#define ROW(nam, siz, val, fmt, cmt) \
+	r_list_append (ret, r_bin_field_new (addr, addr, val, siz, nam, cmt, fmt, false));
+	ut64 addr = 0;
+	ROW ("magic", 8, r_buf_read_be64_at (bf->buf, addr), "x", NULL);
+	addr += 8;
+	ROW ("architecture", 4, r_buf_read_be32_at (bf->buf, addr), "x", NULL);
+	addr += 4;
+	ROW ("formatVersion", 4, r_buf_read_be32_at (bf->buf, addr), "x", NULL);
+	addr += 4;
+	ROW ("dateTimeStamp", 4, r_buf_read_be32_at (bf->buf, addr), "x", NULL);
+	addr += 4;
+	ROW ("oldDefVersion", 4, r_buf_read_be32_at (bf->buf, addr), "x", NULL);
+	addr += 4;
+	ROW ("oldImpVersion", 4, r_buf_read_be32_at (bf->buf, addr), "x", NULL);
+	addr += 4;
+	ROW ("currentVersion", 4, r_buf_read_be32_at (bf->buf, addr), "x", NULL);
+	addr += 4;
+	ROW ("sectionCount", 2, r_buf_read_be16_at (bf->buf, addr), "x", NULL);
+	addr += 2;
+	ROW ("instSectionCount", 2, r_buf_read_be16_at (bf->buf, addr), "x", NULL);
+	addr += 2;
+	ROW ("reserved", 2, r_buf_read_be16_at (bf->buf, addr), "x", NULL);
+	addr += 2;
+	return ret;
+}
+
+static ut64 size(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	ut64 s = 0;
+	int i;
+	for (i = 0; i < pef->nsec; i++) {
+		ut64 e = pef->sec[i].offset + pef->sec[i].lenDisk;
+		if (s < e) {
+			s = e;
+		}
+	}
+	return s;
+}
+
+static RBinAddr *binsym(RBinFile *bf, int sym) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+
+	int n;
+	if (sym == R_BIN_SYM_ENTRY || sym == R_BIN_SYM_MAIN) {
+		n = 0;
+	} else if (sym == R_BIN_SYM_INIT) {
+		n = 1;
+	} else if (sym == R_BIN_SYM_FINI) {
+		n = 2;
+	} else {
+		return NULL;
+	}
+
+	ut32 sec = r_buf_read_be32_at (bf->buf, pef->ldrsec + n * 8);
+	ut32 offset = r_buf_read_be32_at (bf->buf, pef->ldrsec + n * 8 + 4);
+	if (sec < pef->nsec && offset < pef->sec[sec].addr + pef->sec[sec].lenTotal) {
+		RBinAddr *ptr = R_NEW0 (RBinAddr);
+		ptr->paddr = pef->sec[sec].addr;
+		ptr->vaddr = pef->sec[sec].addr + offset;
+		return ptr;
+	}
+	return NULL;
+}
+
+static bool sections_vec(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	RVecRBinSection_clear (&bf->bo->sections_vec);
+	size_t i;
+
+	for (i = 0; i < pef->nsec; i++) {
+		PEFSection *sec = &pef->sec[i];
+		const char *type = NULL;
+		bool is_data = false;
+		ut32 perm = R_PERM_NONE;
+		switch (sec->kind) {
+		case 0: // common
+			type = "code";
+			perm = R_PERM_RX;
+			break;
+		case 1: // fairly common
+			type = "data";
+			is_data = true;
+			perm = R_PERM_RW;
+			break;
+		case 2: // common: "pattern initialized" ~ compressed
+			type = "pidata";
+			is_data = true;
+			perm = R_PERM_RW;
+			break;
+		case 3: // never observed
+			type = "rodata";
+			is_data = true;
+			perm = R_PERM_R;
+			break;
+		case 4: // mandatory
+			type = "loader";
+			break;
+		case 5: // reserved
+			type = "debug";
+			break;
+		case 6: // never observed
+			type = "selfmodcode";
+			is_data = true;
+			perm = R_PERM_RWX;
+			break;
+		case 7: // reserved
+			type = "exception";
+			break;
+		case 8: // reserved
+			type = "traceback";
+			break;
+		default:
+			continue;
+		}
+		RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+		ptr->is_segment = false; // like XCOFF, we have no concept of ELF segments
+		ptr->add = true;
+		ptr->paddr = sec->offset;
+		ptr->size = sec->lenDisk;
+		ptr->type = type;
+		ptr->is_data = is_data;
+		ptr->perm = perm;
+		ptr->name = r_str_newf (".%s-%d", ptr->type, (int)i); // same naming convention as XCOFF
+
+		// Exists in memory
+		if (ptr->perm != R_PERM_NONE) {
+			ptr->vaddr = sec->addr;
+			ptr->vsize = sec->lenTotal;
+		}
+
+		// Sharing field is set to a non-default value (>1) for some
+		// non-memory-loaded sections where sharing would be meaningless.
+		if (sec->share != 1 && ptr->perm != R_PERM_NONE) {
+			ptr->perm |= R_PERM_S;
+		}
+
+		// Decompressed section
+		if (sec->unpack != NULL) {
+			ptr->paddr = 0;
+			ptr->size = 0; // cannot be read direct from disk, don't try
+
+			char *muri = r_str_newf ("malloc://%" PFMT32u, sec->lenTotal); // gets zero-inited
+			RIODesc *desc = r_io_open_nomap (bf->rbin->iob.io, muri, R_PERM_RW, 0);
+			free (muri);
+			if (desc != NULL) {
+				ptr->backing_fd = desc->fd;
+				r_io_desc_write (desc, sec->unpack, sec->lenUnpack);
+			}
+		}
+
+	}
+	return true;
+}
+
+static bool imports_vec(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	ut32 importedLibraryCount = r_buf_read_be32_at (bf->buf, pef->ldrsec + 24);
+	ut32 totalImportedSymbolCount = r_buf_read_be32_at (bf->buf, pef->ldrsec + 28);
+	ut32 loaderStringsOffset = r_buf_read_be32_at (bf->buf, pef->ldrsec + 40);
+	if (totalImportedSymbolCount < 1 || totalImportedSymbolCount > UT16_MAX) {
+		R_LOG_WARN ("invalid amount of imports");
+		return false;
+	}
+	if (importedLibraryCount > (UT32_MAX / 24)) {
+		R_LOG_WARN ("invalid amount of libraries");
+		return false;
+	}
+	RBinImport **ary = calloc (sizeof (RBinImport *), totalImportedSymbolCount);
+	if (!ary) {
+		return false;
+	}
+	int i, j;
+
+	for (i = 0; i < totalImportedSymbolCount; i++) {
+		ary[i] = R_NEW0 (RBinImport);
+	}
+
+	for (i = 0; i < importedLibraryCount; i++) {
+		ut32 at = pef->ldrsec + 56 + 24 * i;
+		ut32 libNamePtr = r_buf_read_be32_at (bf->buf, at);
+		ut32 libSymCount = r_buf_read_be32_at (bf->buf, at + 12);
+		ut32 firstSym = r_buf_read_be32_at (bf->buf, at + 16);
+
+		if (firstSym > totalImportedSymbolCount ||
+				libSymCount > totalImportedSymbolCount ||
+				firstSym > (UT32_MAX - libSymCount)) {
+			continue;
+		}
+
+		for (j = firstSym; j < firstSym + libSymCount && j < totalImportedSymbolCount; j++) {
+			ut32 offset = 56 + 24 * importedLibraryCount;
+			at = pef->ldrsec + offset + 4 * j;
+
+			ut8 kind = 0;
+			r_buf_read_at (bf->buf, at, &kind, 1);
+			ut32 symNamePtr = r_buf_read_be32_at (bf->buf, at) & 0xffffff;
+
+			r_bin_import_fini (ary[j]);
+			ary[j]->name = r_bin_name_new_from (r_buf_get_string (bf->buf, pef->ldrsec + loaderStringsOffset + symNamePtr));
+			ary[j]->libname = r_buf_get_string (bf->buf, pef->ldrsec + loaderStringsOffset + libNamePtr);
+			ary[j]->ordinal = j;
+			ary[j]->type = class2string (kind);
+			ary[j]->bind = (kind & 0x80) ? R_BIN_BIND_WEAK_STR : R_BIN_BIND_GLOBAL_STR;
+		}
+	}
+
+	RVecRBinImport *ret = &bf->bo->imports_vec;
+	for (i = 0; i < totalImportedSymbolCount; i++) {
+		if (ary[i]->name) {
+			RVecRBinImport_push_back (ret, ary[i]);
+			free (ary[i]); /* vec owns inner fields now */
+		} else {
+			r_bin_import_free (ary[i]);
+		}
+	}
+	free (ary);
+	return true;
+}
+
+static RList *libs(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	RList *ret = r_list_newf ((RListFree)free);
+	ut32 importedLibraryCount = r_buf_read_be32_at (bf->buf, pef->ldrsec + 24);
+	ut32 loaderStringsOffset = r_buf_read_be32_at (bf->buf, pef->ldrsec + 40);
+	if (importedLibraryCount > (UT32_MAX / 24)) {
+		return ret;
+	}
+	int i;
+
+	for (i = 0; i < importedLibraryCount; i++) {
+		ut32 at = pef->ldrsec + 56 + 24 * i;
+		ut32 libNamePtr = r_buf_read_be32_at (bf->buf, at);
+		char *name = r_buf_get_string (bf->buf, pef->ldrsec + loaderStringsOffset + libNamePtr);
+		r_list_append (ret, name);
+	}
+	return ret;
+}
+
+static void pef_decode_reloc_blocks(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	if (pef->relocsDecoded) {
+		return;
+	}
+	pef->relocsDecoded = true;
+	const ut64 bsz = r_buf_size (bf->buf);
+	int i;
+	for (i = 0; i < pef->relocSecCount; i++) {
+		const ut64 at = pef->relocTable + 12 * i;
+		const ut16 sec = r_buf_read_be16_at (bf->buf, at);
+		const ut32 instCount = r_buf_read_be32_at (bf->buf, at + 4);
+		const ut32 firstInst = r_buf_read_be32_at (bf->buf, at + 8);
+		ut64 reloc_at = 0;
+		ut64 reloc_bytes = 0;
+		ut64 reloc_end = 0;
+		if (sec >= pef->nsec ||
+			instCount == 0 || instCount > PEF_MAX_RELOC_INSTRUCTIONS ||
+			r_add_overflow ((ut64)pef->relocBase, (ut64)firstInst, &reloc_at) ||
+			r_mul_overflow ((ut64)instCount, (ut64)2, &reloc_bytes) ||
+			r_add_overflow (reloc_at, reloc_bytes, &reloc_end) ||
+			reloc_at > UT32_MAX || reloc_end > bsz) {
+			continue;
+		}
+		const PEFRelocDecodeConfig cfg = {
+			.section_count = pef->nsec,
+			.import_count = pef->totalImportedSymbolCount,
+			.section_size = pef->sec[sec].lenTotal,
+		};
+		RList *relocs = pef_decode_reloc_bytecode (bf->buf, (ut32)reloc_at, instCount, &cfg);
+		if (relocs) {
+			r_list_free (pef->sec[sec].relocs);
+			pef->sec[sec].relocs = relocs;
+		}
+	}
+}
+
+static RVecRBinReloc *relocs(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	pef_decode_reloc_blocks (bf);
+	RVecRBinReloc *ret = RVecRBinReloc_new ();
+	/* ensure imports vec is populated; safe even if already filled */
+	if (RVecRBinImport_empty (&bf->bo->imports_vec)) {
+		imports_vec (bf);
+	}
+	RVecRBinImport *importVec = &bf->bo->imports_vec;
+	size_t importCount = RVecRBinImport_length (importVec);
+	PEFReloc *r;
+	RListIter *iter;
+	int i;
+
+	for (i = 0; i < pef->nsec; i++) {
+		r_list_foreach (pef->sec[i].relocs, iter, r) {
+			if (r->target >= (r->isimport? importCount: pef->nsec)) {
+				continue;
+			}
+			RBinReloc *ptr = RVecRBinReloc_emplace_back (ret);
+			ptr->type = R_BIN_RELOC_32;
+			ptr->additive = 1;
+			ptr->vaddr = pef->sec[i].addr + r->offset;
+			if (r->isimport) {
+				ptr->import = r_bin_import_clone (RVecRBinImport_at (importVec, r->target));
+			} else {
+				ptr->addend = pef->sec[r->target].addr;
+			}
+		}
+	}
+	return ret;
+}
+
+static RVecRBinReloc *patch_relocs(RBinFile *bf) {
+	RVecRBinReloc *list = relocs (bf);
+	RBinReloc *reloc;
+	R_VEC_FOREACH (list, reloc) {
+		if (reloc->import) {
+			continue;
+		}
+		RIOBind *b = &bf->rbin->iob;
+		ut8 buf[4] = {};
+		if (b->read_at (b->io, reloc->vaddr, buf, 4) != 4) {
+			continue;
+		}
+		r_write_be32 (buf, r_read_be32 (buf) + reloc->addend);
+		b->overlay_write_at (b->io, reloc->vaddr, buf, 4);
+	}
+	return list;
+}
+
+static bool symbols_vec(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	RVecRBinSymbol *ret = &bf->bo->symbols_vec;
+	ut32 loaderStringsOffset = r_buf_read_be32_at (bf->buf, pef->ldrsec + 40);
+	ut32 exportHashOffset = r_buf_read_be32_at (bf->buf, pef->ldrsec + 44);
+	ut32 exportHashTablePower = r_buf_read_be32_at (bf->buf, pef->ldrsec + 48);
+	ut32 exportedSymbolCount = r_buf_read_be32_at (bf->buf, pef->ldrsec + 52);
+	if (exportHashTablePower >= 30) {
+		return true;
+	}
+	// guard against a hostile exportedSymbolCount before using it as a loop boundary
+	if (exportedSymbolCount > 0x10000000) {
+		return true;
+	}
+	ut64 hashTableSize = 4ULL << exportHashTablePower;
+	if (hashTableSize > 0xffffffffULL) {
+		return true;
+	}
+	const ut64 bsize = r_buf_size (bf->buf);
+	const ut64 stringLenTable = (ut64)pef->ldrsec + exportHashOffset + hashTableSize;
+	const ut64 exportTable = stringLenTable + 4ULL * exportedSymbolCount;
+	// the key table (4 bytes per symbol) and the export table (10 bytes per symbol) must fit in the file
+	if (exportTable > bsize || exportedSymbolCount > (bsize - exportTable) / 10) {
+		return true;
+	}
+	ut32 i;
+
+	for (i = 0; i < exportedSymbolCount; i++) {
+		const ut64 ofs = exportTable + 10ULL * i;
+		ut8 kind = 0;
+		r_buf_read_at (bf->buf, ofs, &kind, 1);
+		ut32 nameOfs = pef->ldrsec + loaderStringsOffset + (r_buf_read_be32_at (bf->buf, ofs) & 0xffffff);
+		ut32 addr = r_buf_read_be32_at (bf->buf, ofs + 4);
+		st16 index = r_buf_read_be16_at (bf->buf, ofs + 8);
+		ut16 nameLen = r_buf_read_be16_at (bf->buf, stringLenTable + 4ULL * i);
+		if (index < 0 || index >= pef->nsec) {
+			continue; // re-exported func or absolute mem address, not supported
+		}
+		// guard against tainted nameLen/nameOfs that would read past the buffer
+		if (nameOfs > bsize || (ut64)nameLen > bsize - nameOfs) {
+			continue;
+		}
+
+		char *name = calloc (1, (size_t)nameLen + 1); // +1 for the null terminator, which is not on disk
+		if (!name) {
+			continue;
+		}
+		r_buf_read_at (bf->buf, nameOfs, (ut8 *)name, nameLen);
+		RBinSymbol *ptr = RVecRBinSymbol_emplace_back (ret);
+		ptr->name = r_bin_name_new_from (name);
+		ptr->vaddr = pef->sec[index].addr + addr;
+		ptr->bind = R_BIN_BIND_GLOBAL_STR;
+		ptr->type = class2string (kind);
+	}
+	return true;
+}
+
+static RList *entries(RBinFile *bf) {
+	RBinPEFObj *pef = bf->bo->bin_obj;
+	RList *ret = r_list_newf (free);
+	static const int types[] = {
+		R_BIN_ENTRY_TYPE_MAIN,
+		R_BIN_ENTRY_TYPE_INIT,
+		R_BIN_ENTRY_TYPE_FINI
+	};
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		ut32 sec = r_buf_read_be32_at (bf->buf, pef->ldrsec + i * 8);
+		ut32 offset = r_buf_read_be32_at (bf->buf, pef->ldrsec + i * 8 + 4);
+		if (sec < pef->nsec && offset < pef->sec[sec].addr + pef->sec[sec].lenTotal) {
+			RBinAddr *ptr = R_NEW0 (RBinAddr);
+			ptr->paddr = pef->sec[sec].addr;
+			ptr->vaddr = pef->sec[sec].addr + offset;
+			ptr->type = types[i];
+			r_list_append (ret, ptr);
+		}
+	}
+	return ret;
+}
+
+RBinPlugin r_bin_plugin_pef = {
+	.meta = {
+		.name = "pef",
+		.author = "elliotnunn",
+		.desc = "Vintage-Apple Preferred Executable",
+		.license = "LGPL-3.0-only",
+	},
+	.check = &check,
+	.load = &load,
+	.destroy = &destroy,
+	.info = &info,
+	.fields = &fields,
+	.size = &size,
+	.binsym = &binsym,
+	.sections_vec = &sections_vec,
+	.imports_vec = &imports_vec,
+	.libs = &libs,
+	.relocs = &relocs,
+	.patch_relocs = &patch_relocs,
+	.symbols_vec = &symbols_vec,
+	.entries = &entries,
+};
+
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
+	.type = R_LIB_TYPE_BIN,
+	.data = &r_bin_plugin_pef,
+	.version = R2_VERSION
+};
+#endif

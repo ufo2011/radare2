@@ -1,108 +1,100 @@
-/* radare - LGPL - Copyright 2007-2019 - pancake */
+/* radare - LGPL - Copyright 2007-2025 - pancake */
 
-#include <r_util.h>
+#define R_LOG_ORIGIN "line"
+
 #include <r_cons.h>
 
-static RLine r_line_instance;
-#define I r_line_instance
-
-R_API RLine *r_line_singleton(void) {
-	return &r_line_instance;
-}
-
-R_API RLine *r_line_new(void) {
-	I.hist_up = NULL;
-	I.hist_down = NULL;
-	I.prompt = strdup ("> ");
-	I.contents = NULL;
-	I.enable_vi_mode = false;
-	I.clipboard = NULL;
-	I.kill_ring = r_list_newf (NULL);
-	I.kill_ring_ptr = -1;
-#if __WINDOWS__
-	I.vtmode = r_cons_is_vtcompat ();
+R_API RLine *r_line_new(RCons *cons) {
+	RLine *line = R_NEW0 (RLine);
+	line->cons = cons;
+	line->state.prompt = strdup ("> ");
+	line->hist_size = R_LINE_HISTSIZE;
+	line->kill_ring = r_list_newf (free);
+	line->kill_ring_ptr = -1;
+#if R2__WINDOWS__
+	line->vtmode = win_is_vtcompat (cons);
 #else
-	I.vtmode = 2;
+	line->vtmode = 2;
 #endif
-	if (!r_line_dietline_init ()) {
-		eprintf ("error: r_line_dietline_init\n");
+	r_line_completion_init (&line->completion, 4096);
+	return line;
+}
+
+R_API void r_line_free(RLine *line) {
+	if (line) {
+		free (line->state.prompt);
+		free (line->state.contents);
+		free (line->clipboard);
+		r_list_free (line->kill_ring);
+		r_line_hist_free (line);
+		r_line_completion_clear (&line->completion);
+		free (line);
 	}
-	r_line_completion_init (&I.completion, 4096);
-	return &I;
 }
 
-R_API void r_line_free(void) {
-	// XXX: prompt out of the heap?
-	free ((void *)I.prompt);
-	I.prompt = NULL;
-	r_list_free (I.kill_ring);
-	r_line_hist_free ();
-	r_line_completion_fini (&I.completion);
-}
-
-R_API void r_line_clipboard_push (const char *str) {
-	I.kill_ring_ptr += 1;
-	r_list_insert (I.kill_ring, I.kill_ring_ptr, strdup (str));
+R_API void r_line_clipboard_push(RLine *line, const char *str) {
+	R_RETURN_IF_FAIL (line && str);
+	line->kill_ring_ptr += 1;
+	r_list_insert (line->kill_ring, line->kill_ring_ptr, strdup (str));
 }
 
 // handle const or dynamic prompts?
-R_API void r_line_set_prompt(const char *prompt) {
-	free (I.prompt);
-	I.prompt = strdup (prompt);
-	RCons *cons = r_cons_singleton ();
-	I.cb_fkey = cons->cb_fkey;
+R_API void r_line_set_prompt(RLine *line, const char *prompt) {
+	R_RETURN_IF_FAIL (line && prompt);
+	free (line->state.prompt);
+	line->state.prompt = strdup (prompt);
+	line->state.cb_fkey = line->cons->cb_fkey;
 }
 
 // handle const or dynamic prompts?
-R_API char *r_line_get_prompt(void) {
-	return strdup (I.prompt);
+R_API char *r_line_get_prompt(RLine *line) {
+	R_RETURN_VAL_IF_FAIL (line, NULL);
+	return strdup (line->state.prompt);
 }
 
 R_API void r_line_completion_init(RLineCompletion *completion, size_t args_limit) {
 	completion->run = NULL;
 	completion->run_user = NULL;
 	completion->args_limit = args_limit;
-	r_pvector_init (&completion->args, free);
-}
-
-R_API void r_line_completion_fini(RLineCompletion *completion) {
-	r_line_completion_clear (completion);
+	RVecCString_init (&completion->args);
 }
 
 R_API void r_line_completion_push(RLineCompletion *completion, const char *str) {
-	r_return_if_fail (completion && str);
+	R_RETURN_IF_FAIL (completion && str);
 	if (completion->quit) {
-	        return;
+		return;
 	}
-	if (r_pvector_len (&completion->args) < completion->args_limit) {
+	if (RVecCString_length (&completion->args) < completion->args_limit) {
 		char *s = strdup (str);
 		if (s) {
-			r_pvector_push (&completion->args, (void *)s);
+			RVecCString_push_back (&completion->args, &s);
 		}
 	} else {
-	        completion->quit = true;
-	        eprintf ("Warning: Maximum completion capacity reached, increase scr.maxtab");
+		completion->quit = true;
+		R_LOG_WARN ("Maximum completion capacity reached, increase scr.maxtab");
 	}
 }
 
 R_API void r_line_completion_set(RLineCompletion *completion, int argc, const char **argv) {
-	r_return_if_fail (completion && (argc >= 0));
+	R_RETURN_IF_FAIL (completion && (argc >= 0));
 	r_line_completion_clear (completion);
 	if (argc > completion->args_limit) {
-                eprintf ("Warning: Maximum completion capacity reached, increase scr.maxtab");
+		argc = completion->args_limit;
+		R_LOG_DEBUG ("Maximum completion capacity reached, increase scr.maxtab (%d %" PFMTSZu ")",
+				argc, completion->args_limit);
 	}
 	size_t count = R_MIN (argc, completion->args_limit);
-	r_pvector_reserve (&completion->args, count);
-	int i;
-	for (i = 0; i < count; i++) {
-		r_line_completion_push (completion, argv[i]);
+	if (RVecCString_reserve (&completion->args, count)) {
+		int i;
+		for (i = 0; i < count; i++) {
+			r_line_completion_push (completion, argv[i]);
+		}
 	}
 }
 
 R_API void r_line_completion_clear(RLineCompletion *completion) {
-	r_return_if_fail (completion);
+	R_RETURN_IF_FAIL (completion);
 	completion->quit = false;
-	r_pvector_clear (&completion->args);
+	RVecCString_clear (&completion->args);
+	RVecCString_shrink_to_fit (&completion->args);
 }
-
-#include "dietline.c"

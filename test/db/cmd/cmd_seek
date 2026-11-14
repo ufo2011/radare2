@@ -1,3 +1,38 @@
+NAME=prev seek opcode mill bug
+FILE=bins/elf/runofthemill
+CMDS=<<EOF
+s 0x4117e4
+s
+so+1
+s
+so-1
+s
+so-1
+s
+aa
+?e --
+s 0x4117e4
+s
+so+1
+s
+so-1
+s
+so-1
+s
+EOF
+EXPECT=<<EOF
+0x4117e4
+0x4117ef
+0x4117e4
+0x4117dc
+--
+0x4117e4
+0x4117ef
+0x4117e4
+0x4117dc
+EOF
+RUN
+
 NAME=seek preludes
 FILE=bins/mach0/ls-osx-x86_64
 CMDS=<<EOF
@@ -25,13 +60,13 @@ NAME=seekinstr
 FILE=bins//mach0/ired-arm64
 CMDS=<<EOF
 afr
-?v $Fe
-s $I1@$Fe
+?v $BE
+s $ip:1@$BE
 pi 1
-?v $Fb
-s $i1
+?v $FB
+s $in:1
 pi 1
-?v $Fb
+?v $BB
 EOF
 EXPECT=<<EOF
 0x1000058e4
@@ -98,6 +133,21 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=seek invalid symbol keeps offset
+FILE=-
+CMDS=<<EOF
+s 0x42
+s noSuchSymbolEndingT
+?v $$
+EOF
+EXPECT=<<EOF
+0x42
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot seek to unknown address 'noSuchSymbolEndingT' (unknown symbol)
+EOF
+RUN
+
 NAME=seek opcodes
 FILE=-
 CMDS=<<EOF
@@ -110,6 +160,25 @@ EOF
 EXPECT=<<EOF
 0x4
 0x4
+EOF
+RUN
+
+NAME=seek opcodes advances over invalid instructions
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0f040f040f040f040f040f040f040f04
+so
+s
+so 5
+s
+so -6
+s
+EOF
+EXPECT=<<EOF
+0x1
+0xb
+0x0
 EOF
 RUN
 
@@ -177,14 +246,14 @@ FILE=malloc://0x4000
 CMDS=<<EOF
 s 0
 b 64
-wb 38
+wX 38
 s 64
-wb deadbeef
+wX deadbeef
 s-32
 px
 EOF
 EXPECT=<<EOF
-- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+- offset -  2021 2223 2425 2627 2829 2A2B 2C2D 2E2F  0123456789ABCDEF
 0x00000020  3838 3838 3838 3838 3838 3838 3838 3838  8888888888888888
 0x00000030  3838 3838 3838 3838 3838 3838 3838 3838  8888888888888888
 0x00000040  dead beef dead beef dead beef dead beef  ................
@@ -209,15 +278,15 @@ s*
 EOF
 EXPECT=<<EOF
 0x100
-f undo_0 @ 0x0
+f undo_0 = 0x0
 
 0x200
-f undo_1 @ 0x0
-f undo_0 @ 0x100
+f undo_1 = 0x0
+f undo_0 = 0x100
 
 0x300
-f undo_1 @ 0x0
-f undo_0 @ 0x100
+f undo_1 = 0x0
+f undo_0 = 0x100
 EOF
 RUN
 
@@ -242,15 +311,15 @@ s*
 EOF
 EXPECT=<<EOF
 0x100
-f undo_0 @ 0x0
+f undo_0 = 0x0
 
 0x200
-f undo_1 @ 0x0
-f undo_0 @ 0x100
+f undo_1 = 0x0
+f undo_0 = 0x100
 
 0x300
-f undo_1 @ 0x0
-f undo_0 @ 0x100
+f undo_1 = 0x0
+f undo_0 = 0x100
 EOF
 RUN
 
@@ -359,19 +428,19 @@ EXPECT=<<EOF
 --- From 0x560e97 ---
 
 -- 1 --
-|           ; CODE XREF from fcn.00560e67 @ 0x560e80
+|           ; CODE XREF from fcn.00560e67 @ 0x560e80(x)
 |           0x00560e96      0f31           rdtsc
 0x560e96
-|           ; CODE XREF from fcn.00560e67 @ 0x560e80
+|           ; CODE XREF from fcn.00560e67 @ 0x560e80(x)
 |           0x00560e96      0f31           rdtsc
 
 -- 2 --
             0x00560e95  ~   ba0f31e914     mov edx, 0x14e9310f
-|           ; CODE XREF from fcn.00560e67 @ 0x560e80
+|           ; CODE XREF from fcn.00560e67 @ 0x560e80(x)
 |           0x00560e96      0f31           rdtsc
 0x560e95
             0x00560e95  ~   ba0f31e914     mov edx, 0x14e9310f
-|           ; CODE XREF from fcn.00560e67 @ 0x560e80
+|           ; CODE XREF from fcn.00560e67 @ 0x560e80(x)
 |           0x00560e96      0f31           rdtsc
 
 --- From 0x560e96 ---
@@ -401,6 +470,33 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=relative large seek
+FILE=-
+CMDS=<<EOF
+s
+s+0x1000000000
+s
+EOF
+EXPECT=<<EOF
+0x0
+0x1000000000
+EOF
+RUN
+
+NAME=relative plus alias
+FILE=-
+CMDS=<<EOF
++3
+s
++1
+s
+EOF
+EXPECT=<<EOF
+0x3
+0x4
+EOF
+RUN
+
 NAME=seek to bb start (sb)
 FILE=bins/elf/vim
 CMDS=<<EOF
@@ -412,5 +508,197 @@ sb
 EOF
 EXPECT=<<EOF
 0x543a0
+EOF
+RUN
+
+NAME=partial seek history issue
+FILE=-
+CMDS=<<EOF
+s
+s..33
+s..44
+s
+s-
+s
+s-
+s
+EOF
+EXPECT=<<EOF
+0x0
+0x44
+0x33
+0x0
+EOF
+RUN
+
+NAME=seek opcode history
+FILE=bins/elf/runofthemill
+CMDS=<<EOF
+so+1
+s
+so+2
+s
+so-3
+s
+echo ---
+s!
+echo ---
+s-
+s
+EOF
+EXPECT=<<EOF
+0x401007
+0x401012
+0x401000
+---
+0x401000 entry0
+0x401007 entry0 + 7
+0x401012 entry0 + 18
+0x401000 entry0
+---
+0x401012
+EOF
+RUN
+
+NAME=seek history string formats
+FILE=-
+CMDS=<<EOF
+f start @ 0
+f mark @ 0x10
+s 0x10
+s 0x20
+s-
+sj
+s==
+s=
+s*
+s=*
+s-*
+sj
+s==
+EOF
+EXPECT=<<EOF
+[{"offset":0,"name":"start"},{"offset":16,"name":"mark","current":true},{"offset":32,"name":"mark+16"}]
+start > mark > mark + 16
+0x0
+f undo_0 = 0x0
+# Current undo/redo position.
+f redo_0 = 0x20
+0x00000000 ; 1s- # start
+0x00000010 ; # CUR mark
+0x00000020 ; 1s+ # mark + 16
+[{"offset":16,"name":"mark","current":true}]
+mark
+EOF
+RUN
+
+NAME=s with invalid expression does not seek to 0
+FILE=malloc://1024
+CMDS=<<EOF
+s 0x100
+s foo
+s
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot seek to unknown address 'foo' (invalid octal number)
+EOF
+EXPECT=<<EOF
+0x100
+EOF
+RUN
+
+NAME=s++ with invalid expression does not seek
+FILE=malloc://1024
+CMDS=<<EOF
+s 0x100
+s++ foo
+s
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot seek to unknown address 'foo' (invalid octal number)
+EOF
+EXPECT=<<EOF
+0x100
+EOF
+RUN
+
+NAME=so with invalid expression does not seek
+FILE=malloc://1024
+CMDS=<<EOF
+s 0x100
+so foo
+s
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot seek to unknown opcode 'foo' (invalid octal number)
+EOF
+EXPECT=<<EOF
+0x100
+EOF
+RUN
+
+NAME=sa with invalid expression does not seek
+FILE=malloc://1024
+CMDS=<<EOF
+s 0x100
+sa 0x100 foo
+s
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot evaluate block size 'foo' (invalid octal number)
+EOF
+EXPECT=<<EOF
+0x100
+EOF
+RUN
+
+NAME=sl with invalid expression does not seek
+FILE=malloc://1024
+CMDS=<<EOF
+s 0x100
+sl foo
+s
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot evaluate line 'foo' (invalid octal number)
+EOF
+EXPECT=<<EOF
+0x100
+EOF
+RUN
+
+NAME=s+. with invalid expression does not seek
+FILE=malloc://1024
+CMDS=<<EOF
+s 0x100
+s foo+.bar
+s
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot seek to unknown address 'foo' (invalid octal number)
+EOF
+EXPECT=<<EOF
+0x100
+EOF
+RUN
+
+NAME=seek line with offsets that wrap an int
+FILE=bins/mach0/mac-ls
+CMDS=<<EOF
+e lines.from=0x100002000
+e lines.to=0x100004000
+sl 9
+sl+2147483647
+sl
+sl-2147483647
+sl
+EOF
+EXPECT=<<EOF
+9
+9
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Line must be between 1 and 20
+ERROR: Line must be between 1 and 20
 EOF
 RUN

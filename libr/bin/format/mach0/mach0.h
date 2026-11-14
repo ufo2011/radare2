@@ -1,12 +1,10 @@
 #include <r_bin.h>
 #include <r_types.h>
+#include <r_vec.h>
 #include "mach0_specs.h"
 
 #ifndef _INCLUDE_R_BIN_MACH0_H_
 #define _INCLUDE_R_BIN_MACH0_H_
-
-// 20% faster loading times for macho if enabled
-#define FEATURE_SYMLIST 0
 
 #define R_BIN_MACH0_STRING_LENGTH 256
 
@@ -15,10 +13,23 @@
 #define CSMAGIC_EMBEDDED_SIGNATURE 0xfade0cc0
 #define CSMAGIC_DETACHED_SIGNATURE 0xfade0cc1 /* multi-arch collection of embedded signatures */
 #define CSMAGIC_ENTITLEMENTS       0xfade7171
+#define CSMAGIC_DER_ENTITLEMENTS   0xfade7172
 #define CSMAGIC_REQUIREMENT        0xfade0c00 /* single Requirement blob */
 #define CSMAGIC_REQUIREMENTS       0xfade0c01 /* Requirements vector (internal requirements) */
 
 #define CS_PAGE_SIZE 4096
+
+// CodeDirectory flags (subset used for signing classification)
+#define CS_VALID          0x00000001
+#define CS_ADHOC          0x00000002
+#define CS_GET_TASK_ALLOW 0x00000004
+#define CS_HARD           0x00000100
+#define CS_KILL           0x00000200
+#define CS_RESTRICT       0x00000800
+#define CS_ENFORCEMENT    0x00001000
+#define CS_REQUIRE_LV     0x00002000
+#define CS_RUNTIME        0x00010000
+#define CS_LINKER_SIGNED  0x00020000
 
 #define CS_HASHTYPE_SHA1 1
 #define CS_HASHTYPE_SHA256 2
@@ -34,44 +45,76 @@
 #define CSSLOT_RESOURCEDIR 3
 #define CSSLOT_APPLICATION 4
 #define CSSLOT_ENTITLEMENTS  5
-#define CSSLOT_CMS_SIGNATURE 0x10000
+#define CSSLOT_DER_ENTITLEMENTS 7
+#define CSSLOT_LAUNCH_CONSTRAINT_SELF 8
+#define CSSLOT_LAUNCH_CONSTRAINT_PARENT 9
+#define CSSLOT_LAUNCH_CONSTRAINT_RESPONSIBLE 10
+#define CSSLOT_LIBRARY_CONSTRAINT 11
+#define CSSLOT_ALTERNATE_CODEDIRECTORIES 0x1000
+#define CSSLOT_ALTERNATE_CODEDIRECTORY_MAX 5
+#define CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT (CSSLOT_ALTERNATE_CODEDIRECTORIES + CSSLOT_ALTERNATE_CODEDIRECTORY_MAX)
+#define CSSLOT_SIGNATURESLOT 0x10000
+#define CSSLOT_IDENTIFICATIONSLOT 0x10001
+#define CSSLOT_TICKETSLOT 0x10002
+#define CSSLOT_CMS_SIGNATURE CSSLOT_SIGNATURESLOT
+
+typedef struct {
+	ut32 magic; /* magic number (CSMAGIC_CODEDIRECTORY) */
+	ut32 length; /* total length of CodeDirectory blob */
+	ut32 version; /* compatibility version */
+	ut32 flags; /* setup and mode flags */
+	ut32 hashOffset; /* offset of hash slot element at index zero */
+	ut32 identOffset; /* offset of identifier string */
+	ut32 nSpecialSlots; /* number of special hash slots */
+	ut32 nCodeSlots; /* number of ordinary (code) hash slots */
+	ut32 codeLimit; /* limit to main image signature range */
+	ut8 hashSize; /* size of each hash in bytes */
+	ut8 hashType; /* type of hash (cdHashType* constants) */
+	ut8 platform; /* unused (must be zero) */
+	ut8 pageSize; /* log2 (page size in bytes); 0 => infinite */
+	ut32 spare2; /* unused (must be zero) */
+	/* followed by dynamic content as located by offset fields above */
+	ut32 scatterOffset;
+	ut32 teamIDOffset;
+	ut32 spare3;
+	ut64 codeLimit64;
+	ut64 execSegBase;
+	ut64 execSegLimit;
+	ut64 execSegFlags;
+} CS_CodeDirectory;
+
+typedef enum {
+	R_FIXUP_EVENT_NONE = 0,
+	R_FIXUP_EVENT_REBASE = 1,
+	R_FIXUP_EVENT_REBASE_AUTH = 2,
+	R_FIXUP_EVENT_BIND = 4,
+	R_FIXUP_EVENT_BIND_AUTH = 8,
+} RFixupEvent;
+
+#define R_FIXUP_EVENT_MASK_BIND_ALL (R_FIXUP_EVENT_BIND | R_FIXUP_EVENT_BIND_AUTH)
+#define R_FIXUP_EVENT_MASK_REBASE_ALL (R_FIXUP_EVENT_REBASE | R_FIXUP_EVENT_REBASE_AUTH)
+#define R_FIXUP_EVENT_MASK_ALL (R_FIXUP_EVENT_MASK_BIND_ALL | R_FIXUP_EVENT_MASK_REBASE_ALL)
 
 struct section_t {
-	ut64 offset;
-	ut64 addr;
+	ut64 paddr;
+	ut64 vaddr;
 	ut64 size;
 	ut64 vsize;
 	ut32 align;
 	ut32 flags;
 	int perm;
 	char name[R_BIN_MACH0_STRING_LENGTH];
-	int last;
 };
 
-struct symbol_t {
-	ut64 offset;
-	ut64 addr;
-	ut64 size;
-	int bits;
-	int type;
-	bool is_imported;
-	char *name;
-	bool last;
-};
-
-struct import_t {
-	char name[R_BIN_MACH0_STRING_LENGTH];
-	int ord;
-	int last;
-};
+R_VEC_TYPE (RVecSection, struct section_t);
 
 struct reloc_t {
 	ut64 offset;
 	ut64 addr;
 	st64 addend;
 	ut8 type;
+	ut64 ntype;
 	int ord;
-	int last;
 	char name[256];
 	bool external;
 	bool pc_relative;
@@ -82,11 +125,7 @@ struct addr_t {
 	ut64 offset;
 	ut64 addr;
 	ut64 haddr;
-	int last;
-};
-
-struct lib_t {
-	char name[R_BIN_MACH0_STRING_LENGTH];
+	ut64 hvaddr;
 	int last;
 };
 
@@ -106,11 +145,25 @@ struct super_blob_t {
 	struct blob_index_t index[];
 };
 
+// TODO generalize into RBinFileOptions
 struct MACH0_(opts_t) {
 	bool verbose;
+	bool show_codesign;
 	ut64 header_at;
 	ut64 symbols_off;
+	int maxsymlen;
+	bool parse_start_symbols;
+	bool load_unnamed;
+	RBinFile *bf;
 };
+
+R_VEC_TYPE_WITH_FINI(RVecSegment, RBinSection, r_bin_section_fini);
+
+static inline void mach0_lib_fini (char **lib) {
+	free (*lib);
+}
+
+R_VEC_TYPE_WITH_FINI (RVecMach0Lib, char *, mach0_lib_fini);
 
 struct MACH0_(obj_t) {
 	struct MACH0_(mach_header) hdr;
@@ -118,7 +171,14 @@ struct MACH0_(obj_t) {
 	char *intrp;
 	char *compiler;
 	int nsegs;
+	int segs_count;
 	struct r_dyld_chained_starts_in_segment **chained_starts;
+	ut64 *fw_chain_starts;
+	ut32 fw_chain_count;
+	ut16 fw_pointer_format;
+	struct dyld_chained_fixups_header fixups_header;
+	ut64 fixups_offset;
+	ut64 fixups_size;
 	struct MACH0_(section) *sects;
 	int nsects;
 	struct MACH0_(nlist) *symtab;
@@ -128,10 +188,10 @@ struct MACH0_(obj_t) {
 	int nsymtab;
 	ut32 *indirectsyms;
 	int nindirectsyms;
+	int maxsymlen;
 
-	RBinImport **imports_by_ord;
-	size_t imports_by_ord_size;
 	HtPP *imports_by_name;
+	struct MACH0_(opts_t) options;
 
 	struct dysymtab_command dysymtab;
 	struct load_command main_cmd;
@@ -142,6 +202,16 @@ struct MACH0_(obj_t) {
 	int nmodtab;
 	struct thread_command thread;
 	ut8 *signature;
+	ut8 *signature_der; // CSSLOT_DER_ENTITLEMENTS payload (slot 7, magic 0xfade7172)
+	ut32 signature_der_size; // size of signature_der payload
+	bool cs_present; // LC_CODE_SIGNATURE parsed successfully
+	ut64 cs_paddr;
+	ut64 cs_size;
+	ut64 cert_paddr;
+	ut64 cert_size;
+	bool cs_has_cms; // CMS blob (developer signature) present and non-empty
+	ut32 cs_flags; // CodeDirectory flags word
+	ut8 cs_platform; // CodeDirectory platform byte (nonzero => platform binary)
 	union {
 		struct x86_thread_state32 x86_32;
 		struct x86_thread_state64 x86_64;
@@ -150,9 +220,12 @@ struct MACH0_(obj_t) {
 		struct arm_thread_state32 arm_32;
 		struct arm_thread_state64 arm_64;
 	} thread_state;
-	char (*libs)[R_BIN_MACH0_STRING_LENGTH];
+	bool libs_loaded;
+	RVecMach0Lib libs_cache;
+	RVecRBinTrycatch trycatch;
+	bool trycatch_loaded;
 	int nlibs;
-	int size;
+	ut64 size;
 	ut64 baddr;
 	ut64 entry;
 	bool big_endian;
@@ -160,10 +233,11 @@ struct MACH0_(obj_t) {
 	RBuffer *b;
 	int os;
 	Sdb *kv;
-	int has_crypto;
+	bool has_crypto;
 	int has_canary;
 	int has_retguard;
 	int has_sanitizers;
+	int has_libinjprot;
 	int has_blocks_ext;
 	int dbg_info;
 	const char *lang;
@@ -171,29 +245,62 @@ struct MACH0_(obj_t) {
 	int func_size;
 	bool verbose;
 	ut64 header_at;
+	bool parse_start_symbols;
+	bool symbols_loaded;
+	RVecRBinSymbol *symbols_vec; // pointer to &bf->bo->symbols_vec
+	RVecSegment *segments_vec;  // R2_590 pointer of &bf->bo->segments_vec
 	ut64 symbols_off;
 	void *user;
 	ut64 (*va2pa)(ut64 p, ut32 *offset, ut32 *left, RBinFile *bf);
-	struct symbol_t *symbols;
 	ut64 main_addr;
 	int (*original_io_read)(RIO *io, RIODesc *fd, ut8 *buf, int count);
 	bool rebasing_buffer;
+	bool sections_loaded;
+	RVecSection sections_cache;
+	bool imports_loaded;
+	RVecRBinImport imports_cache;
+	bool relocs_loaded;
+	RSkipList *relocs_cache;
+	RVecRBinReloc reloc_fixups;
+	ut8 *internal_buffer;
+	int internal_buffer_size;
+	int limit; // user defined
+	bool nofuncstarts;
+	ut64 exports_trie_off;
+	ut32 exports_trie_size;
+	RInterval lastrange;
+	ut64 lastrange_pa;
+	ut64 objc_lists_size; // bytes of all the objc lists walked so far
 };
+
+typedef struct {
+	RFixupEvent type;
+	struct MACH0_(obj_t) *bin;
+	ut64 offset;
+	ut64 raw_ptr;
+	ut64 ptr_size;
+	ut64 ordinal;
+	ut64 addend;
+	ut64 ptr_value;
+	ut8 key;
+	ut8 addr_div;
+	ut16 diversity;
+} RFixupEventDetails;
+
+typedef bool (*RFixupCallback)(void * context, RFixupEventDetails * event_details);
 
 void MACH0_(opts_set_default)(struct MACH0_(opts_t) *options, RBinFile *bf);
 struct MACH0_(obj_t) *MACH0_(mach0_new)(const char *file, struct MACH0_(opts_t) *options);
-struct MACH0_(obj_t) *MACH0_(new_buf)(RBuffer *buf, struct MACH0_(opts_t) *options);
+struct MACH0_(obj_t) *MACH0_(new_buf)(RBinFile *bf, RBuffer *buf, struct MACH0_(opts_t) *options);
 void *MACH0_(mach0_free)(struct MACH0_(obj_t) *bin);
-struct section_t *MACH0_(get_sections)(struct MACH0_(obj_t) *bin);
-//RList *MACH0_(get_segments)(struct MACH0_(obj_t) *bin);
-RList *MACH0_(get_segments)(RBinFile *bf); // struct MACH0_(obj_t) *bin);
-const struct symbol_t *MACH0_(get_symbols)(struct MACH0_(obj_t) *bin);
-const RList *MACH0_(get_symbols_list)(struct MACH0_(obj_t) *bin);
+const RVecSection *MACH0_(load_sections)(struct MACH0_(obj_t) *mo);
+RVecSegment *MACH0_(get_segments_vec)(RBinFile *bf, struct MACH0_(obj_t) *mo);
+const bool MACH0_(load_symbols)(struct MACH0_(obj_t) *mo);
 void MACH0_(pull_symbols)(struct MACH0_(obj_t) *mo, RBinSymbolCallback cb, void *user);
-struct import_t *MACH0_(get_imports)(struct MACH0_(obj_t) *bin);
-RSkipList *MACH0_(get_relocs)(struct MACH0_(obj_t) *bin);
+RVecRBinImport *MACH0_(load_imports)(RBinFile* bf, struct MACH0_(obj_t) *bin);
+const RSkipList *R_UNOWNED MACH0_(load_relocs)(struct MACH0_(obj_t) *bin);
 struct addr_t *MACH0_(get_entrypoint)(struct MACH0_(obj_t) *bin);
-struct lib_t *MACH0_(get_libs)(struct MACH0_(obj_t) *bin);
+const RVecMach0Lib *MACH0_(load_libs)(struct MACH0_(obj_t) *bin);
 ut64 MACH0_(get_baddr)(struct MACH0_(obj_t) *bin);
 char *MACH0_(get_class)(struct MACH0_(obj_t) *bin);
 int MACH0_(get_bits)(struct MACH0_(obj_t) *bin);
@@ -207,10 +314,13 @@ char *MACH0_(get_cpusubtype)(struct MACH0_(obj_t) *bin);
 char *MACH0_(get_cpusubtype_from_hdr)(struct MACH0_(mach_header) *hdr);
 char *MACH0_(get_filetype)(struct MACH0_(obj_t) *bin);
 char *MACH0_(get_filetype_from_hdr)(struct MACH0_(mach_header) *hdr);
-ut64 MACH0_(get_main)(struct MACH0_(obj_t) *bin);
+ut64 MACH0_(get_main)(struct MACH0_(obj_t) *mo);
 const char *MACH0_(get_cputype_from_hdr)(struct MACH0_(mach_header) *hdr);
 int MACH0_(get_bits_from_hdr)(struct MACH0_(mach_header) *hdr);
 struct MACH0_(mach_header) *MACH0_(get_hdr)(RBuffer *buf);
-void MACH0_(mach_headerfields)(RBinFile *bf);
+char *MACH0_(mach_headerfields)(RBinFile *bf, int mode);
 RList *MACH0_(mach_fields)(RBinFile *bf);
+bool MACH0_(has_fixup_chains)(struct MACH0_(obj_t) *mo);
+bool MACH0_(paddr_to_vaddr)(struct MACH0_(obj_t) *mo, ut64 offset, ut64 *vaddr);
+void MACH0_(iterate_chained_fixups)(struct MACH0_(obj_t) *obj, ut64 limit_start, ut64 limit_end, ut32 event_mask, RFixupCallback callback, void *context);
 #endif

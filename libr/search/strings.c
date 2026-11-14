@@ -1,4 +1,6 @@
-/* radare - LGPL - Copyright 2006-2018 pancake */
+/* radare - LGPL - Copyright 2006-2024 pancake */
+
+#define R_LOG_ORIGIN "search.strings"
 
 #include "r_search.h"
 
@@ -13,15 +15,14 @@ static char *encodings[3] = { "ascii", "cp850", NULL };
 	//encoding = resolve_encoding(config_get("cfg.encoding"));
 
 R_API int r_search_get_encoding(const char *name) {
-	int i;
-	if (!name || !*name) {
+	if (R_STR_ISEMPTY (name)) {
 		return ENCODING_ASCII;
 	}
-	ut32 lename = strlen (name);
+	size_t i, lename = strlen (name);
 	for (i = 0; encodings[i]; i++) {
 		ut32 sz = R_MIN (strlen (encodings[i]), lename);
 		if (!r_str_ncasecmp (name, encodings[i], sz)) {
-			return i; 
+			return i;
 		}
 	}
 	return ENCODING_ASCII;
@@ -58,48 +59,61 @@ static bool is_encoded(int encoding, unsigned char c) {
 	return false;
 }
 
-R_API int r_search_strings_update(RSearch *s, ut64 from, const ut8 *buf, int len) {
+static int findstrings(RSearch *s, ut64 from, const ut8 *buf, int len, RSearchKeyword *kw) {
 	int i = 0;
-	int widechar = 0;
-	int matches = 0;
-	char str[4096];
-	RListIter *iter;
-	RSearchKeyword *kw;
-
-	r_list_foreach (s->kws, iter, kw) {
-		for (i = 0; i < len; i++) {
-			char ch = buf[i];
-			// non-cp850 encoded
-			if (IS_PRINTABLE(ch) || IS_WHITESPACE(ch) || is_encoded (0, ch)) {
-				str[matches] = ch;
-				if (matches < sizeof (str)) {
-					matches++;
-				}
+	bool widechar = false;
+	size_t matches = 0;
+	size_t max_matches = s->string_max + 1;
+	for (i = 0; i < len; i++) {
+		const char ch = buf[i];
+		// non-cp850 encoded
+		if (IS_PRINTABLE (ch) || IS_WHITESPACE (ch) || is_encoded (0, ch)) {
+			if (matches < max_matches) {
+				matches++;
 			} else {
-				/* wide char check \x??\x00\x??\x00 */
-				if (matches && i + 2 < len && buf[i+2]=='\0' && buf[i]=='\0' && buf[i+1]!='\0') {
-					// widechar = 1;
-					return 1; // widechar
-				}
-				/* check if the length fits on our request */
-				if (matches >= s->string_min && (s->string_max == 0 || matches <= s->string_max)) {
-					str[matches] = '\0';
-					int len = strlen(str);
-					if (len>2) {
-						if (widechar) {
-							ut64 off = (ut64)from+i-(len*2)+1;
-							r_search_hit_new (s, kw, off);
-						} else {
-							ut64 off = (ut64)from+i-matches;
-							r_search_hit_new (s, kw, off);
-						}
-					}
-					fflush (stdout);
-				}
+				R_LOG_WARN ("Truncated match (%" PFMTSZu "), keyword is too large at 0x%08"PFMT64x, max_matches, from + i);
 				matches = 0;
-				widechar = 0;
 			}
+		} else {
+			/* wide char check \x??\x00\x??\x00 */
+			if (matches && i + 2 < len && buf[i + 2] == '\0' && buf[i] == '\0' && buf[i + 1]!='\0') {
+				widechar = true;
+				// return 1; // widechar
+			}
+			/* check if the length fits on our request */
+			if (matches >= s->string_min && (s->string_max == 0 || matches <= s->string_max)) {
+				size_t len = matches;
+				if (len > 2) {
+					kw->keyword_length = len;
+					if (widechar) {
+						ut64 off = (ut64)from + i - (len * 2) + 1;
+						r_search_hit_new (s, kw, off);
+					} else {
+						ut64 off = (ut64)from + i - matches;
+						r_search_hit_new (s, kw, off);
+					}
+				}
+				fflush (stdout);
+			}
+			matches = 0;
+			widechar = false;
 		}
 	}
 	return 0;
+}
+
+R_IPI int search_strings_update(RSearch *s, ut64 from, const ut8 *buf, int len) {
+	int res = 0;
+	RSearchKeyword *kw;
+	if (r_list_empty (s->kws)) {
+		RSearchKeyword *kw = r_search_keyword_new_hex ("00", "00", NULL);
+		res = findstrings (s, from, buf, len, kw);
+		r_search_keyword_free (kw);
+	} else {
+		RListIter *iter;
+		r_list_foreach (s->kws, iter, kw) {
+			res = findstrings (s, from, buf, len, kw);
+		}
+	}
+	return res;
 }

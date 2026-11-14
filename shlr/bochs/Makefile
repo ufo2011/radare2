@@ -6,7 +6,7 @@ AR?=ar
 RANLIB?=ranlib
 LIBNAME=libbochs
 LIBFILE=$(LIBNAME).$(EXT_SO)
-CFLAGS:=-I$(LIBR)/include -I$(LIBR)/include/sdb -Iinclude $(PIC_CFLAGS) $(CFLAGS)
+CFLAGS:=-I$(LIBR)/include -Iinclude $(PIC_CFLAGS) $(CFLAGS)
 MAJOR=0
 MINOR=1
 LD=$(CC)
@@ -23,15 +23,16 @@ else
 LDFLAGS_SHARED=-shared
 endif
 #OSTYPE=windows
-include ../../libr/socket/deps.mk
-include ../../shlr/zip/deps.mk
-include ../../shlr/sdb.mk
 
 SRC_D=src
 SRC_C=$(wildcard $(SRC_D)/*.c)
 SRC_O=$(SRC_C:.c=.o)
 
 all: lib/$(LIBNAME).$(EXT_AR)
+
+include ../../libr/socket/deps.mk
+include ../../shlr/zip/deps.mk
+include ../../shlr/sdb.mk
 
 #$(LD) -shared -Wl,-soname,$(LIBNAME).so -o lib/$(LIBNAME).so $(SRC_O)
 lib:
@@ -42,7 +43,7 @@ lib/$(LIBNAME).$(EXT_AR): lib $(SRC_O)
 ifeq ($(WITHPIC),1)
 	$(LD) $(PIC_CFLAGS) $(LDFLAGS_SHARED) -o lib/$(LIBFILE) $(CFLAGS) $(SRC_O) $(LDFLAGS) $(LINK)
 endif
-	$(AR) rvs lib/$(LIBNAME).$(EXT_AR) $(SRC_O)
+	$(AR) rcvs lib/$(LIBNAME).$(EXT_AR) $(SRC_O)
 	$(RANLIB) lib/$(LIBNAME).$(EXT_AR)
 
 clean:

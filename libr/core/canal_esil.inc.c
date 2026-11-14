@@ -1,0 +1,1425 @@
+/* radare - LGPL - Copyright 2009-2026 - pancake */
+
+typedef struct {
+	int arena;
+	int offset;
+	int size;
+} EsilRegTaint;
+
+R_VEC_TYPE(RVecEsilRegTaint, EsilRegTaint);
+
+static void cccb(void *u) {
+	RCore *core = (RCore *)u;
+	core->esil_anal_stop = false;
+	r_cons_context_break (NULL);
+	eprintf ("^C\n");
+}
+
+// dup with isValidAddress wtf
+static bool myvalid(RCore *core, ut64 addr) {
+	RIO *io = core->io;
+	RFlagItem *fi = r_flag_get_in (core->flags, addr);
+	if (fi && strchr (fi->name, '.')) {
+		return true;
+	}
+	if (addr < 0x100) {
+		return false;
+	}
+	if (addr == UT32_MAX || addr == UT64_MAX) { // the best of the best of the best :(
+		return false;
+	}
+	if (!r_io_is_valid_offset (io, addr, 0)) {
+		return false;
+	}
+	return true;
+}
+
+typedef struct {
+	const char *cc;
+	RVecEsilRegTaint spans;
+} EsilCallClobbers;
+
+typedef struct {
+	bool enabled;
+	RVecEsilRegTaint reg_taints;
+	EsilRegTaint pc_span;
+	EsilRegTaint read_tainted_span;
+	int read_tainted_reads;
+	bool read_tainted_other;
+	char read_tainted_reg[64];
+	bool read_clobbered;
+	bool read_clean_mem;
+	char *delayed_call_cc;
+	int delayed_call_slots;
+	int delayed_taint_clear_slots;
+} EsilClobCtx;
+
+typedef struct {
+	RAnalOp *op;
+	RAnal *anal;
+	RAnalFunction *fcn;
+	char *spname;
+	ut64 initial_sp;
+	ut64 last_read;
+	ut64 last_data;
+	ut64 ntarget;
+	bool strings_only;
+	EsilClobCtx clob;
+	EsilCallClobbers *call_clobbers; // Shared by CFG snapshots.
+} EsilBreakCtx;
+
+typedef int RPerm;
+
+static bool esil_reg_taint_overlap_item(const EsilRegTaint *taint, const RRegItem *item) {
+	if (taint->arena != item->arena || taint->size < 1 || item->size < 1) {
+		return false;
+	}
+	const int taint_end = taint->offset + taint->size;
+	const int item_end = item->offset + item->size;
+	return taint->offset < item_end && item->offset < taint_end;
+}
+
+static bool esil_reg_taint_has_item(EsilBreakCtx *ctx, const RRegItem *item) {
+	EsilRegTaint *taint;
+	R_VEC_FOREACH (&ctx->clob.reg_taints, taint) {
+		if (esil_reg_taint_overlap_item (taint, item)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool cc_retreg(RAnal *anal, const char *cc, const RRegItem *item) {
+	int i;
+	const char *ret;
+	for (i = 0; cc && (ret = r_anal_cc_ret (anal, cc, i)); i++) {
+		RRegItem *retitem = r_reg_get (anal->reg, ret, -1);
+		if (retitem) {
+			EsilRegTaint rettaint = { retitem->arena, retitem->offset, retitem->size };
+			bool is_ret = esil_reg_taint_overlap_item (&rettaint, item);
+			r_unref (retitem);
+			if (is_ret) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+static void esil_reg_taint_add(RVecEsilRegTaint *taints, EsilRegTaint span) {
+	if (span.size < 1) {
+		return;
+	}
+	EsilRegTaint *taint;
+	R_VEC_FOREACH (taints, taint) {
+		if (taint->arena != span.arena) {
+			continue;
+		}
+		const int taint_end = taint->offset + taint->size;
+		const int span_end = span.offset + span.size;
+		if (taint->offset < span_end && span.offset < taint_end) {
+			const int start = R_MIN (taint->offset, span.offset);
+			const int end = R_MAX (taint_end, span_end);
+			taint->offset = start;
+			taint->size = end - start;
+			return;
+		}
+	}
+	RVecEsilRegTaint_push_back (taints, &span);
+}
+
+static void esil_reg_taint_clear_item(EsilBreakCtx *ctx, const RRegItem *item) {
+	if (item->size < 1) {
+		return;
+	}
+	const int clear_start = item->offset;
+	const int clear_end = item->offset + item->size;
+	size_t i = 0;
+	while (i < RVecEsilRegTaint_length (&ctx->clob.reg_taints)) {
+		EsilRegTaint *taint = RVecEsilRegTaint_at (&ctx->clob.reg_taints, i);
+		if (!esil_reg_taint_overlap_item (taint, item)) {
+			i++;
+			continue;
+		}
+		const int taint_start = taint->offset;
+		const int taint_end = taint->offset + taint->size;
+		if (clear_start <= taint_start && clear_end >= taint_end) {
+			RVecEsilRegTaint_remove (&ctx->clob.reg_taints, i);
+			continue;
+		}
+		if (clear_start <= taint_start) {
+			taint->offset = clear_end;
+			taint->size = taint_end - clear_end;
+			i++;
+			continue;
+		}
+		if (clear_end >= taint_end) {
+			taint->size = clear_start - taint_start;
+			i++;
+			continue;
+		}
+		EsilRegTaint tail = {
+			.arena = taint->arena,
+			.offset = clear_end,
+			.size = taint_end - clear_end,
+		};
+		taint->size = clear_start - taint_start;
+		RVecEsilRegTaint_push_back (&ctx->clob.reg_taints, &tail);
+		i++;
+	}
+}
+
+static void esil_clear_flow_taint(EsilBreakCtx *ctx) {
+	RVecEsilRegTaint_clear (&ctx->clob.reg_taints);
+	R_FREE (ctx->clob.delayed_call_cc);
+	ctx->clob.delayed_call_slots = 0;
+	ctx->clob.delayed_taint_clear_slots = 0;
+}
+
+static void clob_reset(EsilBreakCtx *ctx) {
+	ctx->clob.read_clobbered = false;
+	ctx->clob.read_clean_mem = false;
+	ctx->clob.read_tainted_other = false;
+	ctx->clob.read_tainted_reads = 0;
+	ctx->clob.read_tainted_reg[0] = 0;
+}
+
+static void esilbreak_ctx_fini(REsil *esil, EsilBreakCtx *ctx) {
+	esil->cb.hook_mem_read = NULL;
+	esil->cb.hook_mem_write = NULL;
+	esil->cb.hook_reg_read = NULL;
+	esil->cb.hook_reg_write = NULL;
+	esil->user = NULL;
+	RVecEsilRegTaint_fini (&ctx->clob.reg_taints);
+	free (ctx->clob.delayed_call_cc);
+	RVecEsilRegTaint_fini (&ctx->call_clobbers->spans);
+	free (ctx->spname);
+}
+
+static bool esilbreak_skip_ref_op(int type) {
+	type &= R_ANAL_OP_TYPE_MASK;
+	return type == R_ANAL_OP_TYPE_LEA || type == R_ANAL_OP_TYPE_ADD || type == R_ANAL_OP_TYPE_LOAD;
+}
+
+static void esil_apply_call_clobbers(EsilBreakCtx *ctx, const char *cc) {
+	RAnal *anal = ctx->anal;
+	EsilCallClobbers *cache = ctx->call_clobbers;
+	if (!cache->cc || strcmp (cache->cc, cc)) {
+		RList *regs = anal->reg->regset[R_REG_TYPE_GPR].regs;
+		if (!RVecEsilRegTaint_reserve (&cache->spans, r_list_length (regs))) {
+			return;
+		}
+		cache->cc = r_str_constpool_get (&anal->constpool, cc);
+		RVecEsilRegTaint_clear (&cache->spans);
+		RRegItem *item;
+		RListIter *iter;
+		r_list_foreach (regs, iter, item) {
+			if (r_anal_cc_isclobber (anal, cc, item->name)) {
+				esil_reg_taint_add (&cache->spans, (EsilRegTaint) { item->arena, item->offset, item->size });
+			}
+		}
+	}
+	EsilRegTaint *span;
+	R_VEC_FOREACH (&cache->spans, span) {
+		esil_reg_taint_add (&ctx->clob.reg_taints, *span);
+	}
+}
+
+static bool esil_delay_call_clobbers(RAnal *anal, EsilBreakCtx *ctx, RAnalOp *op) {
+	if (op->jump != UT64_MAX && op->fail != UT64_MAX && op->jump == op->fail) {
+		// Calls to the fallthrough address are PC materialization, not ABI calls.
+		return false;
+	}
+	const char *cc = r_anal_call_convention (anal, op);
+	if (!cc) {
+		cc = r_anal_cc_default (anal);
+	}
+	if (!cc) {
+		return false;
+	}
+	if (op->delay < 1) {
+		esil_apply_call_clobbers (ctx, cc);
+		return false;
+	}
+	free (ctx->clob.delayed_call_cc);
+	ctx->clob.delayed_call_cc = strdup (cc);
+	ctx->clob.delayed_call_slots = ctx->clob.delayed_call_cc? op->delay + 1: 0;
+	return ctx->clob.delayed_call_slots > 0;
+}
+
+static void esil_step_delayed_call_clobbers(EsilBreakCtx *ctx) {
+	if (!ctx->clob.delayed_call_cc || ctx->clob.delayed_call_slots < 1) {
+		return;
+	}
+	ctx->clob.delayed_call_slots--;
+	if (ctx->clob.delayed_call_slots > 0) {
+		return;
+	}
+	esil_apply_call_clobbers (ctx, ctx->clob.delayed_call_cc);
+	R_FREE (ctx->clob.delayed_call_cc);
+}
+
+static void esil_delay_flow_taint_clear(EsilBreakCtx *ctx, RAnalOp *op) {
+	if (ctx->strings_only && ctx->fcn) {
+		return;
+	}
+	const int type = op->type & R_ANAL_OP_TYPE_MASK;
+	if ((type & R_ANAL_OP_TYPE_COND) || (type != R_ANAL_OP_TYPE_JMP && type != R_ANAL_OP_TYPE_UJMP)) {
+		return;
+	}
+	ctx->clob.delayed_taint_clear_slots = op->delay + 1;
+}
+
+static void esil_step_delayed_flow_taint_clear(EsilBreakCtx *ctx) {
+	if (ctx->clob.delayed_taint_clear_slots < 1) {
+		return;
+	}
+	ctx->clob.delayed_taint_clear_slots--;
+	if (ctx->clob.delayed_taint_clear_slots > 0) {
+		return;
+	}
+	esil_clear_flow_taint (ctx);
+}
+
+static void clob_op_begin(EsilBreakCtx *ctx, RAnalOp *op, ut64 cur) {
+	if (!ctx->clob.enabled) {
+		return;
+	}
+	esil_step_delayed_call_clobbers (ctx);
+	esil_step_delayed_flow_taint_clear (ctx);
+	if (RVecEsilRegTaint_length (&ctx->clob.reg_taints) > 0 && r_anal_get_function_at (ctx->anal, cur)) {
+		esil_clear_flow_taint (ctx);
+	}
+	clob_reset (ctx);
+	const int type = op->type & R_ANAL_OP_TYPE_MASK & ~R_ANAL_OP_TYPE_COND;
+	if (type == R_ANAL_OP_TYPE_RET) {
+		esil_clear_flow_taint (ctx);
+	}
+	esil_delay_flow_taint_clear (ctx, op);
+}
+
+static const char *reg_name_for_access(RAnalOp* op, RPerm type) {
+	if (type == R_PERM_W) {
+		RAnalValue *dst = RVecRArchValue_at (&op->dsts, 0);
+		if (dst) {
+			return dst->reg;
+		}
+	} else {
+		RAnalValue *src = RVecRArchValue_at (&op->srcs, 0);
+		if (src) {
+			return src->reg;
+		}
+	}
+	return NULL;
+}
+
+static ut64 delta_for_access(RAnalOp *op, RPerm type) {
+	RAnalValue *dst = RVecRArchValue_at (&op->dsts, 0);
+	RAnalValue *src0 = RVecRArchValue_at (&op->srcs, 0);
+	RAnalValue *src1 = RVecRArchValue_at (&op->srcs, 1);
+	if (type == R_PERM_W) {
+		if (dst) {
+			return dst->imm + dst->delta;
+		}
+	} else {
+		if (src1 && (src1->imm || src1->delta)) {
+			return src1->imm + src1->delta;
+		}
+		if (src0) {
+			return src0->imm + src0->delta;
+		}
+	}
+	return 0;
+}
+
+static bool esilbreak_is_default_stack_var(const char *name) {
+	return r_str_startswith (name, VARPREFIX"_") && !r_str_startswith (name, VARPREFIX"_clob_");
+}
+
+static void handle_var_stack_access(REsil *esil, ut64 addr, RPerm type, int len, bool clobbered_write) {
+	R_RETURN_IF_FAIL (esil && esil->user);
+	EsilBreakCtx *ctx = esil->user;
+	const char *regname = reg_name_for_access (ctx->op, type);
+	RAnalFunction *fcn = ctx->fcn;
+	if (ctx->strings_only || !fcn || !regname) {
+		return;
+	}
+	ut64 spaddr = r_reg_getv (esil->anal->reg, ctx->spname);
+	if (addr < spaddr || addr >= ctx->initial_sp) {
+		return;
+	}
+	int stack_off = addr - ctx->initial_sp;
+	ut64 delta = delta_for_access (ctx->op, type);
+	RAnalVar *var = r_anal_function_get_var (fcn, R_ANAL_VAR_KIND_SPV, stack_off);
+	if (!var) {
+		var = r_anal_function_get_var (fcn, R_ANAL_VAR_KIND_BPV, stack_off);
+	}
+	if (!var && stack_off >= -fcn->maxstack) {
+		char *varname = clobbered_write
+			? r_anal_function_autoname_var (fcn, R_ANAL_VAR_KIND_SPV, VARPREFIX"_clob", delta? delta: stack_off)
+			: fcn->anal->opt.varname_stack
+			? r_str_newf (VARPREFIX"_%xh", R_ABS (stack_off))
+			: r_anal_function_autoname_var (fcn, R_ANAL_VAR_KIND_SPV, VARPREFIX, delta);
+		var = r_anal_function_set_var (fcn, stack_off, R_ANAL_VAR_KIND_SPV, NULL, len, false, varname);
+		free (varname);
+	}
+	if (var && clobbered_write && esilbreak_is_default_stack_var (var->name)) {
+		char *varname = r_anal_function_autoname_var (fcn, var->kind, VARPREFIX"_clob", delta? delta: stack_off);
+		r_anal_var_rename (fcn->anal, var, varname);
+		free (varname);
+	}
+	if (var) {
+		r_anal_var_set_access (fcn->anal, var, regname, ctx->op->addr, type, delta);
+	}
+}
+
+static bool is_stack(RIO *io, ut64 addr) {
+	RIOMap *map = r_io_map_get_at (io, addr);
+	return map && map->name && r_str_startswith (map->name, "mem.0x");
+}
+
+// only taint on the address register matters here: a stale stored value does
+// not make the write target wrong. when the destination operand is unknown
+// (op->dsts is only filled for some archs in this loop) do not suppress:
+// tainted reads evaluate as zero, so a stale address degrades to the bare
+// displacement, which the myvalid() check filters out
+static bool esilbreak_addr_tainted(REsil *esil, RPerm type) {
+	R_RETURN_VAL_IF_FAIL (esil && esil->anal && esil->user, false);
+	EsilBreakCtx *ctx = esil->user;
+	if (!ctx->clob.enabled || RVecEsilRegTaint_length (&ctx->clob.reg_taints) < 1) {
+		return false;
+	}
+	const char *regname = reg_name_for_access (ctx->op, type);
+	if (!regname) {
+		return false;
+	}
+	RRegItem *item = r_reg_get (esil->anal->reg, regname, -1);
+	if (!item) {
+		return false;
+	}
+	const bool tainted = esil_reg_taint_has_item (ctx, item);
+	r_unref (item);
+	return tainted;
+}
+
+static void esilbreak_note_tainted_read(EsilBreakCtx *ctx, const char *regname, const RRegItem *item) {
+	if (!ctx->clob.read_tainted_reg[0]) {
+		r_str_ncpy (ctx->clob.read_tainted_reg, regname, sizeof (ctx->clob.read_tainted_reg));
+		ctx->clob.read_tainted_span.arena = item->arena;
+		ctx->clob.read_tainted_span.offset = item->offset;
+		ctx->clob.read_tainted_span.size = item->size;
+	} else if (!esil_reg_taint_overlap_item (&ctx->clob.read_tainted_span, item)) {
+		ctx->clob.read_tainted_other = true;
+	}
+	ctx->clob.read_tainted_reads++;
+}
+
+static bool esilbreak_erasing_write(EsilBreakCtx *ctx, const RAnalOp *op, const RRegItem *item) {
+	const int type = op->type & R_ANAL_OP_TYPE_MASK & ~R_ANAL_OP_TYPE_COND;
+	return (type == R_ANAL_OP_TYPE_XOR || type == R_ANAL_OP_TYPE_SUB)
+		&& ctx->clob.read_tainted_reads > 1 && !ctx->clob.read_tainted_other
+		&& esil_reg_taint_overlap_item (&ctx->clob.read_tainted_span, item);
+}
+
+static bool iscall(const RAnalOp *op) {
+	switch (op->type & R_ANAL_OP_TYPE_MASK & ~R_ANAL_OP_TYPE_COND) {
+	case R_ANAL_OP_TYPE_CALL:
+	case R_ANAL_OP_TYPE_UCALL:
+	case R_ANAL_OP_TYPE_ICALL:
+	case R_ANAL_OP_TYPE_RCALL:
+	case R_ANAL_OP_TYPE_IRCALL:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool clob_op_end(EsilBreakCtx *ctx, RAnalOp *op) {
+	if (!ctx->clob.enabled) {
+		return false;
+	}
+	if (ctx->clob.read_tainted_reg[0]) {
+		RRegItem *item = r_reg_get (ctx->anal->reg, ctx->clob.read_tainted_reg, -1);
+		const char *cc = ctx->fcn? r_anal_function_cc (ctx->fcn): NULL;
+		cc = cc? cc: r_anal_cc_default (ctx->anal);
+		if (item && item->type != R_REG_TYPE_FLG && item->size > 1
+				&& strcmp (ctx->clob.read_tainted_reg, ctx->spname)
+				&& !esilbreak_erasing_write (ctx, op, item) && !cc_retreg (ctx->anal, cc, item)) {
+			r_strf_var (text, 96, "%s is call-clobbered", ctx->clob.read_tainted_reg);
+			r_anal_hint_append_reguse (ctx->anal, op->addr, text);
+		}
+		r_unref (item);
+	}
+	if (iscall (op)) {
+		esil_delay_call_clobbers (ctx->anal, ctx, op);
+	}
+	return ctx->clob.read_clobbered;
+}
+
+static void esil_string_ref(REsil *esil, ut64 addr) {
+	EsilBreakCtx *ctx = esil->user;
+	RCore *core = ctx->anal->coreb.core;
+	if (ctx->ntarget != UT64_MAX && ctx->ntarget != addr) {
+		return;
+	}
+	if (is_stack (core->io, addr)) {
+		return;
+	}
+	if (r_flag_exist_at (core->flags, "str.", 4, addr) || add_string_ref (core, esil->addr, addr)) {
+		r_anal_xrefs_set (ctx->anal, esil->addr, addr, R_ANAL_REF_TYPE_STRN | R_ANAL_REF_TYPE_READ);
+	}
+}
+
+static bool esilbreak_mem_write(REsil *esil, ut64 addr, const ut8 *buf, int len) {
+	R_RETURN_VAL_IF_FAIL (esil && esil->anal && esil->user, false);
+	EsilBreakCtx *ctx = esil->user;
+	RCore *core = esil->anal->coreb.core;
+	const bool clobbered_write = ctx->clob.enabled && ctx->clob.read_clobbered;
+	handle_var_stack_access (esil, addr, R_PERM_W, len, clobbered_write);
+	if (esilbreak_addr_tainted (esil, R_PERM_W)) {
+		return true;
+	}
+	if (ctx->strings_only) {
+		esil_string_ref (esil, addr);
+		return true;
+	}
+	// ignore writes in stack
+	if (myvalid (core, addr) && r_io_read_at (core->io, addr, (ut8*)buf, len)) {
+		if (!is_stack (core->io, addr)) {
+			r_anal_xrefs_set (core->anal, esil->addr, addr, R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_WRITE);
+			anal_global_access (core, ctx->op, addr, len, UT64_MAX);
+		}
+	}
+	return true;
+}
+
+// TODO differentiate endian-aware mem_read with other reads; move ntarget handling to another function
+static bool esilbreak_mem_read(REsil *esil, ut64 addr, ut8 *buf, int len) {
+	R_RETURN_VAL_IF_FAIL (esil && esil->anal && esil->user, false);
+	EsilBreakCtx *ctx = esil->user;
+	if (ctx->clob.enabled && ctx->clob.read_clobbered) {
+		if (buf && len > 0) {
+			memset (buf, 0, len);
+		}
+		return true;
+	}
+	RCore *core = esil->anal->coreb.core;
+	if (addr != UT64_MAX) {
+		ctx->last_read = addr;
+		if (ctx->clob.enabled) {
+			ctx->clob.read_clean_mem = true;
+		}
+	}
+	handle_var_stack_access (esil, addr, R_PERM_R, len, false);
+	if ((ctx->strings_only || myvalid (core, addr)) && r_io_read_at (core->io, addr, buf, len)) {
+		ut64 refptr = UT64_MAX;
+		bool trace = true;
+		switch (len) {
+		case 2:
+			ctx->last_data = refptr = (ut64)r_read_ble16 (buf,
+				R_ARCH_CONFIG_IS_BIG_ENDIAN (esil->anal->config));
+			break;
+		case 4:
+			ctx->last_data = refptr = (ut64)r_read_ble32 (buf,
+				R_ARCH_CONFIG_IS_BIG_ENDIAN (esil->anal->config));
+			break;
+		case 8:
+			ctx->last_data = refptr = r_read_ble64 (buf,
+				R_ARCH_CONFIG_IS_BIG_ENDIAN (esil->anal->config));
+			break;
+		default:
+			trace = false;
+			r_io_read_at (core->io, addr, (ut8*)buf, len);
+			break;
+		}
+		if (trace && myvalid (core, refptr) && (ctx->ntarget == UT64_MAX || ctx->ntarget == refptr)) {
+			if (ctx->strings_only) {
+				esil_string_ref (esil, refptr);
+			} else {
+				r_anal_xrefs_set (core->anal, esil->addr, refptr, R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ);
+				add_string_ref (core, esil->addr, refptr);
+			}
+			ctx->last_data = UT64_MAX;
+		}
+		if (!is_stack (core->io, addr)) {
+			if (ctx->strings_only) {
+				esil_string_ref (esil, addr);
+			} else {
+				r_anal_xrefs_set (core->anal, esil->addr, addr, R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ);
+				anal_global_access (core, ctx->op, addr, len, refptr);
+			}
+		}
+	}
+	return false; // fallback
+}
+
+static bool esilbreak_reg_read(REsil *esil, const char *name, ut64 *res, int *size) {
+	R_RETURN_VAL_IF_FAIL (esil && esil->anal && esil->user && name, false);
+	EsilBreakCtx *ctx = esil->user;
+	if (!ctx->clob.enabled || RVecEsilRegTaint_length (&ctx->clob.reg_taints) < 1) {
+		return false;
+	}
+	RRegItem *item = r_reg_get (esil->anal->reg, name, -1);
+	if (!item) {
+		return false;
+	}
+	const bool tainted = esil_reg_taint_has_item (ctx, item);
+	if (tainted) {
+		ctx->clob.read_clobbered = true;
+		esilbreak_note_tainted_read (ctx, name, item);
+		if (res) {
+			*res = 0;
+		}
+		if (size) {
+			*size = item->size;
+		}
+	}
+	r_unref (item);
+	return tainted;
+}
+
+// compare register storage instead of names: esil expressions use "pc"
+// while the profile alias can resolve to another name like "r15" on arm
+static void esil_reg_pc_span(RAnal *anal, EsilRegTaint *span) {
+	const char *pcname = r_reg_alias_getname (anal->reg, R_REG_ALIAS_PC);
+	if (R_STR_ISEMPTY (pcname)) {
+		return;
+	}
+	RRegItem *pc = r_reg_get (anal->reg, pcname, -1);
+	if (!pc) {
+		return;
+	}
+	*span = (EsilRegTaint) {
+		.arena = pc->arena,
+		.offset = pc->offset,
+		.size = pc->size,
+	};
+	r_unref (pc);
+}
+
+static bool esilbreak_reg_write(REsil *esil, const char *name, ut64 *val) {
+	R_RETURN_VAL_IF_FAIL (esil && esil->anal && esil->user, false);
+	RAnal *anal = esil->anal;
+	EsilBreakCtx *ctx = esil->user;
+	RAnalOp *op = ctx->op;
+	const int bits = anal->config->bits;
+	const bool is_arm = r_str_startswith (anal->config->arch, "arm");
+	const bool is_arm64 = is_arm && bits == 64;
+	if (ctx->clob.enabled && (ctx->clob.read_clobbered || RVecEsilRegTaint_length (&ctx->clob.reg_taints) > 0)) {
+		RRegItem *item = r_reg_get (anal->reg, name, -1);
+		if (item) {
+			RRegItem *clear_item = item;
+			RRegItem *xitem = NULL;
+			if (is_arm64 && item->type == R_REG_TYPE_GPR && item->size == 32 && item->name[0] == 'w') {
+				r_strf_var (xname, 8, "x%s", item->name + 1);
+				xitem = r_reg_get (anal->reg, xname, -1);
+				if (xitem && xitem->arena == item->arena && xitem->offset == item->offset && xitem->size > item->size) {
+					clear_item = xitem;
+				}
+			}
+			if (ctx->clob.read_clobbered) {
+				// strip the COND bit: if this hook fired for a conditional
+				// load then the esil condition held and the load did happen
+				if ((ctx->clob.read_clean_mem && (op->type & R_ANAL_OP_TYPE_MASK & ~R_ANAL_OP_TYPE_COND) == R_ANAL_OP_TYPE_LOAD)
+						|| esilbreak_erasing_write (ctx, op, item)) {
+					esil_reg_taint_clear_item (ctx, clear_item);
+				} else if (ctx->clob.pc_span.size < 1
+						|| !esil_reg_taint_overlap_item (&ctx->clob.pc_span, item)) {
+					esil_reg_taint_clear_item (ctx, clear_item);
+					esil_reg_taint_add (&ctx->clob.reg_taints, (EsilRegTaint) { item->arena, item->offset, item->size });
+				}
+				r_unref (xitem);
+				r_unref (item);
+				return false;
+			}
+			esil_reg_taint_clear_item (ctx, clear_item);
+			r_unref (xitem);
+			r_unref (item);
+		}
+	}
+	if (ctx->strings_only) {
+		RRegItem *item = r_reg_get (anal->reg, name, -1);
+		if (item && item->type == R_REG_TYPE_GPR && item->size > 1
+				&& !esil_reg_taint_overlap_item (&ctx->clob.pc_span, item) && strcmp (name, ctx->spname)) {
+			esil_string_ref (esil, *val);
+		}
+		r_unref (item);
+		return false;
+	}
+	handle_var_stack_access (esil, *val, R_PERM_NONE, bits / 8, false);
+	//specific case to handle blx/bx cases in arm through emulation
+	// XXX this thing creates a lot of false positives
+	ut64 at = *val;
+	if (is_arm) {
+		if (anal->opt.armthumb) {
+			if (bits != 64 && !strcmp (name, "pc") && op) {
+				const bool is_ubranch = (op->type == R_ANAL_OP_TYPE_UCALL || op->type == R_ANAL_OP_TYPE_UJMP);
+				if (is_ubranch) {
+					if ((*val & 1)) {
+						ut64 snv = r_reg_getv (anal->reg, "pc");
+						if (snv != UT32_MAX && snv != UT64_MAX) {
+							if (r_io_is_valid_offset (anal->iob.io, *val, 1)) {
+								r_anal_hint_set_bits (anal, *val - 1, 16);
+							}
+						}
+					} else {
+						r_anal_hint_set_bits (anal, *val, 32);
+					}
+				}
+			}
+		}
+		if (bits == 32) {
+			if ((!(at & 1)) && r_io_is_valid_offset (anal->iob.io, at, 0)) { //  !core->anal->opt.noncode)) {
+				add_string_ref (anal->coreb.core, esil->addr, at);
+			}
+		}
+	} else {
+		// intel, sparc and others
+		if (op->type != R_ANAL_OP_TYPE_RMOV) {
+			if (r_io_is_valid_offset (anal->iob.io, at, 0)) {
+				add_string_ref (anal->coreb.core, esil->addr, at);
+			}
+		}
+	}
+	return 0;
+}
+
+static void getpcfromstack(RCore *core, REsil *esil) {
+	ut64 cur;
+	ut64 size;
+	int idx;
+	REsil esil_cpy;
+	RAnalOp op = {0};
+	ut8 *buf = NULL;
+	char *tmp_esil_str = NULL;
+	int tmp_esil_str_len;
+	const int maxaddrlen = 20;
+	const char *spname = NULL;
+	if (!esil) {
+		return;
+	}
+
+	memcpy (&esil_cpy, esil, sizeof (esil_cpy));
+	ut64 addr = cur = esil_cpy.cur;
+	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, addr, 0);
+	if (!fcn) {
+		return;
+	}
+
+	size = r_anal_function_linear_size (fcn);
+	if (size <= 0) {
+		return;
+	}
+
+	buf = malloc (size + 2);
+	if (!buf) {
+		r_sys_perror ("malloc");
+		return;
+	}
+
+	r_io_read_at (core->io, addr, buf, size + 1);
+
+	// TODO Hardcoding for 2 instructions (mov e_p,[esp];ret). More work needed
+	idx = 0;
+	if (r_anal_op (core->anal, &op, cur, buf + idx, size - idx, R_ARCH_OP_MASK_ESIL) <= 0 ||
+			op.size <= 0 ||
+			(op.type != R_ANAL_OP_TYPE_MOV && op.type != R_ANAL_OP_TYPE_CMOV)) {
+		goto err_anal_op;
+	}
+
+	r_asm_set_pc (core->rasm, cur);
+	const char *esilstr = R_STRBUF_SAFEGET (&op.esil);
+	if (!esilstr) {
+		goto err_anal_op;
+	}
+	// Ugly code
+	// This is a hack, since ESIL doesn't always preserve values pushed on the stack. That probably needs to be rectified
+	spname = r_reg_alias_getname (core->anal->reg, R_REG_ALIAS_SP);
+	if (R_STR_ISEMPTY (spname)) {
+		goto err_anal_op;
+	}
+	tmp_esil_str_len = strlen (esilstr) + strlen (spname) + maxaddrlen;
+	tmp_esil_str = (char*) malloc (tmp_esil_str_len);
+	if (!tmp_esil_str) {
+		goto err_anal_op;
+	}
+	tmp_esil_str[tmp_esil_str_len - 1] = '\0';
+	snprintf (tmp_esil_str, tmp_esil_str_len - 1, "%s,[", spname);
+	if (!*esilstr || (strncmp (esilstr, tmp_esil_str, strlen (tmp_esil_str)))) {
+		free (tmp_esil_str);
+		goto err_anal_op;
+	}
+
+	snprintf (tmp_esil_str, tmp_esil_str_len - 1, "%20" PFMT64u "%s", esil_cpy.old, &esilstr[strlen (spname) + 4]);
+	r_str_trim (tmp_esil_str);
+	idx += op.size;
+	r_esil_set_pc (&esil_cpy, cur);
+	r_esil_parse (&esil_cpy, tmp_esil_str);
+	r_esil_stack_free (&esil_cpy);
+	free (tmp_esil_str);
+
+	cur = addr + idx;
+	r_anal_op_fini (&op);
+	if (r_anal_op (core->anal, &op, cur, buf + idx, size - idx, R_ARCH_OP_MASK_ESIL) <= 0 ||
+			op.size <= 0 ||
+			(op.type != R_ANAL_OP_TYPE_RET && op.type != R_ANAL_OP_TYPE_CRET)) {
+		goto err_anal_op;
+	}
+	r_asm_set_pc (core->rasm, cur);
+
+	esilstr = R_STRBUF_SAFEGET (&op.esil);
+	r_esil_set_pc (&esil_cpy, cur);
+	if (R_STR_ISEMPTY (esilstr)) {
+		goto err_anal_op;
+	}
+	r_esil_parse (&esil_cpy, esilstr);
+	r_esil_stack_free (&esil_cpy);
+
+	memcpy (esil, &esil_cpy, sizeof (esil_cpy));
+
+ err_anal_op:
+	r_anal_op_fini (&op);
+	free (buf);
+}
+
+R_VEC_TYPE(RVecEsilBlock, RAnalBlock *);
+R_VEC_TYPE(RVecEsilState, EsilBreakCtx);
+
+typedef struct {
+	ut64 start_addr;
+	ut64 end_addr;
+	ut64 resume;
+	RAnalBlock *bb;
+	EsilBreakCtx *state;
+	RVecEsilBlock blocks;
+	RVecEsilState path;
+	size_t block_index;
+	RBitset *visited;
+} IterCtx;
+
+static bool esil_block_enter(RAnalBlock *bb, void *user) {
+	IterCtx *ctx = user;
+	RVecEsilBlock_push_back (&ctx->blocks, &bb);
+	return true;
+}
+
+static bool esil_block_exit(RAnalBlock *bb, void *user) {
+	return esil_block_enter (NULL, user);
+}
+
+static void esil_state_pop(IterCtx *ctx) {
+	EsilBreakCtx *state = ctx->state;
+	RVecEsilRegTaint_fini (&state->clob.reg_taints);
+	free (state->clob.delayed_call_cc);
+	*state = *RVecEsilState_last (&ctx->path);
+	RVecEsilState_pop_back (&ctx->path);
+	r_reg_arena_pop (state->anal->reg);
+}
+
+static bool get_next_i(IterCtx *ctx, size_t *next_i) {
+	ut64 addr = ctx->start_addr + *next_i;
+	if (!ctx->state->strings_only) {
+		return addr < ctx->end_addr;
+	}
+	if (ctx->bb && addr < ctx->bb->addr + ctx->bb->size) {
+		return addr < ctx->end_addr;
+	}
+	for (;;) {
+		while (ctx->block_index < RVecEsilBlock_length (&ctx->blocks)) {
+			RAnalBlock *bb = *RVecEsilBlock_at (&ctx->blocks, ctx->block_index++);
+			if (!bb) {
+				esil_state_pop (ctx);
+				continue;
+			}
+			EsilBreakCtx *state = ctx->state;
+			RVecEsilState_push_back (&ctx->path, state);
+			state->fcn = r_list_first (bb->fcns);
+			EsilClobCtx saved = state->clob;
+			RVecEsilRegTaint_init (&state->clob.reg_taints);
+			RVecEsilRegTaint_append (&state->clob.reg_taints, &saved.reg_taints, NULL);
+			state->clob.delayed_call_cc = saved.delayed_call_cc? strdup (saved.delayed_call_cc): NULL;
+			r_reg_arena_push (state->anal->reg);
+			if (bb->addr >= ctx->start_addr && bb->addr + bb->size <= ctx->end_addr
+					&& r_bitset_set (ctx->visited, bb->addr)) {
+				ctx->bb = bb;
+				*next_i = bb->addr - ctx->start_addr;
+				return true;
+			}
+		}
+		if (ctx->bb) {
+			addr = ctx->resume;
+			ctx->bb = NULL;
+		}
+		RVecEsilBlock_clear (&ctx->blocks);
+		ctx->block_index = 0;
+		if (addr >= ctx->end_addr) {
+			return false;
+		}
+		RAnalBlock *bb = r_anal_bb_from_offset (ctx->state->anal, addr);
+		if (!bb || r_list_empty (bb->fcns) || bb->addr < ctx->start_addr || bb->addr + bb->size > ctx->end_addr) {
+			*next_i = addr - ctx->start_addr;
+			return true;
+		}
+		if (r_bitset_test (ctx->visited, bb->addr)) {
+			addr = bb->addr + bb->size;
+			continue;
+		}
+		ctx->resume = bb->addr + bb->size;
+		r_anal_block_recurse_depth_first (bb, esil_block_enter, esil_block_exit, ctx);
+	}
+}
+
+static ut64 pulldata(RCore *core, ut8 *buf, size_t buf_size, ut64 start, ut64 end, size_t i, ut64 *buf_addr) {
+	ut64 addr = start + i;
+	if (addr < *buf_addr || addr - *buf_addr + 64 >= buf_size || !i) {
+		r_io_read_at (core->io, addr, buf, R_MIN (buf_size, end - addr));
+		*buf_addr = addr;
+	}
+	return addr - *buf_addr;
+}
+
+static ut64 thumb_slot_target(RCore *core, ut64 slot, ut64 dst) {
+	RBinReloc *rel = r_core_getreloc (core, slot, 1);
+	RBinSymbol *sym = rel? rel->symbol: NULL;
+	return (sym && sym->bits == 16 && reloc_sym_vaddr (core, sym) == dst - 1)? dst - 1: dst;
+}
+
+// R2R db/cmd/cmd_search_esil db/cmd/cmd_aae
+R_API void r_core_anal_esil(RCore *core, const char *str /* len */, const char *target /* addr */) {
+	R_RETURN_IF_FAIL (core && str);
+	if (!core->anal->arch->session) {
+		return;
+	}
+	bool cfg_anal_strings = r_config_get_b (core->config, "anal.strings");
+	bool emu_lazy = r_config_get_b (core->config, "emu.lazy");
+	const bool gp_fixed = r_config_get_b (core->config, "anal.fixed.gp");
+	const bool newstack = core->anal->opt.var_newstack;
+	REsil *ESIL = core->anal->esil;
+	ut64 refptr = 0LL;
+	ut64 ntarget = UT64_MAX;
+	RAnalOp op = {0};
+	int iend;
+	int minopsize = 4; // XXX this depends on asm->mininstrsize
+	bool archIsArm = false;
+	const bool archIsX86 = r_str_startswith (core->anal->config->arch, "x86");
+	// ut64 addr = core->addr;
+	ut64 start = core->addr;
+	ut64 end = 0LL;
+	core->esil_anal_stop = false;
+
+	const bool strings_only = target && r_str_startswith (target, "+s");
+	bool xrefs_only = target && (!strcmp (target, "+x") || strings_only);
+	if (strings_only) {
+		target = r_str_trim_head_ro (target + 2);
+	} else if (xrefs_only) {
+		target = NULL;
+	}
+	const char *expr = target? r_str_trim_head_ro (target): NULL;
+	if (R_STR_ISNOTEMPTY (expr)) {
+		ntarget = r_num_math (core->num, expr);
+		refptr = ntarget = (ntarget && ntarget != UT64_MAX)? ntarget: start;
+	} else if (!strings_only && !target) {
+		ntarget = start;
+	}
+#define CHECKREF(x) (!refptr || (x) == refptr)
+	if (R_STR_ISNOTEMPTY (str)) {
+		end = start + r_num_math (core->num, str);
+	} else {
+		RIOMap *map = r_io_map_get_at (core->io, start);
+		end = map? r_io_map_end (map): start + core->blocksize;
+	}
+	RAnalFunction *fcn = NULL;
+	if (!strcmp (str, "f")) {
+		fcn = r_anal_get_fcn_in (core->anal, core->addr, 0);
+		if (fcn) {
+			ut64 ls = r_anal_function_linear_size (fcn);
+			ut64 fs = r_anal_function_realsize (fcn);
+			if (ls > fs + 4096) {
+				R_LOG_DEBUG ("Function 0x%08"PFMT64x" (%s) is sparse, analyzing each basic block",
+					fcn->addr, fcn->name? fcn->name: "?");
+				// Sparse function: analyze each basic block separately using full ESIL analysis
+				// (not r_core_anal_esil_function which uses simpler hooks and misses some xrefs)
+				bool (*old_write_at)(RIO *io, ut64 addr, const ut8 *buf, int len) = core->anal->iob.write_at;
+				core->anal->iob.write_at = r_io_vwrite_to_overlay_at;
+				size_t i;
+				for (i = 0; i < RVecAnalBlockPtr_length (&fcn->bbs); i++) {
+					RAnalBlock *bb = *RVecAnalBlockPtr_at (&fcn->bbs, i);
+					char szbuf[32];
+					snprintf (szbuf, sizeof (szbuf), "%"PFMT64u, (ut64)bb->size);
+					r_core_seek (core, bb->addr, true);
+					r_core_anal_esil (core, szbuf, NULL);
+				}
+				core->anal->iob.write_at = old_write_at;
+				return;
+			}
+			start = r_anal_function_min_addr (fcn);
+			if (start != UT64_MAX) {
+				start = fcn->addr;
+				end = r_anal_function_max_addr (fcn);
+			}
+		}
+	}
+
+	R_LOG_DEBUG ("aae length (%s) 0x%"PFMT64x, str, end);
+	R_LOG_DEBUG ("aae addr (%s) 0x%"PFMT64x, target, start);
+	if (end < start) {
+		R_LOG_DEBUG ("end < start");
+		return;
+	}
+	iend = end - start;
+	if (iend < 1) {
+		return;
+	}
+	if (iend > r_config_get_i (core->config, "emu.maxsize")) {
+		char *s = r_num_units (NULL, 0, iend);
+		R_LOG_WARN ("Not going to analyze %s bytes. See 'e emu.maxsize'", s);
+		free (s);
+		return;
+	}
+	ut8 *buf = NULL;
+	// maybe r_core_call (core, "aeim");
+	const char *kspname = r_reg_alias_getname (core->anal->reg, R_REG_ALIAS_SP);
+	if (R_STR_ISEMPTY (kspname)) {
+		R_LOG_ERROR ("No =SP defined in the reg profile");
+		return;
+	}
+	char *spname = strdup (kspname);
+	EsilCallClobbers call_clobbers = {0};
+	EsilBreakCtx ctx = {
+		.op = &op,
+		.anal = core->anal,
+		.fcn = fcn,
+		.spname = spname,
+		.initial_sp = r_reg_getv (core->anal->reg, spname),
+		.last_read = UT64_MAX,
+		.last_data = UT64_MAX,
+		.ntarget = ntarget,
+		.strings_only = strings_only,
+		.clob.enabled = r_config_get_b (core->config, "anal.vars.clobber"),
+		.call_clobbers = &call_clobbers,
+	};
+	RVecEsilRegTaint_init (&ctx.clob.reg_taints);
+	esil_reg_pc_span (core->anal, &ctx.clob.pc_span);
+	if (ctx.clob.enabled) {
+		ESIL->cb.hook_reg_read = &esilbreak_reg_read;
+	}
+	ESIL->cb.hook_reg_write = &esilbreak_reg_write;
+	//this is necessary for the hook to read the id of analop
+	ESIL->user = &ctx;
+	ESIL->cb.hook_mem_read = &esilbreak_mem_read;
+	ESIL->cb.hook_mem_write = &esilbreak_mem_write;
+	// r_core_cmd0 (core, "e io.cache=true;wc++");
+
+	if (fcn && fcn->reg_save_area) {
+		ut64 v = newstack?  fcn->reg_save_area: ctx.initial_sp - fcn->reg_save_area;
+		r_reg_setv (core->anal->reg, ctx.spname, v);
+	}
+	//eprintf ("Analyzing ESIL refs from 0x%"PFMT64x" - 0x%"PFMT64x"\n", addr, end);
+	// TODO: backup/restore register state before/after analysis
+	core->esil_anal_stop = false;
+	r_cons_break_push (core->cons, cccb, core);
+
+	int arch = -1;
+	if (!strcmp (core->anal->config->arch, "arm")) {
+		switch (core->anal->config->bits) {
+		case 64: arch = R2_ARCH_ARM64; break;
+		case 32: arch = R2_ARCH_ARM32; break;
+		case 16: arch = R2_ARCH_THUMB; break;
+		}
+		archIsArm = true;
+	}
+
+	const ut64 gp = r_config_get_i (core->config, "anal.gp");
+	const char *gp_reg = NULL;
+	if (!strcmp (core->anal->config->arch, "mips")) {
+		gp_reg = "gp";
+		arch = R2_ARCH_MIPS;
+	} else if (arch == R2_ARCH_ARM64) {
+		RBinInfo *info = r_bin_get_info (core->bin);
+		if (info && info->lang && !strcmp (info->lang, "dart")) {
+			gp_reg = "x27";
+		}
+	}
+	const bool archIsMips32 = (core->anal->config->bits == 32 && arch == R2_ARCH_MIPS);
+	const bool is_thumb = arch == R2_ARCH_THUMB;
+	bool needOpVals = false;
+	if (archIsMips32 || archIsArm) {
+		needOpVals = true;
+	}
+
+	r_reg_arena_push (core->anal->reg);
+	// PIC base register (e.g. PPC32 r30): seeded once at entry, then mutated locally, so unlike gp it is never re-fixed
+	const char *gpseed = r_config_get (core->config, "anal.gpseed");
+	if (R_STR_ISNOTEMPTY (gpseed)) {
+		r_reg_setv (core->anal->reg, gpseed, gp);
+	}
+	char *sn = (char *)r_reg_alias_getname (core->anal->reg, R_REG_ALIAS_SN);
+	if (sn) {
+		sn = strdup (sn);
+	} else {
+		R_LOG_WARN ("No SN reg alias for '%s'", r_config_get (core->config, "asm.arch"));
+	}
+	IterCtx ictx = { .start_addr = start, .end_addr = end, .state = &ctx };
+	RVecEsilBlock_init (&ictx.blocks);
+	RVecEsilState_init (&ictx.path);
+	size_t i = 0; // addr - start;
+	size_t i_old = 0;
+	size_t buf_size = 128 * 1024;
+	const size_t maxopsz = r_arch_info (core->anal->arch, R_ARCH_INFO_MAXOP_SIZE);
+	ut64 buf_addr = UT64_MAX;
+	buf = malloc (buf_size);
+	if (!buf) {
+		free (sn);
+		esilbreak_ctx_fini (ESIL, &ctx);
+		r_cons_break_pop (core->cons);
+		r_reg_arena_pop (core->anal->reg);
+		return;
+	}
+	ictx.visited = strings_only? r_bitset_new (): NULL;
+	size_t buf_i = 0;
+
+	int opflags = R_ARCH_OP_MASK_ESIL | R_ARCH_OP_MASK_HINT;
+	if (needOpVals) {
+		opflags |= R_ARCH_OP_MASK_VAL;
+	}
+	opflags |= R_ARCH_OP_MASK_DISASM;
+
+	while (get_next_i (&ictx, &i)) {
+		if (core->esil_anal_stop || r_cons_is_breaked (core->cons)) {
+			break;
+		}
+		buf_i = pulldata (core,
+				buf, buf_size,
+				start, end, i,
+				&buf_addr);
+		// rename cur to opaddr?
+		ut64 cur = start + i;
+		if (!r_io_is_valid_offset (core->io, cur, 0)) {
+			break;
+		}
+		/* realign address if needed */
+		r_core_seek_arch_bits (core, cur);
+		if (!core->anal->arch->session) {
+			break;
+		}
+		int opalign = core->anal->config->codealign;
+		if (opalign > 0) {
+			cur -= (cur % opalign);
+		}
+		i_old = i;
+		if (buf_i >= buf_size) {
+			break;
+		}
+		size_t opsz = R_MIN (R_MIN (buf_size - buf_i, end - cur), maxopsz);
+		if (!r_anal_op (core->anal, &op, cur, buf + buf_i, opsz, opflags)) {
+			i += minopsize;
+			goto repeat;
+		}
+		switch (op.type) {
+		case R_ANAL_OP_TYPE_ILL:
+		case R_ANAL_OP_TYPE_UNK:
+		case R_ANAL_OP_TYPE_NULL:
+			if (is_thumb) {
+				R_LOG_DEBUG ("thumb unaligned or invalid instructions at 0x%08"PFMT64x, cur);
+				i += 2;
+				goto repeat;
+			} else {
+				R_LOG_DEBUG ("invalid instructions at 0x%08"PFMT64x, cur);
+			}
+			break;
+		}
+		// we need to check again i because buf+i may goes beyond its boundaries
+		// because of i += minopsize
+		if (op.size < 1) {
+			i += minopsize;
+			goto repeat;
+		}
+		clob_op_begin (&ctx, &op, cur);
+		// TODO: rename emu.lazy to emu.slow ? or just reuse anal.slow
+		if (emu_lazy) {
+			if (op.type & R_ANAL_OP_TYPE_REP) {
+				i += op.size;
+				goto repeat;
+			}
+			switch (op.type & R_ANAL_OP_TYPE_MASK) {
+			case R_ANAL_OP_TYPE_CALL:
+				clob_op_end (&ctx, &op);
+				i += op.size;
+				goto repeat;
+			case R_ANAL_OP_TYPE_JMP:
+			case R_ANAL_OP_TYPE_CJMP:
+			case R_ANAL_OP_TYPE_RET:
+			case R_ANAL_OP_TYPE_ILL:
+			case R_ANAL_OP_TYPE_NOP:
+			case R_ANAL_OP_TYPE_UJMP:
+			case R_ANAL_OP_TYPE_IO:
+			case R_ANAL_OP_TYPE_LEAVE:
+			case R_ANAL_OP_TYPE_CRYPTO:
+			case R_ANAL_OP_TYPE_CPL:
+			case R_ANAL_OP_TYPE_SYNC:
+			case R_ANAL_OP_TYPE_SWI:
+			case R_ANAL_OP_TYPE_CMP:
+			case R_ANAL_OP_TYPE_ACMP:
+			case R_ANAL_OP_TYPE_NULL:
+			case R_ANAL_OP_TYPE_CSWI:
+			case R_ANAL_OP_TYPE_TRAP:
+			case R_ANAL_OP_TYPE_PUSH:
+			case R_ANAL_OP_TYPE_POP:
+				i += op.size;
+				goto repeat;
+			}
+		}
+		if (!strings_only && sn && op.type == R_ANAL_OP_TYPE_SWI) {
+			// check if aligned
+			// check if conditional (done by R_ANAL_OP_MASK_COND) CSWI exists but its not used properly on arm16
+			r_strf_buffer (64);
+			int snv = (arch == R2_ARCH_THUMB)? op.val: (int)r_reg_getv (core->anal->reg, sn);
+			if (snv > 0 && snv < 0xFFFF) {
+				r_flag_space_set (core->flags, R_FLAGS_FS_SYSCALLS);
+				RSyscallItem *si = r_syscall_get (core->anal->syscall, snv, -1);
+				if (si) {
+					r_flag_set_next (core->flags, r_strf ("syscall.%s", si->name), cur, 1);
+					r_syscall_item_free (si);
+				} else {
+					r_flag_set_next (core->flags, r_strf ("syscall.%d", snv), cur, 1);
+				}
+				r_flag_space_set (core->flags, NULL);
+			}
+		}
+		const char *esilstr = R_STRBUF_SAFEGET (&op.esil);
+		i += op.size;
+		if (R_STR_ISEMPTY (esilstr)) {
+			goto repeat;
+		}
+		r_esil_set_pc (ESIL, cur);
+		// R2_590 - if roregs is set we dont need to set that value everytime
+		r_reg_setv (core->anal->reg, "PC", cur + op.size);
+		if (gp_fixed && gp_reg) {
+			r_reg_setv (core->anal->reg, gp_reg, gp);
+		}
+		ctx.last_read = ctx.last_data = UT64_MAX;
+		(void)r_esil_parse (ESIL, esilstr);
+		const bool skip_ref = clob_op_end (&ctx, &op);
+		if (skip_ref && esilbreak_skip_ref_op (op.type)) {
+			r_esil_stack_free (ESIL);
+			goto repeat;
+		}
+		if (strings_only) {
+			if (iscall (&op)) {
+				ESIL->old = cur + op.size;
+				getpcfromstack (core, ESIL);
+			}
+			r_esil_stack_free (ESIL);
+			goto repeat;
+		}
+		switch (op.type) {
+		case R_ANAL_OP_TYPE_LEA:
+			// arm64
+			if (cur && arch == R2_ARCH_ARM64) {
+				if (CHECKREF (ESIL->cur)) {
+					int type = core_type_by_addr (core, ESIL->cur);
+					if (type == R_ANAL_REF_TYPE_NULL) {
+						type = R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ;
+					} else if (type == R_ANAL_REF_TYPE_ICOD) {
+						type |= R_ANAL_REF_TYPE_EXEC;
+					} else {
+						type |= R_ANAL_REF_TYPE_READ;
+					}
+					r_anal_xrefs_setf (core->anal, fcn, cur, ESIL->cur, type);
+				}
+			} else if (archIsX86) {
+				const ut64 dst = op.ptr? op.ptr: ESIL->cur;
+				if ((target && dst == ctx.ntarget) || !target) {
+					if (CHECKREF (dst)) {
+						if (dst && r_io_is_valid_offset (core->io, dst, !core->anal->opt.noncode)) {
+							r_anal_xrefs_setf (core->anal, fcn, cur, dst, R_ANAL_REF_TYPE_STRN | R_ANAL_REF_TYPE_READ);
+						} else {
+							r_anal_xrefs_setf (core->anal, fcn, cur, ESIL->cur, R_ANAL_REF_TYPE_STRN | R_ANAL_REF_TYPE_READ);
+						}
+					}
+				}
+			} else if ((target && op.ptr == ctx.ntarget) || !target) {
+				if (CHECKREF (ESIL->cur)) {
+					if (op.ptr && r_io_is_valid_offset (core->io, op.ptr, !core->anal->opt.noncode)) {
+						r_anal_xrefs_setf (core->anal, fcn, cur, op.ptr, R_ANAL_REF_TYPE_STRN | R_ANAL_REF_TYPE_READ);
+					} else {
+						r_anal_xrefs_setf (core->anal, fcn, cur, ESIL->cur, R_ANAL_REF_TYPE_STRN | R_ANAL_REF_TYPE_READ);
+					}
+				}
+			}
+			if (cfg_anal_strings) {
+				add_string_ref (core, op.addr, op.ptr);
+			}
+			break;
+		case R_ANAL_OP_TYPE_SUB:
+			if (newstack && core->anal->cur && archIsArm) {
+				if (strstr (op.mnemonic, " sp,")) {
+					ctx.initial_sp -= op.val;
+				}
+			}
+			break;
+		case R_ANAL_OP_TYPE_ADD:
+			/* TODO: test if this is valid for other archs too */
+			// an fp sum is never an address
+			if (archIsArm && op.family != R_ANAL_OP_FAMILY_FPU) {
+				/* This code is known to work on Thumb, ARM and ARM64 */
+				ut64 dst = ESIL->cur;
+				if ((target && dst == ctx.ntarget) || !target) {
+					if (CHECKREF (dst)) {
+						const int type = core_type_by_addr (core, dst);
+						RAnalRefType ref_type = (type == -1)? R_ANAL_REF_TYPE_CODE : type;
+						ref_type |= R_ANAL_REF_TYPE_READ; // maybe ICOD instead of CODE
+						r_anal_xrefs_setf (core->anal, fcn, cur, dst, ref_type);
+					}
+				}
+				if (cfg_anal_strings) {
+					add_string_ref (core, op.addr, dst);
+				}
+			} else if (archIsMips32) {
+				if (!needOpVals) {
+					R_LOG_ERROR ("Inconsistent needvals state");
+					break;
+				}
+				ut64 dst = ESIL->cur;
+				RAnalValue *opsrc0 = RVecRArchValue_at (&op.srcs, 0);
+				RAnalValue *opsrc1 = RVecRArchValue_at (&op.srcs, 1);
+				if (!opsrc0 || !opsrc0->reg) {
+					break;
+				}
+				if (!strcmp (opsrc0->reg, "sp")) {
+					break;
+				}
+				if (!strcmp (opsrc0->reg, "zero")) {
+					break;
+				}
+				if ((target && dst == ctx.ntarget) || !target) {
+					if (dst > 0xffff && opsrc1 && (dst & 0xffff) == (opsrc1->imm & 0xffff) && myvalid (core, dst)) {
+						RFlagItem *f;
+						char str[STRSZ] = {0};
+						if (CHECKREF (dst) || CHECKREF (cur)) {
+							r_anal_xrefs_setf (core->anal, fcn, cur, dst, R_ANAL_REF_TYPE_DATA);
+							if (cfg_anal_strings) {
+								add_string_ref (core, op.addr, dst);
+							}
+							if ((f = r_core_flag_get_by_spaces (core->flags, false, dst))) {
+								r_meta_set_string (core->anal, R_META_TYPE_COMMENT, cur, f->name);
+						} else if (is_string_at (core, dst, str, NULL)) {
+							char *str2 = r_str_newf ("esilref: '%s'", str);
+								// HACK avoid format string inside string used later as format
+								// string crashes disasm inside agf under some conditions.
+								// https://github.com/radareorg/radare2/issues/6937
+								r_str_replace_char (str2, '%', '&');
+								r_meta_set_string (core->anal, R_META_TYPE_COMMENT, cur, str2);
+								free (str2);
+							}
+						}
+					}
+				}
+			}
+			break;
+		case R_ANAL_OP_TYPE_LOAD:
+			{
+				ut64 dst = ctx.last_read;
+				if (dst != UT64_MAX && CHECKREF (dst)) {
+					if (myvalid (core, dst)) {
+						r_anal_xrefs_setf (core->anal, fcn, cur, dst, R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ);
+						if (cfg_anal_strings) {
+							add_string_ref (core, op.addr, dst);
+						}
+					}
+				}
+				dst = ctx.last_data;
+				if (dst != UT64_MAX && CHECKREF (dst)) {
+					if (myvalid (core, dst)) {
+						r_anal_xrefs_setf (core->anal, fcn, cur, dst, R_ANAL_REF_TYPE_DATA | R_ANAL_REF_TYPE_READ);
+						if (cfg_anal_strings) {
+							add_string_ref (core, op.addr, dst);
+						}
+					}
+				}
+			}
+			break;
+		case R_ANAL_OP_TYPE_JMP:
+			{
+				ut64 dst = op.jump;
+				if (CHECKREF (dst)) {
+					if (myvalid (core, dst)) {
+						r_anal_xrefs_setf (core->anal, fcn, cur, dst, R_ANAL_REF_TYPE_CODE | R_ANAL_REF_TYPE_EXEC);
+					}
+				}
+			}
+			break;
+		case R_ANAL_OP_TYPE_CALL:
+		case R_ANAL_OP_TYPE_CCALL:
+			{
+				ut64 dst = op.jump;
+				if (CHECKREF (dst) || (target && dst == ctx.ntarget)) {
+					if (myvalid (core, dst)) {
+						r_anal_xrefs_setf (core->anal, fcn, cur, dst, R_ANAL_REF_TYPE_CALL | R_ANAL_REF_TYPE_EXEC);
+					}
+					ESIL->old = cur + op.size;
+					getpcfromstack (core, ESIL);
+				}
+			}
+			break;
+		case R_ANAL_OP_TYPE_UJMP:
+		case R_ANAL_OP_TYPE_UCALL:
+		case R_ANAL_OP_TYPE_ICALL:
+		case R_ANAL_OP_TYPE_RCALL:
+		case R_ANAL_OP_TYPE_IRCALL:
+		case R_ANAL_OP_TYPE_MJMP:
+		case R_ANAL_OP_TYPE_UCCALL:
+			{
+				ut64 dst = core->anal->esil->jump_target;
+				if (dst == 0 || dst == UT64_MAX) {
+					dst = r_reg_getv (core->anal->reg, "PC");
+				}
+				// the type mask preserves the COND bit, strip it too so
+				// conditional variants like UCCALL are handled as calls
+				const int utype = op.type & R_ANAL_OP_TYPE_MASK & ~R_ANAL_OP_TYPE_COND;
+				const ut64 to = (!skip_ref && (arch == R2_ARCH_ARM32 || is_thumb)
+						&& op.type == R_ANAL_OP_TYPE_MJMP && (dst & 1))
+					? thumb_slot_target (core, ctx.last_read, dst): dst;
+				if (!skip_ref && (CHECKREF (dst) || CHECKREF (to))) {
+					// Normalizing an xref must not seed another function.
+					if (myvalid (core, dst)) {
+						RAnalRefType ref = utype == R_ANAL_OP_TYPE_UCALL
+							? R_ANAL_REF_TYPE_CALL
+							: R_ANAL_REF_TYPE_CODE;
+						r_anal_xrefs_setf (core->anal, fcn, cur, to, ref | R_ANAL_REF_TYPE_EXEC);
+						if (!xrefs_only) {
+							r_core_anal_fcn (core, dst, UT64_MAX, R_ANAL_REF_TYPE_NULL, 1);
+						}
+					}
+				}
+			}
+			break;
+		default:
+			break;
+		}
+		r_esil_stack_free (ESIL);
+repeat:
+		r_anal_op_fini (&op);
+		if (!r_anal_get_block_at (core->anal, cur)) {
+			size_t fcn_i;
+			for (fcn_i = i_old + 1; fcn_i < i; fcn_i++) {
+				if (r_anal_get_function_at (core->anal, start + fcn_i)) {
+					i = fcn_i;
+					break;
+				}
+			}
+		}
+	}
+	free (sn);
+	while (!RVecEsilState_empty (&ictx.path)) {
+		esil_state_pop (&ictx);
+	}
+	RVecEsilState_fini (&ictx.path);
+	RVecEsilBlock_fini (&ictx.blocks);
+	r_bitset_free (ictx.visited);
+	free (buf);
+	esilbreak_ctx_fini (ESIL, &ctx);
+	r_anal_op_fini (&op);
+	r_cons_break_pop (core->cons);
+	r_reg_arena_pop (core->anal->reg);
+}

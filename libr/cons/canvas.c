@@ -1,13 +1,221 @@
-/* radare - LGPL - Copyright 2013-2021 - pancake */
+/* radare - LGPL - Copyright 2013-2025 - pancake */
 
 #include <r_cons.h>
 #include <r_util/r_assert.h>
+#include <r_util.h>
+#include <math.h>
+#include "private.h"
 
-#define useUtf8 (r_cons_singleton ()->use_utf8)
-#define useUtf8Curvy (r_cons_singleton ()->use_utf8_curvy)
+#define PI 3.14159265359
 
-#define W(y) r_cons_canvas_write (c, y)
-#define G(x, y) r_cons_canvas_gotoxy (c, x, y)
+#define W(y) r_cons_canvas_write(c, y)
+#define G(x, y) r_cons_canvas_gotoxy(c, x, y)
+#define ATTR_PAGE_BITS 12
+#define ATTR_PAGE_CELLS (1 << ATTR_PAGE_BITS)
+
+typedef struct {
+	const char *str;
+	ut32 len;
+} CanvasStyle;
+
+R_VEC_TYPE (RVecCanvasStyle, CanvasStyle);
+
+struct r_cons_canvas_attrs_t {
+	ut8 **pages; // lazily allocated style ids per cell, ut16 once wide
+	size_t npages;
+	bool wide;
+	RVecCanvasStyle styles; // id -> interned attribute, id 0 means none
+	HtUP *ids; // interned attribute -> id
+	const char *last; // last looked up attribute, consecutive stamps repeat it
+	ut32 last_id;
+	ut32 maxlen;
+	ut64 size; // total length of the stored attributes
+};
+
+static RConsCanvasAttrs *attrs_new(void) {
+	RConsCanvasAttrs *a = R_NEW0 (RConsCanvasAttrs);
+	a->ids = ht_up_new0 ();
+	if (!a->ids || !RVecCanvasStyle_emplace_back (&a->styles)) {
+		ht_up_free (a->ids);
+		free (a);
+		return NULL;
+	}
+	return a;
+}
+
+static void attrs_clear(RConsCanvasAttrs *a, bool release) {
+	size_t i;
+	for (i = 0; i < a->npages; i++) {
+		if (release) {
+			R_FREE (a->pages[i]);
+		} else if (a->pages[i]) {
+			memset (a->pages[i], 0, ATTR_PAGE_CELLS * (a->wide? sizeof (ut16): 1));
+		}
+	}
+	if (release) {
+		R_FREE (a->pages);
+		a->npages = 0;
+	}
+	a->size = 0;
+}
+
+static void attrs_free(RConsCanvasAttrs *a) {
+	if (a) {
+		attrs_clear (a, true);
+		RVecCanvasStyle_fini (&a->styles);
+		ht_up_free (a->ids);
+		free (a);
+	}
+}
+
+static inline ut32 attrs_id_at(const RConsCanvasAttrs *a, ut64 loc) {
+	const ut64 pagenum = loc >> ATTR_PAGE_BITS;
+	if (pagenum >= a->npages || !a->pages[pagenum]) {
+		return 0;
+	}
+	const size_t off = loc & (ATTR_PAGE_CELLS - 1);
+	return a->wide? ((const ut16 *)a->pages[pagenum])[off]: a->pages[pagenum][off];
+}
+
+static inline const CanvasStyle *attrs_style(const RConsCanvasAttrs *a, ut32 id) {
+	return a->styles._start + id;
+}
+
+static bool attrs_widen(RConsCanvasAttrs *a) {
+	ut16 **pages = R_NEWS0 (ut16 *, a->npages + 1);
+	if (!pages) {
+		return false;
+	}
+	size_t i, j;
+	for (i = 0; i < a->npages; i++) {
+		if (!a->pages[i]) {
+			continue;
+		}
+		if (!(pages[i] = malloc (ATTR_PAGE_CELLS * sizeof (ut16)))) {
+			while (i > 0) {
+				free (pages[--i]);
+			}
+			free (pages);
+			return false;
+		}
+		for (j = 0; j < ATTR_PAGE_CELLS; j++) {
+			pages[i][j] = a->pages[i][j];
+		}
+	}
+	for (i = 0; i < a->npages; i++) {
+		free (a->pages[i]);
+	}
+	free (a->pages);
+	a->pages = (ut8 **)pages;
+	a->wide = true;
+	return true;
+}
+
+static ut32 attrs_style_id(RConsCanvasAttrs *a, const char *style) {
+	if (style == a->last) {
+		return a->last_id;
+	}
+	bool found = false;
+	ut32 id = (ut32)(size_t)ht_up_find (a->ids, (ut64)(size_t)style, &found);
+	if (!found) {
+		id = RVecCanvasStyle_length (&a->styles);
+		if (id > UT16_MAX || (id > UT8_MAX && !a->wide && !attrs_widen (a))) {
+			return 0;
+		}
+		CanvasStyle *cs = RVecCanvasStyle_emplace_back (&a->styles);
+		if (!cs) {
+			return 0;
+		}
+		cs->str = style;
+		cs->len = strlen (style);
+		a->maxlen = R_MAX (a->maxlen, cs->len);
+		ht_up_insert (a->ids, (ut64)(size_t)style, (void *)(size_t)id);
+	}
+	a->last = style;
+	a->last_id = id;
+	return id;
+}
+
+// style must be interned in the canvas constpool; NULL removes the cell attribute
+R_IPI void canvas_attrs_set(RConsCanvasAttrs *a, ut64 loc, const char *style) {
+	const ut64 pagenum = loc >> ATTR_PAGE_BITS;
+	const ut32 id = style? attrs_style_id (a, style): 0;
+	if (style && !id) {
+		return;
+	}
+	if (pagenum >= a->npages || !a->pages[pagenum]) {
+		if (!id || pagenum >= SIZE_MAX / sizeof (ut8 *) / 2) {
+			return;
+		}
+		if (pagenum >= a->npages) {
+			const size_t npages = R_MAX ((size_t)pagenum + 1, a->npages * 2);
+			ut8 **pages = realloc (a->pages, npages * sizeof (ut8 *));
+			if (!pages) {
+				return;
+			}
+			memset (pages + a->npages, 0, (npages - a->npages) * sizeof (ut8 *));
+			a->pages = pages;
+			a->npages = npages;
+		}
+		if (!(a->pages[pagenum] = calloc (ATTR_PAGE_CELLS, a->wide? sizeof (ut16): 1))) {
+			return;
+		}
+	}
+	const size_t off = loc & (ATTR_PAGE_CELLS - 1);
+	a->size -= attrs_style (a, attrs_id_at (a, loc))->len;
+	a->size += attrs_style (a, id)->len;
+	if (a->wide) {
+		((ut16 *)a->pages[pagenum])[off] = id;
+	} else {
+		a->pages[pagenum][off] = id;
+	}
+}
+
+static int rune_display_width(RRune ch) {
+	if (ch < 0x80) {
+		return 1;
+	}
+	// CJK and wide characters
+	if ((ch >= 0x1100 && ch <= 0x115F) || // Hangul Jamo
+		(ch >= 0x2E80 && ch <= 0x9FFF) || // CJK
+		(ch >= 0xAC00 && ch <= 0xD7AF) || // Hangul Syllables
+		(ch >= 0xF900 && ch <= 0xFAFF) || // CJK Compatibility Ideographs
+		(ch >= 0xFE10 && ch <= 0xFE1F) || // Vertical Forms
+		(ch >= 0xFE30 && ch <= 0xFE4F) || // CJK Compatibility Forms
+		(ch >= 0x1F000 && ch <= 0x1FFFF) || // Emojis and symbols
+		(ch >= 0x20000 && ch <= 0x2FFFF)) { // CJK Extension B, C, D, E, F
+		return 2;
+	}
+	return 1;
+}
+
+static const char *r_cons_get_rune(const ut8 ch) {
+	/* Fast lookup table for runes mapped by RUNECODE_* constants.
+	 * The table is indexed by (ch - RUNECODE_MIN) and covers the
+	 * continuous range [RUNECODE_MIN, RUNECODE_MAX).
+	 */
+	static const char *const rune_table[] = {
+		/* 0xc8 */ RUNE_LINE_VERT,
+		/* 0xc9 */ RUNE_LINE_CROSS,
+		/* 0xca */ RUNE_CORNER_BR,
+		/* 0xcb */ RUNE_CORNER_BL,
+		/* 0xcc */ RUNE_ARROW_RIGHT,
+		/* 0xcd */ RUNE_ARROW_LEFT,
+		/* 0xce */ RUNE_LINE_HORIZ,
+		/* 0xcf */ RUNE_CORNER_TL,
+		/* 0xd0 */ RUNE_CORNER_TR,
+		/* 0xd1 */ RUNE_LINE_UP,
+		/* 0xd2 */ RUNE_CURVE_CORNER_TL,
+		/* 0xd3 */ RUNE_CURVE_CORNER_TR,
+		/* 0xd4 */ RUNE_CURVE_CORNER_BR,
+		/* 0xd5 */ RUNE_CURVE_CORNER_BL,
+	};
+
+	if (ch < RUNECODE_MIN || ch >= RUNECODE_MAX) {
+		return NULL;
+	}
+	return rune_table[ch - RUNECODE_MIN];
+}
 
 static inline bool __isAnsiSequence(const char *s) {
 	return s && s[0] == 033 && s[1] == '[';
@@ -18,7 +226,7 @@ static int __getAnsiPiece(const char *p, char *chr) {
 	if (!p) {
 		return 0;
 	}
-	while (p && *p && *p != '\n' && ! __isAnsiSequence (p)) {
+	while (p && *p && *p != '\n' && !__isAnsiSequence (p)) {
 		p++;
 	}
 	if (chr) {
@@ -27,25 +235,15 @@ static int __getAnsiPiece(const char *p, char *chr) {
 	return p - q;
 }
 
-static void attribute_free_kv(HtUPKv *kv) {
-	free (kv->value);
-}
-
-static const char *__attributeAt(RConsCanvas *c, int loc) {
-	if (!c->color) {
-		return NULL;
-	}
-	return ht_up_find (c->attrs, loc, NULL);
-}
-
-static void __stampAttribute(RConsCanvas *c, int loc, int length) {
+static void __stampAttribute(RConsCanvas *c, ut64 loc, int length) {
 	if (!c->color) {
 		return;
 	}
 	int i;
-	ht_up_update (c->attrs, loc, (void *)c->attr);
+	c->attr = r_str_constpool_get (&c->constpool, c->attr);
+	canvas_attrs_set (c->attrs, loc, c->attr);
 	for (i = 1; i < length; i++) {
-		ht_up_delete (c->attrs, loc + i);
+		canvas_attrs_set (c->attrs, loc + i, NULL);
 	}
 }
 
@@ -61,62 +259,96 @@ static const char *set_attr(RConsCanvas *c, const char *s) {
 		while (*p && *p != 'J' && *p != 'm' && *p != 'H') {
 			p++;
 		}
+		if (!*p) {
+			break;
+		}
 		p++;
 	}
 
 	const int slen = p - s;
 	if (slen > 0) {
-		RStrBuf tmp;
-		r_strbuf_init (&tmp);
-		r_strbuf_append_n (&tmp, s, slen);
-		c->attr = r_str_constpool_get (&c->constpool, r_strbuf_get (&tmp));
-		r_strbuf_fini (&tmp);
+		char tmp[256];
+		if (slen < (int)sizeof (tmp)) {
+			memcpy (tmp, s, slen);
+			tmp[slen] = '\0';
+			c->attr = r_str_constpool_get (&c->constpool, tmp);
+		} else {
+			char *h = r_str_ndup (s, slen);
+			if (h) {
+				c->attr = r_str_constpool_get (&c->constpool, h);
+				free (h);
+			}
+		}
 	}
 	return p;
 }
 
 static int __getUtf8Length(const char *s, int n) {
-	int i = 0, j = 0, fullwidths = 0;
+	int i = 0, len = 0;
 	while (s[i] && n > 0) {
-		if ((s[i] & 0xc0) != 0x80) {
-			j++;
-			if (r_str_char_fullwidth (s + i, n)) {
-				fullwidths++;
+		const ut8 ch = s[i];
+		if (ch < 0x80 || R_BETWEEN (RUNECODE_MIN, ch, RUNECODE_MAX - 1)) {
+			len++;
+			i++;
+			n--;
+		} else if ((ch & 0xc0) != 0x80) {
+			RRune rune;
+			int ulen = r_utf8_decode ((const ut8 *)s + i, n, &rune);
+			if (ulen > 0) {
+				len += rune_display_width (rune);
+				i += ulen;
+				n -= ulen;
+			} else {
+				len += 1;
+				i++;
+				n--;
 			}
+		} else {
+			i++;
+			n--;
 		}
-		n--;
-		i++;
 	}
-	return j + fullwidths;
+	return len;
 }
 
 static int __getUtf8Length2(const char *s, int n, int left) {
-	int i = 0, fullwidths = 0;
-	while (n > -1 && i < left && s[i]) {
-		if (r_str_char_fullwidth (s + i, left - i)) {
-			fullwidths++;
+	int i = 0, len = 0;
+	while (i < left && s[i] && len < n) {
+		const ut8 ch = s[i];
+		if (ch < 0x80 || R_BETWEEN (RUNECODE_MIN, ch, RUNECODE_MAX - 1)) {
+			len++;
+			i++;
+		} else if ((ch & 0xc0) != 0x80) {
+			RRune rune;
+			int ulen = r_utf8_decode ((const ut8 *)s + i, left - i, &rune);
+			if (ulen > 0) {
+				len += rune_display_width (rune);
+				i += ulen;
+			} else {
+				len += 1;
+				i++;
+			}
+		} else {
+			i++;
 		}
-		if ((s[i] & 0xc0) != 0x80) {
-			n--;
-		}
-		i++;
 	}
-	i -= fullwidths;
-	return n == -1 ? i - 1 : i;
+	return i;
 }
 
 static bool __expandLine(RConsCanvas *c, int real_len, int utf8_len) {
 	if (real_len == 0) {
 		return true;
 	}
-	int buf_utf8_len = __getUtf8Length2 (c->b[c->y] + c->x, utf8_len, c->blen[c->y] - c->x);
+	int buf_utf8_len = c->blen[c->y] == c->w
+		? utf8_len
+		: __getUtf8Length2 (c->b[c->y] + c->x, utf8_len, c->blen[c->y] - c->x);
 	int goback = R_MAX (0, (buf_utf8_len - utf8_len));
 	int padding = (real_len - utf8_len) - goback;
 
 	if (padding) {
 		if (padding > 0 && c->blen[c->y] + padding > c->bsize[c->y]) {
-			int newsize = R_MAX ((int)(c->bsize[c->y] * 1.5), c->blen[c->y] + padding);
-			char * newline = realloc (c->b[c->y], sizeof (*c->b[c->y])*(newsize));
+			int newsize = R_MAX ((int) (c->bsize[c->y] * 1.5), c->blen[c->y] + padding);
+			char *newline = realloc (c->b[c->y], sizeof (*c->b[c->y]) *(newsize));
 			if (!newline) {
 				return false;
 			}
@@ -126,63 +358,61 @@ static bool __expandLine(RConsCanvas *c, int real_len, int utf8_len) {
 		}
 		int size = R_MAX (c->blen[c->y] - c->x - goback, 0);
 		char *start = c->b[c->y] + c->x + goback;
-		char *tmp = malloc (size);
-		if (!tmp) {
-			return false;
-		}
-		memcpy (tmp, start, size);
 		if (padding < 0) {
 			int lap = R_MAX (0, c->b[c->y] - (start + padding));
-			memcpy (start + padding + lap,  tmp + lap, size - lap);
-			free (tmp);
+			memmove (start + padding + lap, start + lap, size - lap);
 			c->blen[c->y] += padding;
 			return true;
 		}
-		memcpy (start + padding, tmp, size);
-		free (tmp);
+		memmove (start + padding, start, size);
 		c->blen[c->y] += padding;
 	}
 	return true;
+}
+
+static void canvas_free_buffers(RConsCanvas *c) {
+	if (c->b) {
+		int y;
+		for (y = 0; y < c->h; y++) {
+			free (c->b[y]);
+		}
+	}
+	R_FREE (c->b);
+	R_FREE (c->bsize);
+	R_FREE (c->blen);
+	c->w = c->h = 0;
+	c->x = c->y = 0;
 }
 
 R_API void r_cons_canvas_free(RConsCanvas *c) {
 	if (!c) {
 		return;
 	}
-	if (c->b) {
-		int y;
-		for (y = 0; y < c->h; y++) {
-			free (c->b[y]);
-		}
-		free (c->b);
-	}
-	free (c->bsize);
-	free (c->blen);
-	ht_up_free (c->attrs);
+	canvas_free_buffers (c);
+	free (c->bgcolor);
+	attrs_free (c->attrs);
 	r_str_constpool_fini (&c->constpool);
 	free (c);
 }
 
-static bool attribute_delete_cb(void *user, const ut64 key, const void *value) {
-	HtUP *ht = (HtUP *)user;
-	ht_up_delete (ht, key);
-	return true;
-}
-
-R_API void r_cons_canvas_clear(RConsCanvas *c) {
-	r_return_if_fail (c && c->b);
+R_API void r_cons_canvas_clear(RConsCanvas *c, int flags) {
+	R_RETURN_IF_FAIL (c && c->b);
 	int y;
 	for (y = 0; y < c->h; y++) {
 		memset (c->b[y], '\n', c->bsize[y]);
+		c->blen[y] = c->w;
 	}
-
-	ht_up_foreach (c->attrs, attribute_delete_cb, c->attrs);
+	c->x = c->y = 0;
+	attrs_clear (c->attrs, false);
+	if (flags != R_CONS_CANVAS_FLAG_DEFAULT) {
+		c->flags = flags;
+	}
 }
 
 R_API bool r_cons_canvas_gotoxy(RConsCanvas *c, int x, int y) {
 	bool ret = true;
 	if (!c) {
-		return 0;
+		return false;
 	}
 	y += c->sy;
 	x += c->sx;
@@ -199,7 +429,7 @@ R_API bool r_cons_canvas_gotoxy(RConsCanvas *c, int x, int y) {
 		ret = false;
 	}
 	if (x < 0) {
-		//c->x = 0;
+		// c->x = 0;
 		ret = false;
 	}
 	if (x > c->blen[y] * 2) {
@@ -218,29 +448,49 @@ R_API bool r_cons_canvas_gotoxy(RConsCanvas *c, int x, int y) {
 	return ret;
 }
 
-R_API RConsCanvas *r_cons_canvas_new(int w, int h) {
-	if (w < 1 || h < 1) {
+static bool canvas_array_sizes(int w, int h, size_t *rows_size, size_t *lengths_size) {
+	ut64 rows, lengths;
+	if (w < 0 || w >= ST32_MAX || h <= 0
+			|| r_mul_overflow_ut64 (h, sizeof (char *), &rows)
+			|| r_mul_overflow_ut64 (h, sizeof (int), &lengths)
+			|| rows > SIZE_MAX || lengths > SIZE_MAX) {
+		return false;
+	}
+	*rows_size = (size_t)rows;
+	*lengths_size = (size_t)lengths;
+	return true;
+}
+
+R_API RConsCanvas *r_cons_canvas_new(RCons *cons, int w, int h, int flags) {
+	size_t rows_size, lengths_size;
+	if (w < 1 || !canvas_array_sizes (w, h, &rows_size, &lengths_size)) {
 		return NULL;
 	}
 	RConsCanvas *c = R_NEW0 (RConsCanvas);
-	if (!c) {
-		return NULL;
-	}
+	c->cons = cons;
+	c->bgcolor = strdup (Color_RESET);
 	c->bsize = NULL;
+	if (flags == R_CONS_CANVAS_FLAG_DEFAULT) {
+		c->flags = 0;
+	} else if (flags == R_CONS_CANVAS_FLAG_INHERIT) {
+		c->flags = cons? r_cons_canvas_flags (cons): 0;
+	} else {
+		c->flags = flags;
+	}
 	c->blen = NULL;
 	int i = 0;
 	c->color = 0;
 	c->sx = 0;
 	c->sy = 0;
-	c->b = malloc (sizeof *c->b * h);
+	c->b = malloc (rows_size);
 	if (!c->b) {
 		goto beach;
 	}
-	c->blen = malloc (sizeof *c->blen * h);
+	c->blen = malloc (lengths_size);
 	if (!c->blen) {
 		goto beach;
 	}
-	c->bsize = malloc (sizeof *c->bsize * h);
+	c->bsize = malloc (lengths_size);
 	if (!c->bsize) {
 		goto beach;
 	}
@@ -258,12 +508,12 @@ R_API RConsCanvas *r_cons_canvas_new(int w, int h) {
 	if (!r_str_constpool_init (&c->constpool)) {
 		goto beach;
 	}
-	c->attrs = ht_up_new ((HtUPDupValue)strdup, attribute_free_kv, NULL);
+	c->attrs = attrs_new ();
 	if (!c->attrs) {
 		goto beach;
 	}
 	c->attr = Color_RESET;
-	r_cons_canvas_clear (c);
+	r_cons_canvas_clear (c, -1);
 	return c;
 beach:
 	r_str_constpool_fini (&c->constpool);
@@ -278,20 +528,27 @@ beach:
 	return NULL;
 }
 
-R_API void r_cons_canvas_write(RConsCanvas *c, const char *s) {
-	if (!c || !s || !*s || !R_BETWEEN (0, c->y, c->h - 1) || !R_BETWEEN (0, c->x, c->w - 1)) {
+R_API void r_cons_canvas_write(RConsCanvas *c, const char *_s) {
+	if (!c || !_s || !*_s || !R_BETWEEN (0, c->y, c->h - 1) || !R_BETWEEN (0, c->x, c->w - 1)) {
 		return;
 	}
-
+	RCons *cons = c->cons;
+	char *os = strcmp (c->bgcolor, Color_RESET) && strstr (_s, Color_RESET)? r_str_ansi_resetbg (_s, c->bgcolor): NULL;
+	const char *s = os? os: _s;
 	char ch;
 	int left, slen, attr_len, piece_len;
 	int orig_x = c->x, attr_x = c->x;
+	const bool check_break = strchr (s, '\n') || strchr (s, '\x1b');
 
-	c->x = __getUtf8Length2 (c->b[c->y], c->x, c->blen[c->y]);
+	if (c->blen[c->y] != c->w) {
+		c->x = __getUtf8Length2 (c->b[c->y], c->x, c->blen[c->y]);
+	}
 
 	/* split the string into pieces of non-ANSI chars and print them normally,
-	** using the ANSI chars to set the attr of the canvas */
-	r_cons_break_push (NULL, NULL);
+	 ** using the ANSI chars to set the attr of the canvas */
+	if (check_break) {
+		r_cons_break_push (cons, NULL, NULL);
+	}
 	do {
 		const char *s_part = set_attr (c, s);
 		ch = 0;
@@ -322,169 +579,291 @@ R_API void r_cons_canvas_write(RConsCanvas *c, const char *s) {
 
 		attr_len = slen <= 0 && s_part != s? 1: utf8_len;
 		if (attr_len > 0 && attr_x < c->blen[c->y]) {
-			__stampAttribute (c, c->y * c->w + attr_x, attr_len);
+			__stampAttribute (c, (ut64)c->y * c->w + attr_x, attr_len);
 		}
-
 		s = s_part;
 		if (ch == '\n') {
-			c->attr = Color_RESET;
-			__stampAttribute (c, c->y * c->w + attr_x, 0);
+			c->attr = c->bgcolor;
+			__stampAttribute (c, (ut64)c->y * c->w + attr_x, 0);
 			c->y++;
 			s++;
-			if (*s == '\0' || c->y  >= c->h) {
+			if (*s == '\0' || c->y >= c->h) {
 				break;
 			}
-			c->x = __getUtf8Length2 (c->b[c->y], orig_x, c->blen[c->y]);
+			c->x = c->blen[c->y] == c->w
+				? orig_x
+				: __getUtf8Length2 (c->b[c->y], orig_x, c->blen[c->y]);
 			attr_x = orig_x;
 		} else {
 			c->x += slen;
 			attr_x += utf8_len;
 		}
 		s += piece_len;
-	} while (*s && !r_cons_is_breaked ());
-	r_cons_break_pop ();
+	} while (*s && (!check_break || !r_cons_is_breaked (cons)));
+	if (check_break) {
+		r_cons_break_pop (cons);
+	}
 	c->x = orig_x;
+	free (os);
 }
 
-R_API char *r_cons_canvas_to_string(RConsCanvas *c) {
-	r_return_val_if_fail (c, NULL);
+R_API const char *r_cons_canvas_attribute_at(RConsCanvas *c, int x, int y) {
+	R_RETURN_VAL_IF_FAIL (c, NULL);
+	const ut32 id = (x < 0 || x >= c->w || y < 0 || y >= c->h)? 0: attrs_id_at (c->attrs, (ut64)y * c->w + x);
+	return id? attrs_style (c->attrs, id)->str: NULL;
+}
 
-	int x, y, olen = 0, attr_x = 0;
-	bool is_first = true;
+R_API void r_cons_canvas_write_at(RConsCanvas *c, const char *s, int x, int y) {
+	if (r_cons_canvas_gotoxy (c, x, y)) {
+		r_cons_canvas_write (c, s);
+	}
+}
 
-	for (y = 0; y < c->h; y++) {
-		olen += c->blen[y] + 1;
+R_API void r_cons_canvas_background(RConsCanvas *c, const char *color) {
+	if (color) {
+		free (c->bgcolor);
+		c->bgcolor = strdup (color);
 	}
-	char *o = calloc (1, olen * 4 * CONS_MAX_ATTR_SZ);
-	if (!o) {
-		return NULL;
-	}
-	if (!olen) {
-		free (o);
-		return NULL;
-	}
+}
 
-	olen = 0;
-	for (y = 0; y < c->h; y++) {
-		if (!is_first) {
-			o[olen++] = '\n';
-		}
-		is_first = false;
-		attr_x = 0;
-		for (x = 0; x < c->blen[y]; x++) {
-			if ((c->b[y][x] & 0xc0) != 0x80) {
-				const char *atr = __attributeAt (c, y * c->w + attr_x);
-				if (atr) {
-					size_t len = strlen (atr);
-					memcpy (o + olen, atr, len);
-					olen += len;
-				}
-				attr_x++;
-				if (r_str_char_fullwidth (c->b[y] + x, c->blen[y] - x)) {
-					attr_x++;
-				}
+// renders one row without its trailing spaces and returns its length
+static size_t canvas_render_row(RConsCanvas *c, int y, bool useutf, char *o) {
+	size_t olen = 0;
+	int x, attr_x = 0;
+	for (x = 0; x < c->blen[y];) {
+		const ut8 byte = c->b[y][x];
+		if ((byte & 0xc0) != 0x80) {
+			const ut32 id = c->color? attrs_id_at (c->attrs, (ut64)y * c->w + attr_x): 0;
+			if (id) {
+				const CanvasStyle *cs = attrs_style (c->attrs, id);
+				memcpy (o + olen, cs->str, cs->len);
+				olen += cs->len;
 			}
-			if (!c->b[y][x] || c->b[y][x] == '\n') {
+			if (!byte || byte == '\n') {
 				o[olen++] = ' ';
+				attr_x++;
+				x++;
 				continue;
 			}
-			const char *rune = r_cons_get_rune ((const ut8)c->b[y][x]);
+			if (byte < 0x80) {
+				o[olen++] = byte;
+				attr_x++;
+				x++;
+				continue;
+			}
+			if (useutf) {
+				RRune ch;
+				int ulen = r_utf8_decode ((const ut8 *)c->b[y] + x, c->blen[y] - x, &ch);
+				if (ulen > 1) {
+					memcpy (o + olen, c->b[y] + x, ulen);
+					olen += ulen;
+					attr_x += rune_display_width (ch);
+					x += ulen;
+					continue;
+				}
+			}
+			const char *rune = r_cons_get_rune (byte);
 			if (rune) {
 				size_t rune_len = strlen (rune);
 				memcpy (o + olen, rune, rune_len + 1);
 				olen += rune_len;
+				attr_x++;
+				x++;
 			} else {
-				o[olen++] = c->b[y][x];
+				RRune ch;
+				int ulen = r_utf8_decode ((const ut8 *)c->b[y] + x, c->blen[y] - x, &ch);
+				if (ulen > 0) {
+					memcpy (o + olen, c->b[y] + x, ulen);
+					olen += ulen;
+					attr_x += rune_display_width (ch);
+					x += ulen;
+				} else {
+					o[olen++] = c->b[y][x];
+					attr_x++;
+					x++;
+				}
 			}
+		} else {
+			x++;
 		}
-		while (olen > 0 && o[olen - 1] == ' ') {
-			o[--olen] = '\0';
+	}
+	while (olen > 0 && o[olen - 1] == ' ') {
+		olen--;
+	}
+	return olen;
+}
+
+R_API char *r_cons_canvas_tostring(RConsCanvas *c) {
+	R_RETURN_VAL_IF_FAIL (c, NULL);
+
+	int y;
+	int max_line_length = 0;
+	ut64 olen = 0;
+
+	for (y = 0; y < c->h; y++) {
+		if (c->blen[y] < 0 || r_add_overflow_ut64 (olen, c->blen[y], &olen)) {
+			return NULL;
 		}
+		max_line_length = R_MAX (max_line_length, c->blen[y]);
+	}
+	ut64 output_size;
+	// Runecode bytes expand to at most three UTF-8 bytes.
+	if (r_mul_overflow_ut64 (olen, sizeof (RUNE_LINE_VERT) - 1, &output_size)
+			|| r_add_overflow_ut64 (output_size, c->h, &output_size)) {
+		return NULL;
+	}
+	if (c->color) {
+		ut64 attributes_size = c->attrs->size;
+		// Expanded UTF-8 rows can reach attribute locations from later rows.
+		ut64 row_overlap = c->w > 0
+			? (ut64)max_line_length / c->w + (max_line_length % c->w != 0)
+			: 1;
+		if (r_mul_overflow_ut64 (attributes_size, row_overlap, &attributes_size)
+				|| r_add_overflow_ut64 (output_size, attributes_size, &output_size)) {
+			return NULL;
+		}
+	}
+	if (!output_size || output_size > SIZE_MAX) {
+		return NULL;
+	}
+	char *o = malloc ((size_t)output_size);
+	if (!o) {
+		return NULL;
+	}
+
+	olen = 0;
+	const bool useutf = c->flags & R_CONS_CANVAS_FLAG_UTF8;
+	for (y = 0; y < c->h; y++) {
+		if (y > 0) {
+			o[olen++] = '\n';
+		}
+		olen += canvas_render_row (c, y, useutf, o + olen);
 	}
 	o[olen] = '\0';
 	return o;
 }
 
-R_API void r_cons_canvas_print_region(RConsCanvas *c) {
-	char *o = r_cons_canvas_to_string (c);
-	if (o) {
-		r_str_trim_tail (o);
-		if (*o) {
-			r_cons_strcat (o);
-		}
-		free (o);
+// writes the rows straight into the console buffer instead of building a full copy first
+static void canvas_print_rows(RConsCanvas *c, bool trim) {
+	int y, max_line_length = 0;
+	for (y = 0; y < c->h; y++) {
+		max_line_length = R_MAX (max_line_length, c->blen[y]);
 	}
+	const ut64 cell_size = sizeof (RUNE_LINE_VERT) - 1 + (c->color? c->attrs->maxlen: 0);
+	ut64 row_size;
+	if (r_mul_overflow_ut64 (max_line_length, cell_size, &row_size) || row_size >= SIZE_MAX) {
+		return;
+	}
+	char *row = malloc ((size_t)row_size + 1);
+	if (!row) {
+		return;
+	}
+	// trailing whitespace is held back so the output matches r_str_trim_tail
+	RStrBuf pending;
+	r_strbuf_init (&pending);
+	const bool useutf = c->flags & R_CONS_CANVAS_FLAG_UTF8;
+	for (y = 0; y < c->h; y++) {
+		if (y > 0) {
+			if (trim) {
+				r_strbuf_append_n (&pending, "\n", 1);
+			} else {
+				r_cons_write (c->cons, "\n", 1);
+			}
+		}
+		size_t len = canvas_render_row (c, y, useutf, row);
+		size_t visible = len;
+		if (trim) {
+			while (visible > 0 && IS_WHITECHAR (row[visible - 1])) {
+				visible--;
+			}
+			if (!visible) {
+				r_strbuf_append_n (&pending, row, len);
+				continue;
+			}
+			if (r_strbuf_length (&pending) > 0) {
+				r_cons_write (c->cons, r_strbuf_get (&pending), r_strbuf_length (&pending));
+				r_strbuf_fini (&pending);
+				r_strbuf_init (&pending);
+			}
+			r_strbuf_append_n (&pending, row + visible, len - visible);
+		}
+		if (visible > 0) {
+			r_cons_write (c->cons, row, visible);
+		}
+	}
+	r_strbuf_fini (&pending);
+	free (row);
+}
+
+R_API void r_cons_canvas_print_region(RConsCanvas *c) {
+	R_RETURN_IF_FAIL (c);
+	canvas_print_rows (c, true);
 }
 
 R_API void r_cons_canvas_print(RConsCanvas *c) {
-	char *o = r_cons_canvas_to_string (c);
-	if (o) {
-		r_cons_strcat (o);
-		free (o);
-	}
+	R_RETURN_IF_FAIL (c);
+	canvas_print_rows (c, false);
 }
 
 R_API int r_cons_canvas_resize(RConsCanvas *c, int w, int h) {
-	if (!c || w < 0 || h <= 0) {
+	size_t rows_size, lengths_size;
+	if (!c || !canvas_array_sizes (w, h, &rows_size, &lengths_size)) {
 		return false;
 	}
-	int *newblen = realloc (c->blen, sizeof *c->blen * h);
-	if (!newblen) {
-		r_cons_canvas_free (c);
-		return false;
+	if (c->b && w == c->w && h == c->h) {
+		r_cons_canvas_clear (c, R_CONS_CANVAS_FLAG_DEFAULT);
+		return true;
 	}
-	c->blen = newblen;
-	int *newbsize = realloc (c->bsize, sizeof *c->bsize * h);
-	if (!newbsize) {
-		r_cons_canvas_free (c);
-		return false;
+	const int old_h = c->h;
+	int i;
+	// shrink: free dropped lines before resizing the pointer array
+	for (i = h; i < old_h; i++) {
+		R_FREE (c->b[i]);
 	}
-	c->bsize = newbsize;
-	char **newb = realloc (c->b, sizeof *c->b * h);
+	char **newb = realloc (c->b, rows_size);
 	if (!newb) {
-		r_cons_canvas_free (c);
-		return false;
+		goto beach;
 	}
 	c->b = newb;
-	int i;
-	char *newline = NULL;
+	// NULL-init grown slots so failure cleanup never frees uninit pointers
+	for (i = old_h; i < h; i++) {
+		c->b[i] = NULL;
+	}
+	c->h = h;
+	// blen/bsize are fully overwritten below; replace rather than realloc-preserve
+	free (c->blen);
+	free (c->bsize);
+	c->blen = malloc (lengths_size);
+	c->bsize = malloc (lengths_size);
+	if (!c->blen || !c->bsize) {
+		goto beach;
+	}
 	for (i = 0; i < h; i++) {
-		if (i < c->h) {
-			newline = realloc (c->b[i], sizeof *c->b[i] * (w + 1));
-		} else {
-			newline = malloc (w + 1);
+		char *line = c->b[i]
+			? realloc (c->b[i], w + 1)
+			: malloc (w + 1);
+		if (!line) {
+			goto beach;
 		}
+		c->b[i] = line;
 		c->blen[i] = w;
 		c->bsize[i] = w + 1;
-		if (!newline) {
-			size_t j;
-			for (j = 0; j <= i; j++) {
-				free (c->b[i]);
-			}
-			ht_up_free (c->attrs);
-			free (c->blen);
-			free (c->bsize);
-			free (c->b);
-			free (c);
-			return false;
-		}
-		c->b[i] = newline;
 	}
 	c->w = w;
-	c->h = h;
-	c->x = 0;
-	c->y = 0;
-	r_cons_canvas_clear (c);
+	attrs_clear (c->attrs, true);
+	r_cons_canvas_clear (c, R_CONS_CANVAS_FLAG_DEFAULT);
 	return true;
+beach:
+	canvas_free_buffers (c);
+	attrs_clear (c->attrs, true);
+	return false;
 }
 
-#include <math.h>
-#define PI 3.1415
 R_API void r_cons_canvas_circle(RConsCanvas *c, int x, int y, int w, int h, const char *color) {
 	if (color) {
 		c->attr = color;
 	}
-	double xfactor = 1; //(double)w / (double)h;
+	double xfactor = 1; // (double)w / (double)h;
 	double yfactor = (double)h / 24; // 0.8; // 24  10
 	double size = w;
 	double a = 0.0;
@@ -494,8 +873,8 @@ R_API void r_cons_canvas_circle(RConsCanvas *c, int x, int y, int w, int h, cons
 		double ca = r_num_cos (a);
 		double cx = s * ca + (size / 2);
 		double cy = s * sa + (size / 4);
-		int X = x + (int)(xfactor * cx) - 2;
-		int Y = y + (int)((yfactor/2) * cy);
+		int X = x + (int) (xfactor * cx) - 2;
+		int Y = y + (int) ((yfactor / 2) * cy);
 		if (G (X, Y)) {
 			W ("=");
 		}
@@ -506,67 +885,102 @@ R_API void r_cons_canvas_circle(RConsCanvas *c, int x, int y, int w, int h, cons
 	}
 }
 
-R_API void r_cons_canvas_box(RConsCanvas *c, int x, int y, int w, int h, const char *color) {
-	const char *hline = useUtf8? RUNECODESTR_LINE_HORIZ : "-";
-	const char *vtmp = useUtf8? RUNECODESTR_LINE_VERT : "|";
-	RStrBuf *vline = r_strbuf_new (NULL);
-	r_strbuf_appendf (vline, Color_RESET"%s%s", color, vtmp);
-	const char *tl_corner = useUtf8 ? (useUtf8Curvy ? RUNECODESTR_CURVE_CORNER_TL : RUNECODESTR_CORNER_TL) : ".";
-	const char *tr_corner = useUtf8 ? (useUtf8Curvy ? RUNECODESTR_CURVE_CORNER_TR : RUNECODESTR_CORNER_TR) : ".";
-	const char *bl_corner = useUtf8 ? (useUtf8Curvy ? RUNECODESTR_CURVE_CORNER_BL : RUNECODESTR_CORNER_BL) : "`";
-	const char *br_corner = useUtf8 ? (useUtf8Curvy ? RUNECODESTR_CURVE_CORNER_BR : RUNECODESTR_CORNER_BR) : "'";
-	int i, x_mod;
-	int roundcorners = 0;
-	char *row = NULL, *row_ptr;
-
+R_API void r_cons_canvas_box(RConsCanvas *c, int x, int y, int w, int h, const char *R_NULLABLE color) {
+	R_RETURN_IF_FAIL (c);
 	if (w < 1 || h < 1) {
 		return;
 	}
+	// NOTE: As long as utf and curvy flags are tied to the canvas, we need to
+	// regenerate the canvas to get such changes now. before the kons refactoring
+	// this changed when cconfig settings were modified. not sure if its worth.
+	const bool useutf = c->flags & R_CONS_CANVAS_FLAG_UTF8;
+	const bool usecrv = c->flags & R_CONS_CANVAS_FLAG_CURVY;
+	const char *hline = useutf? RUNECODESTR_LINE_HORIZ: "-";
+	const char *vtmp = useutf? RUNECODESTR_LINE_VERT: "|";
+	const char *tl_corner = useutf? (usecrv? RUNECODESTR_CURVE_CORNER_TL: RUNECODESTR_CORNER_TL): ".";
+	const char *tr_corner = useutf? (usecrv? RUNECODESTR_CURVE_CORNER_TR: RUNECODESTR_CORNER_TR): ".";
+	const char *bl_corner = useutf? (usecrv? RUNECODESTR_CURVE_CORNER_BL: RUNECODESTR_CORNER_BL): "`";
+	const char *br_corner = useutf? (usecrv? RUNECODESTR_CURVE_CORNER_BR: RUNECODESTR_CORNER_BR): "'";
 	if (color) {
 		c->attr = color;
 	}
 	if (!c->color) {
 		c->attr = Color_RESET;
 	}
-	row = malloc (w + 1);
-	if (!row) {
-		return;
-	}
-	row[0] = roundcorners? '.': tl_corner[0];
-	if (w > 2) {
-		memset (row + 1, hline[0], w - 2);
-	}
-	if (w > 1) {
-		row[w - 1] = roundcorners? '.': tr_corner[0];
-	}
-	row[w] = 0;
-
-	row_ptr = row;
-	x_mod = x;
-	if (x < -c->sx) {
-		x_mod = R_MIN (-c->sx, x_mod + w);
-		row_ptr += x_mod - x;
-	}
-	if (G (x_mod, y)) {
-		W (row_ptr);
-	}
-	if (G (x_mod, y + h - 1)) {
-		row[0] = roundcorners? '\'': bl_corner[0];
-		row[w - 1] = roundcorners? '\'': br_corner[0];
-		W (row_ptr);
-	}
-	for (i = 1; i < h - 1; i++) {
-		if (G (x, y + i)) {
-			W (r_strbuf_get (vline));
+	const st64 from = R_MAX ((st64)y, -(st64)c->sy);
+	const st64 to = R_MIN (R_MIN ((st64)y + h, (st64)c->h - c->sy), (st64)ST32_MAX + 1);
+	const st64 right = (st64)x + w - 1;
+	const st64 bottom = (st64)y + h - 1;
+	const st64 row_from = R_MAX ((st64)x, -(st64)c->sx);
+	const st64 row_to = R_MIN (R_MIN (right + 1, (st64)c->w - c->sx), (st64)ST32_MAX + 1);
+	if (row_from < row_to && row_from <= ST32_MAX
+			&& ((y >= from && y < to) || (bottom >= from && bottom < to))) {
+		const size_t row_width = row_to - row_from;
+		char *row = malloc (row_width + 1);
+		if (!row) {
+			return;
 		}
-		if (G (x + w - 1, y + i)) {
-			W (r_strbuf_get (vline));
+		memset (row, hline[0], row_width);
+		row[row_width] = '\0';
+		if (row_from == x) {
+			row[0] = tl_corner[0];
+		}
+		if (row_to == right + 1 && w > 1) {
+			row[row_width - 1] = tr_corner[0];
+		}
+		if (y >= from && y < to && G ((int)row_from, y)) {
+			W (row);
+		}
+		if (bottom >= from && bottom < to && G ((int)row_from, (int)bottom)) {
+			if (row_from == x) {
+				row[0] = bl_corner[0];
+			}
+			if (row_to == right + 1) {
+				row[row_width - 1] = br_corner[0];
+			}
+			W (row);
+		}
+		free (row);
+	}
+	const bool left_visible = (st64)x + c->sx >= 0 && (st64)x + c->sx < c->w;
+	const bool right_visible = right <= ST32_MAX && right + c->sx >= 0 && right + c->sx < c->w;
+	st64 i;
+	const st64 sides_from = R_MAX (from, (st64)y + 1);
+	const st64 sides_to = R_MIN (to, (st64)y + h - 1);
+	if ((left_visible || right_visible) && sides_from < sides_to) {
+		char *vline = r_str_newf (Color_RESET "%s%s", color? color: "", vtmp);
+		if (vline) {
+			char *colored = r_str_ansi_resetbg (vline, c->bgcolor);
+			if (colored) {
+				free (vline);
+				vline = colored;
+			}
+			const char *saved_attr = c->attr;
+			const char *text = set_attr (c, vline);
+			const char *attr = c->attr;
+			c->attr = saved_attr;
+			for (i = sides_from; i < sides_to; i++) {
+				if (left_visible && G (x, (int)i)) {
+					c->attr = attr;
+					W (text);
+				}
+				if (right_visible && G ((int)right, (int)i)) {
+					c->attr = attr;
+					W (text);
+				}
+			}
+			free (vline);
 		}
 	}
-	free (row);
-	r_strbuf_free (vline);
 	if (color) {
 		c->attr = Color_RESET;
+		if (right < ST32_MAX && right + 1 + c->sx >= 0 && right + 1 + c->sx < c->w) {
+			for (i = from; i < to; i++) {
+				if (G ((int)(right + 1), (int)i)) {
+					W (Color_RESET);
+				}
+			}
+		}
 	}
 }
 
@@ -589,10 +1003,44 @@ R_API void r_cons_canvas_fill(RConsCanvas *c, int x, int y, int w, int h, char c
 	free (row);
 }
 
+R_API void r_cons_canvas_bgfill(RConsCanvas *c, int x, int y, int w, int h, const char *color) {
+	st32 row_width;
+	if (r_add_overflow_st32 (w, 2, &row_width)) {
+		return;
+	}
+	const char *col = strstr (color, "\x1b[3");
+	char *row = r_str_newf ("%s%*s" Color_RESET, col? color: Color_BGBLUE, R_MAX (row_width, 0), "");
+	if (!row) {
+		return;
+	}
+	if (col) {
+		row[col - color + 2] = '4';
+	}
+	int i;
+	for (i = 0; i < h; i++) {
+		if (G (x, y + i)) {
+			W (row);
+		}
+	}
+	free (row);
+}
+
 R_API void r_cons_canvas_line(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style) {
 	if (c->linemode) {
 		r_cons_canvas_line_square (c, x, y, x2, y2, style);
 	} else {
 		r_cons_canvas_line_diagonal (c, x, y, x2, y2, style);
 	}
+}
+
+R_API int r_cons_canvas_flags(RCons *R_NONNULL cons) {
+	R_RETURN_VAL_IF_FAIL (cons, 0);
+	int flags = 0;
+	if (cons->use_utf8) {
+		flags |= R_CONS_CANVAS_FLAG_UTF8;
+	}
+	if (cons->use_utf8_curvy) {
+		flags |= R_CONS_CANVAS_FLAG_CURVY;
+	}
+	return flags;
 }

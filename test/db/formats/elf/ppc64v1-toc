@@ -1,0 +1,191 @@
+# merged: PPC64 ELFv1: second ld from same addis — toc_map persists through intervening instruction; PPC64 ELFv1: addis+addi TOC chain resolves op->val (address materialisation); PPC64 ELFv1: r1-relative load does not get spurious ptr from toc_map (regression)
+NAME=PPC64 ELFv1: addis+ld TOC chain resolves op->ptr
+FILE=bins/elf/ppc64v1-more
+CMDS=<<EOF
+e anal.gp=0x37f00
+ao 2 @ 0x30e4~^ptr
+?e --
+e anal.gp=0x37f00
+ao 4 @ 0x30e4~^ptr
+?e --
+e anal.gp=0x37f00
+ao 2 @ 0x3fac~^val
+?e --
+e anal.gp=0x37f00
+ao 1 @ 0x3f54~^ptr
+EOF
+EXPECT=<<EOF
+ptr: 0x0002f5d0
+--
+ptr: 0x0002f5d0
+ptr: 0x0002f5d8
+--
+val: 0x0002ef58
+--
+EOF
+RUN
+
+NAME=PPC64 ELFv1: ppc32 binary unaffected by toc_map logic (regression)
+FILE=bins/elf/hello.ppc
+CMDS=<<EOF
+e asm.arch=ppc
+e asm.bits=32
+ao 6 @ 0x10000308~^ptr
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=ELF v1: stale TOC cache no longer floods an address with false xrefs
+FILE=bins/elf/ppc64v1-more
+CMDS=<<EOF2
+e bin.relocs.apply=true
+aaa
+axt @ 0x7f9c ~?
+EOF2
+EXPECT=<<EOF2
+0
+EOF2
+RUN
+
+NAME=ELF v1: legit TOC data xref survives full analysis (RET cache reset is not over-eager)
+FILE=bins/elf/ppc64v1-more
+CMDS=<<EOF2
+e bin.relocs.apply=true
+e anal.gp=0x37f00
+aaa
+axt @ 0x2f5d0 ~?
+EOF2
+EXPECT=<<EOF2
+1
+EOF2
+RUN
+
+NAME=PPC64 ELFv1: addis+ld resolves op->ptr (synthetic control)
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d62ffffe98b76d0
+ao 2~^ptr
+EOF
+EXPECT=<<EOF
+ptr: 0x100176d0
+EOF
+RUN
+
+NAME=PPC64 ELFv1: overwriting the holding register drops the pending TOC entry
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d62ffff39600000e98b76d0
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=PPC64 ELFv1: a call clobbers volatile r3 so a later load does not resolve
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3c62ffff48000001e9830000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=PPC64 ELFv1: a call preserves a callee-saved TOC base (r30 survives)
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3fc2ffff48000001e99e0000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+ptr: 0x10010000
+EOF
+RUN
+
+NAME=PPC64 ELFv1: storing the TOC base does not invalidate its entry
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d22ffff9123000ce9890000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+ptr: 0x10010000
+EOF
+RUN
+
+NAME=PPC64 ELFv1: reloading r2 invalidates every pending TOC entry
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d62ffff7c822378e98b0000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=PPC64 ELFv1: update-form store writes back the base so its pending TOC entry drops
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d22ffff94090010e9890000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+ptr: 0x10010010
+EOF
+RUN
+
+NAME=PPC64 ELFv1: indexed update-form store writes back the base so its pending TOC entry drops
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d22ffff7c09296ee9890000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=PPC64 ELFv1: update-form load invalidates the base register entry, not only the destination
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d22ffff84890010e9890000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+ptr: 0x10010010
+EOF
+RUN
+
+NAME=PPC64 ELFv1: update-form store through r2 rewrites the TOC base and drops every entry
+ARGS=-a ppc -e asm.bits=64 -e cfg.bigendian=true -e anal.gp=0x10020000
+FILE=malloc://64
+CMDS=<<EOF
+wx 3d22fffff922ffe1e9890000
+ao 3~^ptr
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=PPC64 ELFv1: /r resolves TOC-mediated data refs in the forward scan
+FILE=bins/elf/ppc64v1-more
+CMDS=<<EXPECT_END
+e search.in=io.maps.x
+e anal.stateful=false
+/r 0x2f918
+e anal.stateful=true
+/r 0x2f918
+EXPECT_END
+EXPECT=<<EXPECT_END
+(nofunc) 0x3088 [DATA] ld r12, 0x7a18(r11)
+EXPECT_END
+RUN

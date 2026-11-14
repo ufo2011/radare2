@@ -11,16 +11,25 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: cmtrefs
 NAME=#3829 remove comment where another meta is already defined
 FILE=bins/elf/analysis/main
 CMDS=<<EOF
 CCu lol @ str.Hello_World
 CC- @ str.Hello_World
 pd 1 @ str.Hello_World
+?e --
+aaa
+e asm.cmt.refs = true
+f test.flag @ 0x004003e0
+CC test comment @ 0x004003e0
+pd 1 @ 0x0040050f
 EOF
 EXPECT=<<EOF
             ;-- str.Hello_World:
             0x004005c4     .string "Hello World" ; len=12
+--
+|           0x0040050f      e8ccfeffff     call sym.imp.puts           ; int puts(const char *s) ; (sym.imp.puts) ; (test.flag) ; (test comment)
 EOF
 RUN
 
@@ -45,6 +54,17 @@ EOF
 EXPECT=<<EOF
 1
 CCu base64:aGVsbG8= @ 0x00000008
+EOF
+RUN
+
+NAME=add base64 comment at
+FILE=malloc://1024
+CMDS=<<EOF
+CCa 8 base64:YQpi
+CC*
+EOF
+EXPECT=<<EOF
+CCu base64:YQpi @ 0x00000008
 EOF
 RUN
 
@@ -128,16 +148,16 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=cmtrefs
-FILE=bins/elf/analysis/main
+NAME=comments strip C1 control codes rebuilt by nested stray bytes
+FILE=malloc://16
 CMDS=<<EOF
-aaa
-e asm.cmt.refs = true
-f test.flag @ 0x004003e0
-CC test comment @ 0x004003e0
-pd 1 @ 0x0040050f
+CC+ a\xc2\xc2\x9b\x9b2Jb
+CC+ c\xc2\xc2\xc2\x9b\x9b\x9bd
+CC+ e\xc2\x1b[m\x9b2Jf
+CC+ g\xc2\x1b[m\xa9h
+CC.
 EOF
 EXPECT=<<EOF
-|           0x0040050f      e8ccfeffff     call sym.imp.puts           ; int puts(const char *s) ; (sym.imp.puts) ; (test.flag) ; (test comment)
+a2Jb cd e2Jf g©h
 EOF
 RUN

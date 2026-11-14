@@ -1,8 +1,3 @@
-# Usage
-
-All r2 tools and commands support printing the output in different formats
-by appending a char at the end or using the `-r`(\*r2) and `-j`(json) flags.
-
 ```
  ___  __  ___  __ ___  ___   ____
 | _ \/  \|   \/  \ _ \/ _ \ (__  \
@@ -14,40 +9,54 @@ by appending a char at the end or using the `-r`(\*r2) and `-j`(json) flags.
                         --pancake
 ```
 
+# Usage
+
+All r2 tools and commands support printing the output in different formats by
+appending a character at the end or using the `-r` (\*r2) and `-j` (json)
+flags.
+
 ### radare2
 
-```
-r2 -          # same as r2 malloc://4096 the playground
-r2 /bin/ls    # standard way to run r2
-r2 -w ls      # open in read-write
-r2 -d ls      # start debugging the ls in PATH
+```sh
+r2 -       # same as r2 malloc://4096; "the playground"
+r2 /bin/ls # standard way to run r2
+r2 -w ls   # open in read-write
+r2 -d ls   # start debugging the ls in PATH
 ```
 
 ### rasm2
 
-```
-rasm2 -L       # list all supported assembler/disassembler/emulator plugins
-rasm2 -a arm -b 64 'nop'
-rasm2 -d 90    # disassembles a nop asuming local x86
+```sh
+rasm2 -L                 # list all supported assembler/disassembler/emulator plugins
+rasm2 -a arm -b 64 'nop' # assemble a nop in 64-bit ARM
+rasm2 -d 90              # disassemble 0x90; nop, if you're using x86
 ```
 
 ### rabin2
 
+```sh
+rabin2 -s /bin/ls # list symbols in a binary
+rabin2 -z /bin/ls # find strings
 ```
-rabin2 -s /bin/ls  # list symbols of binary
-rabin2 -z /bin/ls  # find strings
+
+### rafind2
+
+```sh
+rafind2 -s lib /bin/ls # search for strings matching 'lib' in /bin/ls
 ```
 
 ### rax2
-```
-rax2 '10+0x20'     # compute the result
-rax2 -k 10+32      # keep the same base as input (10)
-rax2 -h            # convert between (hex, octal, decimal.. bases)
+
+```sh
+rax2 '10+0x20' # compute the result
+rax2 -k 10+32  # keep the same base as input (10)
+rax2 -h        # convert between (hex, octal, decimal.. bases)
 ```
 
-### Other tools...
+### Other tools
 
-Checkout the [manpages](https://github.com/radareorg/radare2/blob/master/man) and help messages for more details
+Check out the [manpages](https://github.com/radareorg/radare2/blob/master/man)
+and help messages for more information.
 
 ## Scripting
 
@@ -67,3 +76,18 @@ r2 = r2pipe.open("/bin/ls")
 print(r2.cmd("pd 10"))
 r2.quit()
 ```
+
+### HTTP commands
+
+Start the HTTP server with `r2 -e http.port=9999 -c '=h' -`. These requests
+all execute `echo hello`:
+
+```sh
+curl http://localhost:9999/cmd/echo%20hello
+curl -d 'echo hello' http://localhost:9999/cmd/
+curl -d hello http://localhost:9999/cmd/echo
+```
+
+POST requests join the URL-decoded command after `/cmd/` and the raw body
+with one space when both are nonempty. An empty body runs only the URL command;
+an empty URL command runs only the body. Body-only POSTs to `/cmd` also work.

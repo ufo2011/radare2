@@ -1,0 +1,177 @@
+/* radare - LGPL - Copyright 2024-2026 - pancake */
+
+#include <r_asm.h>
+
+static char *replace(int argc, const char *argv[]) {
+#define MAXPSEUDOOPS 10
+	int i, j, d;
+	struct {
+		int narg;
+		const char *op;
+		const char *str;
+		int args[MAXPSEUDOOPS];
+	} ops[] = {
+		// { 0, "ldw", "# = [#]", { 1, 2 } },
+		{ 0, "ldf", "# = #", { 1, 2 } },
+		{ 2, "ldw", "# = #", { 1, 2 } }, // ldw 0x00, x | x = [0x00]
+		{ 2, "ld", "# = #", { 1, 2 } },  // ld a, 0x86  | a = [0x86]
+		{ 3, "ld", "# = # + #", { 3, 2, 1 } },
+		{ 0, "decw", "# --", { 1 } },
+		{ 0, "clrw", "# = 0", { 1 } },
+		{ 1, "clr", "# = 0", { 1 } },
+		{ 0, "dec", "# --", { 1 } },
+		{ 0, "ret", "return a;", {}},
+		{ 2, "mov", "# = #", { 1, 2 } }, // MOVS are stores
+		{ 2, "mul", "# = (# & 0xff) * #", { 1, 1, 2 } },
+		{ 1, "neg", "# = !#", { 1, 1 } }, // TODO carry = (res != 0)
+		{ 2, "divw", "# /= #", { 1, 2 } },
+		{ 2, "div", "# /= #", { 1, 2 } },
+		{ 2, "or", "# |= #", { 1, 2 } },
+		{ 2, "bcp", "res = # & (1 << #)", { 1, 2 } },
+		{ 1, "cpl", "complement (#)", { 1, 1 } },
+		{ 2, "and", "# &= #", { 1, 2 } },
+		{ 1, "popw", "# = [sp] , sp += 2", { 1 } },
+		{ 1, "pop", "# = [sp] , sp += 1", { 1 } },
+		{ 1, "pushw", "sp -= 2, [sp] = #", { 1 } },
+		{ 1, "push", "sp -= 1, [sp] = #", { 1 } },
+		{ 1, "incw", "# ++", { 1 } },
+		{ 1, "inc", "# ++", { 1 } },
+		{ 0, "subw", "# -= #", { 1, 2 } },
+		{ 0, "addw", "# += #", { 1, 2 } },
+		{ 2, "bset", "# |= (1 << #)", { 1, 2 } },
+		{ 2, "bres", "# &= ~(1 << #)", { 1, 2 } },
+		{ 0, "jp", "goto #", { 1 } },
+		{ 1, "rrwa", "a >>= #", { 1 } },
+		{ 1, "rrc", "# = rotate_right(#, 1)", { 1, 1 } },
+		{ 1, "rlc", "# = rotate_left(#, 1)", { 1, 1 } },
+		{ 1, "srl", "# = shift_right(#, 1)", { 1, 1 } },
+		{ 2, "xor", "# ^= #", { 1, 2 } },
+		{ 1, "rlwa", "a <<= #", { 1 } },
+		{ 1, "sra", "a >>= #", { 1 } },
+		{ 1, "sla", "a <<= #", { 1 } },
+		{ 2, "cpw", "res = # - #", { 1, 2 } },
+		{ 2, "cp", "res = # - #", { 1, 2 } },
+		{ 1, "tnz", "res = # < 1", { 1 } },
+		{ 1, "jrsgt", "if (res > 0) goto #", { 1 } },
+		{ 1, "jrslt", "if (res < 0) goto #", { 1 } },
+		{ 1, "jrugt", "if (res > 0) goto #", { 1 } }, // TODO: support signed vs unsigned
+		{ 1, "jrult", "if (res < 0) goto #", { 1 } }, // TODO: support signed vs unsigned
+		{ 1, "jrule", "if (res <= 0) goto #", { 1 } },
+		{ 0, "jrne", "if (res != 0) goto #", { 1 } },
+		{ 0, "jreq", "if (res == 0) goto #", { 1 } },
+		{ 0, "jrnc", "if (!res.carry) goto #", { 1 } },
+		{ 0, "jrc", "if (res.carry) goto #", { 1 } },
+		{ 0, "jra", "goto #", { 1 } },
+		{ 3, "btjt", "if (# & (1 << #)) goto #", { 1, 2, 3 } },
+		{ 3, "btjf", "if (!(# & (1 << #))) goto #", { 1, 2, 3 } },
+		{ 0, "sllw", "# <<= 1", { 1 } },
+		{ 1, "sll", "# <<= 1", { 1, 1 } },
+		{ 2, "exgw", "# <=> #", {1, 2}},
+		{ 2, "exg", "# <=> #", {1, 2}},
+		{ 0, "slaw", "# <<= 1", { 1 } },
+		{ 0, "srlw", "# >>= 1", { 1 } },
+		{ 0, "srl", "# >>= 1", { 1 } },
+		{ 0, "callr", "# ()", { 1 } },
+		{ 0, "callf", "# ()", { 1 } },
+		{ 0, "rvf", "res.overflow = 0", { } },
+		{ 0, "sraw", "# >>= 1", { 1 } },
+		{ 2, "add", "# += #", { 1, 2 } },
+		{ 2, "sub", "# -= #", { 1, 2 } },
+		{ 1, "int", "goto #", { 1 } }, // goto interrupt
+		{ 2, "sbc", "# -= #", { 1, 2 } }, // carry
+		{ 0, NULL }
+	};
+	RStrBuf *sb = r_strbuf_new ("");
+	for (i = 0; ops[i].op; i++) {
+		if (ops[i].narg) {
+			if (argc - 1 != ops[i].narg) {
+				continue;
+			}
+		}
+		if (!strcmp (ops[i].op, argv[0])) {
+			const char *str = ops[i].str;
+			d = 0;
+			for (j = 0; str[j]; j++) {
+				if (str[j] == '#') {
+					if (d >= MAXPSEUDOOPS) {
+						// XXX Shouldn't ever happen...
+						continue;
+					}
+					int idx = ops[i].args[d];
+					d++;
+					if (idx <= 0) {
+						// XXX Shouldn't ever happen...
+						continue;
+					}
+					const char *w = argv[idx];
+					if (w) {
+						r_strbuf_append (sb, w);
+					}
+				} else {
+					r_strbuf_append_n (sb, str + j, 1);
+				}
+			}
+			return r_strbuf_drain (sb);
+		}
+	}
+	for (i = 0; i < argc; i++) {
+		r_strbuf_append (sb, argv[i]);
+		r_strbuf_append (sb, (!i || i == argc - 1)? " ": ",");
+	}
+	return r_strbuf_drain (sb);
+}
+
+static char *parse(RAsmPluginSession *aps, const char *data) {
+	if (!strcmp (data, "iret")) {
+		return strdup ("ireturn");
+	}
+	if (!strcmp (data, "ret")) {
+		return strdup ("return a");
+	}
+	if (!*data) {
+		return strdup (data);
+	}
+	char *buf = strdup (data);
+	const char *wa[5] = { buf };
+	int nw = 1;
+	char *ptr = strchr (buf, ' ');
+	if (ptr) {
+		*ptr = '\0';
+		ptr = (char *)r_str_trim_head_ro (ptr + 1);
+		wa[nw++] = ptr;
+		if (*ptr == '[') {
+			ptr = strchr (ptr + 1, ']');
+			if (!ptr) {
+				R_LOG_ERROR ("Unbalanced bracket");
+				free (buf);
+				return NULL;
+			}
+		}
+		while (nw < 5 && (ptr = strchr (ptr, ','))) {
+			*ptr = '\0';
+			ptr = (char *)r_str_trim_head_ro (ptr + 1);
+			wa[nw++] = ptr;
+		}
+	}
+	char *str = replace (nw, wa);
+	free (buf);
+	return r_str_fixspaces (str);
+}
+
+RAsmPlugin r_asm_plugin_stm8= {
+	.meta = {
+		.name = "stm8",
+		.desc = "STM8 pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
+	.parse = parse,
+};
+
+#ifndef R2_PLUGIN_INCORE
+R_API RLibStruct radare_plugin = {
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_stm8,
+	.version = R2_VERSION
+};
+#endif

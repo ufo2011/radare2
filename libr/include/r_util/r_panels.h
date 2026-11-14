@@ -41,6 +41,7 @@ typedef struct r_panel_model_t {
 	RPanelType type;
 	char *cmd;
 	char *title;
+	char *bgcolor;
 	ut64 baseAddr;
 	ut64 addr;
 	bool cache;
@@ -63,11 +64,11 @@ typedef struct r_panel_view_t {
 } RPanelView;
 
 typedef struct r_panel_t {
-    RPanelModel *model;
-    RPanelView *view;
+	RPanelModel *model;
+	RPanelView *view;
 } RPanel;
 
-typedef void (*RPanelAlmightyCallback)(void *user, RPanel *panel, const RPanelLayout dir, R_NULLABLE const char *title);
+typedef void (*RPanelAlmightyCallback)(void *user, RPanel *panel, const RPanelLayout dir, const char * R_NULLABLE title);
 
 #ifdef __cplusplus
 }

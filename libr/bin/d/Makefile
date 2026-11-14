@@ -1,9 +1,6 @@
 include ../../../global.mk
 include ../../../config-user.mk
 
-SDBPATH=$(LTOP)/../shlr/sdb/
-SDB=$(SDBPATH)/sdb
-
 P=${DESTDIR}${DATADIR}/radare2/${VERSION}/format
 
 DLLS=ws2_32 oleaut32 wsock32 msi csmfpapi msvbvm60 kernel32
@@ -13,51 +10,49 @@ DLLS+=olepro32 olesvr32 shdocvw shell32 shlwapi uxtheme
 DLLS+=vb40032 vssapi winmm cabinet gsprop32 spr32d70 mfc90u
 DLLS+=wldap32 iertutil urlmon wsnmp32 mfc30 mfc40 mfc71 mfc71u
 DLLS+=mfc120 csmtpapi csncdapi mfc140u mfc100u
-# NE
-DLLS+=AVICAP AVIFILE AWDEVL16 CARDS CMC COMM COMMCTRL COMMDLG COMPOBJ
-DLLS+=CSPMAN DCIMAN DDEML DESKCP16 DIBENG DISPDIB DISPLAY DSKMAINT
-DLLS+=ENABLE3 FAXCODEC GDI INET16 IOSCLASS KERNEL KEYBOARD LZEXPAND
-DLLS+=MAINCP16 MAPI MAPIU MAPIX MCIAVI MCICDA MCIMIDI MCIOLE
-DLLS+=MCIWAVE MIDIMAP ML3XEC16 MMCI MMSYSTEM MODEM MODEMUI MOUSE
-DLLS+=MSACM MSACMMAP MSDOS MSDOSD MSJSTICK MSMIXMGR MSPCIC
-DLLS+=MSPRINT MSTCP MSVIDEO NETAPI NETCPL NETDI NETOS NETWARE
-DLLS+=NW16 OLE2 OLE2CONV OLE2DISP OLE2NLS OLECLI OLESVR PIFMGR
-DLLS+=PKPD PMSPL POWER RASAPI16 RNASETUP RSRC16 SB16SND SBFM
-DLLS+=SETUP4 SETUPX SHELL SOUND SPOOLER STORAGE SYSCLASS SYSDETMG
-DLLS+=SYSDM SYSEDIT SYSTEM SYSTHUNK TAPI TAPIADDR
-DLLS+=TOOLHELP TYPELIB UMDM16 USER VER WHLP16T WIN32S16
-DLLS+=WIN87EM WINASPI WINNET16 WINOLDAP WINSOCK WINSPL16 WPSAPD WPSUNI
-DLLS+=WPSUNIRE WSASRV
+# ne
+DLLS+=avicap avifile awdevl16 cards cmc comm commctrl commdlg compobj
+DLLS+=cspman dciman ddeml deskcp16 dibeng dispdib display dskmaint
+DLLS+=enable3 faxcodec gdi inet16 iosclass kernel keyboard lzexpand
+DLLS+=maincp16 mapi mapiu mapix mciavi mcicda mcimidi mciole
+DLLS+=mciwave midimap ml3xec16 mmci mmsystem modem modemui mouse
+DLLS+=msacm msacmmap msdos msdosd msjstick msmixmgr mspcic
+DLLS+=msprint mstcp msvideo netapi netcpl netdi netos netware
+DLLS+=nw16 ole2 ole2conv ole2disp ole2nls olecli olesvr pifmgr
+DLLS+=pkpd pmspl power rasapi16 rnasetup rsrc16 sb16snd sbfm
+DLLS+=setup4 setupx shell sound spooler storage sysclass sysdetmg
+DLLS+=sysdm sysedit system systhunk tapi tapiaddr
+DLLS+=toolhelp typelib umdm16 user ver whlp16t win32s16
+DLLS+=win87em winaspi winnet16 winoldap winsock winspl16 wpsapd wpsuni
+DLLS+=wpsunire wsasrv
 DLL_SDB=$(addsuffix .sdb,$(addprefix dll/,$(DLLS)))
 
-all: $(DLL_SDB)
+all:
+	$(SDB) -r $(shell pwd)
+	$(SDB) -r $(shell pwd)/dll
 
 clean:
 	rm -f dll/*.sdb
 
-.PHONY: all clean install install-symlink symstall
+.PHONY: all clean install install-symlink symstall uninstall
 
-FORMATS=dex macho elf32 elf64 elf_enums pe32 trx mz zip
-
-install: ${F_SDB}
+install: $(F_SDB)
 	@echo "[i] Installing bin format files"
 	rm -rf "$P"
 	mkdir -p "$P"
-	-cp -f $(FORMATS) "$P" || true
+	-cp -f *.r2 *.h "$P" || true
+	-cp -f symclass.sdb "$P" || true
 	mkdir -p "$P/dll"
 	cp -f dll/*.sdb "$P/dll"
 
 CWD=$(shell pwd)
 symstall install-symlink:
 	mkdir -p "$P"
-	for FILE in * ; do \
-		if [ "$$FILE" != Makefile ]; then \
-			ln -fs "${CWD}/$$FILE" "$P/$$FILE" ; \
-		fi ; \
+	rm -rf "$P/dll"
+	for FILE in *.r2 *.h dll symclass.sdb ; do \
+		[ ! -d "$P/$$FILE" ] && ln -fs "${CWD}/$$FILE" "$P/$$FILE" ; \
 	done
 
-$(DLL_SDB):
-	$(SDB) $@ = < $@.txt
 
 uninstall:
 	rm -rf "$P"

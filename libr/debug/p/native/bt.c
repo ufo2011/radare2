@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2024 - pancake */
 
 #include <r_anal.h>
 
@@ -9,19 +9,18 @@
 typedef RList* (*RDebugFrameCallback)(RDebug *dbg, ut64 at);
 
 static void prepend_current_pc(RDebug *dbg, RList *list) {
-	r_return_if_fail (dbg);
+	R_RETURN_IF_FAIL (dbg);
 	if (!list) {
 		return;
 	}
-	const char *pcname = r_reg_get_name (dbg->reg, R_REG_NAME_PC);
-	if (pcname) {
-		ut64 addr = r_reg_getv (dbg->reg, pcname);
+	ut64 addr = r_reg_getv (dbg->reg, "PC");
+	if (addr != UT64_MAX) {
 		RDebugFrame *frame = R_NEW0 (RDebugFrame);
-		if (frame) {
-			frame->addr = addr;
-			frame->size = 0;
-			r_list_prepend (list, frame);
-		}
+		frame->addr = addr;
+		frame->size = 0;
+		frame->sp = r_reg_getv (dbg->reg, "SP");
+		frame->bp = r_reg_getv (dbg->reg, "BP");
+		r_list_prepend (list, frame);
 	}
 }
 
@@ -44,11 +43,11 @@ static void *backtrace_proxy(void *user) {
 
 static RList *r_debug_native_frames(RDebug *dbg, ut64 at) {
 	RDebugFrameCallback cb = NULL;
-	if (dbg->btalgo) {
-		if (!strcmp (dbg->btalgo, "fuzzy")) {
+	if (dbg->options.btalgo) {
+		if (!strcmp (dbg->options.btalgo, "fuzzy")) {
 			cb = backtrace_fuzzy;
-		} else if (!strcmp (dbg->btalgo, "anal")) {
-			if (dbg->bits == R_SYS_BITS_64) {
+		} else if (!strcmp (dbg->options.btalgo, "anal")) {
+			if (R_SYS_BITS_CHECK (dbg->bits, 64)) {
 				cb = backtrace_x86_64_anal;
 			} else {
 				cb = backtrace_x86_32_anal;
@@ -56,7 +55,7 @@ static RList *r_debug_native_frames(RDebug *dbg, ut64 at) {
 		}
 	}
 	if (!cb) {
-		if (dbg->bits == R_SYS_BITS_64) {
+		if (R_SYS_BITS_CHECK (dbg->bits, 64)) {
 			cb = backtrace_x86_64;
 		} else {
 			cb = backtrace_x86_32;
@@ -64,9 +63,9 @@ static RList *r_debug_native_frames(RDebug *dbg, ut64 at) {
 	}
 
 	RList *list;
-	if (dbg->btalgo && !strcmp (dbg->btalgo, "trace")) {
+	if (dbg->options.btalgo && !strcmp (dbg->options.btalgo, "trace")) {
 		if (dbg->call_frames) {
-			list = r_list_clone (dbg->call_frames);
+			list = r_list_clone (dbg->call_frames, NULL);
 		} else {
 			list = r_list_newf (free);
 		}

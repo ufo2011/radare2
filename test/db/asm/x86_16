@@ -1,4 +1,6 @@
+ad "mov ax, bx" 89d8
 d "call 0" e8fdff
+ad "jcxz 0" e3fe
 a "jmp 0x0" ebfe
 a "jmp 0x10" eb0e
 a "jmp 0x34" eb32
@@ -7,7 +9,7 @@ a "jnz 0x94" 660f858d000000
 a "jnz -0x94" 660f8565ffffff
 a "jno -0x34" 71ca
 dB "jmp 0xfec50" e95bec f000:fff2
-d "jmp 0xfec50" e95bec 0x001ffff2
+dB "jmp 0xfec50" e95bec 0x001ffff2
 a "mov al, [0xbeef]" a0efbe
 a "mov ax, [0xbeef]" a1efbe
 aB "mov bx, ax" 89c3
@@ -16,6 +18,13 @@ aB "sub sp, 2" 83ec02
 aB "sub esp, 4" 6683ec04
 a "test bl, 0x12" f6c312
 a "test bx, 0x1234" f7c33412
+a "test eax, ecx" 6685c8
+a "test ax, cx" 85c8
 aB "test byte [bx], 0x12" f60712
 aB "test word [bx], 0x1234" f7073412
 d "jmp 0xc6" e9c300
+ad "bt ax, cx" 0fa3c8
+ad "bts eax, 7" 660fbae807
+ad "btr cx, 0xf" 0fbaf10f
+a "movzx ax, bl" 0fb6c3
+a "movsx eax, bl" 660fbec3

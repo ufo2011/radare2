@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2017-2018 - rkx1209 */
+/* radare2 - LGPL - Copyright 2017-2022 - rkx1209 */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -7,11 +7,6 @@
 #include <r_io.h>
 #include <r_cons.h>
 #include "nxo/nxo.h"
-#ifdef R_MESON_VERSION
-#include <lz4.h>
-#else
-#include "../../../shlr/lz4/lz4.c"
-#endif
 
 #define NSO_OFF(x) r_offsetof (NSOHeader, x)
 #define NSO_OFFSET_MODMEMOFF r_offsetof (NXOStart, mod_memoffset)
@@ -40,36 +35,45 @@ static uint32_t decompress(const ut8 *cbuf, ut8 *obuf, int32_t csize, int32_t us
 	if (csize < 0 || usize < 0 || !cbuf || !obuf) {
 		return -1;
 	}
-	return LZ4_decompress_safe ((const char*)cbuf, (char*)obuf, (uint32_t) csize, (uint32_t) usize);
+	int consumed, osize;
+	ut8 *out = r_inflate_lz4 (cbuf, (int)csize, &consumed, &osize);
+	if (out) {
+		// short output leaves obuf partially uninitialized, callers reject it
+		const int copied = R_MIN (usize, osize);
+		memcpy (obuf, out, copied);
+		free (out);
+		return copied;
+	}
+	return 0;
 }
 
 static ut64 baddr(RBinFile *bf) {
 	return 0x8000000;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	if (r_buf_size (b) >= 0x20) {
 		ut8 magic[4];
 		if (r_buf_read_at (b, 0, magic, sizeof (magic)) != 4) {
 			return false;
 		}
-		return fileType (magic) != NULL;
+		return fileType (magic);
 	}
 	return false;
 }
 
 static RBinNXOObj *nso_new(void) {
 	RBinNXOObj *bin = R_NEW0 (RBinNXOObj);
-	if (bin) {
-		bin->methods_list = r_list_newf ((RListFree)free);
-		bin->imports_list = r_list_newf ((RListFree)free);
-		bin->classes_list = r_list_newf ((RListFree)free);
-	}
+	RVecRBinSymbol_init (&bin->methods_list);
+	RVecRBinImport_init (&bin->imports_list);
+	bin->classes_list = r_list_newf ((RListFree)free);
 	return bin;
 }
 
-static bool load_bytes(RBinFile *bf, void **bin_obj, const ut8 *buf, ut64 sz, ut64 loadaddr, Sdb *sdb) {
-	eprintf ("load_bytes in bin.nso must die\n");
+// 512MB
+#define MAX_UNCOMPRESSED_SIZE (1024*1024*512)
+
+static bool load_bytes(RBinFile *bf, const ut8 *buf, ut64 sz, ut64 loadaddr) {
 	RBin *rbin = bf->rbin;
 	ut32 toff = r_buf_read_le32_at (bf->buf, NSO_OFF (text_memoffset));
 	ut32 tsize = r_buf_read_le32_at (bf->buf, NSO_OFF (text_size));
@@ -77,13 +81,25 @@ static bool load_bytes(RBinFile *bf, void **bin_obj, const ut8 *buf, ut64 sz, ut
 	ut32 rosize = r_buf_read_le32_at (bf->buf, NSO_OFF (ro_size));
 	ut32 doff = r_buf_read_le32_at (bf->buf, NSO_OFF (data_memoffset));
 	ut32 dsize = r_buf_read_le32_at (bf->buf, NSO_OFF (data_size));
-	ut64 total_size = tsize + rosize + dsize;
+	ut64 total_size = (ut64)tsize + rosize + dsize;
+	if (total_size > MAX_UNCOMPRESSED_SIZE) {
+		R_LOG_WARN ("prevented oom");
+		return false;
+	}
+	if (toff >= sz || rooff >= sz || doff >= sz) {
+		R_LOG_ERROR ("invalid section offset");
+		return false;
+	}
+	if (toff > rooff || rooff > doff) {
+		R_LOG_ERROR ("invalid section offset order");
+		return false;
+	}
 	RBuffer *newbuf = r_buf_new_empty (total_size);
 	ut64 ba = baddr (bf);
 	ut8 *tmp = NULL;
 
-	if (rbin->iob.io && !(rbin->iob.io->cached & R_PERM_W)) {
-		eprintf ("Please add \'-e io.cache=true\' option to r2 command. This is required to decompress the code.\n");
+	if (!r_io_cache_writable (rbin->iob.io)) {
+		R_LOG_INFO ("Please add '-e io.cache=true' option to r2 command. This is required to decompress the code");
 		goto fail;
 	}
 	/* Decompress each sections */
@@ -92,7 +108,7 @@ static bool load_bytes(RBinFile *bf, void **bin_obj, const ut8 *buf, ut64 sz, ut
 		goto fail;
 	}
 	if (decompress (buf + toff, tmp, rooff - toff, tsize) != tsize) {
-		eprintf ("decompression failure\n");
+		R_LOG_ERROR ("decompression failure");
 		goto fail;
 	}
 	r_buf_write_at (newbuf, 0, tmp, tsize);
@@ -103,7 +119,7 @@ static bool load_bytes(RBinFile *bf, void **bin_obj, const ut8 *buf, ut64 sz, ut
 		goto fail;
 	}
 	if (decompress (buf + rooff, tmp, doff - rooff, rosize) != rosize) {
-		eprintf ("decompression2 failure\n");
+		R_LOG_ERROR ("decompression2 failure");
 		goto fail;
 	}
 	r_buf_write_at (newbuf, tsize, tmp, rosize);
@@ -114,7 +130,7 @@ static bool load_bytes(RBinFile *bf, void **bin_obj, const ut8 *buf, ut64 sz, ut
 		goto fail;
 	}
 	if (decompress (buf + doff, tmp, r_buf_size (bf->buf) - doff, dsize) != dsize) {
-		eprintf ("decompression3 failure\n");
+		R_LOG_ERROR ("decompression3 failure");
 		goto fail;
 	}
 	r_buf_write_at (newbuf, tsize + rosize, tmp, dsize);
@@ -125,24 +141,23 @@ static bool load_bytes(RBinFile *bf, void **bin_obj, const ut8 *buf, ut64 sz, ut
 	r_io_write_at (rbin->iob.io, ba, tmpbuf, total_size);
 	ut32 modoff = r_buf_read_le32_at (newbuf, NSO_OFFSET_MODMEMOFF);
 	RBinNXOObj *bin = nso_new ();
-	eprintf ("MOD Offset = 0x%"PFMT64x"\n", (ut64)modoff);
+	R_LOG_INFO ("MOD Offset = 0x%"PFMT64x, (ut64)modoff);
 	parseMod (newbuf, bin, modoff, ba);
-	r_buf_free (newbuf);
-	*bin_obj = bin;
+	r_unref (newbuf);
+	bf->bo->bin_obj = bin;
 	return true;
 fail:
 	free (tmp);
-	r_buf_free (newbuf);
-	*bin_obj = NULL;
+	r_unref (newbuf);
 	return false;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	r_return_val_if_fail (bf && buf, false);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	R_RETURN_VAL_IF_FAIL (bf && buf, false);
 	const ut64 la = bf->loadaddr;
 	ut64 sz = 0;
 	const ut8 *bytes = r_buf_data (buf, &sz);
-	return load_bytes (bf, bin_obj, bytes, sz, la, bf->sdb);
+	return load_bytes (bf, bytes, sz, la);
 }
 
 static RBinAddr *binsym(RBinFile *bf, int type) {
@@ -157,11 +172,10 @@ static RList *entries(RBinFile *bf) {
 		return NULL;
 	}
 	ret->free = free;
-	if ((ptr = R_NEW0 (RBinAddr))) {
-		ptr->paddr = r_buf_read_le32_at (b, NSO_OFF (text_memoffset));
-		ptr->vaddr = r_buf_read_le32_at (b, NSO_OFF (text_loc)) + baddr (bf);
-		r_list_append (ret, ptr);
-	}
+	ptr = R_NEW0 (RBinAddr);
+	ptr->paddr = r_buf_read_le32_at (b, NSO_OFF (text_memoffset));
+	ptr->vaddr = r_buf_read_le32_at (b, NSO_OFF (text_loc)) + baddr (bf);
+	r_list_append (ret, ptr);
 	return ret;
 }
 
@@ -177,23 +191,17 @@ static Sdb *get_sdb(RBinFile *bf) {
 	return kv;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret = NULL;
+static bool sections_vec(RBinFile *bf) {
 	RBinSection *ptr = NULL;
 	RBuffer *b = bf->buf;
-	if (!bf->o->info) {
-		return NULL;
+	if (!bf->bo->info) {
+		return false;
 	}
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
-	ret->free = free;
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 
 	ut64 ba = baddr (bf);
 
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("header");
 	ptr->size = r_buf_read_le32_at (b, NSO_OFF (text_memoffset));
 	ptr->vsize = r_buf_read_le32_at (b, NSO_OFF (text_memoffset));
@@ -201,12 +209,9 @@ static RList *sections(RBinFile *bf) {
 	ptr->vaddr = 0;
 	ptr->perm = R_PERM_R;
 	ptr->add = false;
-	r_list_append (ret, ptr);
 
 	// add text segment
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("text");
 	ptr->vsize = r_buf_read_le32_at (b, NSO_OFF (text_size));
 	ptr->size = ptr->vsize;
@@ -214,12 +219,9 @@ static RList *sections(RBinFile *bf) {
 	ptr->vaddr = r_buf_read_le32_at (b, NSO_OFF (text_loc)) + ba;
 	ptr->perm = R_PERM_RX;	// r-x
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
 	// add ro segment
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("ro");
 	ptr->vsize = r_buf_read_le32_at (b, NSO_OFF (ro_size));
 	ptr->size = ptr->vsize;
@@ -227,12 +229,9 @@ static RList *sections(RBinFile *bf) {
 	ptr->vaddr = r_buf_read_le32_at (b, NSO_OFF (ro_loc)) + ba;
 	ptr->perm = R_PERM_R;	// r--
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
 	// add data segment
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("data");
 	ptr->vsize = r_buf_read_le32_at (b, NSO_OFF (data_size));
 	ptr->size = ptr->vsize;
@@ -242,15 +241,11 @@ static RList *sections(RBinFile *bf) {
 	ptr->add = true;
 	eprintf ("BSS Size 0x%08"PFMT64x "\n", (ut64)
 		r_buf_read_le32_at (bf->buf, NSO_OFF (bss_size)));
-	r_list_append (ret, ptr);
-	return ret;
+	return true;
 }
 
 static RBinInfo *info(RBinFile *bf) {
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
 	ut8 magic[4];
 	if (r_buf_read_at (bf->buf, NSO_OFF (magic), magic, sizeof (magic)) != sizeof (magic)) {
 		free (ret);
@@ -280,15 +275,18 @@ static RBinInfo *info(RBinFile *bf) {
 #if !R_BIN_NSO
 
 RBinPlugin r_bin_plugin_nso = {
-	.name = "nso",
-	.desc = "Nintendo Switch NSO0 binaries",
-	.license = "MIT",
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.meta = {
+		.name = "nso",
+		.author = "rkx1209",
+		.desc = "Nintendo Switch NSO0",
+		.license = "MIT",
+	},
+	.load = &load,
+	.check = &check,
 	.baddr = &baddr,
 	.binsym = &binsym,
 	.entries = &entries,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
 	.get_sdb = &get_sdb,
 	.info = &info,
 };

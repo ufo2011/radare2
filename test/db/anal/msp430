@@ -1,10 +1,12 @@
-NAME=aFr on ELF
+NAME=aF on ELF
 FILE=bins/elf/msp430.elf
 CMDS=<<EOF
 s main
-aFr
+aF
 pif
 afi
+?e --
+afix~ref
 EOF
 EXPECT=<<EOF
 add 0xff9c, sp
@@ -27,86 +29,101 @@ add 0x0064, sp
 bis 0x00f0, sr
 jmp $-0x0004
 #
-offset: 0x00004438
+addr: 0x00004438
 name: main
 size: 62
 is-pure: true
 realsz: 62
 stackframe: 0
-call-convention: reg
-cyclomatic-cost: 0
+callconv: reg
+cyclic-cost: 0
 cyclomatic-complexity: 1
 bits: 32
 type: fcn [NEW]
 num-bbs: 5
+num-instrs: 19
 edges: 6
+minaddr: 0x00004438
+maxaddr: 0x00004476
+is-lineal: true
 end-bbs: 0
-call-refs: 0x00004558 C 0x0000447a C 0x00004484 C 0x00004558 C 0x0000446a J 0x00004558 C 0x0000449c C 0x00004470 J
-data-refs:
-code-xrefs: 0x0000445c J 0x00004474 J
+maxbbins: 9
+midbbins: 3.80
+ratbbins: 2.37
 noreturn: false
-in-degree: 2
+recursive: false
+in-degree: 0
 out-degree: 6
-data-xrefs:
 locals: 0
 args: 0
-diff: type: new
+
+--
+call-refs: 0x00004558 C 0x0000447a C 0x00004484 C 0x00004558 C 0x0000446a J 0x00004558 C 0x0000449c C 0x00004470 J
+data-refs:
+all-code-xrefs: 0x0000445c J 0x00004474 J
+data-xrefs:
 EOF
 RUN
 
-NAME=aFr on same but ihex and .r2 script
-BROKEN=1
+NAME=aF on same but ihex and .r2 script
 FILE=ihex://bins/microcorruption/tutorial
 CMDS=<<EOF
 . bins/microcorruption/tutorial.r2
 s main
-aFr
-pif
-afi
+aF
+pif~call
+pif~str.Invalid
+pif~str.Access
+afi~size
+afi~bits
 EOF
 EXPECT=<<EOF
-add 0xff9c, sp
-mov loc..strings, r15
 call loc.puts
-mov sp, r15
 call loc.get_password
-mov sp, r15
 call loc.check_password
-tst r15
-jnz $+0x000c
-mov 0x44c7, r15
 call loc.puts
-jmp $+0x000e
-mov 0x44e4, r15
 call loc.puts
 call loc.unlock_door
-clr r15
-add 0x0064, sp
-bis 0x00f0, sr
-jmp $-0x0004
-#
-offset: 0x00004438
-name: main
+mov str.Invalid_password_try_again, r15
+mov str.Access_Granted, r15
 size: 62
-is-pure: true
-realsz: 62
-stackframe: 0
-call-convention: (null)
-cyclomatic-cost: 0
-cyclomatic-complexity: 1
-bits: 32
-type: fcn [NEW]
-num-bbs: 5
-edges: 6
-end-bbs: 0
-call-refs: 0x00004558 C 0x0000447a C 0x00004484 C 0x00004558 C 0x0000446a J 0x00004558 C 0x0000449c C 0x00004470 J
-data-refs:
-code-xrefs: 0x0000445c J 0x00004474 J
-in-degree: 2
-out-degree: 6
-data-xrefs:
-locals: 0
-args: 0
-diff: type: new
+bits: 16
+EOF
+RUN
+
+NAME=pseudo msp430
+FILE=bins/elf/msp430.elf
+CMDS=<<EOF
+s main
+af
+e asm.pseudo=true
+e asm.lines=0
+e asm.bytes=0
+pdf
+EOF
+EXPECT=<<EOF
+62: int main (int argc, char **argv, char **envp);
+0x00004438      sp += 0xff9c
+0x0000443c      r15 = loc..strings
+0x00004440      $2 ()
+0x00004444      r15 = sp
+0x00004446      $2 ()
+0x0000444a      r15 = sp
+0x0000444c      $2 ()
+0x00004450      if ($2 == 0) goto _TST_FALSE_
+0x00004452      if (!z) goto $2
+0x00004454      r15 = 0x44c7
+0x00004458      $2 ()
+0x0000445c      goto $2
+0x0000445e      r15 = 0x44e4
+0x00004462      $2 ()
+0x00004466      $2 ()
+; CODE XREF from main @ 0x445c(x)
+0x0000446a      $2 = 0
+0x0000446c      sp += 0x0064
+;-- __stop_progExec__:
+; CODE XREF from main @ 0x4474(x)
+0x00004470      sr |= 0x00f0
+0x00004474      goto $2
 EOF
 RUN

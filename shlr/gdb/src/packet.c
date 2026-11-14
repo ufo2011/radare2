@@ -1,7 +1,9 @@
-/* libgdbr - LGPL - Copyright 2014-2016 - defragger */
+/* libgdbr - LGPL - Copyright 2014-2022 - defragger, pancake */
 
 #include "packet.h"
 #include "utils.h"
+#include "gdbr_common.h"
+#include <r_util.h>
 
 #define READ_TIMEOUT (250 * 1000)
 
@@ -14,32 +16,23 @@ enum {
 
 struct parse_ctx {
 	ut32 flags;
-	ut8  last;
-	ut8  sum;
-	int  chksum_nibble;
+	ut8 last;
+	ut8 sum;
+	int chksum_nibble;
 };
 
 static bool append(libgdbr_t *g, const char ch) {
-	char *ptr;
-	if (g->data_len == g->data_max - 1) {
-		int newsize = g->data_max * 2;
-		if (newsize < 1) {
-			return false;
-		}
-		ptr = realloc (g->data, newsize);
-		if (!ptr) {
-			eprintf ("%s: Failed to reallocate buffer\n",
-				 __func__);
-			return false;
-		}
-		g->data = ptr;
-		g->data_max = newsize;
+	R_RETURN_VAL_IF_FAIL (g, -1);
+	if (!gdbr_data_reserve (g, g->data_len + 1)) {
+		R_LOG_ERROR ("%s: Failed to reallocate buffer", __func__);
+		return false;
 	}
 	g->data[g->data_len++] = ch;
 	return true;
 }
 
 static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
+	R_RETURN_VAL_IF_FAIL (g, -1);
 	int i = 0;
 	int j = 0;
 	bool first = true;
@@ -52,7 +45,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 				continue;
 			}
 			if (ctx->sum != '#') {
-				eprintf ("%s: Invalid checksum\n", __func__);
+				R_LOG_ERROR ("%s: Invalid checksum", __func__);
 				return -1;
 			}
 			if (i != len - 1) {
@@ -60,11 +53,11 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 				    (g->read_buff[i + 1] == '+' && g->read_buff[i + 2] == '$')) {
 					// Packets clubbed together
 					g->read_len = len - i - 1;
-					memcpy (g->read_buff, g->read_buff + i + 1, g->read_len);
+					memmove (g->read_buff, g->read_buff + i + 1, g->read_len);
 					g->read_buff[g->read_len] = '\0';
 					return 0;
 				}
-				eprintf ("%s: Garbage at end of packet: %s (%s)\n",
+				R_LOG_ERROR ("%s: Garbage at end of packet: %s (%s)",
 					 __func__, g->read_buff + i + 1, g->read_buff + i + 1);
 			}
 			g->read_len = 0;
@@ -80,7 +73,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 		}
 		if (ctx->flags & DUP) {
 			if (cur < 32 || cur > 126) {
-				eprintf ("%s: Invalid repeat count: %d\n",
+				R_LOG_ERROR ("%s: Invalid repeat count: %d",
 					 __func__, cur);
 				return -1;
 			}
@@ -96,7 +89,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 		switch (cur) {
 		case '$':
 			if (ctx->flags & HEADER) {
-				eprintf ("%s: More than one $\n", __func__);
+				R_LOG_ERROR ("%s: More than one $", __func__);
 				return -1;
 			}
 			ctx->flags |= HEADER;
@@ -112,7 +105,7 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 			break;
 		case '*':
 			if (first) {
-				eprintf ("%s: Invalid repeat\n", __func__);
+				R_LOG_ERROR ("%s: Invalid repeat", __func__);
 				return -1;
 			}
 			ctx->flags |= DUP;
@@ -121,9 +114,8 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 		case '-':
 			if (!(ctx->flags & HEADER)) {
 				/* TODO: Handle acks/nacks */
-				if (g->server_debug && !g->no_ack) {
-					eprintf ("[received '%c' (0x%x)]\n", cur,
-						 (int) cur);
+				if (!g->no_ack) {
+					R_LOG_DEBUG ("[received '%c' (0x%x)]", cur, (int) cur);
 				}
 				break;
 			}
@@ -140,26 +132,21 @@ static int unpack(libgdbr_t *g, struct parse_ctx *ctx, int len) {
 }
 
 int read_packet(libgdbr_t *g, bool vcont) {
-	struct parse_ctx ctx = { 0 };
+	R_RETURN_VAL_IF_FAIL (g, -1);
+	struct parse_ctx ctx = {0};
 	int ret, i;
-	if (!g) {
-		eprintf ("Initialize libgdbr_t first\n");
-		return -1;
-	}
 	g->data_len = 0;
 	if (g->read_len > 0) {
 		if (unpack (g, &ctx, g->read_len) == 0) {
 			// TODO: Evaluate if partial packets are clubbed
 			g->data[g->data_len] = '\0';
-			if (g->server_debug) {
-				eprintf ("getpkt (\"%s\");  %s\n", g->data,
-					 g->no_ack ? "[no ack sent]" : "[sending ack]");
-			}
+			R_LOG_DEBUG ("getpkt (\"%s\");  %s", g->data,
+					g->no_ack ? "[no ack sent]" : "[sending ack]");
 			return 0;
 		}
 	}
 	g->data_len = 0;
-	for (i = 0; i < g->num_retries && !g->isbreaked; vcont ? 0 : i++) {
+	for (i = 0; i < g->num_retries && !g->isbreaked; i++) {
 		ret = r_socket_ready (g->sock, 0, READ_TIMEOUT);
 		if (ret == 0 && !vcont) {
 			continue;
@@ -169,20 +156,18 @@ int read_packet(libgdbr_t *g, bool vcont) {
 		}
 		int sz = r_socket_read (g->sock, (void *)g->read_buff, g->read_max - 1);
 		if (sz <= 0) {
-			eprintf ("%s: read failed\n", __func__);
+			R_LOG_ERROR ("%s: read failed", __func__);
 			return -1;
 		}
 		ret = unpack (g, &ctx, sz);
 		if (ret < 0) {
-			eprintf ("%s: unpack failed\n", __func__);
+			R_LOG_ERROR ("%s: unpack failed", __func__);
 			return -1;
 		}
 		if (!ret) {
 			g->data[g->data_len] = '\0';
-			if (g->server_debug) {
-				eprintf ("getpkt (\"%s\");  %s\n", g->data,
-					 g->no_ack ? "[no ack sent]" : "[sending ack]");
-			}
+			R_LOG_DEBUG ("getpkt (\"%s\");  %s", g->data,
+					g->no_ack ? "[no ack sent]" : "[sending ack]");
 			return 0;
 		}
 	}
@@ -190,29 +175,24 @@ int read_packet(libgdbr_t *g, bool vcont) {
 }
 
 int send_packet(libgdbr_t *g) {
-	if (!g) {
-		eprintf ("Initialize libgdbr_t first\n");
-		return -1;
-	}
-	if (g->server_debug) {
-		g->send_buff[g->send_len] = '\0';
-		eprintf ("putpkt (\"%s\");  %s\n", g->send_buff,
-			 g->no_ack ? "[noack mode]" : "[looking for ack]");
-	}
+	R_RETURN_VAL_IF_FAIL (g, -1);
+	g->send_buff[g->send_len] = '\0';
+	R_LOG_DEBUG ("putpkt (\"%s\");  %s", g->send_buff,
+			g->no_ack ? "[noack mode]" : "[looking for ack]");
 	return r_socket_write (g->sock, g->send_buff, g->send_len);
 }
 
 int pack(libgdbr_t *g, const char *msg) {
+	R_RETURN_VAL_IF_FAIL (g && msg, -1);
 	int run_len;
 	size_t msg_len;
 	const char *src;
 	char prev;
-	if (!g || !msg) {
-		return -1;
-	}
+	/* Buffer layout: '$' + payload + "#xx" + '\0'. Reserve 5 bytes overhead. */
+	const size_t payload_max = (g->send_max > 5) ? (size_t)g->send_max - 5 : 0;
 	msg_len = strlen (msg);
-	if (msg_len > g->send_max + 5) {
-		eprintf ("%s: message too long: %s", __func__, msg);
+	if (msg_len > payload_max) {
+		R_LOG_ERROR ("%s: message too long: %s", __func__, msg);
 		return -1;
 	}
 	if (!g->send_buff) {
@@ -224,8 +204,8 @@ int pack(libgdbr_t *g, const char *msg) {
 	while (*src) {
 		if (*src == '#' || *src == '$' || *src == '}') {
 			msg_len += 1;
-			if (msg_len > g->send_max + 5) {
-				eprintf ("%s: message too long: %s", __func__, msg);
+			if (msg_len > payload_max) {
+				R_LOG_ERROR ("%s: message too long: %s", __func__, msg);
 				return -1;
 			}
 			g->send_buff[g->send_len++] = '}';
@@ -259,7 +239,7 @@ int pack(libgdbr_t *g, const char *msg) {
 		src += run_len - 29;
 	}
 	g->send_buff[g->send_len] = '\0';
-	snprintf (g->send_buff + g->send_len, 4, "#%.2x", cmd_checksum(g->send_buff + 1));
+	snprintf (g->send_buff + g->send_len, 4, "#%.2x", cmd_checksum (g->send_buff + 1));
 	g->send_len += 3;
 	return g->send_len;
 }

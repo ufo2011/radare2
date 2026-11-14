@@ -1,103 +1,178 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2026 - pancake */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
-#include <r_bin.h>
 #include <r_core.h>
 #include "../i/private.h"
 #include "mach0/mach0.h"
 #include "objc/mach0_classes.h"
-#include <ht_uu.h>
+#include <sdb/ht_uu.h>
 
-// wip settings
+R_VEC_TYPE (RVecExtReloc, struct reloc_t *);
+
+typedef struct {
+	ut8 *chunk;
+	ut64 off;
+	ut64 size;
+	ut64 chunk_addr;
+	ut64 chunk_size;
+	ut64 chunk_capacity;
+	bool chunk_dirty;
+	bool chunk_valid;
+	bool failed;
+	struct MACH0_(obj_t) *obj;
+} RFixupRebaseContext;
 
 extern RBinWrite r_bin_write_mach0;
 
+static bool rebase_buffer_callback2(void * context, RFixupEventDetails * event_details);
 static RBinInfo *info(RBinFile *bf);
-
-static void swizzle_io_read(struct MACH0_(obj_t) *obj, RIO *io);
-static int rebasing_and_stripping_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count);
-static void rebase_buffer(struct MACH0_(obj_t) *obj, ut64 off, RIODesc *fd, ut8 *buf, int count);
+static RBuffer *rebase_buffer(struct MACH0_(obj_t) *obj);
 
 #define IS_PTR_AUTH(x) ((x & (1ULL << 63)) != 0)
 #define IS_PTR_BIND(x) ((x & (1ULL << 62)) != 0)
 
-static Sdb *get_sdb (RBinFile *bf) {
-	RBinObject *o = bf->o;
-	if (!o) {
-		return NULL;
-	}
-	struct MACH0_(obj_t) *bin = (struct MACH0_(obj_t) *) o->bin_obj;
-	return bin? bin->kv: NULL;
+static Sdb *get_sdb(RBinFile *bf) {
+	struct MACH0_(obj_t) *mo = (struct MACH0_(obj_t) *) R_UNWRAP3 (bf, bo, bin_obj);
+	return mo? mo->kv: NULL;
 }
 
 static char *entitlements(RBinFile *bf, bool json) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
-	struct MACH0_(obj_t) *bin = bf->o->bin_obj;
-	if (json) {
-		const char *s = r_str_get ((const char *)bin->signature);
-		PJ *pj = pj_new ();
-		pj_s (pj, s);
-		return pj_drain (pj);
+	struct MACH0_(obj_t) *mo = R_UNWRAP3 (bf, bo, bin_obj);
+	if (!mo) {
+		return NULL;
 	}
-	return r_str_dup (NULL, (const char*)bin->signature);
+	const char *xml = (const char *)mo->signature;
+	char *der = NULL;
+	if (mo->signature_der && mo->signature_der_size) {
+		RAsn1 *a = r_asn1_new (mo->signature_der, (int)mo->signature_der_size, json? 'j': 0);
+		if (a) {
+			der = r_asn1_tostring (a);
+			r_asn1_free (a);
+		}
+	}
+	if (!xml && !der) {
+		return NULL;
+	}
+	char *res = NULL;
+	if (json) {
+		PJ *pj = pj_new ();
+		if (xml && der) {
+			pj_o (pj);
+			pj_ks (pj, "plist", xml);
+			pj_k (pj, "der");
+			pj_j (pj, der);
+			pj_end (pj);
+		} else if (xml) {
+			pj_s (pj, xml);
+		} else {
+			pj_o (pj);
+			pj_k (pj, "der");
+			pj_j (pj, der);
+			pj_end (pj);
+		}
+		res = pj_drain (pj);
+	} else if (xml && der) {
+		res = r_str_newf ("%s\n;; DER entitlements (slot 7, magic 0xfade7172)\n%s", xml, der);
+	} else if (xml) {
+		res = strdup (xml);
+	} else {
+		res = r_str_newf (";; DER entitlements (slot 7, magic 0xfade7172)\n%s", der);
+	}
+	free (der);
+	return res;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb){
-	r_return_val_if_fail (bf && bin_obj && buf, false);
+// TODO: remove laddr, just pass RBinFileOptions which should be inside rbinfile
+static bool load(RBinFile *bf, RBuffer *buf, ut64 laddr) {
+	R_RETURN_VAL_IF_FAIL (bf && buf, false);
 	struct MACH0_(opts_t) opts;
 	MACH0_(opts_set_default) (&opts, bf);
-	struct MACH0_(obj_t) *res = MACH0_(new_buf) (buf, &opts);
-	if (res) {
-		if (res->chained_starts) {
-			RIO *io = bf->rbin->iob.io;
-			swizzle_io_read (res, io);
+	opts.parse_start_symbols = true;
+
+	struct MACH0_(obj_t) *mo = MACH0_(new_buf) (bf, buf, &opts);
+	if (mo) {
+		bf->bo->bin_obj = mo;
+		if (MACH0_(has_fixup_chains) (mo)) {
+			RBuffer *nb = rebase_buffer (mo);
+			if (nb != bf->buf) {
+				r_unref (bf->buf);
+			}
+			bf->buf = nb;
 		}
-		sdb_ns_set (sdb, "info", res->kv);
-		*bin_obj = res;
+		sdb_ns_set (bf->sdb, "info", mo->kv);
 		return true;
 	}
 	return false;
 }
 
 static void destroy(RBinFile *bf) {
-	MACH0_(mach0_free) (bf->o->bin_obj);
+	MACH0_(mach0_free) (bf->bo->bin_obj);
 }
 
 static ut64 baddr(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, UT64_MAX);
-	struct MACH0_(obj_t) *bin = bf->o->bin_obj;
-	return MACH0_(get_baddr)(bin);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, UT64_MAX);
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
+	return MACH0_(get_baddr)(mo);
 }
 
-static RList *sections(RBinFile *bf) {
-	return MACH0_(get_segments) (bf);
+static bool sections_vec(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, false);
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
+	RVecSegment *segments = MACH0_(get_segments_vec) (bf, mo);
+	if (!segments) {
+		return false;
+	}
+	RVecRBinSection *dst_sections = &bf->bo->sections_vec;
+	RVecRBinSection_clear (dst_sections);
+	if (!RVecRBinSection_reserve (dst_sections, RVecSegment_length (segments))) {
+		return false;
+	}
+	RBinSection *section;
+	R_VEC_FOREACH (segments, section) {
+		RBinSection *dst = RVecRBinSection_emplace_back (dst_sections);
+		*dst = *section;
+		dst->name = section->name? strdup (section->name): NULL;
+		dst->format = section->format? strdup (section->format): NULL;
+	}
+	return true;
 }
 
-static RBinAddr *newEntry(ut64 hpaddr, ut64 paddr, int type, int bits) {
+static RBinAddr *newEntry(RBinFile *bf, ut64 hpaddr, ut64 vaddr, int type, int bits) {
 	RBinAddr *ptr = R_NEW0 (RBinAddr);
-	if (ptr) {
-		ptr->paddr = paddr;
-		ptr->vaddr = paddr;
-		ptr->hpaddr = hpaddr;
-		ptr->bits = bits;
-		ptr->type = type;
-		//realign due to thumb
-		if (bits == 16 && ptr->vaddr & 1) {
-			ptr->paddr--;
-			ptr->vaddr--;
+	ptr->paddr = UT64_MAX;
+	ptr->vaddr = vaddr;
+	ptr->hpaddr = hpaddr;
+	ptr->bits = bits;
+	ptr->type = type;
+	// realign due to thumb
+	if (bits == 16 && ptr->vaddr & 1) {
+		// TODO add hint about thumb entrypoint
+		ptr->vaddr--;
+	}
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
+	RVecSegment *segments = MACH0_(get_segments_vec) (bf, mo);
+	RBinSection *segment;
+	R_VEC_FOREACH (segments, segment) {
+		if (segment->is_segment && ptr->vaddr >= segment->vaddr
+				&& ptr->vaddr - segment->vaddr < segment->size) {
+			ptr->paddr = segment->paddr + (ptr->vaddr - segment->vaddr);
+			break;
 		}
 	}
 	return ptr;
 }
 
-static void process_constructors(RBinFile *bf, RList *ret, int bits) {
-	RList *secs = sections (bf);
-	RListIter *iter;
+static void process_constructors(RBinFile *bf, RList *ret, int bits, int limit) {
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
+	RVecSegment *secs = MACH0_(get_segments_vec) (bf, mo);
 	RBinSection *sec;
 	int i, type;
-	r_list_foreach (secs, iter, sec) {
+	R_VEC_FOREACH (secs, sec) {
+		if (sec->is_segment) {
+			continue;
+		}
+		if (limit_reached (ret, limit)) {
+			break;
+		}
 		type = -1;
 		if (strstr (sec->name, "_mod_fini_func")) {
 			type  = R_BIN_ENTRY_TYPE_FINI;
@@ -105,247 +180,116 @@ static void process_constructors(RBinFile *bf, RList *ret, int bits) {
 			type  = R_BIN_ENTRY_TYPE_INIT;
 		}
 		if (type != -1) {
-			ut8 *buf = calloc (sec->size, 1);
+			if (sec->size == 0 || sec->size > ST32_MAX) {
+				continue;
+			}
+			int ss = sec->size;
+			ut8 *buf = calloc (ss, 1);
 			if (!buf) {
 				continue;
 			}
-			int read = r_buf_read_at (bf->buf, sec->paddr, buf, sec->size);
-			if (read < sec->size) {
-				eprintf ("process_constructors: cannot process section %s\n", sec->name);
+			st64 nread = r_buf_read_at (bf->buf, sec->paddr - bf->bo->boffset, buf, ss);
+			if (nread != ss) {
+				R_LOG_ERROR ("process_constructors: cannot process section %s", sec->name);
+				free (buf);
 				continue;
 			}
 			if (bits == 32) {
-				for (i = 0; i + 3 < sec->size; i += 4) {
-					ut32 addr32 = r_read_le32 (buf + i);
-					RBinAddr *ba = newEntry (sec->paddr + i, (ut64)addr32, type, bits);
-					if (ba) {
-						r_list_append (ret, ba);
+				for (i = 0; i + 3 < ss; i += 4) {
+					if (limit_reached (ret, limit)) {
+						break;
 					}
+					ut32 addr32 = r_read_le32 (buf + i);
+					RBinAddr *ba = newEntry (bf, sec->paddr + i, (ut64)addr32, type, bits);
+					r_list_append (ret, ba);
 				}
 			} else {
-				for (i = 0; i + 7 < sec->size; i += 8) {
-					ut64 addr64 = r_read_le64 (buf + i);
-					RBinAddr *ba = newEntry (sec->paddr + i, addr64, type, bits);
-					if (ba) {
-						r_list_append (ret, ba);
+				for (i = 0; i + 7 < ss; i += 8) {
+					if (limit_reached (ret, limit)) {
+						break;
 					}
+					ut64 addr64 = r_read_le64 (buf + i);
+					RBinAddr *ba = newEntry (bf, sec->paddr + i, addr64, type, bits);
+					r_list_append (ret, ba);
 				}
 			}
 			free (buf);
 		}
 	}
-	r_list_free (secs);
 }
 
 static RList *entries(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
 
-	RBinAddr *ptr = NULL;
+	RBinObject *bo = bf->bo;
+	struct MACH0_(obj_t) *mo = bo->bin_obj;
 	struct addr_t *entry = NULL;
+	int limit = bf->rbin->options.limit;
 
 	RList *ret = r_list_newf (free);
 	if (!ret) {
 		return NULL;
 	}
 
-	int bits = MACH0_(get_bits) (bf->o->bin_obj);
-	if (!(entry = MACH0_(get_entrypoint) (bf->o->bin_obj))) {
+	int bits = MACH0_(get_bits) (mo);
+	if (!(entry = MACH0_(get_entrypoint) (mo))) {
 		return ret;
 	}
-	if ((ptr = R_NEW0 (RBinAddr))) {
-		ptr->paddr = entry->offset + bf->o->boffset;
-		ptr->vaddr = entry->addr;
-		ptr->hpaddr = entry->haddr;
-		ptr->bits = bits;
-		//realign due to thumb
-		if (bits == 16) {
-			if (ptr->vaddr & 1) {
-				ptr->paddr--;
-				ptr->vaddr--;
-			}
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
+	ptr->paddr = entry->offset + bo->boffset;
+	ptr->vaddr = entry->addr;
+	ptr->hpaddr = entry->haddr? entry->haddr + bo->boffset: 0;
+	ptr->hvaddr = entry->hvaddr;
+	ptr->bits = bits;
+	//realign due to thumb
+	if (bits == 16) {
+		if (ptr->vaddr & 1) {
+			ptr->paddr--;
+			ptr->vaddr--;
 		}
-		r_list_append (ret, ptr);
 	}
+	r_list_append (ret, ptr);
 
-	process_constructors (bf, ret, bits);
+	if (!limit_reached (ret, limit)) {
+		process_constructors (bf, ret, bits, limit);
+	}
 	// constructors
 	free (entry);
 	return ret;
 }
 
-static void _handle_arm_thumb(struct MACH0_(obj_t) *bin, RBinSymbol **p) {
-	RBinSymbol *ptr = *p;
-	if (bin) {
-		if (ptr->paddr & 1) {
-			ptr->paddr--;
-			ptr->vaddr--;
-			ptr->bits = 16;
+static bool symbols_vec(RBinFile *bf) {
+	struct MACH0_(obj_t) *mo = R_UNWRAP3 (bf, bo, bin_obj);
+	if (R_LIKELY (mo)) {
+		if (MACH0_(load_symbols) (mo)) {
+			return !RVecRBinSymbol_empty (&bf->bo->symbols_vec);
 		}
 	}
+	return false;
 }
-
-#if FEATURE_SYMLIST
-static RList *symbols(RBinFile *bf) {
-	RBinObject *obj = bf? bf->o: NULL;
-	return (RList *)MACH0_(get_symbols_list) (obj->bin_obj);
-}
-#else
-static RList *symbols(RBinFile *bf) {
-	struct MACH0_(obj_t) *bin;
-	int i;
-	const struct symbol_t *syms = NULL;
-	RBinSymbol *ptr = NULL;
-	RBinObject *obj = bf? bf->o: NULL;
-	RList *ret = r_list_newf (free);
-#if 0
-	const char *lang = "c"; // XXX deprecate this
-#endif
-	int wordsize = 0;
-	if (!ret) {
-		return NULL;
-	}
-	if (!obj || !obj->bin_obj) {
-		free (ret);
-		return NULL;
-	}
-	bool isStripped = false;
-	wordsize = MACH0_(get_bits) (obj->bin_obj);
-
-	// OLD CODE
-	if (!(syms = MACH0_(get_symbols) (obj->bin_obj))) {
-		return ret;
-	}
-	Sdb *symcache = sdb_new0 ();
-	bin = (struct MACH0_(obj_t) *) obj->bin_obj;
-	for (i = 0; !syms[i].last; i++) {
-		if (syms[i].name == NULL || syms[i].name[0] == '\0' || syms[i].addr < 100) {
-			continue;
-		}
-		if (!(ptr = R_NEW0 (RBinSymbol))) {
-			break;
-		}
-		ptr->name = strdup ((char*)syms[i].name);
-		ptr->is_imported = syms[i].is_imported;
-		if (ptr->name[0] == '_' && !ptr->is_imported) {
-			char *dn = r_bin_demangle (bf, ptr->name, ptr->name, ptr->vaddr, false);
-			if (dn) {
-				ptr->dname = dn;
-				char *p = strchr (dn, '.');
-				if (p) {
-					if (IS_UPPER (ptr->name[0])) {
-						ptr->classname = strdup (ptr->name);
-						ptr->classname[p - ptr->name] = 0;
-					} else if (IS_UPPER (p[1])) {
-						ptr->classname = strdup (p + 1);
-						p = strchr (ptr->classname, '.');
-						if (p) {
-							*p = 0;
-						}
-					}
-				}
-			}
-		}
-		ptr->forwarder = "NONE";
-		ptr->bind = (syms[i].type == R_BIN_MACH0_SYMBOL_TYPE_LOCAL)? R_BIN_BIND_LOCAL_STR: R_BIN_BIND_GLOBAL_STR;
-		ptr->type = R_BIN_TYPE_FUNC_STR;
-		ptr->vaddr = syms[i].addr;
-		ptr->paddr = syms[i].offset + obj->boffset;
-		ptr->size = syms[i].size;
-		ptr->bits = syms[i].bits;
-		if (bin->hdr.cputype == CPU_TYPE_ARM && wordsize < 64) {
-			_handle_arm_thumb (bin, &ptr);
-		}
-		ptr->ordinal = i;
-		bin->dbg_info = strncmp (ptr->name, "radr://", 7)? 0: 1;
-		sdb_set (symcache, sdb_fmt ("sym0x%"PFMT64x, ptr->vaddr), "found", 0);
-#if 0
-		if (!strncmp (ptr->name, "__Z", 3)) {
-			lang = "c++";
-		}
-		if (!strncmp (ptr->name, "type.", 5)) {
-			lang = "go";
-		} else if (!strcmp (ptr->name, "_rust_oom")) {
-			lang = "rust";
-		}
-#endif
-		r_list_append (ret, ptr);
-	}
-	//functions from LC_FUNCTION_STARTS
-	if (bin->func_start) {
-		char symstr[128];
-		ut64 value = 0, address = 0;
-		const ut8 *temp = bin->func_start;
-		const ut8 *temp_end = bin->func_start + bin->func_size;
-		strcpy (symstr, "sym0x");
-		while (temp + 3 < temp_end && *temp) {
-			temp = r_uleb128_decode (temp, NULL, &value);
-			address += value;
-			ptr = R_NEW0 (RBinSymbol);
-			if (!ptr) {
-				break;
-			}
-			ptr->vaddr = bin->baddr + address;
-			ptr->paddr = address;
-			ptr->size = 0;
-			ptr->name = r_str_newf ("func.%08"PFMT64x, ptr->vaddr);
-			ptr->type = R_BIN_TYPE_FUNC_STR;
-			ptr->forwarder = "NONE";
-			ptr->bind = R_BIN_BIND_LOCAL_STR;
-			ptr->ordinal = i++;
-			if (bin->hdr.cputype == CPU_TYPE_ARM && wordsize < 64) {
-				_handle_arm_thumb (bin, &ptr);
-			}
-			r_list_append (ret, ptr);
-			// if any func is not found in syms then we can consider it is stripped
-			if (!isStripped) {
-				snprintf (symstr + 5, sizeof (symstr) - 5 , "%" PFMT64x, ptr->vaddr);
-				if (!sdb_const_get (symcache, symstr, 0)) {
-					isStripped = true;
-				}
-			}
-		}
-	}
-#if 0
-// this must be done in bobj.c not here
-	if (bin->has_blocks_ext) {
-		lang = !strcmp (lang, "c++") ? "c++ blocks ext." : "c blocks ext.";
-	}
-	bin->lang = lang;
-#endif
-	if (isStripped) {
-		bin->dbg_info |= R_BIN_DBG_STRIPPED;
-	}
-	sdb_free (symcache);
-	return ret;
-}
-#endif // FEATURE_SYMLIST
 
 static RBinImport *import_from_name(RBin *rbin, const char *orig_name, HtPP *imports_by_name) {
-	if (imports_by_name) {
-		bool found = false;
-		RBinImport *ptr = ht_pp_find (imports_by_name, orig_name, &found);
-		if (found) {
-			return ptr;
-		}
-	}
-
-	RBinImport *ptr = NULL;
-	if (!(ptr = R_NEW0 (RBinImport))) {
+	if (!imports_by_name) {
 		return NULL;
 	}
+	bool found = false;
+	RBinImport *ptr = ht_pp_find (imports_by_name, orig_name, &found);
+	if (found) {
+		return ptr;
+	}
+
+	ptr = R_NEW0 (RBinImport);
 
 	char *name = (char*) orig_name;
-	const char *_objc_class = "_OBJC_CLASS_$";
-	const int _objc_class_len = strlen (_objc_class);
-	const char *_objc_metaclass = "_OBJC_METACLASS_$";
-	const int _objc_metaclass_len = strlen (_objc_metaclass);
-	char *type = "FUNC";
+	const char *const _objc_class = "_OBJC_CLASS_$";
+	const char *const _objc_metaclass = "_OBJC_METACLASS_$";
+	const char *type = "FUNC";
 
-	if (!strncmp (name, _objc_class, _objc_class_len)) {
-		name += _objc_class_len;
+	if (r_str_startswith (name, _objc_class)) {
+		name += strlen (_objc_class);
 		type = "OBJC_CLASS";
-	} else if (!strncmp (name, _objc_metaclass, _objc_metaclass_len)) {
-		name += _objc_metaclass_len;
+	} else if (r_str_startswith (name, _objc_metaclass)) {
+		name += strlen (_objc_metaclass);
 		type = "OBJC_METACLASS";
 	}
 
@@ -353,200 +297,180 @@ static RBinImport *import_from_name(RBin *rbin, const char *orig_name, HtPP *imp
 	if (*name == '_') {
 		name++;
 	}
-	ptr->name = strdup (name);
+	ptr->name = r_bin_name_new (name);
 	ptr->bind = "NONE";
 	ptr->type = r_str_constpool_get (&rbin->constpool, type);
 
-	if (imports_by_name) {
-		ht_pp_insert (imports_by_name, orig_name, ptr);
-	}
+	ht_pp_insert (imports_by_name, orig_name, ptr);
 
 	return ptr;
 }
 
-static RList *imports(RBinFile *bf) {
-	RBinObject *obj = bf ? bf->o : NULL;
-	struct MACH0_(obj_t) *bin = bf ? bf->o->bin_obj : NULL;
-	const char *name;
-	RBinImport *ptr = NULL;
-	int i;
-
-	if (!obj || !bin || !obj->bin_obj) {
-		return NULL;
+static bool imports_vec(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, false);
+	RBinObject *bo = bf->bo;
+	if (!RVecRBinImport_empty (&bo->imports_vec)) {
+		return true;
 	}
-	RList *ret = r_list_newf((RListFree)r_bin_import_free);
-	struct import_t *imports = MACH0_(get_imports)(bf->o->bin_obj);
-	if (!ret || !imports) {
-		r_list_free (ret);
-		free (imports);
-		return NULL;
+	struct MACH0_(obj_t) *mo = bo->bin_obj;
+	RVecRBinImport *imports = MACH0_(load_imports) (bf, mo);
+	if (!imports) {
+		return false;
 	}
-	bin->has_canary = false;
-	bin->has_retguard = -1;
-	bin->has_sanitizers = false;
-	bin->has_blocks_ext = false;
-	for (i = 0; !imports[i].last; i++) {
-		if (!(ptr = import_from_name (bf->rbin, imports[i].name, NULL))) {
-			break;
-		}
-		name = ptr->name;
-		ptr->ordinal = imports[i].ord;
-		if (bin->imports_by_ord && ptr->ordinal < bin->imports_by_ord_size) {
-			bin->imports_by_ord[ptr->ordinal] = ptr;
-		}
-		if (!strcmp (name, "__stack_chk_fail") ) {
-			bin->has_canary = true;
-		}
-		if (!strcmp (name, "__asan_init") ||
-                   !strcmp (name, "__tsan_init")) {
-			bin->has_sanitizers = true;
-		}
-		if (!strcmp (name, "_NSConcreteGlobalBlock")) {
-			bin->has_blocks_ext = true;
-		}
-		r_list_append (ret, ptr);
-	}
-	free (imports);
-	return ret;
+	// Transfer ownership: swap vectors and reset source
+	bo->imports_vec = mo->imports_cache;
+	RVecRBinImport_init (&mo->imports_cache);
+	mo->imports_loaded = false;
+	return true;
 }
 
-static RList *relocs(RBinFile *bf) {
-	RList *ret = NULL;
-	struct MACH0_(obj_t) *bin = NULL;
-	RBinObject *obj = bf ? bf->o : NULL;
-	if (bf && bf->o) {
-		bin = bf->o->bin_obj;
-	}
-	if (!obj || !obj->bin_obj || !(ret = r_list_newf (free))) {
-		return NULL;
-	}
-	ret->free = free;
-
-	RSkipList *relocs;
-	if (!(relocs = MACH0_(get_relocs) (bf->o->bin_obj))) {
-		return ret;
-	}
-
+// the load-time rows: every non-external reloc, then the chained fixups
+static void append_load_relocs(RBinFile *bf, RBinObject *bo, const RSkipList *relocs, RVecRBinReloc *ret) {
+	struct MACH0_(obj_t) *mo = bo->bin_obj;
+	RVecRBinImport *imports = mo->imports_loaded
+		? &mo->imports_cache
+		: &bo->imports_vec;
 	RSkipListNode *it;
 	struct reloc_t *reloc;
 	r_skiplist_foreach (relocs, it, reloc) {
 		if (reloc->external) {
 			continue;
 		}
-		RBinReloc *ptr = NULL;
-		if (!(ptr = R_NEW0 (RBinReloc))) {
-			break;
-		}
+		RBinReloc *ptr = RVecRBinReloc_emplace_back (ret);
 		ptr->type = reloc->type;
-		ptr->additive = 0;
+		ptr->ntype = reloc->ntype;
+		RBinImport *imp = NULL;
 		if (reloc->name[0]) {
-			RBinImport *imp;
-			if (!(imp = import_from_name (bf->rbin, (char*) reloc->name, bin->imports_by_name))) {
-				free (ptr);
-				break;
-			}
-			ptr->import = imp;
-		} else if (reloc->ord >= 0 && bin->imports_by_ord && reloc->ord < bin->imports_by_ord_size) {
-			ptr->import = bin->imports_by_ord[reloc->ord];
-		} else {
-			ptr->import = NULL;
+			imp = import_from_name (bf->rbin, (char*) reloc->name, mo->imports_by_name);
+		} else if (reloc->ord >= 0) {
+			imp = RVecRBinImport_at (imports, reloc->ord);
+		}
+		if (imp) {
+			ptr->import = r_bin_import_clone (imp);
 		}
 		ptr->addend = reloc->addend;
 		ptr->vaddr = reloc->addr;
 		ptr->paddr = reloc->offset;
-		r_list_append (ret, ptr);
 	}
+	RBinReloc *r;
+	R_VEC_FOREACH (&mo->reloc_fixups, r) {
+		ut64 vaddr;
+		if (!MACH0_(paddr_to_vaddr) (mo, r->paddr, &vaddr)) {
+			continue;
+		}
+		RBinReloc *ptr = RVecRBinReloc_emplace_back (ret);
+		ptr->type = r->type;
+		ptr->ntype = r->ntype;
+		ptr->vaddr = vaddr;
+		ptr->paddr = r->paddr;
+		ptr->addend = r->vaddr;
+	}
+}
 
-	r_skiplist_free (relocs);
-
+static RVecRBinReloc *relocs(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
+	const RSkipList *relocs = MACH0_(load_relocs) (mo);
+	if (!relocs) {
+		return NULL;
+	}
+	RVecRBinReloc *ret = RVecRBinReloc_new ();
+	append_load_relocs (bf, bf->bo, relocs, ret);
 	return ret;
 }
 
 static RList *libs(RBinFile *bf) {
-	int i;
-	char *ptr = NULL;
-	struct lib_t *libs;
-	RList *ret = NULL;
-	RBinObject *obj = bf ? bf->o : NULL;
-
-	if (!obj || !obj->bin_obj || !(ret = r_list_newf (free))) {
+	RBinObject *obj = bf ? bf->bo : NULL;
+	if (!obj) {
 		return NULL;
 	}
-	if ((libs = MACH0_(get_libs) (obj->bin_obj))) {
-		for (i = 0; !libs[i].last; i++) {
-			ptr = strdup (libs[i].name);
-			r_list_append (ret, ptr);
-		}
-		free (libs);
+	const int limit = bf->rbin->options.limit;
+	const RVecMach0Lib *libs = MACH0_(load_libs) (obj->bin_obj);
+	if (!libs) {
+		return NULL;
 	}
-	return ret;
+
+	RList *result = r_list_new ();
+	if (!result) {
+		return NULL;
+	}
+	char **it;
+	R_VEC_FOREACH (libs, it) {
+		if (limit_reached (result, limit)) {
+			break;
+		}
+		r_list_append (result, *it);
+	}
+	return result;
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	struct MACH0_(obj_t) *bin = NULL;
-	char *str;
-
-	r_return_val_if_fail (bf && bf->o, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
-
-	bin = bf->o->bin_obj;
 	if (bf->file) {
 		ret->file = strdup (bf->file);
 	}
-	if ((str = MACH0_(get_class) (bf->o->bin_obj))) {
-		ret->bclass = str;
+	ret->bclass = MACH0_(get_class) (mo);
+	ret->has_canary = mo->has_canary;
+	ret->has_retguard = -1;
+	ret->has_sanitizers = mo->has_sanitizers;
+	ret->has_libinjprot = mo->has_libinjprot;
+	ret->dbg_info = mo->dbg_info;
+	ret->lang = mo->lang;
+	struct dyld_info_command *di = mo->dyld_info;
+	if (di) {
+		ut64 allbinds = 0;
+		if ((int)di->bind_size > 0) {
+			allbinds += di->bind_size;
+		}
+		if ((int)di->lazy_bind_size > 0) {
+			allbinds += di->lazy_bind_size;
+		}
+		if ((int)di->weak_bind_size > 0) {
+			allbinds += di->weak_bind_size;
+		}
+		if (allbinds > 0) {
+			ret->dbg_info |= R_BIN_DBG_RELOCS;
+		}
 	}
-	if (bin) {
-		ret->has_canary = bin->has_canary;
-		ret->has_retguard = -1;
-		ret->has_sanitizers = bin->has_sanitizers;
-		ret->dbg_info = bin->dbg_info;
-		ret->lang = bin->lang;
-	}
-	ret->intrp = r_str_dup (NULL, MACH0_(get_intrp)(bf->o->bin_obj));
-	ret->compiler = r_str_dup (NULL, "");
+	const char *intrp = MACH0_(get_intrp) (mo);
+	ret->intrp = intrp? strdup (intrp): NULL;
+	ret->compiler = strdup ("clang");
 	ret->rclass = strdup ("mach0");
-	ret->os = strdup (MACH0_(get_os)(bf->o->bin_obj));
+	ret->os = strdup (MACH0_(get_os) (mo));
 	ret->subsystem = strdup ("darwin");
-	ret->arch = strdup (MACH0_(get_cputype) (bf->o->bin_obj));
-	ret->machine = MACH0_(get_cpusubtype) (bf->o->bin_obj);
+	ret->arch = strdup (MACH0_(get_cputype) (mo));
+	ret->machine = MACH0_(get_cpusubtype) (mo);
 	ret->has_lit = true;
-	ret->type = MACH0_(get_filetype) (bf->o->bin_obj);
-	ret->big_endian = MACH0_(is_big_endian) (bf->o->bin_obj);
-	ret->bits = 32;
-	if (bf && bf->o && bf->o->bin_obj) {
-		ret->has_crypto = ((struct MACH0_(obj_t)*)
-			bf->o->bin_obj)->has_crypto;
-		ret->bits = MACH0_(get_bits) (bf->o->bin_obj);
-	}
+	ret->type = MACH0_(get_filetype) (mo);
+	ret->big_endian = MACH0_(is_big_endian) (mo);
+	ret->has_crypto = mo->has_crypto;
+	ret->bits = MACH0_(get_bits) (mo);
 	ret->has_va = true;
-	ret->has_pi = MACH0_(is_pie) (bf->o->bin_obj);
-	ret->has_nx = MACH0_(has_nx) (bf->o->bin_obj);
+	ret->has_pi = MACH0_(is_pie) (mo);
+	ret->has_nx = MACH0_(has_nx) (mo);
 	return ret;
 }
 
-static bool _patch_reloc(struct MACH0_(obj_t) *bin, RIOBind *iob, struct reloc_t * reloc, ut64 symbol_at) {
+static bool _patch_reloc(struct MACH0_(obj_t) *mo, RIOBind *iob, struct reloc_t *reloc, ut64 symbol_at) {
 	ut64 pc = reloc->addr;
 	ut64 ins_len = 0;
 
-	switch (bin->hdr.cputype) {
-	case CPU_TYPE_X86_64: {
+	switch (mo->hdr.cputype) {
+	case CPU_TYPE_X86_64:
 		switch (reloc->type) {
 		case X86_64_RELOC_UNSIGNED:
 			break;
 		case X86_64_RELOC_BRANCH:
-			pc -= 1;
+			pc--;
 			ins_len = 5;
 			break;
 		default:
-			eprintf ("Warning: unsupported reloc type for X86_64 (%d), please file a bug.\n", reloc->type);
+			R_LOG_WARN ("unsupported reloc type for X86_64 (%d), please file a bug", reloc->type);
 			return false;
 		}
 		break;
-	}
 	case CPU_TYPE_ARM64:
 	case CPU_TYPE_ARM64_32:
 		pc = reloc->addr & ~3;
@@ -555,293 +479,422 @@ static bool _patch_reloc(struct MACH0_(obj_t) *bin, RIOBind *iob, struct reloc_t
 	case CPU_TYPE_ARM:
 		break;
 	default:
-		eprintf ("Warning: unsupported architecture for patching relocs, please file a bug. %s\n", MACH0_(get_cputype_from_hdr)(&bin->hdr));
+		R_LOG_WARN ("unsupported architecture for patching relocs, please file a bug. %s",
+				MACH0_(get_cputype_from_hdr)(&mo->hdr));
 		return false;
 	}
 
-	ut64 val = symbol_at;
-	if (reloc->pc_relative) {
-		val = symbol_at - pc - ins_len;
-	}
+	ut64 val = reloc->pc_relative ? symbol_at - pc - ins_len : symbol_at;
 
 	ut8 buf[8];
 	r_write_ble (buf, val, false, reloc->size * 8);
-	iob->write_at (iob->io, reloc->addr, buf, reloc->size);
-
+	if (reloc->size < 1) {
+		R_LOG_WARN ("invalid reloc size %d at 0x%08"PFMT64x, reloc->size, reloc->addr);
+		return false;
+	}
+	if (!iob->overlay_write_at (iob->io, reloc->addr, buf, reloc->size)) {
+		R_LOG_WARN ("cannot write reloc at 0x%"PFMT64x, reloc->addr);
+		return false;
+	}
 	return true;
 }
 
-static RList* patch_relocs(RBin *b) {
-	RList *ret = NULL;
-	RIO *io = NULL;
-	RBinObject *obj = NULL;
-	struct MACH0_(obj_t) *bin = NULL;
+static RVecRBinReloc *patch_relocs(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->rbin, NULL);
+
+	RVecRBinReloc *ret = NULL;
 	RIOMap *g = NULL;
 	HtUU *relocs_by_sym = NULL;
 	RIODesc *gotr2desc = NULL;
 
-	r_return_val_if_fail (b, NULL);
-
-	io = b->iob.io;
+	RBin *b = bf->rbin;
+	RIOBind *iob = &b->iob;
+	RIO *io = iob->io;
 	if (!io || !io->desc) {
 		return NULL;
 	}
-	obj = r_bin_cur_object (b);
-	if (!obj) {
+	const int curfd = io->desc->fd;
+
+	RBinObject *obj = r_bin_cur_object (b);
+	if (!obj || !obj->bin_obj) {
 		return NULL;
 	}
-	bin = obj->bin_obj;
+	struct MACH0_(obj_t) *mo = obj->bin_obj;
 
-	RSkipList * all_relocs = MACH0_(get_relocs)(bin);
+	const RSkipList *all_relocs = MACH0_(load_relocs)(mo);
 	if (!all_relocs) {
 		return NULL;
 	}
-	RList * ext_relocs = r_list_new ();
-	if (!ext_relocs) {
-		goto beach;
-	}
+	RVecExtReloc ext_relocs;
+	RVecExtReloc_init (&ext_relocs);
 	RSkipListNode *it;
-	struct reloc_t * reloc;
+	struct reloc_t *reloc;
 	r_skiplist_foreach (all_relocs, it, reloc) {
 		if (!reloc->external) {
 			continue;
 		}
-		r_list_append (ext_relocs, reloc);
+		RVecExtReloc_push_back (&ext_relocs, &reloc);
 	}
-	ut64 num_ext_relocs = r_list_length (ext_relocs);
+#if 1
+	// XXX for some reason we are patching this twice as relocs and fixups
+	// may be good to find out why and comment back this code with an if0
+	// fixups are now considered part of the relocs listing
+	RVecRBinReloc *fixups = &mo->reloc_fixups;
+	size_t relocs_count = RVecRBinReloc_length (fixups);
+	if (relocs_count > 0) {
+		ut8 buf[8], obuf[8];
+		RBinReloc *r;
+
+		size_t count = relocs_count;
+		if (mo->limit > 0) {
+			if (relocs_count > (size_t)mo->limit) {
+				R_LOG_WARN ("mo.limit for relocs");
+			}
+			count = mo->limit;
+		}
+		R_VEC_FOREACH (fixups, r) {
+			if (count-- == 0) {
+				break;
+			}
+			ut64 vaddr;
+			if (!MACH0_(paddr_to_vaddr) (mo, r->paddr, &vaddr)) {
+				continue;
+			}
+			const int width = r->type / 8;
+			r_write_ble (buf, r->vaddr, false, r->type);
+			if (iob->read_at (io, vaddr, obuf, width) != width) {
+				continue;
+			}
+			if (memcmp (buf, obuf, width)) {
+				if (!iob->overlay_write_at (io, vaddr, buf, width)) {
+					R_LOG_ERROR ("write error at 0x%"PFMT64x, vaddr);
+				}
+			}
+		}
+	}
+#endif
+	ut64 num_ext_relocs = RVecExtReloc_length (&ext_relocs);
 	if (!num_ext_relocs) {
 		goto beach;
 	}
 
-	if (!io->cached) {
-		eprintf ("Warning: run r2 with -e bin.cache=true to fix relocations in disassembly\n");
-		goto beach;
-	}
-
-	int cdsz = obj->info ? obj->info->bits / 8 : 8;
+	const bool is64 = mo->hdr.magic == MH_MAGIC_64 || mo->hdr.magic == MH_CIGAM_64;
+	const int cdsz = is64 ? 8 : 4;
 
 	ut64 offset = 0;
-	RIOBank *bank = b->iob.bank_get (io, io->bank);
+	RIOBank *bank = iob->bank_get (io, io->bank);
+	if (!bank) {
+		goto beach;
+	}
 	RListIter *iter;
 	RIOMapRef *mapref;
 	r_list_foreach (bank->maprefs, iter, mapref) {
-		RIOMap *map = b->iob.map_get (io, mapref->id);
+		RIOMap *map = iob->map_get (io, mapref->id);
 		if (r_io_map_from (map) > offset) {
 			offset = r_io_map_from (map);
 			g = map;
 		}
 	}
 	if (!g) {
+		R_LOG_WARN ("no maps for these territories");
 		goto beach;
 	}
 	ut64 n_vaddr = g->itv.addr + g->itv.size;
 	ut64 size = num_ext_relocs * cdsz;
 	char *muri = r_str_newf ("malloc://%" PFMT64u, size);
-	gotr2desc = b->iob.open_at (io, muri, R_PERM_R, 0664, n_vaddr);
+	gotr2desc = iob->open_at (io, muri, R_PERM_R, 0664, n_vaddr);
 	free (muri);
 	if (!gotr2desc) {
 		goto beach;
 	}
 
-	RIOMap *gotr2map = b->iob.map_get_at (io, n_vaddr);
+	RIOMap *gotr2map = iob->map_get_at (io, n_vaddr);
 	if (!gotr2map) {
+		R_LOG_WARN ("no maps for 0x%"PFMT64x, n_vaddr);
 		goto beach;
 	}
 	gotr2map->name = strdup (".got.r2");
 
-	if (!(ret = r_list_newf ((RListFree)free))) {
+	if (!(ret = RVecRBinReloc_new ())) {
 		goto beach;
 	}
 	if (!(relocs_by_sym = ht_uu_new0 ())) {
 		goto beach;
 	}
 	ut64 vaddr = n_vaddr;
-	RListIter *liter;
-	r_list_foreach (ext_relocs, liter, reloc) {
-		ut64 sym_addr = 0;
-		sym_addr = ht_uu_find (relocs_by_sym, reloc->ord, NULL);
-		if (!sym_addr) {
+	struct reloc_t **ext_reloc_iter;
+	R_VEC_FOREACH (&ext_relocs, ext_reloc_iter) {
+		reloc = *ext_reloc_iter;
+		bool found = false;
+		ut64 sym_addr = ht_uu_find (relocs_by_sym, reloc->ord, &found);
+		const bool own_slot = !found || !sym_addr;
+		if (own_slot) {
 			sym_addr = vaddr;
-			ht_uu_insert (relocs_by_sym, reloc->ord, vaddr);
-			vaddr += cdsz;
 		}
-		if (!_patch_reloc (bin, &b->iob, reloc, sym_addr)) {
+		// every reloc of a symbol patches to its slot, which is listed once, and
+		// a failed patch leaves the slot unclaimed for the next reloc of it
+		if (!_patch_reloc (mo, iob, reloc, sym_addr) || !own_slot) {
 			continue;
 		}
-		RBinReloc *ptr = NULL;
-		if (!(ptr = R_NEW0 (RBinReloc))) {
-			goto beach;
+		ht_uu_insert (relocs_by_sym, reloc->ord, sym_addr);
+		vaddr += cdsz;
+		RBinImport *imp = import_from_name (b, (char*) reloc->name, mo->imports_by_name);
+		if (R_LIKELY (imp)) {
+			RBinReloc *ptr = RVecRBinReloc_emplace_back (ret);
+			ptr->type = reloc->type;
+			ptr->ntype = reloc->ntype;
+			ptr->vaddr = sym_addr;
+			ptr->import = r_bin_import_clone (imp);
 		}
-		ptr->type = reloc->type;
-		ptr->additive = 0;
-		RBinImport *imp;
-		if (!(imp = import_from_name (b, (char*) reloc->name, bin->imports_by_name))) {
-			R_FREE (ptr);
-			goto beach;
-		}
-		ptr->vaddr = sym_addr;
-		ptr->import = imp;
-		r_list_append (ret, ptr);
 	}
-	if (r_list_empty (ret)) {
+	if (RVecRBinReloc_empty (ret)) {
 		goto beach;
 	}
+	// this vector replaces the whole table, so it carries the load-time rows
+	append_load_relocs (bf, obj, all_relocs, ret);
 	ht_uu_free (relocs_by_sym);
-	r_list_free (ext_relocs);
-	r_skiplist_free (all_relocs);
+	RVecExtReloc_fini (&ext_relocs);
+	// io owns gotr2desc from here: its map serves the patched slots
 	return ret;
 
 beach:
-	r_list_free (ext_relocs);
-	r_skiplist_free (all_relocs);
-	r_io_desc_free (gotr2desc);
-	r_list_free (ret);
+	RVecExtReloc_fini (&ext_relocs);
+	if (gotr2desc) {
+		// open_at selected and mapped it, so close it and reselect the file
+		iob->fd_close (io, gotr2desc->fd);
+		iob->desc_use (io, curfd);
+	}
+	RVecRBinReloc_free (ret);
 	ht_uu_free (relocs_by_sym);
 	return NULL;
 }
 
-static void swizzle_io_read(struct MACH0_(obj_t) *obj, RIO *io) {
-	r_return_if_fail (io && io->desc && io->desc->plugin);
-	RIOPlugin *plugin = io->desc->plugin;
-	obj->original_io_read = plugin->read;
-	plugin->read = &rebasing_and_stripping_io_read;
-}
+#define MACH0_SWIZZLE_DEFAULT_PAGE_SIZE 0x1000
 
-static int rebasing_and_stripping_io_read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
-	r_return_val_if_fail (io, -1);
-	RCore *core = (RCore*) io->corebind.core;
-	if (!core || !core->bin || !core->bin->binfiles) {
-		return -1;
+static ut64 swizzle_max_fixup_page_size(struct MACH0_(obj_t) *obj) {
+	ut64 chunk_capacity = MACH0_SWIZZLE_DEFAULT_PAGE_SIZE;
+	if (!obj->chained_starts) {
+		return chunk_capacity;
 	}
-	struct MACH0_(obj_t) *obj = NULL;
-	RListIter *iter;
-	RBinFile *bf;
-	r_list_foreach (core->bin->binfiles, iter, bf) {
-		if (bf->fd == fd->fd ) {
-			/* The first field of MACH0_(obj_t) is
-			 * the mach_header, whose first field is
-			 * the MH magic.
-			 * This code assumes that bin objects are
-			 * at least 4 bytes long.
-			 */
-			ut32 *magic = bf->o->bin_obj;
-			if (magic && (*magic == MH_MAGIC ||
-					*magic == MH_CIGAM ||
-					*magic == MH_MAGIC_64 ||
-					*magic == MH_CIGAM_64)) {
-				obj = bf->o->bin_obj;
-			}
-			break;
-		}
-	}
-	if (!obj || !obj->original_io_read) {
-		if (fd->plugin->read == &rebasing_and_stripping_io_read) {
-			return -1;
-		}
-		return fd->plugin->read (io, fd, buf, count);
-	}
-	if (obj->rebasing_buffer) {
-		return obj->original_io_read (io, fd, buf, count);
-	}
-	static ut8 *internal_buffer = NULL;
-	static int internal_buf_size = 0;
-	if (count > internal_buf_size) {
-		if (internal_buffer) {
-			R_FREE (internal_buffer);
-			internal_buffer = NULL;
-		}
-		internal_buf_size = R_MAX (count, 8);
-		internal_buffer = (ut8 *) malloc (internal_buf_size);
-	}
-	ut64 io_off = io->off;
-	int result = obj->original_io_read (io, fd, internal_buffer, count);
-	if (result == count) {
-		rebase_buffer (obj, io_off - bf->o->boffset, fd, internal_buffer, count);
-		memcpy (buf, internal_buffer, result);
-	}
-	return result;
-}
-
-static void rebase_buffer(struct MACH0_(obj_t) *obj, ut64 off, RIODesc *fd, ut8 *buf, int count) {
-	if (obj->rebasing_buffer) {
-		return;
-	}
-	obj->rebasing_buffer = true;
-	ut64 eob = off + count;
-	int i = 0;
-	for (; i < obj->nsegs; i++) {
-		if (!obj->chained_starts[i]) {
+	int i;
+	int count = R_MIN (obj->nsegs, obj->segs_count);
+	for (i = 0; i < count; i++) {
+		struct r_dyld_chained_starts_in_segment *starts = obj->chained_starts[i];
+		if (!starts || !starts->page_start || !starts->page_count) {
 			continue;
 		}
-		int page_size = obj->chained_starts[i]->page_size;
-		if (page_size < 1) {
-			page_size = 4096;
+		ut64 page_size = starts->page_size? starts->page_size: MACH0_SWIZZLE_DEFAULT_PAGE_SIZE;
+		chunk_capacity = R_MAX (chunk_capacity, page_size);
+	}
+	return chunk_capacity;
+}
+
+static bool flush_rebase_buffer_chunk(RFixupRebaseContext *ctx) {
+	if (ctx->chunk_valid && ctx->chunk_dirty) {
+		if (r_buf_write_at (ctx->obj->b, ctx->chunk_addr, ctx->chunk, ctx->chunk_size) < 1) {
+			ctx->failed = true;
+			return false;
 		}
-		ut64 start = obj->segs[i].fileoff;
-		ut64 end = start + obj->segs[i].filesize;
-		if (end >= off && start <= eob) {
-			ut64 page_idx = (R_MAX (start, off) - start) / page_size;
-			ut64 page_end_idx = (R_MIN (eob, end) - start) / page_size;
-			for (; page_idx <= page_end_idx; page_idx++) {
-				if (page_idx >= obj->chained_starts[i]->page_count) {
-					break;
-				}
-				ut16 page_start = obj->chained_starts[i]->page_start[page_idx];
-				if (page_start == DYLD_CHAINED_PTR_START_NONE) {
-					continue;
-				}
-				ut64 cursor = start + page_idx * page_size + page_start;
-				while (cursor < eob && cursor < end) {
-					ut8 tmp[8];
-					if (r_buf_read_at (obj->b, cursor, tmp, 8) != 8) {
-						break;
-					}
-					ut64 raw_ptr = r_read_le64 (tmp);
-					bool is_auth = IS_PTR_AUTH (raw_ptr);
-					bool is_bind = IS_PTR_BIND (raw_ptr);
-					ut64 ptr_value = raw_ptr;
-					ut64 delta;
-					if (is_auth && is_bind) {
-						struct dyld_chained_ptr_arm64e_auth_bind *p =
-								(struct dyld_chained_ptr_arm64e_auth_bind *) &raw_ptr;
-						delta = p->next;
-					} else if (!is_auth && is_bind) {
-						struct dyld_chained_ptr_arm64e_bind *p =
-								(struct dyld_chained_ptr_arm64e_bind *) &raw_ptr;
-						delta = p->next;
-					} else if (is_auth && !is_bind) {
-						struct dyld_chained_ptr_arm64e_auth_rebase *p =
-								(struct dyld_chained_ptr_arm64e_auth_rebase *) &raw_ptr;
-						delta = p->next;
-						ptr_value = p->target + obj->baddr;
-					} else {
-						struct dyld_chained_ptr_arm64e_rebase *p =
-								(struct dyld_chained_ptr_arm64e_rebase *) &raw_ptr;
-						delta = p->next;
-						ptr_value = ((ut64)p->high8 << 56) | p->target;
-					}
-					ut64 in_buf = cursor - off;
-					if (cursor >= off && cursor <= eob - 8) {
-						r_write_le64 (&buf[in_buf], ptr_value);
-					}
-					cursor += delta * 8;
-					if (!delta) {
-						break;
-					}
-				}
+		ctx->chunk_dirty = false;
+	}
+	return true;
+}
+
+static ut8 *rebase_buffer_chunk_ptr(RFixupRebaseContext *ctx, ut64 in_buf, ut32 len) {
+	if (len < 1 || in_buf >= ctx->size || len > ctx->size - in_buf) {
+		ctx->failed = true;
+		return NULL;
+	}
+	ut64 chunk_off = in_buf % ctx->chunk_capacity;
+	ut64 chunk_addr = in_buf - chunk_off;
+	if (len > ctx->chunk_capacity - chunk_off) {
+		R_LOG_WARN ("chained fixup at 0x%"PFMT64x" straddles swizzle chunk boundary", in_buf);
+		chunk_addr = in_buf;
+		chunk_off = 0;
+	}
+	if (!ctx->chunk_valid || ctx->chunk_addr != chunk_addr) {
+		if (!flush_rebase_buffer_chunk (ctx)) {
+			return NULL;
+		}
+		if (!ctx->chunk) {
+			ctx->chunk = malloc (ctx->chunk_capacity);
+			if (!ctx->chunk) {
+				ctx->failed = true;
+				return NULL;
 			}
 		}
+		ctx->chunk_addr = chunk_addr;
+		ctx->chunk_size = R_MIN (ctx->chunk_capacity, ctx->size - chunk_addr);
+		if (r_buf_read_at (ctx->obj->b, chunk_addr, ctx->chunk, ctx->chunk_size) != ctx->chunk_size) {
+			ctx->failed = true;
+			return NULL;
+		}
+		ctx->chunk_valid = true;
 	}
-	obj->rebasing_buffer = false;
+	return ctx->chunk + chunk_off;
+}
+
+static RBuffer *rebase_buffer(struct MACH0_(obj_t) *obj) {
+	R_RETURN_VAL_IF_FAIL (obj && obj->b, NULL);
+	RFixupRebaseContext ctx = {0};
+	RBuffer *nb = r_buf_new_with_cache (obj->b, false);
+	if (!nb) {
+		return obj->b;
+	}
+	RBuffer *ob = obj->b;
+	obj->b = nb;
+	ut64 count = r_buf_size (obj->b);
+	ut64 off = 0;
+	ctx.obj = obj;
+	ctx.off = off;
+	ctx.size = count;
+	ctx.chunk_capacity = swizzle_max_fixup_page_size (obj);
+	MACH0_(iterate_chained_fixups) (obj, off, off + count,
+		R_FIXUP_EVENT_MASK_ALL, &rebase_buffer_callback2, &ctx);
+	flush_rebase_buffer_chunk (&ctx);
+	free (ctx.chunk);
+	if (ctx.failed) {
+		obj->b = ob;
+		r_unref (nb);
+		return ob;
+	}
+	obj->b = ob;
+	return nb;
+}
+
+static void add_fixup(RVecRBinReloc *fixups, ut64 addr, ut64 value, ut32 psz) {
+	if (!fixups) {
+		return;
+	}
+	RBinReloc *r = RVecRBinReloc_emplace_back (fixups);
+	r->type = psz == 4? R_BIN_RELOC_32: R_BIN_RELOC_64;
+	r->vaddr = value;
+	r->paddr = addr;
+}
+
+static bool rebase_buffer_callback2(void *context, RFixupEventDetails * event_details) {
+	RFixupRebaseContext *ctx = context;
+	struct MACH0_(obj_t) *obj = ctx->obj;
+	const ut32 psz = event_details->ptr_size;
+	ut64 in_buf = event_details->offset - ctx->off;
+	if (psz != 4 && psz != 8) {
+		R_LOG_WARN ("rebase_buffer_callback2: invalid ptr_size %u, skipping", psz);
+		return false;
+	}
+	RVecRBinReloc *rflist = &obj->reloc_fixups;
+	switch (event_details->type) {
+	case R_FIXUP_EVENT_BIND:
+	case R_FIXUP_EVENT_BIND_AUTH:
+		{
+			ut8 *data = rebase_buffer_chunk_ptr (ctx, in_buf, psz);
+			if (!data) {
+				return false;
+			}
+			memset (data, 0, psz);
+			ctx->chunk_dirty = true;
+			add_fixup (rflist, in_buf, 0, psz);
+		}
+		break;
+	case R_FIXUP_EVENT_REBASE:
+	case R_FIXUP_EVENT_REBASE_AUTH:
+		{
+			ut8 *data = rebase_buffer_chunk_ptr (ctx, in_buf, psz);
+			if (!data) {
+				return false;
+			}
+			ut64 v = event_details->ptr_value;
+			add_fixup (rflist, in_buf, v, psz);
+			r_write_ble (data, v, false, psz * 8);
+			ctx->chunk_dirty = true;
+		}
+		break;
+	default:
+		R_LOG_ERROR ("Unexpected event while rebasing buffer");
+		return false;
+	}
+
+	return true;
 }
 
 static RList *classes(RBinFile *bf) {
+	// 8s / 16s
 	return MACH0_(parse_classes) (bf, NULL);
+}
+
+static bool load_resources(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, false);
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
+	RVecSegment *sections = MACH0_(get_segments_vec) (bf, mo);
+	if (!sections) {
+		return false;
+	}
+	ut32 index = 0;
+	RBinSection *section;
+	R_VEC_FOREACH (sections, section) {
+		const char *type = NULL;
+		if (strstr (section->name, ".__TEXT.__info_plist")) {
+			type = "plist";
+		} else if (strstr (section->name, ".__TEXT.__launchd_plist")) {
+			type = "launchd_plist";
+		} else if (strstr (section->name, ".__TEXT.__entitlements")) {
+			type = "entitlements";
+		}
+		if (!type || !section->size) {
+			continue;
+		}
+		RBinResource *resource = RVecRBinResource_emplace_back (&bf->bo->resources_vec);
+		if (!resource) {
+			return false;
+		}
+		resource->name = strdup (section->name);
+		resource->type = strdup (type);
+		resource->paddr = section->paddr + bf->bo->loadaddr;
+		resource->vaddr = section->vaddr;
+		resource->size = section->size;
+		resource->id = UT64_MAX;
+		resource->index = index++;
+		resource->type_id = UT32_MAX;
+		resource->language_id = UT32_MAX;
+		resource->named = true;
+	}
+	if (mo->cs_present && mo->cs_size) {
+		RBinResource *resource = RVecRBinResource_emplace_back (&bf->bo->resources_vec);
+		if (!resource) {
+			return false;
+		}
+		resource->name = strdup ("CodeSignature");
+		resource->type = strdup ("signature");
+		resource->paddr = mo->cs_paddr + bf->bo->boffset + bf->bo->loadaddr;
+		resource->vaddr = resource->paddr;
+		resource->size = mo->cs_size;
+		resource->id = UT64_MAX;
+		resource->index = index++;
+		resource->type_id = UT32_MAX;
+		resource->language_id = UT32_MAX;
+		resource->named = true;
+		if (mo->cert_size) {
+			resource = RVecRBinResource_emplace_back (&bf->bo->resources_vec);
+			if (!resource) {
+				return false;
+			}
+			resource->name = strdup ("Certificate");
+			resource->type = strdup ("certificate");
+			resource->paddr = mo->cert_paddr + bf->bo->boffset + bf->bo->loadaddr;
+			resource->vaddr = resource->paddr;
+			resource->size = mo->cert_size;
+			resource->id = UT64_MAX;
+			resource->index = index++;
+			resource->type_id = UT32_MAX;
+			resource->language_id = UT32_MAX;
+			resource->named = true;
+		}
+	}
+	return true;
 }
 
 #if !R_BIN_MACH064
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	if (r_buf_size (b) >= 4) {
 		ut8 buf[4] = {0};
 		if (r_buf_read_at (b, 0, buf, 4)) {
@@ -853,6 +906,7 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 	}
 	return false;
 }
+
 static RBuffer *create(RBin *bin, const ut8 *code, int clen, const ut8 *data, int dlen, RBinArchOptions *opt) {
 	const bool use_pagezero = true;
 	const bool use_main = true;
@@ -866,13 +920,13 @@ static RBuffer *create(RBin *bin, const ut8 *code, int clen, const ut8 *data, in
 	ut32 p_cmdsize = 0, p_entry = 0, p_tmp = 0;
 	ut32 baddr = 0x1000;
 
-	r_return_val_if_fail (bin && opt, NULL);
+	R_RETURN_VAL_IF_FAIL (bin && opt, NULL);
 
 	bool is_arm = strstr (opt->arch, "arm");
 	RBuffer *buf = r_buf_new ();
 #ifndef R_BIN_MACH064
 	if (opt->bits == 64) {
-		eprintf ("TODO: Please use mach064 instead of mach0\n");
+		R_LOG_TODO ("Please use mach064 instead of mach0");
 		free (buf);
 		return NULL;
 	}
@@ -1097,7 +1151,7 @@ static RBuffer *create(RBin *bin, const ut8 *code, int clen, const ut8 *data, in
 	filesize = magiclen + cmdsize + clen + dlen;
 	// TEXT SEGMENT should span the whole file //
 	W (p_codefsz, &filesize, 4);
-	W (p_codefsz-8, &filesize, 4); // vmsize = filesize
+	W (p_codefsz - 8, &filesize, 4); // vmsize = filesize
 	W (p_codeva, &codeva, 4);
 	// clen = 4096;
 	W (p_codesz, &clen, 4);
@@ -1120,32 +1174,26 @@ static RBuffer *create(RBin *bin, const ut8 *code, int clen, const ut8 *data, in
 }
 
 static RBinAddr *binsym(RBinFile *bf, int sym) {
-	ut64 addr;
 	RBinAddr *ret = NULL;
-	switch (sym) {
-	case R_BIN_SYM_MAIN:
-		addr = MACH0_(get_main) (bf->o->bin_obj);
-		if (addr == UT64_MAX || !(ret = R_NEW0 (RBinAddr))) {
-			return NULL;
+	if (sym == R_BIN_SYM_MAIN) {
+		struct MACH0_(obj_t) *mo = R_UNWRAP3 (bf, bo, bin_obj);
+		ut64 addr = MACH0_(get_main) (mo);
+		if (addr != UT64_MAX && addr != 0) {
+			ret = R_NEW0 (RBinAddr);
+			ret->vaddr = ((addr >> 1) << 1);
+			ret->paddr = ret->vaddr;
 		}
-		//if (bf->o->info && bf->o->info->bits == 16) {
-		// align for thumb
-		ret->vaddr = ((addr >> 1) << 1);
-		//}
-		ret->paddr = ret->vaddr;
-		break;
 	}
 	return ret;
 }
 
 static ut64 size(RBinFile *bf) {
+	RVecSegment *segments = MACH0_(get_segments_vec) (bf, bf->bo->bin_obj);
 	ut64 off = 0;
 	ut64 len = 0;
-	if (!bf->o->sections) {
-		RListIter *iter;
+	if (segments) {
 		RBinSection *section;
-		bf->o->sections = sections (bf);
-		r_list_foreach (bf->o->sections, iter, section) {
+		R_VEC_FOREACH (segments, section) {
 			if (section->paddr > off) {
 				off = section->paddr;
 				len = section->size;
@@ -1155,21 +1203,94 @@ static ut64 size(RBinFile *bf) {
 	return off + len;
 }
 
+#endif
+
+// walk the compact unwind LSDA index and parse each referenced exception region
+static RVecRBinTrycatch *trycatch(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
+	RVecRBinTrycatch *result = &mo->trycatch;
+	if (mo->trycatch_loaded) {
+		return result;
+	}
+	mo->trycatch_loaded = true;
+	RBinSection *section = NULL, *s;
+	R_VEC_FOREACH (&bf->bo->sections_vec, s) {
+		if (s->name && r_str_endswith (s->name, ".__unwind_info")) {
+			section = s;
+			break;
+		}
+	}
+	if (!section || section->size < 28 || section->size > ST32_MAX) {
+		return result;
+	}
+	ut8 *bytes = malloc (section->size);
+	ut64 offset = r_bin_file_get_buffer_offset (bf, section->paddr);
+	if (!bytes || r_buf_read_at (bf->buf, offset, bytes, section->size) != section->size) {
+		free (bytes);
+		return result;
+	}
+	const bool be = mo->big_endian;
+	ut32 version = r_read_ble32 (bytes, be);
+	ut32 index_offset = r_read_ble32 (bytes + 20, be);
+	ut32 index_count = r_read_ble32 (bytes + 24, be);
+	if (version != 1 || index_count < 2 || index_count > section->size / 12
+			|| index_offset > section->size - (index_count * 12)) {
+		free (bytes);
+		return result;
+	}
+	RBinLsdaParser *lp = r_bin_dwarf_lsda_new (bf, result);
+	if (!lp) {
+		free (bytes);
+		return result;
+	}
+	const ut64 base = baddr (bf);
+	// the index entries slice one sorted descriptor array, never walk back over it
+	ut32 walked = 0;
+	ut32 i;
+	for (i = 0; i + 1 < index_count; i++) {
+		const ut8 *index = bytes + index_offset + (i * 12);
+		ut32 lsda_offset = r_read_ble32 (index + 8, be);
+		ut32 next_lsda_offset = r_read_ble32 (index + 20, be);
+		if (lsda_offset < walked || lsda_offset > next_lsda_offset || next_lsda_offset > section->size
+				|| (next_lsda_offset - lsda_offset) % 8) {
+			continue;
+		}
+		walked = next_lsda_offset;
+		ut32 at;
+		for (at = lsda_offset; at < next_lsda_offset; at += 8) {
+			ut32 function_offset = r_read_ble32 (bytes + at, be);
+			ut32 lsda = r_read_ble32 (bytes + at + 4, be);
+			r_bin_dwarf_parse_lsda (lp, base + function_offset, base + lsda);
+		}
+	}
+	r_bin_dwarf_lsda_free (lp);
+	free (bytes);
+	RVecRBinTrycatch_shrink_to_fit (result);
+	return result;
+}
+
+#if !R_BIN_MACH064
+
 RBinPlugin r_bin_plugin_mach0 = {
-	.name = "mach0",
-	.desc = "mach0 bin plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "mach0",
+		.desc = "32bit Mach Objects",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
 	.binsym = &binsym,
 	.entries = &entries,
 	.signature = &entitlements,
-	.sections = &sections,
-	.symbols = &symbols,
-	.imports = &imports,
+	.load_resources = &load_resources,
+	.sections_vec = &sections_vec,
+	.symbols_vec = &symbols_vec,
+	.imports_vec = &imports_vec,
 	.size = &size,
 	.info = &info,
 	.header = MACH0_(mach_headerfields),
@@ -1179,6 +1300,7 @@ RBinPlugin r_bin_plugin_mach0 = {
 	.patch_relocs = &patch_relocs,
 	.create = &create,
 	.classes = &classes,
+	.trycatch = &trycatch,
 	.write = &r_bin_write_mach0,
 };
 

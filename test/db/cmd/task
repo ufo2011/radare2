@@ -1,0 +1,148 @@
+NAME=&
+FILE=-
+CMDS=<<EOF
+& ?e Hello\nfrom\na task!
+&& 1
+&= 1
+EOF
+EXPECT=<<EOF
+[1] ?e Hello\nfrom\na task!
+Hello
+from
+a task!
+
+EOF
+RUN
+
+NAME=& + grep
+FILE=-
+CMDS=<<EOF
+'& ?e Hello\nfrom\na task!~task
+&& 1
+&= 1
+EOF
+EXPECT=<<EOF
+[1] ?e Hello\nfrom\na task!~task
+a task!
+
+EOF
+RUN
+
+NAME=& + grep 2
+FILE=-
+CMDS=<<EOF
+'& ?e Hello\nfrom\na task!~task
+&& 1
+&= 1
+EOF
+EXPECT=<<EOF
+[1] ?e Hello\nfrom\na task!~task
+a task!
+
+EOF
+RUN
+
+NAME=& list
+FILE=-
+CMDS=<<EOF
+& ?e hello
+& ?e world
+&& 1
+&& 2
+&
+?e --
+&=1
+&=2
+EOF
+EXPECT=<<EOF
+[1] ?e hello
+[2] ?e world
+id mode   fg state   transient cmd
+----------------------------------
+0  coop   *  running false     -- MAIN TASK --
+1  thread    done    false     ?e hello
+2  thread    done    false     ?e world
+
+total running: 0
+--
+hello
+
+world
+
+EOF
+RUN
+
+NAME=& analysis capture
+FILE=hex://554889e5b82a0000005dc3
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+'& af @ 0;?e task-analysis;aflq
+&& 1
+&= 1
+EOF
+EXPECT=<<EOF
+[1] af @ 0;?e task-analysis;aflq
+task-analysis
+0x00000000
+
+EOF
+RUN
+
+NAME=& nested context echo
+FILE=-
+CMDS=<<EOF
+'& echo $(echo nested); echo second
+'& 'echo "raw task"
+?e foreground
+&& 1
+&= 1
+&& 2
+&= 2
+EOF
+EXPECT=<<EOF
+[1] echo $(echo nested); echo second
+[2] 'echo "raw task"
+foreground
+nested
+second
+
+raw task
+
+EOF
+RUN
+
+NAME=& analysis capture with main output
+FILE=hex://554889e5b82a0000005dc3
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+'& af @ 0;?e task-only;aflq
+?e main-only
+&& 1
+&= 1
+EOF
+EXPECT=<<EOF
+[1] af @ 0;?e task-only;aflq
+main-only
+task-only
+0x00000000
+
+EOF
+RUN
+
+NAME=& webserver command help
+FILE=-
+CMDS=<<EOF
+'& =h?~http server
+&& 1
+&= 1
+EOF
+EXPECT=<<EOF
+[1] =h?~http server
+Usage:  =[hH] [...]   # http server
+http server:
+| =h& port      start http server on 'port' in background
+| =H port       start http server on 'port' (launch browser)
+| =H& port      start http server on 'port' in background (launch browser)
+
+EOF
+RUN

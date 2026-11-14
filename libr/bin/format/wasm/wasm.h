@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2017-2018 - cgvwzq */
+/* radare2 - LGPL - Copyright 2017-2026 - cgvwzq */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -8,13 +8,11 @@
 #ifndef _INCLUDE_WASM_H_
 #define _INCLUDE_WASM_H_
 
-// version 0x1 (WIP)
-// https://github.com/WebAssembly/design/blob/master/BinaryEncoding.md
+// https://webassembly.github.io/spec/core/binary/modules.html
 
 #define R_BIN_WASM_MAGIC_BYTES "\x00" \
 			       "asm"
 #define R_BIN_WASM_VERSION 0x1
-#define R_BIN_WASM_STRING_LENGTH 256
 #define R_BIN_WASM_END_OF_CODE 0xb
 
 #define R_BIN_WASM_SECTION_CUSTOM 0x0
@@ -29,16 +27,27 @@
 #define R_BIN_WASM_SECTION_ELEMENT 0x9
 #define R_BIN_WASM_SECTION_CODE 0xa
 #define R_BIN_WASM_SECTION_DATA 0xb
+#define R_BIN_WASM_SECTION_DATACOUNT 0xc
+#define R_BIN_WASM_SECTION_TAG 0xd
 
+/*
+ * Value types From:
+ * https://webassembly.github.io/spec/core/binary/types.html#value-types,
+ * https://webassembly.github.io/spec/core/binary/types.html#binary-numtype
+ * https://github.com/sunfishcode/wasm-reference-manual/blob/master/WebAssembly.md#type-encoding-type
+ */
 typedef enum {
-	R_BIN_WASM_VALUETYPE_i32 = 0x1,
-	R_BIN_WASM_VALUETYPE_i64 = 0x2,
-	R_BIN_WASM_VALUETYPE_f32 = 0x3,
-	R_BIN_WASM_VALUETYPE_f64 = 0x4,
-	R_BIN_WASM_VALUETYPE_v128 = 0x5,
-	R_BIN_WASM_VALUETYPE_ANYFUNC = 0x10,
-	R_BIN_WASM_VALUETYPE_FUNC = 0x20,
-	R_BIN_WASM_VALUETYPE_EMPTY = 0x40,
+	R_BIN_WASM_VALUETYPE_i32 = 0x7f,
+	R_BIN_WASM_VALUETYPE_i64 = 0x7e,
+	R_BIN_WASM_VALUETYPE_f32 = 0x7d,
+	R_BIN_WASM_VALUETYPE_f64 = 0x7c,
+	R_BIN_WASM_VALUETYPE_v128 = 0x7b,
+	R_BIN_WASM_VALUETYPE_REF = 0x64,
+	R_BIN_WASM_VALUETYPE_REF_NULL = 0x63,
+	R_BIN_WASM_VALUETYPE_REFTYPE = 0x70,
+	R_BIN_WASM_VALUETYPE_EXTERNREF = 0x6f,
+	R_BIN_WASM_VALUETYPE_FUNC = 0x60,
+	R_BIN_WASM_VALUETYPE_VOID = 0x40,
 } r_bin_wasm_value_type_t;
 
 typedef enum {
@@ -52,6 +61,7 @@ typedef enum {
 	R_BIN_WASM_NAMETYPE_Module = 0x0,
 	R_BIN_WASM_NAMETYPE_Function = 0x1,
 	R_BIN_WASM_NAMETYPE_Local = 0x2,
+	R_BIN_WASM_NAMETYPE_None = 0xff,
 } r_bin_wasm_custom_name_type_t;
 
 struct r_bin_wasm_init_expr_t {
@@ -65,11 +75,6 @@ struct r_bin_wasm_resizable_limits_t {
 	ut32 maximum;
 };
 
-typedef struct r_bin_wasm_name_t {
-	ut32 len;
-	ut8 *name;
-} RBinWasmName;
-
 typedef struct r_bin_wasm_section_t {
 	ut8 id;
 	ut32 size;
@@ -78,16 +83,20 @@ typedef struct r_bin_wasm_section_t {
 	ut32 offset;
 	ut32 payload_data;
 	ut32 payload_len;
-	ut32 count;
 } RBinWasmSection;
 
+typedef struct r_bin_wasm_type_vector_t {
+	ut32 count;
+	ut8 *types;
+} RBinWasmTypeVec;
+
 typedef struct r_bin_wasm_type_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	ut8 form;
-	ut32 param_count;
-	r_bin_wasm_value_type_t *param_types;
-	st8 return_count; // MVP = 1
-	r_bin_wasm_value_type_t return_type;
-	char to_str[R_BIN_WASM_STRING_LENGTH];
+	RBinWasmTypeVec *args;
+	RBinWasmTypeVec *rets;
+	char *to_str;
 } RBinWasmTypeEntry;
 
 // Other Types
@@ -106,10 +115,12 @@ struct r_bin_wasm_memory_type_t {
 };
 
 typedef struct r_bin_wasm_import_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	ut32 module_len;
-	char module_str[R_BIN_WASM_STRING_LENGTH];
+	char *module_str;
 	ut32 field_len;
-	char field_str[R_BIN_WASM_STRING_LENGTH];
+	char *field_str;
 	ut8 kind;
 	union {
 		ut32 type_f;
@@ -117,31 +128,40 @@ typedef struct r_bin_wasm_import_t {
 		struct r_bin_wasm_table_type_t type_t;
 		struct r_bin_wasm_memory_type_t type_m;
 	};
-
 } RBinWasmImportEntry;
 
 typedef struct r_bin_wasm_function_t {
-	ut32 type_index; // index to Type entries
+	ut32 sec_i;
+	ut64 file_offset;
+	ut32 typeindex;
 } RBinWasmFunctionEntry;
 
 typedef struct r_bin_wasm_table_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	ut8 element_type; // only anyfunc
 	struct r_bin_wasm_resizable_limits_t limits;
 } RBinWasmTableEntry;
 
 typedef struct r_bin_wasm_memory_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	struct r_bin_wasm_resizable_limits_t limits;
 } RBinWasmMemoryEntry;
 
 typedef struct r_bin_wasm_global_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	r_bin_wasm_value_type_t content_type;
 	ut8 mutability; // 0 if immutable, 1 if mutable
 	struct r_bin_wasm_init_expr_t init;
 } RBinWasmGlobalEntry;
 
 typedef struct r_bin_wasm_export_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	ut32 field_len;
-	char field_str[R_BIN_WASM_STRING_LENGTH];
+	char *field_str;
 	ut8 kind;
 	ut32 index;
 } RBinWasmExportEntry;
@@ -152,10 +172,12 @@ typedef struct r_bin_wasm_start_t {
 
 struct r_bin_wasm_local_entry_t {
 	ut32 count;
-	r_bin_wasm_value_type_t type;
+	st8 type; // r_bin_wasm_value_type_t
 };
 
 typedef struct r_bin_wasm_element_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	ut32 index;
 	struct r_bin_wasm_init_expr_t init;
 	ut32 num_elem;
@@ -163,58 +185,48 @@ typedef struct r_bin_wasm_element_t {
 } RBinWasmElementEntry;
 
 typedef struct r_bin_wasm_code_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	ut32 body_size;
 	ut32 local_count; // numer of local entries
 	struct r_bin_wasm_local_entry_t *locals;
 	ut32 code; // offset
 	ut32 len; // real bytecode length
-	ut8 byte; // 0xb, indicating end of the body
-	char *name;
-	char *signature;
 } RBinWasmCodeEntry;
 
 typedef struct r_bin_wasm_data_t {
+	ut32 sec_i;
+	ut64 file_offset;
 	ut32 index; // linear memory index (0 in MVP)
 	struct r_bin_wasm_init_expr_t offset; // bytecode evaluated at runtime
 	ut32 size;
 	ut32 data; // offset
 } RBinWasmDataEntry;
 
-// TODO: custom sections
+R_VEC_TYPE (RVecWasmPtr, void *);
 
+typedef struct r_bin_wasm_custom_module {
+	ut64 file_offset;
+	char *name;
+} RBinWasmCustomModule;
 
-typedef struct r_bin_wasm_custom_name_function_names_t {
-	ut32 count;
-	RIDStorage *names;
-} RBinWasmCustomNameFunctionNames;
+typedef struct r_bin_wasm_custom_function {
+	ut64 file_offset;
+	RIDStorage *store; // RIDStorage of char *
+} RBinWasmCustomFunction;
 
-typedef struct r_bin_wasm_custom_name_local_name_t {
-	ut32 index; // function index
+typedef struct r_bin_wasm_custom_locals {
+	ut64 file_offset;
+	RIDStorage *store; // 2d idstore, RIDStorage of RIDStorage of char *
+} RBinWasmCustomLocals;
 
-	ut32 names_count;
-	RIDStorage *names; // local names
-} RBinWasmCustomNameLocalName;
-
-typedef struct r_bin_wasm_custom_name_local_names_t {
-	ut32 count;
-	RList *locals; // RBinWasmCustomNameLocalName
-} RBinWasmCustomNameLocalNames;
-
-// "name" section entry
-typedef struct r_bin_wasm_custom_name_entry_t {
-	ut8 type;
-	ut32 size;
-
-	ut8 payload_data;
-	union {
-		struct r_bin_wasm_name_t* mod_name;
-		RBinWasmCustomNameFunctionNames *func;
-		RBinWasmCustomNameLocalNames *local;
-	};
-} RBinWasmCustomNameEntry;
+typedef struct r_bin_wasm_custom_names {
+	RBinWasmCustomModule mod;
+	RBinWasmCustomFunction funcs;
+	RBinWasmCustomLocals locals;
+} RBinWasmCustomNames;
 
 typedef struct r_bin_wasm_obj_t {
-
 	RBuffer *buf;
 	size_t size;
 
@@ -222,37 +234,38 @@ typedef struct r_bin_wasm_obj_t {
 
 	// cache purposes
 	RList *g_sections;
-	RList *g_types;
-	RList *g_imports;
-	RList *g_exports;
-	RList *g_tables;
-	RList *g_memories;
-	RList *g_globals;
-	RList *g_elements;
-	RList *g_codes;
-	RList *g_datas;
-	RBinWasmStartEntry *g_start;
+	RVecWasmPtr *g_types;
+	RVecWasmPtr *g_imports_arr[4];
+	RVecWasmPtr *g_funcs;
+	RVecWasmPtr *g_tables;
+	RVecWasmPtr *g_memories;
+	RVecWasmPtr *g_globals;
+	RVecWasmPtr *g_exports;
+	RVecWasmPtr *g_elements;
+	RVecWasmPtr *g_codes;
+	RVecWasmPtr *g_datas;
+	ut32 g_start;
 
-	RList *g_names;
-	// etc...
-
+	// custom sections
+	RBinWasmCustomNames *names;
 } RBinWasmObj;
 
 RBinWasmObj *r_bin_wasm_init(RBinFile *bf, RBuffer *buf);
 void r_bin_wasm_destroy(RBinFile *bf);
 RList *r_bin_wasm_get_sections(RBinWasmObj *bin);
-RList *r_bin_wasm_get_types(RBinWasmObj *bin);
-RList *r_bin_wasm_get_imports(RBinWasmObj *bin);
-RList *r_bin_wasm_get_exports(RBinWasmObj *bin);
-RList *r_bin_wasm_get_tables(RBinWasmObj *bin);
-RList *r_bin_wasm_get_memories(RBinWasmObj *bin);
-RList *r_bin_wasm_get_globals(RBinWasmObj *bin);
-RList *r_bin_wasm_get_elements(RBinWasmObj *bin);
-RList *r_bin_wasm_get_codes(RBinWasmObj *bin);
-RList *r_bin_wasm_get_datas(RBinWasmObj *bin);
-RList *r_bin_wasm_get_custom_names(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_types(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_imports_kind(RBinWasmObj *bin, ut32 kind);
+RVecWasmPtr *r_bin_wasm_get_functions(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_tables(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_memories(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_globals(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_exports(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_elements(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_codes(RBinWasmObj *bin);
+RVecWasmPtr *r_bin_wasm_get_datas(RBinWasmObj *bin);
+RBinWasmCustomNames *r_bin_wasm_get_custom_names(RBinWasmObj *bin);
 ut32 r_bin_wasm_get_entrypoint(RBinWasmObj *bin);
 const char *r_bin_wasm_get_function_name(RBinWasmObj *bin, ut32 idx);
-const char *r_bin_wasm_valuetype_to_string(r_bin_wasm_value_type_t type);
+const char *r_bin_wasm_valuetype_tostring(r_bin_wasm_value_type_t type);
 
 #endif

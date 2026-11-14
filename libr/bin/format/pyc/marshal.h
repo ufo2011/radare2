@@ -5,6 +5,7 @@
 
 #include <r_util.h>
 #include <r_types.h>
+#include <sdb/set.h>
 
 typedef enum {
 	TYPE_ASCII = 'a',
@@ -47,6 +48,8 @@ typedef enum {
 typedef struct {
 	pyc_marshal_type type;
 	void *data;
+	ut32 refcount; // owners besides the first one (TYPE_REF and the ref table)
+	int height;    // levels of objects nested below this one
 } pyc_object;
 
 typedef struct {
@@ -70,7 +73,21 @@ typedef struct {
 	st64 end_offset;
 } pyc_code_object;
 
-bool get_sections_symbols_from_code_objects(RBuffer *buffer, RList *sections, RList *symbols, RList *objs, ut32 magic);
+// Per-parse context to avoid global variables.
+// Created fresh for each parse operation (sections/symbols extraction).
+typedef struct {
+	ut32 magic;            // .pyc magic number
+	ut32 scount;           // symbol ordinal counter
+	RList *refs;           // ref table for FLAG_REF objects (internal to parse)
+	RList *interned_table; // shared interned strings table
+	int depth;             // current get_object nesting level
+	int deepest;           // deepest level reached below the object being parsed
+	bool too_deep;         // nesting limit reached, abort the parse
+	SetU *seen;            // start offsets of the code objects already registered
+} PycUnmarshalCtx;
+
+bool get_sections_symbols_from_code_objects(PycUnmarshalCtx *ctx, RBuffer *buffer, RVecRBinSection *sections, RVecRBinSymbol *symbols, RList *objs, pyc_object **out_pobj);
 ut64 get_code_object_addr(RBuffer *buffer, ut32 magic);
+void pyc_object_free(pyc_object *obj);
 
 #endif

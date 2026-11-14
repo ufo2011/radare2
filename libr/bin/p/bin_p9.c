@@ -1,168 +1,595 @@
-/* radare2 - LGPL - Copyright 2009-2019 - nibble, pancake */
+/* radare2 - MIT - Copyright 2021-2022 - pancake, keegan, Plan 9 Foundation */
 
 #include <r_types.h>
 #include <r_util.h>
 #include <r_lib.h>
 #include <r_bin.h>
+#include <r_vec.h>
 #include "../format/p9/p9bin.h"
 
-static bool check_buffer(RBinFile *bf, RBuffer *buf) {
-	return r_bin_p9_get_arch (buf, NULL, NULL);
+#undef P9_ALIGN
+#define P9_ALIGN(address, align) (((address) + (align - 1)) & ~(align - 1))
+
+extern struct r_bin_dbginfo_t r_bin_dbginfo_p9;
+
+static bool check(RBinFile *bf, RBuffer *buf) {
+	const char *arch;
+	int bits, big_endian;
+	return r_bin_p9_get_arch (buf, &arch, &bits, &big_endian);
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb){
-	return check_buffer (bf, b);
+static bool load(RBinFile *bf, RBuffer *b, ut64 loadaddr) {
+	if (!check (bf, b)) {
+		return false;
+	}
+
+	RBinPlan9Obj *o = R_NEW0 (RBinPlan9Obj);
+
+	if (r_buf_fread_at (bf->buf, 0, (ut8 *)&o->header, "IIIIIIII", 1) != sizeof (o->header)) {
+		return false;
+	}
+
+	o->header_size = sizeof (struct plan9_exec);
+
+	// for extended headers (64-bit binaries)
+	if (o->header.magic & HDR_MAGIC) {
+		o->entry = r_buf_read_be64_at (bf->buf, o->header_size);
+		if (o->entry == UT64_MAX) {
+			return false;
+		}
+		o->header_size += 8;
+	} else {
+		o->entry = o->header.entry;
+	}
+
+	// kernels require different maps (see uses for details)
+	o->is_kernel = o->entry & KERNEL_MASK;
+
+	// each arch has a pc quantization used for line-number calculation
+	switch (o->header.magic) {
+	case MAGIC_AMD64:
+	case MAGIC_INTEL_386:
+		o->pcq = 1;
+		break;
+	case MAGIC_68020:
+		o->pcq = 2;
+		break;
+	case MAGIC_ARM64:
+	case MAGIC_PPC64:
+	case MAGIC_RISCV64:
+	case MAGIC_SPARC:
+	case MAGIC_SPARC64:
+	case MAGIC_MIPS_3000BE:
+	case MAGIC_MIPS_4000BE:
+	case MAGIC_MIPS_4000LE:
+	case MAGIC_MIPS_3000LE:
+	case MAGIC_ARM:
+	case MAGIC_PPC:
+		o->pcq = 4;
+		break;
+	}
+
+	bf->bo->bin_obj = o;
+	return true;
 }
 
 static void destroy(RBinFile *bf) {
-	r_buf_free (bf->o->bin_obj);
+	free (bf->bo->bin_obj);
 }
 
 static ut64 baddr(RBinFile *bf) {
-	return 0x1000000; // XXX
+	RBinPlan9Obj *o = (RBinPlan9Obj *)bf->bo->bin_obj;
+
+	switch (o->header.magic) {
+	case MAGIC_ARM64:
+		// if this is an arm64 kernel: check mask and return known
+		// base address. see libmach for definitions.
+		if (o->is_kernel) {
+			return 0xffffffffc0080000ULL;
+		}
+		return 0x10000ULL;
+	case MAGIC_AMD64:
+		// if this is an amd64 kernel. see above
+		if (o->is_kernel) {
+			return 0xffffffff80110000ULL;
+		}
+		// fallthrough
+	case MAGIC_PPC64:
+		return 0x200000ULL;
+	case MAGIC_RISCV64:
+		if (o->is_kernel) {
+			return 0xffffffffc0200000ULL;
+		}
+		return 0x10000ULL;
+	case MAGIC_68020:
+	case MAGIC_INTEL_386:
+	case MAGIC_SPARC:
+	case MAGIC_SPARC64:
+	case MAGIC_MIPS_3000BE:
+	case MAGIC_MIPS_4000BE:
+	case MAGIC_MIPS_4000LE:
+	case MAGIC_MIPS_3000LE:
+	case MAGIC_ARM:
+	case MAGIC_PPC:
+		return 0x1000ULL;
+	}
+
+	// unreachable because check only supports the above architectures
+	return 0;
 }
 
 static RBinAddr *binsym(RBinFile *bf, int type) {
-	return NULL; // TODO
+	return NULL;
 }
 
 static RList *entries(RBinFile *bf) {
-	RList *ret;
-	RBinAddr *ptr = NULL;
+	RBinPlan9Obj *o = (RBinPlan9Obj *)bf->bo->bin_obj;
+	RList *ret = r_list_newf (free);
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
+	ptr->paddr = o->entry - baddr (bf);
+	// for kernels the header is not mapped
+	if (o->is_kernel) {
+		ptr->paddr += o->header_size;
+	}
+	ptr->vaddr = o->entry;
+	r_list_append (ret, ptr);
 
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
-	ret->free = free;
-	if ((ptr = R_NEW0 (RBinAddr))) {
-		ptr->paddr = 8 * 4;
-		ptr->vaddr = 8 * 4;// + baddr (bf);
-		r_list_append (ret, ptr);
-	}
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret = NULL;
-	RBinSection *ptr = NULL;
-	ut64 textsize, datasize, symssize, spszsize, pcszsize;
-	if (!bf->o->info) {
-		return NULL;
+static bool sections_vec(RBinFile *bf) {
+	RBinPlan9Obj *o = (RBinPlan9Obj *)bf->bo->bin_obj;
+
+	if (!bf->bo->info) {
+		return false;
+	}
+	RVecRBinSection_clear (&bf->bo->sections_vec);
+
+	ut32 align = 0x1000;
+	// on some platforms the text segment has a separate alignment
+	switch (o->header.magic) {
+	case MAGIC_AMD64:
+		align = 0x200000;
+		break;
+	case MAGIC_MIPS_3000BE:
+		align = 0x4000;
+		break;
+	case MAGIC_ARM64:
+		align = 0x10000;
+		break;
 	}
 
-	if (!(ret = r_list_newf ((RListFree)free))) {
-		return NULL;
-	}
-	if (r_buf_size (bf->buf) < 28) {
-		r_list_free (ret);
-		return NULL;
-	}
+	// for kernels the header is not mapped
+	ut64 phys = o->is_kernel? o->header_size: 0;
+	ut64 vsize = 0;
+
 	// add text segment
-	textsize = r_buf_read_le32_at (bf->buf, 4);
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		r_list_free (ret);
-		return NULL;
-	}
+	RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("text");
-	ptr->size = textsize;
-	ptr->vsize = textsize + (textsize % 4096);
-	ptr->paddr = 8 * 4;
-	ptr->vaddr = ptr->paddr;
+	ptr->size = o->header.text;
+	// for regular applications: header is included in the text segment
+	if (!o->is_kernel) {
+		ptr->size += o->header_size;
+	}
+	ptr->vsize = P9_ALIGN (o->header.text, align);
+	ptr->paddr = phys;
+	ptr->vaddr = baddr (bf);
 	ptr->perm = R_PERM_RX; // r-x
 	ptr->add = true;
-	r_list_append (ret, ptr);
+	phys += ptr->size;
+	vsize += ptr->vsize;
+
+	// switch back to 4k page size
+	align = 0x1000;
+
 	// add data segment
-	datasize = r_buf_read_le32_at (bf->buf, 8);
-	if (datasize > 0) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
-		ptr->name = strdup ("data");
-		ptr->size = datasize;
-		ptr->vsize = datasize + (datasize % 4096);
-		ptr->paddr = textsize + (8 * 4);
-		ptr->vaddr = ptr->paddr;
-		ptr->perm = R_PERM_RW;
-		ptr->add = true;
-		r_list_append (ret, ptr);
-	}
-	// ignore bss or what
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+	ptr->name = strdup ("data");
+	ptr->size = o->header.data;
+	ptr->vsize = P9_ALIGN (o->header.data, align);
+	ptr->paddr = phys;
+	ptr->vaddr = baddr (bf) + vsize;
+	ptr->perm = R_PERM_RW;
+	ptr->add = true;
+	phys += ptr->size;
+	vsize += ptr->vsize;
+
+	// add bss segment
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+	ptr->name = strdup ("bss");
+	ptr->size = 0;
+	ptr->vsize = P9_ALIGN (o->header.bss, align);
+	ptr->paddr = 0;
+	ptr->vaddr = baddr (bf) + vsize;
+	ptr->perm = R_PERM_RW;
+	ptr->add = true;
+	phys += ptr->size;
+	vsize += ptr->vsize;
+
 	// add syms segment
-	symssize = r_buf_read_le32_at (bf->buf, 16);
-	if (symssize) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
-		ptr->name = strdup ("syms");
-		ptr->size = symssize;
-		ptr->vsize = symssize + (symssize % 4096);
-		ptr->paddr = datasize + textsize + (8 * 4);
-		ptr->vaddr = ptr->paddr;
-		ptr->perm = R_PERM_R; // r--
-		ptr->add = true;
-		r_list_append (ret, ptr);
-	}
-	// add spsz segment
-	spszsize = r_buf_read_le32_at (bf->buf, 24);
-	if (spszsize) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
-		ptr->name = strdup ("spsz");
-		ptr->size = spszsize;
-		ptr->vsize = spszsize + (spszsize % 4096);
-		ptr->paddr = symssize + datasize + textsize + (8 * 4);
-		ptr->vaddr = ptr->paddr;
-		ptr->perm = R_PERM_R; // r--
-		ptr->add = true;
-		r_list_append (ret, ptr);
-	}
-	// add pcsz segment
-	pcszsize = r_buf_read_le32_at (bf->buf, 24);
-	if (pcszsize) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
-		ptr->name = strdup ("pcsz");
-		ptr->size = pcszsize;
-		ptr->vsize = pcszsize + (pcszsize % 4096);
-		ptr->paddr = spszsize + symssize + datasize + textsize + (8 * 4);
-		ptr->vaddr = ptr->paddr;
-		ptr->perm = R_PERM_R; // r--
-		ptr->add = true;
-		r_list_append (ret, ptr);
-	}
-	return ret;
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+	ptr->name = strdup ("syms");
+	ptr->size = o->header.syms;
+	ptr->vsize = P9_ALIGN (o->header.syms, align);
+	ptr->paddr = phys;
+	ptr->vaddr = baddr (bf) + vsize;
+	ptr->perm = R_PERM_R; // r--
+	ptr->add = true;
+	phys += ptr->size;
+	vsize += ptr->vsize;
+
+	// add pc/sp offsets segment
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+	ptr->name = strdup ("pcsp");
+	ptr->size = o->header.spsz;
+	ptr->vsize = P9_ALIGN (o->header.spsz, align);
+	ptr->paddr = phys;
+	ptr->vaddr = baddr (bf) + vsize;
+	ptr->perm = R_PERM_R; // r--
+	ptr->add = true;
+	phys += ptr->size;
+	vsize += ptr->vsize;
+
+	// add pc/line numbers segment
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+	ptr->name = strdup ("pcline");
+	ptr->size = o->header.pcsz;
+	ptr->vsize = P9_ALIGN (o->header.pcsz, align);
+	ptr->paddr = phys;
+	ptr->vaddr = baddr (bf) + vsize;
+	ptr->perm = R_PERM_R; // r--
+	ptr->add = true;
+
+	return true;
 }
 
-static RList *symbols(RBinFile *bf) {
-	// TODO: parse symbol table
-	return NULL;
+typedef struct {
+	ut64 value;
+	char type;
+	char *name;
+} Sym;
+
+static void sym_fini_vec(Sym *s) {
+	if (s && s->name) {
+		R_FREE (s->name);
+	}
 }
 
-static RList *imports(RBinFile *bf) {
-	return NULL;
+R_VEC_TYPE_WITH_FINI(SymVec, Sym, sym_fini_vec)
+
+static void str_fini_vec(char **name) {
+	free (*name);
+}
+
+R_VEC_TYPE_WITH_FINI(StrVec, char *, str_fini_vec)
+
+static st64 sym_read(RBinFile *bf, Sym *sym, const ut64 offset) {
+	st64 size = 0;
+	const RBinPlan9Obj *o = (RBinPlan9Obj *)bf->bo->bin_obj;
+	const ut64 syms = o->header_size + o->header.text + o->header.data;
+
+	ut64 value;
+	if (o->header.magic & HDR_MAGIC) {
+		// for 64-bit binaries the value type is 8 bytes
+		value = r_buf_read_be64_at (bf->buf, syms + offset);
+		if (value == UT64_MAX) {
+			return -1;
+		}
+		size += sizeof (ut64);
+	} else {
+		value = (ut64)r_buf_read_be32_at (bf->buf, syms + offset);
+		if (value == UT32_MAX) {
+			return -1;
+		}
+		size += sizeof (ut32);
+	}
+
+	const ut8 typ = r_buf_read8_at (bf->buf, syms + offset + size);
+	if (typ == UT8_MAX) {
+		return -1;
+	}
+	size += sizeof (typ);
+	const char type = typ & 0x7f;
+
+	char *name = r_buf_get_string (bf->buf, syms + offset + size);
+	if (!name) {
+		return -1;
+	}
+	size += strlen (name) + 1;
+
+	sym->value = value;
+	sym->type = type;
+	sym->name = name;
+	return size;
+}
+
+// see fline in libmach: empty names close the innermost open file
+static void apply_history(RBinFile *bf, ut64 pc, ut64 line, Sym *first, Sym *end) {
+	size_t depth = 0;
+	Sym *h;
+	for (h = first; h < end && h->name && line > h->value; h++) {
+		if (*h->name) {
+			depth++;
+		} else if (!depth || !--depth) {
+			return;
+		}
+	}
+	// walk back to the open file, summing the lines of its closed includes
+	ut64 nested = 0;
+	ut64 closed_at = 0;
+	depth = 0;
+	Sym *file = h;
+	while (file > first) {
+		file--;
+		if (!*file->name) {
+			if (!depth++) {
+				closed_at = file->value;
+			}
+		} else if (!depth) {
+			break;
+		} else if (!--depth) {
+			nested += closed_at - file->value;
+		}
+	}
+	const char *name = (h < end && h->name)? file->name: "<unknown>";
+	bf->addrline.al_add (&bf->addrline, pc, name, NULL, line - file->value - nested + 1, 0);
+}
+
+static bool symbols_vec(RBinFile *bf) {
+	RVecRBinSymbol *ret = &bf->bo->symbols_vec;
+	SymVec *history = NULL; // <Sym>
+	HtUP *histories = NULL; // <ut64, SymVec *>
+	StrVec *names = NULL; // <char *>
+	RList *all_histories = NULL; // owns every allocated SymVec*
+	const RBinPlan9Obj *o = (RBinPlan9Obj *)bf->bo->bin_obj;
+	ut64 i;
+	Sym sym = {0};
+
+	if (!(histories = ht_up_new0 ())) {
+		goto error;
+	}
+
+	if (!(names = StrVec_new ())) {
+		goto error;
+	}
+
+	if (!(all_histories = r_list_newf ((RListFree)SymVec_free))) {
+		goto error;
+	}
+
+	const ut64 syms = o->header_size + o->header.text + o->header.data;
+	const ut64 bsize = r_buf_size (bf->buf);
+	// clamp tainted header fields against the actual buffer size
+	if (syms > bsize || o->header.syms > bsize - syms) {
+		goto error;
+	}
+
+	ut64 offset = 0;
+	while (offset < o->header.syms) {
+		sym_fini_vec (&sym);
+		const st64 size = sym_read (bf, &sym, offset);
+		if (size == -1) {
+			goto error;
+		}
+		offset += size;
+
+		// source file name components
+		if (sym.type == 'f') {
+			if (sym.value > bsize / 4) {
+				R_LOG_ERROR ("Prevented huge memory allocation");
+				break;
+			}
+			if (StrVec_length (names) < sym.value) {
+				if (!StrVec_reserve (names, sym.value)) {
+					goto error;
+				}
+				// push NULL elements until we reach sym.value
+				while (StrVec_length (names) < sym.value) {
+					char *null_ptr = NULL;
+					StrVec_push_back (names, &null_ptr);
+				}
+			}
+
+			char **name_ptr = StrVec_at (names, sym.value - 1);
+			if (name_ptr) {
+				free (*name_ptr);
+				*name_ptr = sym.name;
+				sym.name = NULL;
+			}
+			continue;
+		}
+
+		// source file name
+		if (sym.type == 'z') {
+			// make a /-delim name
+			RStrBuf *sb = r_strbuf_new (NULL);
+
+			ut64 fin = (o->header.syms > offset)? o->header.syms - offset: 0;
+			for (i = 0; i < fin; i += sizeof (ut16)) {
+				ut16 index = r_buf_read_be16_at (bf->buf, syms + offset + i);
+				if (index == UT16_MAX) {
+					r_strbuf_free (sb);
+					goto error;
+				}
+
+				// read indices until a zero index
+				if (index == 0) {
+					offset += i + sizeof (ut16);
+					break;
+				}
+
+				char **name_ptr = StrVec_at (names, index - 1);
+				const char *name = name_ptr ? *name_ptr : NULL;
+				r_strbuf_appendf (sb, "%s", name);
+				// lead / is NOT assumed
+				if (i != 0) {
+					r_strbuf_append (sb, "/");
+				}
+			}
+
+			char *name = r_strbuf_drain (sb);
+			size_t name_size = strlen (name);
+			// pop final /
+			if (name_size) {
+				name[name_size - 1] = '\0';
+			}
+
+			// a new history
+			if (sym.value == 1 && history) {
+				history = NULL;
+			}
+
+			if (!history) {
+				history = SymVec_new ();
+				if (!history) {
+					free (name);
+					goto error;
+				}
+				r_list_append (all_histories, history);
+			}
+
+			Sym history_sym = {sym.value, 'z', name};
+			SymVec_push_back (history, &history_sym);
+			continue;
+			}
+
+		// skip non symbol information
+		switch (sym.type) {
+		case 'T':
+		case 't':
+		case 'L':
+		case 'l':
+		case 'D':
+		case 'd':
+		case 'B':
+		case 'b':
+			break;
+		// TODO: source file line offset
+		case 'Z': {
+			ut64 fin = (o->header.syms > offset)? o->header.syms - offset: 0;
+			for (i = 0; i < fin; i += sizeof (ut16)) {
+				ut16 index = r_buf_read_be16_at (bf->buf, syms + offset + i);
+				if (index == UT16_MAX) {
+					goto error;
+				}
+
+				// read indices until a zero index
+				if (index == 0) {
+					offset += i + sizeof (ut16);
+					break;
+				}
+			}
+		}
+			// fallthrough
+		default:
+			sym_fini_vec (&sym);
+			continue;
+		}
+
+		RBinSymbol *bin_sym = RVecRBinSymbol_emplace_back (ret);
+		bin_sym->name = r_bin_name_new_from (sym.name);
+		sym.name = NULL;
+		bin_sym->paddr = sym.value - baddr (bf);
+		// for kernels the header is not mapped
+		if (o->is_kernel) {
+			bin_sym->paddr += o->header_size;
+		}
+		bin_sym->vaddr = sym.value;
+
+		if (history) {
+			ht_up_insert (histories, bin_sym->vaddr, history);
+		}
+	}
+
+	history = NULL;
+
+	const ut64 pcs = syms + o->header.syms + o->header.spsz;
+	// clamp tainted header fields against the actual buffer size
+	if (pcs > bsize || o->header.pcsz > bsize - pcs) {
+		goto error;
+	}
+
+	ut64 line = 0;
+	// base address (for kernels the header is NOT mapped)
+	ut64 pc = baddr (bf) + (o->is_kernel? 0: o->header_size) - o->pcq;
+
+	offset = 0;
+	while (offset < o->header.pcsz) {
+		SymVec *h = ht_up_find (histories, pc + o->pcq, NULL);
+		if (h) {
+			history = h;
+		}
+
+		ut64 prev = line;
+
+		ut8 b;
+		st64 r = r_buf_read_at (bf->buf, pcs + offset, &b, sizeof (b));
+		if (r != sizeof (b)) {
+			goto error;
+		}
+		offset += sizeof (ut8);
+
+		// see pc2line in libmach
+		if (b == 0) {
+			ut32 d = r_buf_read_be32_at (bf->buf, pcs + offset);
+			if (d == UT32_MAX) {
+				goto error;
+			}
+			line += (st32)d;
+			offset += sizeof (ut32);
+		} else if (b < 65) {
+			line += b;
+		} else if (b < 129) {
+			line -= b - 64;
+		} else {
+			pc += o->pcq * (b - 129);
+		}
+
+		pc += o->pcq;
+
+		if (history && prev != line && SymVec_length (history) > 1) {
+			apply_history (bf, pc, line, R_VEC_START_ITER (history), R_VEC_END_ITER (history));
+		}
+	}
+
+	sym_fini_vec (&sym);
+	ht_up_free (histories);
+	StrVec_free (names);
+	r_list_free (all_histories);
+	return true;
+error:
+	sym_fini_vec (&sym);
+	StrVec_free (names);
+	ht_up_free (histories);
+	r_list_free (all_histories);
+	return false;
 }
 
 static RList *libs(RBinFile *bf) {
+	// all executables are statically linked
 	return NULL;
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	RBinInfo *ret = NULL;
-	int bits = 32, bina, big_endian = 0;
+	const char *arch;
+	int bits, big_endian;
+	struct plan9_exec header;
 
-	if (!(bina = r_bin_p9_get_arch (bf->buf, &bits, &big_endian))) {
+	if (!r_bin_p9_get_arch (bf->buf, &arch, &bits, &big_endian)) {
 		return NULL;
 	}
-	if (!(ret = R_NEW0 (RBinInfo))) {
+
+	if (r_buf_fread_at (bf->buf, 0, (ut8 *)&header, "IIIIIIII", 1) != sizeof (header)) {
 		return NULL;
 	}
+
+	RBinInfo *ret = R_NEW0 (RBinInfo);
 	ret->file = strdup (bf->file);
 	ret->bclass = strdup ("program");
 	ret->rclass = strdup ("p9");
 	ret->os = strdup ("Plan9");
-	ret->arch = strdup (r_sys_arch_str (bina));
+	ret->default_cc = strdup ("p9");
+	ret->arch = strdup (arch);
 	ret->machine = strdup (ret->arch);
 	ret->subsystem = strdup ("plan9");
 	ret->type = strdup ("EXEC (executable file)");
@@ -170,29 +597,48 @@ static RBinInfo *info(RBinFile *bf) {
 	ret->has_va = true;
 	ret->big_endian = big_endian;
 	ret->dbg_info = 0;
+	if (header.syms) {
+		ret->dbg_info |= R_BIN_DBG_SYMS;
+	}
+	if (header.pcsz) {
+		ret->dbg_info |= R_BIN_DBG_LINENUMS;
+	}
+	if (!ret->dbg_info) {
+		ret->dbg_info |= R_BIN_DBG_STRIPPED;
+	}
 	return ret;
 }
 
 static ut64 size(RBinFile *bf) {
-	ut64 text, data, syms, spsz;
 	if (!bf) {
 		return 0;
 	}
-	if (!bf->o->info) {
-		bf->o->info = info (bf);
+	if (!bf->bo->info) {
+		bf->bo->info = info (bf);
 	}
-	if (!bf->o->info) {
+	if (!bf->bo->info) {
 		return 0;
 	}
-	// TODO: reuse section list
-	if (r_buf_size (bf->buf) < 28) {
+
+	struct plan9_exec header;
+	if (r_buf_fread_at (bf->buf, 0, (ut8 *)&header, "IIIIIIII", 1) != sizeof (header)) {
 		return 0;
 	}
-	text = r_buf_read_le32_at (bf->buf, 4);
-	data = r_buf_read_le32_at (bf->buf, 8);
-	syms = r_buf_read_le32_at (bf->buf, 16);
-	spsz = r_buf_read_le32_at (bf->buf, 24);
-	return text + data + syms + spsz + (6 * 4);
+
+	ut64 size = sizeof (header);
+
+	// there may be an additional 64-bit entry after the header
+	if (header.magic & HDR_MAGIC) {
+		size += 8;
+	}
+
+	size += header.text;
+	size += header.data;
+	size += header.syms;
+	size += header.spsz;
+	size += header.pcsz;
+
+	return size;
 }
 
 #if !R_BIN_P9
@@ -202,7 +648,7 @@ static RBuffer *create(RBin *bin, const ut8 *code, int codelen, const ut8 *data,
 	RBuffer *buf = r_buf_new ();
 #define B(x, y) r_buf_append_bytes (buf, (const ut8 *) (x), y)
 #define D(x) r_buf_append_ut32 (buf, x)
-	D (I_MAGIC); // i386 only atm
+	D (MAGIC_INTEL_386); // i386 only atm
 	D (codelen);
 	D (datalen);
 	D (4096); // bss
@@ -218,21 +664,24 @@ static RBuffer *create(RBin *bin, const ut8 *code, int codelen, const ut8 *data,
 }
 
 RBinPlugin r_bin_plugin_p9 = {
-	.name = "p9",
-	.desc = "Plan9 bin plugin",
-	.license = "LGPL3",
-	.load_buffer = &load_buffer,
+	.meta = {
+		.name = "p9",
+		.desc = "Plan 9 Executables",
+		.author = "keegan",
+		.license = "MIT",
+	},
+	.load = &load,
 	.size = &size,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
 	.binsym = &binsym,
 	.entries = &entries,
-	.sections = &sections,
-	.symbols = &symbols,
-	.imports = &imports,
+	.sections_vec = &sections_vec,
+	.symbols_vec = &symbols_vec,
 	.info = &info,
 	.libs = &libs,
+	// .dbginfo = &r_bin_dbginfo_p9,
 	.create = &create,
 };
 

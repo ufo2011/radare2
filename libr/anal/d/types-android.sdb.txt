@@ -19,35 +19,68 @@ enum.androidLogPriority.FATAL=0x7
 enum.androidLogPriority.SILENT=0x8
 androidLogPriority=enum
 
-__android_log_print=func
-func.__android_log_print.args=3
-func.__android_log_print.arg.0=androidLogPriority,prio
-func.__android_log_print.arg.1=const char *,tag
-func.__android_log_print.arg.2=const char *,fmt
-func.__android_log_print.ret=int
+android_log_print=func
+func.android_log_print.args=3
+func.android_log_print.arg.0=androidLogPriority,prio
+func.android_log_print.arg.1=const char *,tag
+func.android_log_print.arg.2=const char *,fmt
+func.android_log_print.ret=int
 
-__android_log_write=func
-func.__android_log_write.args=3
-func.__android_log_write.arg.0=androidLogPriority,prio
-func.__android_log_write.arg.1=const char *,tag
-func.__android_log_write.arg.2=const char *,fmt
-func.__android_log_write.ret=int
+android_log_write=func
+func.android_log_write.args=3
+func.android_log_write.arg.0=androidLogPriority,prio
+func.android_log_write.arg.1=const char *,tag
+func.android_log_write.arg.2=const char *,fmt
+func.android_log_write.ret=int
 
-__android_log_vprint=func
-func.__android_log_vprint.args=3
-func.__android_log_vprint.arg.0=androidLogPriority,prio
-func.__android_log_vprint.arg.1=const char *,tag
-func.__android_log_vprint.arg.2=const char *,fmt
-func.__android_log_vprint.ret=int
+android_log_vprint=func
+func.android_log_vprint.args=3
+func.android_log_vprint.arg.0=androidLogPriority,prio
+func.android_log_vprint.arg.1=const char *,tag
+func.android_log_vprint.arg.2=const char *,fmt
+func.android_log_vprint.ret=int
 
-__android_log_assert=func
-func.__android_log_assert.args=3
-func.__android_log_assert.arg.0=const char *,cond
-func.__android_log_assert.arg.1=const char *,tag
-func.__android_log_assert.arg.2=const char *,fmt
-func.__android_log_assert.ret=void
+android_log_assert=func
+func.android_log_assert.args=3
+func.android_log_assert.arg.0=const char *,cond
+func.android_log_assert.arg.1=const char *,tag
+func.android_log_assert.arg.2=const char *,fmt
+func.android_log_assert.ret=void
 
 __stack_chk_fail=func
 func.__stack_chk_fail.args=0
 func.__stack_chk_fail.noreturn=true
 func.__stack_chk_fail.ret=void
+
+xalloc_die=func
+func.xalloc_die.args=0
+func.xalloc_die.noreturn=true
+func.xalloc_die.ret=void
+
+exit=func
+func.exit.args=1
+func.exit.arg.0=int,status
+func.exit.noreturn=true
+func.exit.ret=void
+
+abort=func
+func.abort.args=0
+func.abort.noreturn=true
+func.abort.ret=void
+
+fgets_chk=func
+func.fgets_chk.args=4
+func.fgets_chk.arg.0=char *,s
+func.fgets_chk.arg.1=int,n
+func.fgets_chk.arg.2=FILE *,stream
+func.fgets_chk.arg.3=size_t,size
+func.fgets_chk.ret=char *
+
+fread_chk=func
+func.fread_chk.args=5
+func.fread_chk.arg.0=void *,ptr
+func.fread_chk.arg.1=size_t,size
+func.fread_chk.arg.2=size_t,n
+func.fread_chk.arg.3=FILE *,stream
+func.fread_chk.arg.4=size_t,ptrlen
+func.fread_chk.ret=size_t

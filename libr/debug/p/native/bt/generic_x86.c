@@ -19,12 +19,17 @@ static RList *backtrace_x86_32(RDebug *dbg, ut64 at) {
 	_esp = (ut32) ((ri)? r_reg_get_value (reg, ri): at);
 		// TODO: implement [stack] map uptrace method too
 	esp = _esp;
-	for (i=0; i<dbg->btdepth; i++) {
-		bio->read_at (bio->io, esp, (void *)&ebp2, 4);
+	for (i = 0; i < dbg->options.btdepth; i++) {
+		if (bio->read_at (bio->io, esp, (void *)&ebp2, sizeof (ebp2)) != sizeof (ebp2)) {
+			break;
+		}
 		if (ebp2 == UT32_MAX)
 			break;
 		*buf = '\0';
-		bio->read_at (bio->io, (ebp2-5)-(ebp2-5)%4, (void *)&buf, 4);
+		if (bio->read_at (bio->io, (ebp2 - 5) - (ebp2 - 5) % 4, (void *)&buf, sizeof (buf)) != sizeof (buf)) {
+			esp += 4;
+			continue;
+		}
 
 		// TODO: arch_is_call() here and this fun will be portable
 		if (buf[(ebp2-5)%4] == 0xe8) {
@@ -60,19 +65,24 @@ static RList *backtrace_x86_32_anal(RDebug *dbg, ut64 at) {
 
 	eip = r_reg_get_value (reg, r_reg_get (reg, "eip", R_REG_TYPE_GPR));
 	fcn = r_anal_get_fcn_in (dbg->anal, eip, R_ANAL_FCN_TYPE_NULL);
-	if (fcn != NULL) {
+	if (fcn) {
 		frame = R_NEW0 (RDebugFrame);
 		frame->addr = eip;
 		frame->size = 0;
 		r_list_append (list, frame);
 	}
 
-	for (i=1; i<dbg->btdepth; i++) {
-		bio->read_at (bio->io, esp, (void *)&ebp2, 4);
+	for (i = 1; i < dbg->options.btdepth; i++) {
+		if (bio->read_at (bio->io, esp, (void *)&ebp2, sizeof (ebp2)) != sizeof (ebp2)) {
+			break;
+		}
 		if (ebp2 == UT32_MAX)
 			break;
 		*buf = '\0';
-		bio->read_at (bio->io, (ebp2-5)-(ebp2-5)%4, (void *)&buf, 4);
+		if (bio->read_at (bio->io, (ebp2 - 5) - (ebp2 - 5) % 4, (void *)&buf, sizeof (buf)) != sizeof (buf)) {
+			esp += 4;
+			continue;
+		}
 
 		// TODO: arch_is_call() here and this fun will be portable
 		if (buf[(ebp2-5)%4]==0xe8) {

@@ -13,7 +13,6 @@ LINK+=-g
 endif
 
 LIBR:=$(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-# /libr
 
 ALL?=
 CFLAGS:=-I$(LIBR) -I$(LIBR)/include $(CFLAGS)
@@ -39,6 +38,7 @@ endif
 LINK+=-Wl,-rpath,"${LIBDIR}"
 endif
 
+ifeq (,$(findstring emcc,$(CC)))
 ifeq (${OSTYPE},gnulinux)
 ifeq (${HAVE_LIBVERSION},1)
 LIBNAME=${LDFLAGS_SONAME}${LIBSO}.${LIBVERSION}
@@ -48,12 +48,13 @@ endif
 else
 ifeq (${OSTYPE},darwin)
 ifeq (${HAVE_LIBVERSION},1)
-LIBNAME=${LDFLAGS_SONAME}${LIB}.${LIBVERSION}.${EXT_SO}
+LIBNAME=${LDFLAGS_SONAME}${LIB}.${ABIVERSION}.${EXT_SO}
 else
 LIBNAME=${LDFLAGS_SONAME}${LIB}.${EXT_SO}
 endif
 else
 LIBNAME=${LDFLAGS_SONAME}${LIBSO}
+endif
 endif
 endif
 
@@ -66,7 +67,7 @@ LINK+=-lproc
 endif
 
 ifeq ($(EXTRA_PRE),)
-all: ${LIBSO} ${LIBAR} ${EXTRA_TARGETS}
+all: $(LIBSO) ${LIBAR} ${EXTRA_TARGETS}
 else
 all: $(EXTRA_PRE)
 	$(MAKE) all2
@@ -82,11 +83,14 @@ else
 	@-if [ -f d/Makefile ] ; then (echo "DIR ${NAME}/d"; ${MAKE} -C d) ; fi
 endif
 
-$(OBJS): $(EXTRA_TARGETS)
+prelib-build: $(EXTRA_TARGETS)
+	$(MAKE) $(OBJS)
+
 ifeq ($(WITH_LIBS),1)
-$(LIBSO): ${WFD} ${OBJS} ${SHARED_OBJ}
+
+$(LIBSO): prelib-build ${SHARED_OBJ}
 	@for a in ${OBJS} ${SHARED_OBJ} ${SRC}; do \
-	  do=0 ; [ ! -e "${LIBSO}" ] && do=1 ; \
+	  do=0; [ ! -e "${LIBSO}" ] && do=1 ; \
 	  test "$$a" -nt "${LIBSO}" && do=1 ; \
 	  if [ $$do = 1 ]; then \
 	    [ -n "${SILENT}" ] && \
@@ -101,7 +105,8 @@ $(LIBSO): ;
 endif
 
 ifeq ($(WITH_LIBR),1)
-$(LIBAR): ${OBJS}
+
+$(LIBAR): prelib-build
 	@[ "${SILENT}" = 1 ] && echo "CC_AR $(LIBAR)" || true
 	rm -f $(LIBAR)
 	${CC_AR} ${OBJS} ${SHARED_OBJ}
@@ -123,6 +128,9 @@ pkgcfg:
 	@echo 'Requires: $(filter r_%,${R2DEPS})' >> ../../pkgcfg/${NAME}.pc.acr
 	@if [ "${NAME}" = "libr" ]; then NAME=''; else NAME=${NAME}; fi ;\
 	echo 'Libs: -L$${libdir} -l${NAME} $(filter-out r_%,${R2DEPS}) ${PCLIBS}' >> ../../pkgcfg/${NAME}.pc.acr
+	@if [ -n "${PCLIBS_PRIVATE}" ]; then \
+		echo 'Libs.private: ${PCLIBS_PRIVATE}' >> ../../pkgcfg/${NAME}.pc.acr ; \
+	fi
 	@echo 'Cflags: -I$${includedir}/libr ${PCCFLAGS}' >> ../../pkgcfg/${NAME}.pc.acr
 
 clean:: ${EXTRA_CLEAN}
@@ -136,7 +144,7 @@ mrproper: clean
 	-rm -f *.d
 	@true
 
-.PHONY: all install pkgcfg clean deinstall uninstall echodir
+.PHONY: all install pkgcfg clean deinstall uninstall echodir prelib-build
 
 # autodetect dependencies object
 -include $(OBJS:.o=.d)

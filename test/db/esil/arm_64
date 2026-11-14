@@ -1,3 +1,223 @@
+NAME=Checked pointer multiplication handles negative offsets and zero registers
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200c629b208c629b3f0c629b207c629be07f7f9b
+aei
+aer x1=3
+aer x2=8
+aer x3=0x1000
+aer pstate=0xf0000000
+aeip
+aes
+aer x0
+s 4
+aeip
+aes
+aer x0
+aer x1=0xfffffffffffffffd
+s 0
+aeip
+aes
+aer x0
+s 8
+aeip
+aes
+aer x0
+s 12
+aeip
+aes
+aer x0
+s 16
+aeip
+aes
+aer x0
+aer pstate
+EOF
+EXPECT=<<EOF
+0x00001018
+0x00000fe8
+0x00000fe8
+0x00000fe8
+0xffffffffffffffe8
+0x00000000
+0xf0000000
+EOF
+RUN
+
+NAME=Tagged pointer subtraction strips tags and sets comparison flags
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx e03f82d16d00c79a6d00c7baff03cdba
+aei
+aer sp=0x2000
+aeip
+aes
+aer x0
+aer x3=0xab00000000001030
+aer x7=0xcd00000000001000
+s 4
+aeip
+aes
+aer x13
+s 8
+aeip
+aes
+aer x13
+aer zf
+aer nf
+aer cf
+aer vf
+aer sp=0xaa00000000000030
+s 12
+aeip
+aes
+aer sp
+aer zf
+aer nf
+aer cf
+aer vf
+EOF
+EXPECT=<<EOF
+0x00001fe0
+0x00000030
+0x00000030
+0x00000000
+0x00000000
+0x00000001
+0x00000000
+0xaa00000000000030
+0x00000001
+0x00000000
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=Tagged pointer subtraction sign extends the 56-bit addresses
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 6d00c79a6d00c7ba
+aei
+aer x3=0x0080000000000000
+aer x7=0
+aeip
+aes
+aer x13
+aer x3=0
+aer x7=0x0080000000000000
+s 4
+aeip
+aes
+aer x13
+aer zf
+aer nf
+aer cf
+aer vf
+EOF
+EXPECT=<<EOF
+0xff80000000000000
+0x80000000000000
+0x00000000
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=Checked pointer address arithmetic handles shifts, SP and XZR
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 962e179a962e17daff231f9ae13f029a9f3e1cda
+aei
+aer x20=0x1000
+aer x23=3
+aeip
+aes
+aer x22
+s 4
+aeip
+aes
+aer x22
+aer sp=0x2000
+s 8
+aeip
+aes
+aer sp
+aer x2=1
+s 12
+aeip
+aes
+aer x1
+aer x28=1
+s 16
+aeip
+aes
+aer sp
+EOF
+EXPECT=<<EOF
+0x00001018
+0x00000fe8
+0x00002000
+0x00002080
+0x00000f80
+EOF
+RUN
+
+NAME=flutter refs
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 71334091314640f9
+f str.CTF_is_awesome=0xc088
+e asm.emu=true
+pd 2
+e asm.esil=true
+pd 2
+EOF
+EXPECT=<<EOF
+            0x00000000      71334091       add x17, x27, 0xc, lsl 12   ; x17=0xc000
+            0x00000004      314640f9       ldr x17, [x17, 0x88]        ; tmp=0xc088 str.CTF_is_awesome ; x17=0xffffffffffffffff -> 0x403371ff
+            0x00000000      71334091       12,12,<<,x27,+,x17,=        ; x17=0xc000
+            0x00000004      314640f9       136,x17,+,DUP,tmp,=,[8],x17,= ; tmp=0xc088 str.CTF_is_awesome ; x17=0xffffffffffffffff -> 0x403371ff
+EOF
+RUN
+
+NAME=/re in calls
+FILE=bins/mach0/ls-m1
+ARGS=-a arm -b 64
+CMDS=<<EOF
+s 0x1000071e8
+/re $$
+pd 1
+EOF
+EXPECT=<<EOF
+            ;-- func.1000071e8:
+            ; CALL XREFS from main @ +0x4c(x), +0x668(x)
+            0x1000071e8      7f2303d5       pacibsp
+EOF
+RUN
+
+NAME=/r in calls
+FILE=bins/mach0/ls-m1
+ARGS=-a arm -b 64
+CMDS=<<EOF
+s 0x1000071e8
+/r $$
+pd 1
+EOF
+EXPECT=<<EOF
+(nofunc) 0x100003adc [CALL] bl sym.func.1000071e8
+(nofunc) 0x1000040f8 [CALL] bl sym.func.1000071e8
+            ;-- func.1000071e8:
+            ; CALL XREFS from main @ +0x4c(x), +0x668(x)
+            0x1000071e8      7f2303d5       pacibsp
+EOF
+RUN
+
 NAME=ldr x25, [sp, 0x28]
 FILE=malloc://0x200
 CMDS=<<EOF
@@ -13,6 +233,92 @@ ar x25
 EOF
 EXPECT=<<EOF
 0x1122334455667788
+EOF
+RUN
+
+NAME=store q0 128bit reg
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+e hex.header=false
+woe 1
+x 16
+ae 0,[16],q0,=
+ar q0
+?e --
+wow 00
+x 16
+ae q0,0,=[16]
+x 16
+EOF
+EXPECT=<<EOF
+0x00000000  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f  ................
+0x0f0e0d0c0b0a09080706050403020100
+--
+0x00000000  0000 0000 0000 0000 0000 0000 0000 0000  ................
+0x00000000  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f  ................
+EOF
+RUN
+
+
+NAME=ldr q0 128bit reg
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+ar q0
+ar q0=123
+ar q0
+ar0
+ar q0
+?e --
+woe 1
+ae 0,[16],q0,=
+ar q0
+EOF
+EXPECT=<<EOF
+0x00000000000000000000000000000000
+0x0000000000000000000000000000007b
+0x00000000000000000000000000000000
+--
+0x0f0e0d0c0b0a09080706050403020100
+EOF
+RUN
+
+NAME=128bit peek and poke halves on big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true -e hex.header=false
+CMDS=<<EOF
+woe 1
+ae 0,[16],q0,=
+ar v0l
+ar v0h
+ae q0,0x10,=[16]
+x 16 @ 0x10
+EOF
+EXPECT=<<EOF
+0x8090a0b0c0d0e0f
+0x1020304050607
+0x00000010  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f  ................
+EOF
+RUN
+
+NAME=128bit register view on big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+ar v0l=0x08090a0b0c0d0e0f
+ar v0h=0x0001020304050607
+ar q0
+ar q0=123
+ar q0
+ar v0l
+EOF
+EXPECT=<<EOF
+0x000102030405060708090a0b0c0d0e0f
+0x0000000000000000000000000000007b
+0x0000007b
 EOF
 RUN
 
@@ -486,9 +792,132 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=tst x10, 7 with x10=1
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 5f0940f2
+ar x10=1
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:0 z:0 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=tst x10, 7 with x10=8
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 5f0940f2
+ar x10=8
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:0 z:1 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=tst x10, 0xf000000000000000 with x10=0x7000000000000000
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 5f0d44f2
+ar x10=0x7000000000000000
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:0 z:0 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=tst x10, 0xf000000000000000 with x10=0x8000000000000000
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 5f0d44f2
+ar x10=0x8000000000000000
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:1 z:0 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=tst x10, 7 with x10=1 (arm.v35)
+FILE=malloc://0x200
+REQUIRE=arm.v35
+CMDS=<<EOF
+e asm.arch=arm.v35
+e asm.bits=64
+wx 5f0940f2
+ar x10=1
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:0 z:0 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=tst x10, 7 with x10=8 (arm.v35)
+FILE=malloc://0x200
+REQUIRE=arm.v35
+CMDS=<<EOF
+e asm.arch=arm.v35
+e asm.bits=64
+wx 5f0940f2
+ar x10=8
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:0 z:1 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=tst x10, 0xf000000000000000 with x10=0x7000000000000000 (arm.v35)
+FILE=malloc://0x200
+REQUIRE=arm.v35
+CMDS=<<EOF
+e asm.arch=arm.v35
+e asm.bits=64
+wx 5f0d44f2
+ar x10=0x7000000000000000
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:0 z:0 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=tst x10, 0xf000000000000000 with x10=0x8000000000000000 (arm.v35)
+FILE=malloc://0x200
+REQUIRE=arm.v35
+CMDS=<<EOF
+e asm.arch=arm.v35
+e asm.bits=64
+wx 5f0d44f2
+ar x10=0x8000000000000000
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:1 z:0 c:0 o:0 p:0
+EOF
+RUN
+
 NAME=subs x0, x0, x1; csel x0, x2, x3, mi
 FILE=malloc://0x200
-BROKEN=1
 CMDS=<<EOF
 e asm.arch=arm
 e asm.bits=64
@@ -807,6 +1236,25 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=bic vector immediate
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 7114006f # bic v17.4s, 3
+aei
+aer v17l=0x112233475566778b
+aer v17h=0x99aabbcfddeeff03
+aes
+aer v17l
+aer v17h
+EOF
+EXPECT=<<EOF
+0x1122334455667788
+0x99aabbccddeeff00
+EOF
+RUN
+
 NAME=rev 64-bit register
 FILE=malloc://0x200
 CMDS=<<EOF
@@ -918,6 +1366,7 @@ RUN
 
 NAME=arm.v35 registers
 FILE=malloc://0x200
+REQUIRE=arm.v35
 CMDS=<<EOF
 e asm.arch=arm.v35
 e asm.bits=64
@@ -962,8 +1411,4944 @@ fp = 0x00000000
 lr = 0x00000000
 sp = 0x00000000
 pc = 0x00000000
-zr = 0x00000000
-xzr = 0x00000000
 pstate = 0x00000000
+EOF
+RUN
+
+NAME=invalid instruction skip
+FILE=malloc://0x2048
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 00000000100000d01002019100021fd6
+f sym.something 8 @ 0x2040
+aaex 16
+axt 0x2040
+aaex 12@4
+axt 0x2040
+EOF
+EXPECT=<<EOF
+(nofunc) 0x8 [ICOD:r--] add x16, x16, 0x40
+(nofunc) 0x8 [ICOD:r--] add x16, x16, 0x40
+EOF
+RUN
+
+NAME=subs x flags nzcv
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200002eb
+ar x1=5
+ar x2=1
+aes
+ar cf
+ar vf
+ar zf
+ar pc=0
+ar x1=1
+ar x2=5
+aes
+ar cf
+ar nf
+ar pc=0
+ar x1=0x8000000000000000
+ar x2=1
+aes
+ar vf
+ar pc=0
+ar x1=7
+ar x2=7
+aes
+ar zf
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000000
+0x00000000
+0x00000000
+0x00000001
+0x00000001
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=subs w flags
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000026b
+ar x1=1
+ar x2=5
+aes
+ar cf
+ar nf
+ar pc=0
+ar x1=0x80000000
+ar x2=1
+aes
+ar vf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=adds x flags nzcv
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200002ab
+ar x1=0xffffffffffffffff
+ar x2=1
+aes
+ar cf
+ar zf
+ar x0
+ar pc=0
+ar x1=0x7fffffffffffffff
+ar x2=1
+aes
+ar vf
+ar nf
+ar cf
+ar pc=0
+ar x1=2
+ar x2=3
+aes
+ar x0
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000000
+0x00000001
+0x00000001
+0x00000000
+0x00000005
+0x00000000
+EOF
+RUN
+
+NAME=adds w flags
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000022b
+ar x1=0xffffffff
+ar x2=1
+aes
+ar cf
+ar zf
+ar x0
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=cmp vf with int64 min subtrahend
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 3f0002eb
+ar x1=0xffffffffffffffff
+ar x2=0x8000000000000000
+aes
+ar vf
+ar cf
+ar nf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=cmn flags
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 3f0002ab
+ar x1=0
+ar x2=1
+aes
+ar nf
+ar zf
+ar cf
+ar pc=0
+ar x1=0xffffffffffffffff
+ar x2=1
+aes
+ar cf
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=ands clears cv
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200002ea
+ar cf=1
+ar vf=1
+ar x1=0xf0
+ar x2=0x0f
+aes
+ar zf
+ar cf
+ar vf
+ar pc=0
+ar x1=0x8000000000000000
+ar x2=0x8000000000000000
+aes
+ar nf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000000
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=adcs carry chain wrap
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200002ba
+ar cf=1
+ar x1=5
+ar x2=0xffffffffffffffff
+aes
+ar x0
+ar cf
+ar pc=0
+ar cf=0
+ar x1=5
+ar x2=0xffffffffffffffff
+aes
+ar x0
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000005
+0x00000001
+0x00000004
+0x00000001
+EOF
+RUN
+
+NAME=adc adds carry in
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000029a
+ar cf=1
+ar x1=2
+ar x2=3
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x00000006
+EOF
+RUN
+
+NAME=negs flags
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx e00301eb
+ar x1=0
+aes
+ar cf
+ar zf
+ar pc=0
+ar x1=1
+aes
+ar x0
+ar nf
+ar cf
+ar pc=0
+ar x1=0x8000000000000000
+aes
+ar vf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0xffffffffffffffff
+0x00000001
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=sbc x carry sense
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200002da
+ar x1=5
+ar x2=3
+ar cf=1
+aes
+ar x0
+ar pc=0
+ar cf=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x00000002
+0x00000001
+EOF
+RUN
+
+NAME=sbc w borrow wrap
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000025a
+ar x1=0
+ar x2=0
+ar cf=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0xffffffff
+EOF
+RUN
+
+NAME=sbcs x flags nzcv
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200002fa
+ar x1=5
+ar x2=3
+ar cf=1
+aes
+ar x0
+ar cf
+ar zf
+ar pc=0
+ar x1=3
+ar x2=5
+aes
+ar x0
+ar nf
+ar cf
+ar pc=0
+ar x1=7
+ar x2=7
+ar cf=1
+aes
+ar zf
+ar cf
+ar pc=0
+ar x1=7
+ar x2=7
+ar cf=0
+aes
+ar x0
+ar nf
+ar cf
+ar zf
+ar pc=0
+ar x1=0x8000000000000000
+ar x2=1
+ar cf=1
+aes
+ar x0
+ar vf
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000002
+0x00000001
+0x00000000
+0xfffffffffffffffe
+0x00000001
+0x00000000
+0x00000001
+0x00000001
+0xffffffffffffffff
+0x00000001
+0x00000000
+0x00000000
+0x7fffffffffffffff
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=sbcs w flags
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000027a
+ar x1=0x80000000
+ar x2=1
+ar cf=1
+aes
+ar x0
+ar vf
+ar cf
+ar pc=0
+ar x1=1
+ar x2=5
+aes
+ar x0
+ar nf
+ar cf
+EOF
+EXPECT=<<EOF
+0x7fffffff
+0x00000001
+0x00000001
+0xfffffffc
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=ngc ngcs negate with carry
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx e00301da
+ar x1=5
+ar cf=1
+aes
+ar x0
+ar pc=0
+ar cf=0
+aes
+ar x0
+wx e00301fa @ 0
+ar pc=0
+ar x1=0
+ar cf=1
+aes
+ar x0
+ar zf
+ar cf
+wx e003017a @ 0
+ar pc=0
+ar x1=0x80000000
+ar cf=1
+aes
+ar x0
+ar nf
+ar vf
+ar cf
+EOF
+EXPECT=<<EOF
+0xfffffffffffffffb
+0xfffffffffffffffa
+0x00000000
+0x00000001
+0x00000001
+0x80000000
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=arm64 bics computes and-not result and nz flags with cv cleared
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 200022ea
+ar x1=0xff00ff00ff00ff00
+ar x2=0x0f0f0f0f0f0f0f0f
+ar cf=1
+ar vf=1
+ar pc=0
+aes
+ar x0
+ar nf
+ar zf
+ar cf
+ar vf
+wx 200022ea
+ar x1=0x0f0f
+ar x2=0xffff
+ar pc=0
+aes
+ar x0
+ar zf
+wx 2000226a
+ar x1=0xffffffff
+ar x2=0x7fffffff
+ar pc=0
+aes
+ar w0
+ar nf
+EOF
+EXPECT=<<EOF
+0xf000f000f000f000
+0x00000001
+0x00000000
+0x00000000
+0x00000000
+0x00000000
+0x00000001
+0x80000000
+0x00000001
+EOF
+RUN
+
+NAME=w-register writes zero-extend into the x register
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 2000020b
+ar x0=0xffffffff00000000
+ar x1=1
+ar x2=2
+aes
+ar x0
+wx 8046a272
+ar x0=0xa5a5000089abcdef
+ar pc=0
+aes
+ar x0
+wx 2000821a
+ar x0=0xa5a5000000000000
+ar x1=0xffffffff80000005
+ar x2=0x0000000100000003
+ar zf=1
+ar pc=0
+aes
+ar x0
+wx 60044029
+ar x0=0xa5a5000000000000
+ar x1=0xa5a5000100000000
+ar x3=0x100
+wx 88776655a5a5a5a5@0x100
+ar pc=0
+aes
+ar x0
+ar x1
+wx ff430011
+ar sp=0xffffffff00001000
+ar pc=0
+aes
+ar sp
+EOF
+EXPECT=<<EOF
+0x00000003
+0x1234cdef
+0x80000005
+0x55667788
+0xa5a5a5a5
+0x00001010
+EOF
+RUN
+
+NAME=ldrsb w sign-extends to 32 bits then zero-extends, sxtw x untouched
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 2000c039
+ar x0=0xa5a5000000000000
+ar x1=0x100
+wx 88@0x100
+aes
+ar x0
+wx 207c4093
+ar x1=0xa5a50001ff887766
+ar pc=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0xffffff88
+0xffffffffff887766
+EOF
+RUN
+
+NAME=cmp cmn tst on w registers do not touch the source x register
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 3f00026b
+ar x1=0xa5a5000180000000
+ar x2=0xa5a5000200000001
+aes
+ar x1
+ar nf
+wx 3f00022b
+ar pc=0
+aes
+ar x1
+wx 3f00026a
+ar pc=0
+aes
+ar x1
+wx 3f000071
+ar pc=0
+aes
+ar x1
+aoe @ 0
+EOF
+EXPECT=<<EOF
+0xa5a5000180000000
+0x00000000
+0xa5a5000180000000
+0xa5a5000180000000
+0xa5a5000180000000
+0x00000000 0x0,w1,==,$z,zf,:=,31,$s,nf,:=,32,$b,!,cf,:=,31,0x0,w1,^,0x0,w1,-,w1,^,&,>>,1,&,vf,:=
+EOF
+RUN
+
+NAME=zero-extension is appended after the flag block and only for written w registers
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000022b
+aoe
+wx 200080b9
+aoe
+wx 41000088
+aoe
+EOF
+EXPECT=<<EOF
+0x00000000 w2,-1,*,w1,==,$z,zf,:=,31,$s,nf,:=,31,$c,cf,:=,31,$o,vf,:=,w2,w1,+,w0,=,w0,x0,=
+0x00000000 32,0,x1,+,DUP,tmp,=,[4],~,x0,=
+0x00000000 0,w0,=,w1,w1,0,+,=[8],w0,x0,=
+EOF
+RUN
+
+NAME=ldp loads both words before writing the register that addresses them
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 1122334455667788aabbccddeeff0011 @ 0x40
+wx 000440a9 @ 0
+aei
+aeim
+aer x0=0x40
+aes
+aer x0
+aer x1
+EOF
+EXPECT=<<EOF
+0x8877665544332211
+0x1100ffeeddccbbaa
+EOF
+RUN
+
+NAME=the extended register operands extend first and shift after
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 2008228b
+aer x1=0x1000
+aer x2=0x1ff
+aer pc=0
+s 0
+aes
+aer x0
+wx 20a422cb
+aer x1=0x1000
+aer x2=0x18000
+aer pc=0
+s 0
+aes
+aer x0
+wx 2000220b
+aer x1=0x1000
+aer x2=0x1ff
+aer pc=0
+s 0
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x000013fc
+0x00011000
+0x000010ff
+EOF
+RUN
+
+NAME=bfxil, extr, smulh, smsubl and the wrapping sdiv
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 202c0433
+aer x0=0x89abcdef
+aer x1=0x12345f78
+aer pc=0
+s 0
+aes
+aer x0
+wx 20108213
+aer x1=0x12345678
+aer x2=0x9abcdef0
+aer pc=0
+s 0
+aes
+aer x0
+wx 207c429b
+aer x1=0xfffffffffffffffe
+aer x2=0x7fffffffffffffff
+aer pc=0
+s 0
+aes
+aer x0
+wx 2090229b
+aer x1=0xfffffffe
+aer x2=3
+aer x4=0x100000000
+aer pc=0
+s 0
+aes
+aer x0
+wx 200cc29a
+aer x1=0x8000000000000000
+aer x2=0xffffffffffffffff
+aer pc=0
+s 0
+aes
+aer x0
+wx 20008213
+aer x1=0x12345678
+aer x2=0x9abcdef0
+aer pc=0
+s 0
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x89abcdf7
+0x89abcdef
+0xffffffffffffffff
+0x100000006
+0x8000000000000000
+0x9abcdef0
+EOF
+RUN
+
+NAME=clz counts at the register width
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 2010c05a
+aer x1=0x00001000
+aer pc=0
+s 0
+aes
+aer x0
+wx 2010c0da
+aer x1=0x00001000
+aer pc=0
+s 0
+aes
+aer x0
+aer x1=0
+aer pc=0
+s 0
+aes
+aer x0
+wx 2010c05a
+aer x1=0xffffffff00001000
+aer pc=0
+s 0
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x00000013
+0x00000033
+0x00000040
+0x00000013
+EOF
+RUN
+
+NAME=ccmp emits a balanced conditional
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 000041fa
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: zf,?{,x1,x0,==,$z,zf,:=,63,$s,nf,:=,64,$b,!,cf,:=,63,x1,x0,^,x1,x0,-,x0,^,&,>>,1,&,vf,:=,}{,pstate,1,28,1,<<,-,&,28,0,<<,|,pstate,:=,}
+EOF
+RUN
+
+NAME=ccmp with an always condition has no else arm
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 07e041fa
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: x1,x0,==,$z,zf,:=,63,$s,nf,:=,64,$b,!,cf,:=,63,x1,x0,^,x1,x0,-,x0,^,&,>>,1,&,vf,:=
+EOF
+RUN
+
+NAME=ccmn emits a balanced conditional
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 000041ba
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: zf,?{,x1,-1,*,x0,==,$z,zf,:=,63,$s,nf,:=,63,$c,cf,:=,63,$o,vf,:=,}{,pstate,1,28,1,<<,-,&,28,0,<<,|,pstate,:=,}
+EOF
+RUN
+
+NAME=ccmn with an always condition has no else arm
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 07e041ba
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: x1,-1,*,x0,==,$z,zf,:=,63,$s,nf,:=,63,$c,cf,:=,63,$o,vf,:=
+EOF
+RUN
+
+NAME=fccmp guards the compare with its condition
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0044611e
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: nf,?{,64,d1,F2D,NAN,64,d0,F2D,NAN,|,vf,:=,64,d1,F2D,64,d0,F2D,F==,zf,:=,64,d1,F2D,64,d0,F2D,F<,nf,:=,nf,!,vf,|,cf,:=,}{,pstate,1,28,1,<<,-,&,0x0,|,pstate,:=,}
+EOF
+RUN
+
+NAME=fccmp with an always condition has no else arm
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 07e4611e
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: 64,d1,F2D,NAN,64,d0,F2D,NAN,|,vf,:=,64,d1,F2D,64,d0,F2D,F==,zf,:=,64,d1,F2D,64,d0,F2D,F<,nf,:=,nf,!,vf,|,cf,:=
+EOF
+RUN
+
+NAME=fcmp against the zero immediate uses the register width
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0820201e
+ao 1~esil:
+wx 0820601e
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: 32,s0,F2D,NAN,vf,:=,0,I2D,32,s0,F2D,F==,zf,:=,0,I2D,32,s0,F2D,F<,nf,:=,nf,!,vf,|,cf,:=
+esil: 64,d0,F2D,NAN,vf,:=,0,I2D,64,d0,F2D,F==,zf,:=,0,I2D,64,d0,F2D,F<,nf,:=,nf,!,vf,|,cf,:=
+EOF
+RUN
+
+NAME=conditional compares encode the nzcv immediate
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0a0041fa
+ao 1~esil:
+wx 0a0041ba
+ao 1~esil:
+wx 0a44611e
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: zf,?{,x1,x0,==,$z,zf,:=,63,$s,nf,:=,64,$b,!,cf,:=,63,x1,x0,^,x1,x0,-,x0,^,&,>>,1,&,vf,:=,}{,pstate,1,28,1,<<,-,&,28,10,<<,|,pstate,:=,}
+esil: zf,?{,x1,-1,*,x0,==,$z,zf,:=,63,$s,nf,:=,63,$c,cf,:=,63,$o,vf,:=,}{,pstate,1,28,1,<<,-,&,28,10,<<,|,pstate,:=,}
+esil: nf,?{,64,d1,F2D,NAN,64,d0,F2D,NAN,|,vf,:=,64,d1,F2D,64,d0,F2D,F==,zf,:=,64,d1,F2D,64,d0,F2D,F<,nf,:=,nf,!,vf,|,cf,:=,}{,pstate,1,28,1,<<,-,&,0xa0000000,|,pstate,:=,}
+EOF
+RUN
+
+NAME=ccmp else arm lands the nzcv immediate in the flags
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 0a0041fa
+aer zf=0
+aer pc=0
+s 0
+aes
+aer nf
+aer zf
+aer cf
+aer vf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000000
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=fcmp with a nan operand sets nzcv to 0011
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+wx 0020611e
+ar d0=0x7ff8000000000000
+ar d1=0x3ff0000000000000
+aer pc=0
+s 0
+aes
+aer nf
+aer zf
+aer cf
+aer vf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=PAuth LR returns restore the program counter
+FILE=malloc://64
+ARGS=-a arm -b 64
+REQUIRE=cs5
+CMDS=<<EOF_CMDS
+aei
+aer lr=0x30
+wx 1f0000551f002055e00b5fd6fe0b5fd6e00f5fd6fe0f5fd6
+ao 6~type[1]
+aeip
+aes
+aer pc
+s 4
+aeip
+aes
+aer pc
+s 8
+aeip
+aes
+aer pc
+s 12
+aeip
+aes
+aer pc
+s 16
+aeip
+aes
+aer pc
+s 20
+aeip
+aes
+aer pc
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+ret
+ret
+ret
+ret
+ret
+ret
+0x00000030
+0x00000030
+0x00000030
+0x00000030
+0x00000030
+0x00000030
+EOF_EXPECT
+RUN
+
+NAME=ret x1 returns to x1
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 20005fd6c0035fd6
+ar x1=0x40
+ar lr=0x80
+aes
+ar pc
+ar pc=4
+aes
+ar pc
+EOF
+EXPECT=<<EOF
+0x00000040
+0x00000080
+EOF
+RUN
+
+NAME=mrs and msr move the thread pointer
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 40d03bd541d01bd5
+ar tpidr_el0=0x1234
+aes
+ar x0
+ar x1=0x5678
+aes
+ar tpidr_el0
+EOF
+EXPECT=<<EOF
+0x00001234
+0x00005678
+EOF
+RUN
+
+NAME=mrs and msr nzcv
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=64
+wx 00423bd501421bd5
+ar pstate=0x60000000
+aes
+ar x0
+ar x1=0x80000000
+aes
+ar nf
+ar zf
+EOF
+EXPECT=<<EOF
+0x60000000
+0x00000001
+0x00000000
+EOF
+RUN
+
+
+NAME=csel with an always condition has no else arm
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20e0829a
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: x1,x0,=
+EOF
+RUN
+
+NAME=csel with a condition keeps both arms
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000829a
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: zf,?{,x1,}{,x2,},x0,=
+EOF
+RUN
+
+NAME=csinv selects the inverted register
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000825a
+ao 1~esil:
+aei
+aeim
+ar zf=0
+ar x2=5
+ar x0=0xffffffffffffffff
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+esil: zf,?{,w1,}{,w2,-1,^,},w0,=,w0,x0,=
+0xfffffffa
+EOF
+RUN
+
+NAME=csneg selects the negated register
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2004825a
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: zf,?{,w1,}{,w2,0,-,},w0,=,w0,x0,=
+EOF
+RUN
+
+NAME=csinv selects the first register when the condition holds
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000825a
+aei
+aeim
+ar zf=1
+ar x1=7
+ar x2=5
+ar x0=0xffffffffffffffff
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x00000007
+EOF
+RUN
+
+NAME=cinv inverts the register when the condition holds
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2010815a
+ao 1~esil:
+aei
+aeim
+ar x1=5
+ar zf=1
+aes
+ar x0
+ar pc=0
+ar zf=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+esil: zf,?{,w1,-1,^,}{,w1,},w0,=,w0,x0,=
+0xfffffffa
+0x00000005
+EOF
+RUN
+
+NAME=cneg negates the register when the condition holds
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 201481da
+ao 1~esil:
+aei
+aeim
+ar x1=5
+ar zf=1
+aes
+ar x0
+ar pc=0
+ar zf=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+esil: zf,?{,x1,0,-,}{,x1,},x0,=
+0xfffffffffffffffb
+0x00000005
+EOF
+RUN
+
+NAME=csetm w0 sets all 32 bits and clears the upper half
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx e0139f5a
+ao 1~esil:
+aei
+aeim
+ar x0=0x1234567812345678
+ar zf=1
+aes
+ar x0
+ar pc=0
+ar zf=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+esil: zf,?{,0xffffffff,}{,0,},w0,=,w0,x0,=
+0xffffffff
+0x00000000
+EOF
+RUN
+
+NAME=csetm x0 sets all 64 bits
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx e0139fda
+ao 1~esil:
+aei
+aeim
+ar zf=1
+aes
+ar x0
+ar pc=0
+ar zf=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+esil: zf,?{,-1,}{,0,},x0,=
+0xffffffffffffffff
+0x00000000
+EOF
+RUN
+
+NAME=fcsel with an always condition has no else arm
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20ec621e
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: d1,d0,=,0,v0h,=
+EOF
+RUN
+
+NAME=fcsel selects by the condition
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200c621e
+ao 1~esil:
+aei
+aeim
+ar d1=0x3ff0000000000000
+ar d2=0x4000000000000000
+ar zf=1
+aes
+ar d0
+ar pc=0
+ar zf=0
+aes
+ar d0
+EOF
+EXPECT=<<EOF
+esil: zf,?{,d1,}{,d2,},d0,=,0,v0h,=
+0x3ff0000000000000
+0x4000000000000000
+EOF
+RUN
+
+NAME=csneg executes both arms
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2004825a
+aei
+aeim
+ar x1=7
+ar x2=5
+ar zf=1
+aes
+ar x0
+ar pc=0
+ar zf=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x00000007
+0xfffffffb
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV64 reverses each 64-bit half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008204e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x090a0b0c0d0e0f10
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x807060504030201
+0x100f0e0d0c0b0a09
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV64 reverses each 64-bit half in big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 2008204e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x090a0b0c0d0e0f10
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x807060504030201
+0x100f0e0d0c0b0a09
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV64 D-form zeroes upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008200e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x8899aabbccddeeff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x807060504030201
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV64 reverses halfword elements within each half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008604e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x090a0b0c0d0e0f10
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x708050603040102
+0xf100d0e0b0c090a
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV64 reverses word elements within each half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008a04e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x090a0b0c0d0e0f10
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x506070801020304
+0xd0e0f10090a0b0c
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV32 reverses bytes within each word
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008206e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x090a0b0c0d0e0f10
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x403020108070605
+0xc0b0a09100f0e0d
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV32 reverses bytes within each word in big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 2008206e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x090a0b0c0d0e0f10
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x403020108070605
+0xc0b0a09100f0e0d
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV32 D-form zeroes upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008202e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x8899aabbccddeeff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x403020108070605
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV16 swaps bytes within each halfword
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2018204e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x090a0b0c0d0e0f10
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x201040306050807
+0xa090c0b0e0d100f
+EOF
+RUN
+
+NAME=arm64 ESIL vector REV16 D-form zeroes upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2018200e
+aei
+aeip
+aer v1l=0x0102030405060708
+aer v1h=0x8899aabbccddeeff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x201040306050807
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL scalar REV reverses the doubleword
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200cc0da
+aei
+aeip
+aer x1=0x0102030405060708
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x807060504030201
+EOF
+RUN
+
+NAME=arm64 ESIL scalar REV reverses the doubleword in big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 200cc0da
+aei
+aeip
+aer x1=0x0102030405060708
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x807060504030201
+EOF
+RUN
+
+NAME=arm64 ESIL scalar REV reverses the word
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008c05a
+aei
+aeip
+aer x1=0xffffffffffffffff
+aer w1=0x01020304
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x04030201
+EOF
+RUN
+
+NAME=arm64 ESIL scalar REV16 swaps halfwords in the doubleword
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2004c0da
+aei
+aeip
+aer x1=0x0102030405060708
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x201040306050807
+EOF
+RUN
+
+NAME=arm64 ESIL scalar REV16 swaps halfwords in the word
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2004c05a
+aei
+aeip
+aer x1=0xffffffffffffffff
+aer w1=0x01020304
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x02010403
+EOF
+RUN
+
+NAME=arm64 ESIL scalar REV32 reverses bytes within each word
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2008c0da
+aei
+aeip
+aer x1=0x0102030405060708
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x403020108070605
+EOF
+RUN
+
+NAME=arm64 ESIL scalar FP load into d zeroes upper bits
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 000040fd
+wx 0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v0h=0xdeadbeefdeadbeef
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0xefcdab8967452301
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL scalar FP load into s zeroes upper bits
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 000040bd
+wx 0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v0=0xdeadbeefdeadbeef
+aer v0h=0xdeadbeefdeadbeef
+aes
+aer v0
+aer v0h
+EOF
+EXPECT=<<EOF
+0x00000000000000000000000067452301
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL fadd s zeroes bits above the word
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2028221e
+aei
+aeip
+aer s1=0x3f800000
+aer s2=0x40000000
+aer v0=0xdeadbeefdeadbeef
+aer v0h=0xdeadbeefdeadbeef
+aes
+aer v0
+aer v0h
+EOF
+EXPECT=<<EOF
+0x00000000000000000000000040400000
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL fmov s zeroes bits above the word
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2040201e
+aei
+aeip
+aer s1=0x3f800000
+aer v0=0xdeadbeefdeadbeef
+aer v0h=0xdeadbeefdeadbeef
+aes
+aer v0
+aer v0h
+EOF
+EXPECT=<<EOF
+0x0000000000000000000000003f800000
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL fmov d zeroes upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2040601e
+aei
+aeip
+aer d1=0x0123456789abcdef
+aer v0h=0xdeadbeefdeadbeef
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x123456789abcdef
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL ldp d clears both destinations
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0004406d
+wx 0123456789abcdef0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v0l=0xdeadbeefdeadbeef
+aer v1l=0xdeadbeefdeadbeef
+aer v0h=0xdeadbeef
+aer v1h=0xdeadbeef
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+EOF
+EXPECT=<<EOF
+0xefcdab8967452301
+0x00000000
+0xefcdab8967452301
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL ldp s clears both destinations
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0004402d
+wx 0123456789abcdef0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v0l=0xdeadbeefdeadbeef
+aer v1l=0xdeadbeefdeadbeef
+aer v0h=0xdeadbeef
+aer v1h=0xdeadbeef
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+EOF
+EXPECT=<<EOF
+0x67452301
+0x00000000
+0xefcdab89
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL mov vector 64 bit destination
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 201ca10e
+aei
+aeip
+aer v0l=0x1111
+aer v0h=0x2222
+aer v1l=0x1234
+aer v1h=0xdeadbeef
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x00001234
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL mov vector 128 bit destination
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 201ca14e
+aei
+aeip
+aer v0l=0x1111
+aer v0h=0x2222
+aer v1l=0x1234
+aer v1h=0xdeadbeef
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x00001234
+0xdeadbeef
+EOF
+RUN
+
+NAME=arm64 ESIL ldr b0 uses vector alias and clears upper bits
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0000403d
+wx 0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v0l=0xdeadbeefdeadbeef
+aer v0h=0xdeadbeef
+aes
+aer b0
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL ldr b31 uses vector alias and clears upper bits
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 1f00403d
+wx 0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v31l=0xdeadbeefdeadbeef
+aer v31h=0xdeadbeef
+aes
+aer b31
+aer v31l
+aer v31h
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL ldr h0 uses vector alias and clears upper bits
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0000407d
+wx 0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v0l=0xdeadbeefdeadbeef
+aer v0h=0xdeadbeef
+aes
+aer h0
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x00002301
+0x00002301
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL ldr h31 uses vector alias and clears upper bits
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 1f00407d
+wx 0123456789abcdef @ 0x100
+aei
+aeip
+aer x0=0x100
+aer v31l=0xdeadbeefdeadbeef
+aer v31h=0xdeadbeef
+aes
+aer h31
+aer v31l
+aer v31h
+EOF
+EXPECT=<<EOF
+0x00002301
+0x00002301
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL lane insert preserves other lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx c01e0c4e
+aei
+aeip
+aer v0l=0x1111111122222222
+aer v0h=0x3333
+aer w22=0x12345678
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x1234567822222222
+0x00003333
+EOF
+RUN
+
+NAME=arm64 ESIL mov to 64-bit vector lane writes the whole half directly
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 201c184e # mov v0.d[1], x1 replaces the whole upper half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x1122334455667788
+aes
+aer v0l
+aer v0h
+wx 401c084e @ 0 # mov v0.d[0], x2 replaces the whole lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x2=0x99aabbccddeeff00
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0xaaaaaaaaaaaaaaaa
+0x1122334455667788
+0x99aabbccddeeff00
+0xbbbbbbbbbbbbbbbb
+EOF
+RUN
+
+NAME=arm64 ESIL mov to sub-dword vector lane keeps the other lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 201c044e # mov v0.s[0], w1 replaces word lane 0 at the bottom of the lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer w1=0x24680f13
+aes
+aer v0l
+aer v0h
+wx 201c0c4e @ 0 # mov v0.s[1], w1 replaces word lane 1 of the lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer w1=0xdeadbeef
+aes
+aer v0l
+aer v0h
+wx 201c144e @ 0 # mov v0.s[2], w1 replaces word lane 2 at the bottom of the upper half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer w1=0x10fd5e01
+aes
+aer v0l
+aer v0h
+wx 201c1c4e @ 0 # mov v0.s[3], w1 replaces word lane 3 inside the upper half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer w1=0xcafe1234
+aes
+aer v0l
+aer v0h
+wx 201c0e4e @ 0 # mov v0.h[3], w1 replaces halfword lane 3 at the top of the lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer w1=0xfeed
+aes
+aer v0l
+aer v0h
+wx 201c0b4e @ 0 # mov v0.b[5], w1 replaces byte lane 5 inside the lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer w1=0x3c
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0xaaaaaaaa24680f13
+0xbbbbbbbbbbbbbbbb
+0xdeadbeefaaaaaaaa
+0xbbbbbbbbbbbbbbbb
+0xaaaaaaaaaaaaaaaa
+0xbbbbbbbb10fd5e01
+0xaaaaaaaaaaaaaaaa
+0xcafe1234bbbbbbbb
+0xfeedaaaaaaaaaaaa
+0xbbbbbbbbbbbbbbbb
+0xaaaa3caaaaaaaaaa
+0xbbbbbbbbbbbbbbbb
+EOF
+RUN
+
+NAME=arm64 ESIL mov to 64-bit vector lane emits a direct assignment
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 201c184e # mov v0.d[1], x1
+e asm.esil=true
+pd 1
+wx 401c084e @ 0 # mov v0.d[0], x2
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      201c184e       x1,v0h,=
+            0x00000000      401c084e       x2,v0l,=
+EOF
+RUN
+
+NAME=arm64 ESIL per-lane vector FP on 64-bit lanes writes each half directly
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20d4624e # fadd v0.2d, v1.2d, v2.2d replaces both 64-bit lanes whole
+e asm.esil=true
+pd 1
+wx 20dc626e @ 0 # fmul v0.2d, v1.2d, v2.2d replaces both 64-bit lanes whole
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      20d4624e       128,DUP,0xffffffffffffffff,v2l,&,F2D,128,0xffffffffffffffff,v1l,&,F2D,F+,D2F,v0l,=,128,DUP,0xffffffffffffffff,v2h,&,F2D,128,0xffffffffffffffff,v1h,&,F2D,F+,D2F,v0h,=
+            0x00000000      20dc626e       128,DUP,0xffffffffffffffff,v2l,&,F2D,128,0xffffffffffffffff,v1l,&,F2D,F*,D2F,v0l,=,128,DUP,0xffffffffffffffff,v2h,&,F2D,128,0xffffffffffffffff,v1h,&,F2D,F*,D2F,v0h,=
+EOF
+RUN
+
+NAME=fccmp d0, d1, 0xa, mi sets nzcv or compares (arm.v35)
+FILE=malloc://0x200
+REQUIRE=arm.v35
+CMDS=<<EOF
+e asm.arch=arm.v35
+e asm.bits=64
+wx 0a44611e
+ar pstate=0
+aes
+arcq
+ar pc=0
+ar pstate=0x80000000
+ar d1=0x3ff0000000000000
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:1 z:0 c:1 o:0 p:0
+s:1 z:0 c:0 o:0 p:0
+EOF
+RUN
+
+NAME=ccmp x2, 1, 0xa, eq sets nzcv or compares (arm.v35)
+FILE=malloc://0x200
+REQUIRE=arm.v35
+CMDS=<<EOF
+e asm.arch=arm.v35
+e asm.bits=64
+wx 4a0841fa
+ar pstate=0
+ar x2=1
+aes
+arcq
+ar pc=0
+ar pstate=0x40000000
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:1 z:0 c:1 o:0 p:0
+s:0 z:1 c:1 o:0 p:0
+EOF
+RUN
+
+NAME=ccmn x2, 1, 0xa, eq with eq false sets nzcv (arm.v35)
+FILE=malloc://0x200
+REQUIRE=arm.v35
+CMDS=<<EOF
+e asm.arch=arm.v35
+e asm.bits=64
+wx 4a0841ba
+ar pstate=0
+ar x2=1
+aes
+arcq
+EOF
+EXPECT=<<EOF
+s:1 z:0 c:1 o:0 p:0
+EOF
+RUN
+
+NAME=arm64 ESIL ld1 single structure and ld1r fill all lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2070404c # ld1 {v0.16b}, [x1] spreads 16 bytes into the byte lanes
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer x1=0x100
+wx 000102030405060708090a0b0c0d0e0f @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2078df4c @ 0 # ld1 {v0.4s}, [x1], #16 loads words and walks the base
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer x1=0x100
+wx 11111111222222223333333344444444 @ 0x100
+aes
+aer v0l
+aer v0h
+aer x1
+wx 20c8404d @ 0 # ld1r {v0.4s}, [x1] replicates the word into every lane
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer x1=0x100
+wx efbeadde @ 0x100
+aes
+aer v0l
+aer v0h
+wx 20ccdf4d @ 0 # ld1r {v0.2d}, [x1], #8 replicates the dword and advances
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer x1=0x100
+wx 8877665544332211 @ 0x100
+aes
+aer v0l
+aer v0h
+aer x1
+wx 2074404c @ 0 # ld1 {v0.8h}, [x1] fills the halfword lanes across both halves
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer x1=0x100
+wx 11112222333344445555666677778888 @ 0x100
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x706050403020100
+0xf0e0d0c0b0a0908
+0x2222222211111111
+0x4444444433333333
+0x00000110
+0xdeadbeefdeadbeef
+0xdeadbeefdeadbeef
+0x1122334455667788
+0x1122334455667788
+0x00000108
+0x4444333322221111
+0x8888777766665555
+EOF
+RUN
+
+NAME=arm64 ESIL ld1 multiple structures load linearly per register
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2028404c # ld1 {v0.4s-v3.4s}, [x1] gives each register 4 consecutive words
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer v2l=0x1111111111111111
+aer v2h=0x1111111111111111
+aer v3l=0x1111111111111111
+aer v3h=0x1111111111111111
+aer x1=0x100
+wx 0000000b0100000b0200000b0300000b0400000b0500000b0600000b0700000b0800000b0900000b0a00000b0b00000b0c00000b0d00000b0e00000b0f00000b @ 0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer v2l
+aer v2h
+aer v3l
+aer v3h
+wx 2068400c @ 0 # ld1 {v0.2s-v2.2s}, [x1] two-word structures zero the upper halves
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer v1l=0x1111111111111111
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer v2l=0x1111111111111111
+aer v2h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx 0000000c0100000c0200000c0300000c0400000c0500000c @ 0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer v2l
+aer v2h
+wx 20a8c24c @ 0 # ld1 {v0.4s, v1.4s}, [x1], x2 adds the register offset to the base
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer x1=0x100
+aer x2=0x20
+wx 0000000d0100000d0200000d0300000d0400000d0500000d0600000d0700000d @ 0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer x1
+EOF
+EXPECT=<<EOF
+0xb0000010b000000
+0xb0000030b000002
+0xb0000050b000004
+0xb0000070b000006
+0xb0000090b000008
+0xb00000b0b00000a
+0xb00000d0b00000c
+0xb00000f0b00000e
+0xc0000010c000000
+0x00000000
+0xc0000030c000002
+0x00000000
+0xc0000050c000004
+0x00000000
+0xd0000010d000000
+0xd0000030d000002
+0xd0000050d000004
+0xd0000070d000006
+0x00000120
+EOF
+RUN
+
+NAME=arm64 ESIL ld1 D forms zero the upper 64 bits
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 207c400c # ld1 {v0.1d}, [x1] writes bits 63:0 only
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx 8877665544332211 @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2074400c @ 0 # ld1 {v0.4h}, [x1] fills the D form halfword lanes
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx 1111222233334444 @ 0x100
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x1122334455667788
+0x00000000
+0x4444333322221111
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL ld1 indexed lane loads keep the other lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2080404d # ld1 {v0.s}[2], [x1] replaces only word lane 2
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx beefabec @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2080df4d @ 0 # ld1 {v0.s}[2], [x1], #4 also advances the base by the element
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx beefabec @ 0x100
+aes
+aer v0h
+aer x1
+wx 2084404d @ 0 # ld1 {v0.d}[1], [x1] replaces the full upper half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx 8877665544332211 @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2090400d @ 0 # ld1 {v0.s}[1], [x1] replaces word lane 1 of the lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx efbeadde @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2058400d @ 0 # ld1 {v0.h}[3], [x1] replaces halfword lane 3 at the top of the lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx edfe @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2014400d @ 0 # ld1 {v0.b}[5], [x1] replaces byte lane 5 inside the lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx 5a @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2014404d @ 0 # ld1 {v0.b}[13], [x1] replaces byte lane 13 inside the upper half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx 5a @ 0x100
+aes
+aer v0l
+aer v0h
+wx 2084400d @ 0 # ld1 {v0.d}[0], [x1] replaces the full lower half
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx efcdab89674523f1 @ 0x100
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0xaaaaaaaaaaaaaaaa
+0xbbbbbbbbecabefbe
+0xbbbbbbbbecabefbe
+0x00000104
+0xaaaaaaaaaaaaaaaa
+0x1122334455667788
+0xdeadbeefaaaaaaaa
+0xbbbbbbbbbbbbbbbb
+0xfeedaaaaaaaaaaaa
+0xbbbbbbbbbbbbbbbb
+0xaaaa5aaaaaaaaaaa
+0xbbbbbbbbbbbbbbbb
+0xaaaaaaaaaaaaaaaa
+0xbbbb5abbbbbbbbbb
+0xf123456789abcdef
+0xbbbbbbbbbbbbbbbb
+EOF
+RUN
+
+NAME=arm64 ESIL st1 single and multiple structures store linearly
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 2070004c # st1 {v0.16b}, [x1] writes the byte lanes in order
+aei
+aeip
+aer v0l=0x0706050403020100
+aer v0h=0x0f0e0d0c0b0a0908
+aer x1=0x100
+wx ffffffffffffffffffffffffffffffff @ 0x100
+aes
+px 16 @ 0x100
+aer v0h
+wx 20789f4c @ 0 # st1 {v0.4s}, [x1], #16 stores the words and walks the base
+aei
+aeip
+aer v0l=0x2222222211111111
+aer v0h=0x4444444433333333
+aer x1=0x100
+wx ffffffffffffffffffffffffffffffff @ 0x100
+aes
+px 16 @ 0x100
+aer x1
+wx 2028004c @ 0 # st1 {v0.4s-v3.4s}, [x1] concatenates the register contents
+aei
+aeip
+aer v0l=0x0e0000010e000000
+aer v0h=0x0e0000030e000002
+aer v1l=0x0e0000050e000004
+aer v1h=0x0e0000070e000006
+aer v2l=0x0e0000090e000008
+aer v2h=0x0e00000b0e00000a
+aer v3l=0x0e00000d0e00000c
+aer v3h=0x0e00000f0e00000e
+aer x1=0x100
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff @ 0x100
+aes
+px 64 @ 0x100
+aer v1h
+aer v3h
+wx 20a89f4c @ 0 # st1 {v0.4s, v1.4s}, [x1], #32 stores both and advances the base
+aei
+aeip
+aer v0l=0x0d0000010d000000
+aer v0h=0x0d0000030d000002
+aer v1l=0x0d0000050d000004
+aer v1h=0x0d0000070d000006
+aer x1=0x100
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffff @ 0x100
+aes
+px 32 @ 0x100
+aer x1
+wx 20a8000c @ 0 # st1 {v0.2s, v1.2s}, [x1] stores the D form structures
+aei
+aeip
+aer v0l=0x2222222211111111
+aer v1l=0x4444444433333333
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+wx ffffffffffffffffffffffff @ 0x100
+aes
+px 16 @ 0x100
+aer v1h
+EOF
+EXPECT=<<EOF
+0x00000100  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f  ................
+0xf0e0d0c0b0a0908
+0x00000100  1111 1111 2222 2222 3333 3333 4444 4444  ....""""3333DDDD
+0x00000110
+0x00000100  0000 000e 0100 000e 0200 000e 0300 000e  ................
+0x00000110  0400 000e 0500 000e 0600 000e 0700 000e  ................
+0x00000120  0800 000e 0900 000e 0a00 000e 0b00 000e  ................
+0x00000130  0c00 000e 0d00 000e 0e00 000e 0f00 000e  ................
+0xe0000070e000006
+0xe00000f0e00000e
+0x00000100  0000 000d 0100 000d 0200 000d 0300 000d  ................
+0x00000110  0400 000d 0500 000d 0600 000d 0700 000d  ................
+0x00000120
+0x00000100  1111 1111 2222 2222 3333 3333 4444 4444  ....""""3333DDDD
+0xbbbbbbbbbbbbbbbb
+EOF
+RUN
+
+NAME=arm64 ESIL st1 indexed byte and doubleword stores
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 200c000d # st1 {v0.b}[3], [x1] stores only byte lane 3
+aei
+aeip
+aer v0l=0x7766554433221100
+aer x1=0x100
+wx ffffffff @ 0x100
+aes
+px 4 @ 0x100
+wx 2084004d @ 0 # st1 {v0.d}[1], [x1] stores the full upper half
+aei
+aeip
+aer v0h=0x1122334455667788
+aer x1=0x100
+wx ffffffffffffffff @ 0x100
+aes
+px 8 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000100  33ff ffff                                3...
+0x00000100  8877 6655 4433 2211                      .wfUD3".
+EOF
+RUN
+
+NAME=arm64 ESIL structure Q-form accesses honor cfg.bigendian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+e hex.header=false
+wx 2070404c @ 0 # ld1 {v0.16b}, [x1] loads every byte lane as its own value
+wx 000102030405060708090a0b0c0d0e0f @ 0x100
+aei
+aeip
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+wx 20a4404c @ 0 # ld1 {v0.8h, v1.8h}, [x1] decodes halfwords in the data order
+wx 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f @ 0x100
+aei
+aeip
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+wx 2070004c @ 0 # st1 {v0.16b}, [x1] stores byte lanes in address order
+wx ffffffffffffffffffffffffffffffff @ 0x100
+aei
+aeip
+aer v0l=0xf7e6d5c4b3a29180
+aer v0h=0x1f0e1d0c0b0a0908
+aer x1=0x100
+aes
+px 16 @ 0x100
+wx 20c0404d @ 0 # ld1r {v0.16b}, [x1] replicates the byte value into every lane
+wx 2a @ 0x100
+aei
+aeip
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x706050403020100
+0xf0e0d0c0b0a0908
+0x607040502030001
+0xe0f0c0d0a0b0809
+0x1617141512131011
+0x1e1f1c1d1a1b1819
+0x00000100  8091 a2b3 c4d5 e6f7 0809 0a0b 0c1d 0e1f  ................
+0x2a2a2a2a2a2a2a2a
+0x2a2a2a2a2a2a2a2a
+EOF
+RUN
+
+NAME=arm64 ESIL ld2 ld3 ld4 deinterleave multiple structures
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 2080404c @ 0 # ld2 {v0.16b, v1.16b}, [x1]
+wx 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+wx 2088df4c @ 0 # ld2 {v0.4s, v1.4s}, [x1], #32
+wx 0000000f0100000f0200000f0300000f0400000f0500000f0600000f0700000f @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer x1
+wx 2048400c @ 0 # ld3 {v0.2s, v1.2s, v2.2s}, [x1]
+wx 000000100100001002000010030000100400001005000010 @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer v1l=0x1111111111111111
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer v2l=0x1111111111111111
+aer v2h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer v2l
+aer v2h
+wx 2004c24c @ 0 # ld4 {v0.8h-v3.8h}, [x1], x2
+wx 00f001f002f003f004f005f006f007f008f009f00af00bf00cf00df00ef00ff010f011f012f013f014f015f016f017f018f019f01af01bf01cf01df01ef01ff0 @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer v2l=0x1111111111111111
+aer v2h=0x1111111111111111
+aer v3l=0x1111111111111111
+aer v3h=0x1111111111111111
+aer x1=0x100
+aer x2=0x40
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer v2l
+aer v2h
+aer v3l
+aer v3h
+aer x1
+EOF
+EXPECT=<<EOF
+0xe0c0a0806040200
+0x1e1c1a1816141210
+0xf0d0b0907050301
+0x1f1d1b1917151311
+0xf0000020f000000
+0xf0000060f000004
+0xf0000030f000001
+0xf0000070f000005
+0x00000120
+0x1000000310000000
+0x00000000
+0x1000000410000001
+0x00000000
+0x1000000510000002
+0x00000000
+0xf00cf008f004f000
+0xf01cf018f014f010
+0xf00df009f005f001
+0xf01df019f015f011
+0xf00ef00af006f002
+0xf01ef01af016f012
+0xf00ff00bf007f003
+0xf01ff01bf017f013
+0x00000140
+EOF
+RUN
+
+NAME=arm64 ESIL ld2r ld3r ld4r replicate one element per register
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 20c8604d @ 0 # ld2r {v0.4s, v1.4s}, [x1]
+wx efbeadded80dcafe @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+wx 20ec404d @ 0 # ld3r {v0.2d, v1.2d, v2.2d}, [x1]
+wx 44443333222211118888777766665555ccfcbbaaaaaa9999 @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer v2l=0x1111111111111111
+aer v2h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer v2l
+aer v2h
+wx 20e4ff4d @ 0 # ld4r {v0.8h-v3.8h}, [x1], #8
+wx aaaabbbbccccdddd @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer v2l=0x1111111111111111
+aer v2h=0x1111111111111111
+aer v3l=0x1111111111111111
+aer v3h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v1l
+aer v2l
+aer v3l
+aer x1
+EOF
+EXPECT=<<EOF
+0xdeadbeefdeadbeef
+0xdeadbeefdeadbeef
+0xfeca0dd8feca0dd8
+0xfeca0dd8feca0dd8
+0x1111222233334444
+0x1111222233334444
+0x5555666677778888
+0x5555666677778888
+0x9999aaaaaabbfccc
+0x9999aaaaaabbfccc
+0xaaaaaaaaaaaaaaaa
+0xbbbbbbbbbbbbbbbb
+0xcccccccccccccccc
+0xdddddddddddddddd
+0x00000108
+EOF
+RUN
+
+NAME=arm64 ESIL ld2 indexed structures share the lane index across registers
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 2090600d @ 0 # ld2 {v0.s, v1.s}[1], [x1]
+wx 0000feca1111beba @ 0x100
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xaaaaaaaaaaaaaaaa
+aer v1l=0xbbbbbbbbbbbbbbbb
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+wx 2090ff0d @ 0 # ld2 {v0.s, v1.s}[1], [x1], #8
+wx 0000feca1111beba @ 0x100
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0xaaaaaaaaaaaaaaaa
+aer v1l=0xbbbbbbbbbbbbbbbb
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+aes
+aer v0l
+aer v1l
+aer x1
+wx 20a4604d @ 0 # ld4 {v0.d, v1.d, v2.d, v3.d}[1], [x1]
+wx 08090a0b0c0d0e0f18191a1b1c1d1e1f28292a2b2c2d2e2f38393a3b3c3d3e3f @ 0x100
+aei
+aeip
+aer v0l=0xaaaaaaaaaaaaaaaa
+aer v0h=0x1111111111111111
+aer v1l=0xbbbbbbbbbbbbbbbb
+aer v2l=0xcccccccccccccccc
+aer v2h=0x2222222222222222
+aer v3l=0xdddddddddddddddd
+aer x1=0x100
+aes
+aer v0h
+aer v1h
+aer v2h
+aer v3h
+aer v0l
+EOF
+EXPECT=<<EOF
+0xcafe0000aaaaaaaa
+0xaaaaaaaaaaaaaaaa
+0xbabe1111bbbbbbbb
+0xbbbbbbbbbbbbbbbb
+0xcafe0000aaaaaaaa
+0xbabe1111bbbbbbbb
+0x00000108
+0xf0e0d0c0b0a0908
+0x1f1e1d1c1b1a1918
+0x2f2e2d2c2b2a2928
+0x3f3e3d3c3b3a3938
+0xaaaaaaaaaaaaaaaa
+EOF
+RUN
+
+NAME=arm64 ESIL st2 st3 st4 interleave multiple structures
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 2088004c @ 0 # st2 {v0.4s, v1.4s}, [x1]
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffff @ 0x100
+aei
+aeip
+aer v0l=0x0202020201010101
+aer v0h=0x0404040403030303
+aer v1l=0x0606060605050505
+aer v1h=0x0808080807070707
+aer x1=0x100
+aes
+px 32 @ 0x100
+wx 20889f4c @ 0 # st2 {v0.4s, v1.4s}, [x1], #32
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffff @ 0x100
+aei
+aeip
+aer v0l=0x0202020201010101
+aer v0h=0x0404040403030303
+aer v1l=0x0606060605050505
+aer v1h=0x0808080807070707
+aer x1=0x100
+aes
+px 32 @ 0x100
+aer x1
+wx 2048000c @ 0 # st3 {v0.2s, v1.2s, v2.2s}, [x1]
+wx ffffffffffffffffffffffff @ 0x100
+aei
+aeip
+aer v0l=0x2222222211111111
+aer v1l=0x4444444433333333
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer v2l=0x6666666655555555
+aer v2h=0xcccccccccccccccc
+aer x1=0x100
+aes
+px 24 @ 0x100
+aer v1h
+aer v2h
+wx 2008004c @ 0 # st4 {v0.4s-v3.4s}, [x1]
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff @ 0x100
+aei
+aeip
+aer v0l=0x0202020201010101
+aer v0h=0x0404040403030303
+aer v1l=0x0606060605050505
+aer v1h=0x0808080807070707
+aer v2l=0x0a0a0a0a09090909
+aer v2h=0x0c0c0c0c0b0b0b0b
+aer v3l=0x0e0e0e0e0d0d0d0d
+aer v3h=0x101010100f0f0f0f
+aer x1=0x100
+aes
+px 64 @ 0x100
+aer v3h
+EOF
+EXPECT=<<EOF
+0x00000100  0101 0101 0505 0505 0202 0202 0606 0606  ................
+0x00000110  0303 0303 0707 0707 0404 0404 0808 0808  ................
+0x00000100  0101 0101 0505 0505 0202 0202 0606 0606  ................
+0x00000110  0303 0303 0707 0707 0404 0404 0808 0808  ................
+0x00000120
+0x00000100  1111 1111 3333 3333 5555 5555 2222 2222  ....3333UUUU""""
+0x00000110  4444 4444 6666 6666                      DDDDffff
+0xbbbbbbbbbbbbbbbb
+0xcccccccccccccccc
+0x00000100  0101 0101 0505 0505 0909 0909 0d0d 0d0d  ................
+0x00000110  0202 0202 0606 0606 0a0a 0a0a 0e0e 0e0e  ................
+0x00000120  0303 0303 0707 0707 0b0b 0b0b 0f0f 0f0f  ................
+0x00000130  0404 0404 0808 0808 0c0c 0c0c 1010 1010  ................
+0x101010100f0f0f0f
+EOF
+RUN
+
+NAME=arm64 ESIL st2 indexed stores one lane per register
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 2090200d @ 0 # st2 {v0.s, v1.s}[1], [x1]
+wx ffffffffffffffff @ 0x100
+aei
+aeip
+aer v0l=0x1111111122222222
+aer v1l=0x3333333344444444
+aer x1=0x100
+aes
+px 8 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000100  1111 1111 3333 3333                      ....3333
+EOF
+RUN
+
+NAME=arm64 ESIL ldnp stnp pairs load vectors and d forms zero the upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 200440ac @ 0 # ldnp q0, q1, [x1]
+wx 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f @ 0x100
+aei
+aeip
+aer q0=0x11111111111111111111111111111111
+aer q1=0x11111111111111111111111111111111
+aer x1=0x100
+aes
+aer q0
+aer q1
+wx 2004406c @ 0 # ldnp d0, d1, [x1]
+wx 887766554433221100ffeeddccbbaa99 @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer v1l=0x1111111111111111
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+wx 200400ac @ 0 # stnp q0, q1, [x1]
+wx ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff @ 0x100
+aei
+aeip
+aer v0l=0x0706050403020100
+aer v0h=0x0f0e0d0c0b0a0908
+aer v1l=0x1716151413121110
+aer v1h=0x1f1e1d1c1b1a1918
+aer x1=0x100
+aes
+px 32 @ 0x100
+wx 220c40a8 @ 0 # ldnp x2, x3, [x1]
+wx 887766554433221100ffeeddccbbaa99 @ 0x100
+aei
+aeip
+aer x2=0x1111111111111111
+aer x3=0x1111111111111111
+aer x1=0x100
+aes
+aer x2
+aer x3
+wx 2004406d @ 0 # ldp d0, d1, [x1]
+wx 887766554433221100ffeeddccbbaa99 @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0xbbbbbbbbbbbbbbbb
+aer v1l=0x1111111111111111
+aer v1h=0xbbbbbbbbbbbbbbbb
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+EOF
+EXPECT=<<EOF
+0x0f0e0d0c0b0a09080706050403020100
+0x1f1e1d1c1b1a19181716151413121110
+0x1122334455667788
+0x00000000
+0x99aabbccddeeff00
+0x00000000
+0x00000100  0001 0203 0405 0607 0809 0a0b 0c0d 0e0f  ................
+0x00000110  1011 1213 1415 1617 1819 1a1b 1c1d 1e1f  ................
+0x1122334455667788
+0x99aabbccddeeff00
+0x1122334455667788
+0x00000000
+0x99aabbccddeeff00
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL ld1r ld2r D forms replicate with a spread multiply
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e hex.header=false
+wx 20c0400d @ 0 # ld1r {v0.8b}, [x1] spreads the byte over the low 64 bits
+wx 2a @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+wx 20c4600d @ 0 # ld2r {v0.4h-v1.4h}, [x1] broadcasts one halfword per register
+wx 22114433 @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+wx 20e8ff0d @ 0 # ld4r {v0.2s-v3.2s}, [x1], #16 broadcasts words and walks the base
+wx 112233445566778899aabbccddeeff00 @ 0x100
+aei
+aeip
+aer v0l=0x1111111111111111
+aer v0h=0x1111111111111111
+aer v1l=0x1111111111111111
+aer v1h=0x1111111111111111
+aer v2l=0x1111111111111111
+aer v2h=0x1111111111111111
+aer v3l=0x1111111111111111
+aer v3h=0x1111111111111111
+aer x1=0x100
+aes
+aer v0l
+aer v0h
+aer v1l
+aer v1h
+aer v2l
+aer v2h
+aer v3l
+aer v3h
+aer x1
+EOF
+EXPECT=<<EOF
+0x2a2a2a2a2a2a2a2a
+0x00000000
+0x1122112211221122
+0x00000000
+0x3344334433443344
+0x00000000
+0x4433221144332211
+0x00000000
+0x8877665588776655
+0x00000000
+0xccbbaa99ccbbaa99
+0x00000000
+0xffeedd00ffeedd
+0x00000000
+0x00000110
+EOF
+RUN
+
+NAME=ARM64 literal load from a signed high virtual address
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e io.va=true
+on malloc://0x200 0xfffffffe00011200 rwx
+wx 20090058 @ 0xfffffffe0001126c
+wv8 0x240200000 @ 0xfffffffe00011390
+aei
+aer pc=0xfffffffe0001126c
+aes
+aer x0
+ae 0x12345678,-8589864048,=[8]
+ae -8589864048,[8],x0,=
+aer x0
+ae -0x1fffeec70,[8],x0,=
+aer x0
+EOF
+EXPECT=<<EOF
+0x240200000
+0x12345678
+0x12345678
+EOF
+RUN
+
+NAME=ARM64 UMINV reduces unsigned lanes and clears the destination upper bits
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 01a8316e62a8716ea4a8b16e00a8312e
+aei
+aer v0l=0xfefdfcfbfaf9f8f7
+aer v0h=0xf6f5f4f3f2f180ff
+aer v1l=0xffffffffffffffff
+aer v1h=0xffffffffffffffff
+aeip
+aes
+aer v1l
+aer v1h
+aer v3l=0xfffffffffffffffe
+aer v3h=0xfffd8001fffcffff
+aer v2l=0xffffffffffffffff
+aer v2h=0xffffffffffffffff
+aes
+aer v2l
+aer v2h
+aer v5l=0xfffffffe00000001
+aer v5h=0xffffffff80000001
+aer v4l=0xffffffffffffffff
+aer v4h=0xffffffffffffffff
+aes
+aer v4l
+aer v4h
+aes
+aer v0l
+aer v0h
+s 16
+wx 63a8712e
+aer pc=16
+aer pstate=0xf0000000
+aer v3l=0xfffdfffc8002ffff
+aer v3h=0
+aes
+aer v3l
+aer v3h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x00000080
+0x00000000
+0x00008001
+0x00000000
+0x00000001
+0x00000000
+0x000000f7
+0x00000000
+0x00008002
+0x00000000
+0xf0000000
+EOF
+RUN
+
+NAME=ARM64 CMHI compares unsigned SIMD lanes and preserves aliased sources
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0034216e0034212e0034a16e0034e16e
+aei
+aer v0l=0x80ff0102ff00017f
+aer v0h=0x0001000200030004
+aer v1l=0x7fff0201fe000180
+aer v1h=0x0000000100020003
+aer pstate=0xf0000000
+aeip
+aes
+aer v0l
+aer v0h
+aer v1l
+aer pc=4
+aes
+aer v0h
+aer pc=8
+aer v0l=0x8000000100000001
+aer v0h=0xffffffff00000000
+aer v1l=0x7fffffff00000002
+aer v1h=0x8000000000000000
+aes
+aer v0l
+aer v0h
+aer pc=12
+aer v0l=0x8000000000000000
+aer v0h=0xffffffffffffffff
+aer v1l=0x7fffffffffffffff
+aer v1h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+aer pstate
+EOF
+EXPECT=<<EOF
+0xff0000ffff000000
+0xff00ff00ff00ff
+0x7fff0201fe000180
+0x00000000
+0xffffffff00000000
+0xffffffff00000000
+0xffffffffffffffff
+0x00000000
+0xf0000000
+EOF
+RUN
+
+NAME=ARM64 MOVI replicates shifted lane immediates and clears narrow writes
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 00e4006f61e5054f42a6000f83d6014f44e5052f
+aei
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aer v2h=0xffffffffffffffff
+aer v4h=0xffffffffffffffff
+aer pstate=0xf0000000
+aeip
+aes
+aer v0l
+aer v0h
+aes
+aer v1l
+aer v1h
+aes
+aer v2l
+aer v2h
+aes
+aer v3l
+aer v3h
+aes
+aer v4l
+aer v4h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0xabababababababab
+0xabababababababab
+0x1200120012001200
+0x00000000
+0x34ffff0034ffff
+0x34ffff0034ffff
+0xff00ff00ff00ff00
+0x00000000
+0xf0000000
+EOF
+RUN
+
+NAME=arm64 braa/brab/braaz/brabz branch to Xn, Xm is only the PAC modifier
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 22081fd7
+aei
+ar x1=0x20
+ar x2=5
+aes
+ar pc
+wx 220c1fd7 @ 0x20
+ar x1=0x30
+aes
+ar pc
+wx 3f081fd6 @ 0x30
+ar x1=0x10
+aes
+ar pc
+wx 3f0c1fd6 @ 0x10
+ar x1=0x38
+aes
+ar pc
+EOF
+EXPECT=<<EOF
+0x00000020
+0x00000030
+0x00000010
+0x00000038
+EOF
+RUN
+
+NAME=arm64 fabs clears the sign of negative and positive doubles
+FILE=malloc://16
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20c0601e20c0601e
+aei
+aeim
+ar d1=0xc000000000000000
+aes
+ar d0
+ar d1=0x4000000000000000
+aes
+ar d0
+EOF
+EXPECT=<<EOF
+0x4000000000000000
+0x4000000000000000
+EOF
+RUN
+
+NAME=arm64 fabs clears the sign of negative zero and double, single and half negative nan
+FILE=malloc://16
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20c0601e20c0601e20c0201e20c0e01e
+aei
+aeim
+ar d1=0x8000000000000000
+ar d0=0x1234
+aes
+ar d0
+ar d1=0xfff8000000000000
+aes
+ar d0
+ar s1=0xffc00000
+aes
+ar s0
+ar h1=0xfe00
+aes
+ar h0
+EOF
+EXPECT=<<EOF
+0x00000000
+0x7ff8000000000000
+0x7fc00000
+0x00007e00
+EOF
+RUN
+
+NAME=arm64 vector fabs clears only the sign of each lane
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20f8a04e20f8e04e20f8a00e20f8f80e00f8a04e20f8a04e20f8f84e00f8a00e41f8e04e
+aei
+aeim
+ar v0l=0x1111111111111111
+ar v0h=0x2222222222222222
+ar v1l=0x80000000c0000000
+ar v1h=0x3f800000ffc00000
+aes
+ar v0
+ar v1
+ar v0l=0x1111111111111111
+ar v0h=0x2222222222222222
+ar v1l=0xc000000000000000
+ar v1h=0xfff8000000000000
+aes
+ar v0
+ar v0l=0x1111111111111111
+ar v0h=0x2222222222222222
+ar v1l=0xbf800000c0000000
+ar v1h=0x3333333333333333
+aes
+ar v0
+ar v0h=0x2222222222222222
+ar v1l=0xfe00800080017fff
+aes
+ar v0
+ar v0l=0x80000000c0000000
+ar v0h=0xbf800000ffc00000
+aes
+ar v0
+ar v0l=0x1111111111111111
+ar v0h=0x2222222222222222
+ar v1l=0x3f80000040000000
+ar v1h=0x000000007fc00000
+aes
+ar v0
+ar v0l=0x1111111111111111
+ar v0h=0x2222222222222222
+ar v1l=0x8000ffff7fff0001
+ar v1h=0xfe00bc0000008001
+aes
+ar v0
+ar v1
+ar v0l=0x80000000c0000000
+ar v0h=0x2222222222222222
+aes
+ar v0
+ar v1l=0x1111111111111111
+ar v1h=0x2222222222222222
+ar v2l=0x3ff0000000000000
+ar v2h=0x7ff8000000000000
+aes
+ar v1
+EOF
+EXPECT=<<EOF
+0x3f8000007fc000000000000040000000
+0x3f800000ffc0000080000000c0000000
+0x7ff80000000000004000000000000000
+0x00000000000000003f80000040000000
+0x00000000000000007e00000000017fff
+0x3f8000007fc000000000000040000000
+0x000000007fc000003f80000040000000
+0x7e003c000000000100007fff7fff0001
+0xfe00bc00000080018000ffff7fff0001
+0x00000000000000000000000040000000
+0x7ff80000000000003ff0000000000000
+EOF
+RUN
+
+NAME=arm64 scalar fabs esil stays a sign mask of the source
+FILE=malloc://16
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20c0201e20c0601e
+pi 2
+aoj 2~{[0].esil}
+aoj 2~{[1].esil}
+EOF
+EXPECT=<<EOF
+fabs s0, s1
+fabs d0, d1
+0x7fffffff,s1,&,s0,=,0xffffffff,v0l,&=,0,v0h,=
+0x7fffffffffffffff,d1,&,d0,=,0,v0h,=
+EOF
+RUN
+
+NAME=ARM64 SHA256SU0 custom operation snapshots overlapping vector sources
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff2b285e
+aei
+aer pstate=0xb0000000
+aer v31l=0x1234569701234586
+aer v31h=0x345678b9234567a8
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x1ff885823aea6c78
+0x119e272c0e11969b
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 SHA256SU1 custom operation snapshots overlapping vector sources
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff631e5e
+aei
+aer pstate=0xb0000000
+aer v30l=0x1234569601234585
+aer v30h=0x345678b8234567a7
+aer v31l=0x1234569701234586
+aer v31h=0x345678b9234567a8
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x28bfc77e328740b0
+0x50d4bcf79fde9f24
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 SHA256H custom operation snapshots overlapping vector sources
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff431e5e
+aei
+aer pstate=0xb0000000
+aer v30l=0x1234569601234585
+aer v30h=0x345678b8234567a7
+aer v31l=0x1234569701234586
+aer v31h=0x345678b9234567a8
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x3c88e1592ff99668
+0xb5d8976fd51270c6
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 SHA256H2 custom operation snapshots overlapping vector sources
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff531e5e
+aei
+aer pstate=0xb0000000
+aer v30l=0x1234569601234585
+aer v30h=0x345678b8234567a7
+aer v31l=0x1234569701234586
+aer v31h=0x345678b9234567a8
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x3ef9b234151531bc
+0xc59b0823b2d14b1f
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 8b distinct registers
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 3f0a202e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v17l=0x0706050403020100
+aer v17h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x405060700010203
+0x00000000
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 8b in place
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff0b202e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v31l=0x0706050403020100
+aer v31h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x405060700010203
+0x00000000
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 16b distinct registers
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 3f0a206e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v17l=0x0706050403020100
+aer v17h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x405060700010203
+0xc0d0e0f08090a0b
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 16b in place
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff0b206e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v31l=0x0706050403020100
+aer v31h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x405060700010203
+0xc0d0e0f08090a0b
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 4h distinct registers
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 3f0a602e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v17l=0x0706050403020100
+aer v17h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x504070601000302
+0x00000000
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 4h in place
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff0b602e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v31l=0x0706050403020100
+aer v31h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x504070601000302
+0x00000000
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 8h distinct registers
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 3f0a606e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v17l=0x0706050403020100
+aer v17h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x504070601000302
+0xd0c0f0e09080b0a
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 REV32 8h in place
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx ff0b606e
+aei
+aer pstate=0xb0000000
+aer v31h=0xffffffffffffffff
+aer v31l=0x0706050403020100
+aer v31h=0x0f0e0d0c0b0a0908
+aeip
+aes
+aer v31l
+aer v31h
+aer pstate
+EOF
+EXPECT=<<EOF
+0x504070601000302
+0xd0c0f0e09080b0a
+0xb0000000
+EOF
+RUN
+
+NAME=ARM64 SHA custom operations follow ESIL init and fini
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aei
+ae???~ARM64_SHA256~?
+aei-
+aei
+ae???~ARM64_SHA256~?
+e asm.bits=32
+aei-
+aei
+ae???~ARM64_SHA256~?
+e asm.arch=x86
+e asm.bits=64
+aei-
+aei
+ae???~ARM64_SHA256~?
+EOF
+EXPECT=<<EOF
+4
+4
+0
+0
+EOF
+RUN
+
+NAME=arm64 fmadd fnmadd fmsub fnmsub round once
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 200c421f200c621f208c421f208c621f200c421f200c421f
+aei
+aeim
+ar d1=0x3fe44cb63e46dd61;ar d2=0x3ff58f16ad9ac27c;ar d3=0xbfeb5a39943335d4
+aes
+ar d0
+aes
+ar d0
+ar d3=0x3feb5a39943335d4
+aes
+ar d0
+aes
+ar d0
+ar d1=0x4000000000000000;ar d2=0x4008000000000000;ar d3=0x3ff0000000000000
+aes
+ar d0
+ar d1=0x7ff8000000000001;ar d3=0x7ff8000000000003
+aes
+ar d0
+EOF
+EXPECT=<<EOF
+0x3de2c7523d309977
+0xbde2c7523d309977
+0xbde2c7523d309977
+0x3de2c7523d309977
+0x401c000000000000
+0x7ff8000000000003
+EOF
+RUN
+
+NAME=arm64 fmadd fnmadd fmsub fnmsub round once (arm.v35)
+FILE=malloc://32
+REQUIRE=arm.v35
+ARGS=-a arm.v35 -b 64
+CMDS=<<EOF
+wx 200c421f200c621f208c421f208c621f200c421f
+aei
+aeim
+ar d1=0x3fe44cb63e46dd61;ar d2=0x3ff58f16ad9ac27c;ar d3=0xbfeb5a39943335d4
+aes
+ar d0
+aes
+ar d0
+ar d3=0x3feb5a39943335d4
+aes
+ar d0
+aes
+ar d0
+ar d1=0x4000000000000000;ar d2=0x4008000000000000;ar d3=0x3ff0000000000000
+aes
+ar d0
+EOF
+EXPECT=<<EOF
+0x3de2c7523d309977
+0xbde2c7523d309977
+0xbde2c7523d309977
+0x3de2c7523d309977
+0x401c000000000000
+EOF
+RUN
+
+NAME=arm64 cls x and w
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2014c0da
+ar x1=0
+aes
+ar x0
+ar pc=0
+ar x1=0xffffffffffffffff
+aes
+ar x0
+ar pc=0
+ar x1=1
+aes
+ar x0
+ar pc=0
+ar x1=0xc000000000000000
+aes
+ar x0
+wx 2014c05a
+ar pc=0
+ar x1=0xffff0000ffffffff
+aes
+ar x0
+ar pc=0
+ar x1=0x0000ffff
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x0000003f
+0x0000003f
+0x0000003e
+0x00000001
+0x0000001f
+0x0000000f
+EOF
+RUN
+
+NAME=arm64 smnegl and umnegl
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20fc229b
+ar x1=0xfffffffb
+ar x2=3
+aes
+ar x0
+wx 20fca29b
+ar pc=0
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x0000000f
+0xfffffffd0000000f
+EOF
+RUN
+
+NAME=arm64 subs and cmp w with shifted or extended operand set vf from 32 bits
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2004026b
+ar x1=0
+ar x2=0x80000000
+aes
+ar vf
+ar x0
+wx 2080226b
+ar pc=0
+ar x1=0xffffffff
+ar x2=0xff
+aes
+ar vf
+wx 3f04026b
+ar pc=0
+ar x1=0
+ar x2=0x80000000
+aes
+ar vf
+ar pc=0
+ar x1=0x7fffffff
+ar x2=0x7fffffff
+aes
+ar vf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000000
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLZ on 8-bit lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 0148202e
+aei
+aeip
+aer v0l=0x0102040810204080
+aer v0h=0xffffffffffffffff
+aes
+aer v1l
+aer v1h
+EOF
+EXPECT=<<EOF
+0x706050403020100
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLZ on 8-bit lanes in big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 0148202e
+aei
+aeip
+aer v0l=0x0102040810204080
+aer v0h=0xffffffffffffffff
+aes
+aer v1l
+aer v1h
+EOF
+EXPECT=<<EOF
+0x706050403020100
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLZ on 16-byte lanes replicates width for zeros
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2048206e
+aei
+aeip
+aer v1l=0x0102040810204080
+aer v1h=0x0000000000000000
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x706050403020100
+0x808080808080808
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLZ on halfword lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2048606e
+aei
+aeip
+aer v1l=0x0008000400020001
+aer v1h=0xffffffffffffffff
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0xc000d000e000f
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLZ on word lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2048a06e
+aei
+aeip
+aer v1l=0x8000000000000001
+aer v1h=0x0000000100000000
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x0000001f
+0x1f00000020
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLZ D-form zeroes upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2048a02e
+aei
+aeip
+aer v1l=0x8000000000000001
+aer v1h=0x8899aabbccddeeff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x0000001f
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL scalar CLZ keeps working
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2010c0da
+aei
+aeip
+aer x1=0x0000000000000001
+aes
+aer x0
+wx 2010c05a @ 0
+aeip
+aer w1=0x00000001
+aeip
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x0000003f
+0x0000001f
+EOF
+RUN
+
+NAME=arm64 ESIL vector CNT on 8-bit lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2058204e
+aei
+aeip
+aer v1l=0x0102040810204080
+aer v1h=0xff00f00f0f00f0f0
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x101010101010101
+0x800040404000404
+EOF
+RUN
+
+NAME=arm64 ESIL vector CNT on 8-bit lanes in big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 2058204e
+aei
+aeip
+aer v1l=0x0102040810204080
+aer v1h=0xff00f00f0f00f0f0
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x101010101010101
+0x800040404000404
+EOF
+RUN
+
+NAME=arm64 ESIL vector CNT D-form zeroes upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2058200e
+aei
+aeip
+aer v1l=0xff008001ff008001
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x800010108000101
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLS on 8-bit lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2048204e
+aei
+aeip
+aer v1l=0x0102040810204080
+aer v1h=0xffffffffffffffff
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x605040302010000
+0x707070707070707
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLS on 8-bit lanes in big endian
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF
+wx 2048204e
+aei
+aeip
+aer v1l=0x0102040810204080
+aer v1h=0xffffffffffffffff
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x605040302010000
+0x707070707070707
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLS on halfword lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2048604e
+aei
+aeip
+aer v1l=0x0008000400020001
+aer v1h=0x8000ffff7fff0000
+aer v0l=0xffffffffffffffff
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0xb000c000d000e
+0xf0000000f
+EOF
+RUN
+
+NAME=arm64 ESIL vector CLS D-form zeroes upper half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2048a00e
+aei
+aeip
+aer v1l=0x8000000000000001
+aer v0h=0xffffffffffffffff
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x0000001e
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL scalar CLS keeps working
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2014c0da
+aei
+aeip
+aer x1=0x0000000000000001
+aes
+aer x0
+wx 2014c0da @ 0
+aeip
+aer x1=0xffffffffffffff80
+aes
+aer x0
+wx 2014c0da @ 0
+aeip
+aer x1=0x8000000000000000
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x0000003e
+0x00000038
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL scalar CLS word form uses 32-bit width
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2014c05a
+aei
+aeip
+aer x1=0xffffffffffffffff
+aer w1=0x00000001
+aes
+aer x0
+EOF
+EXPECT=<<EOF
+0x0000001e
+EOF
+RUN
+
+NAME=arm64 ESIL ins moves a single vector lane
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20440c6e # ins v0.s[1], v1.s[2]
+aei
+aeip
+aer v0l=0x1111111122222222
+aer v0h=0x3333333344444444
+aer v1l=0xaaaabbbbccccdddd
+aer v1h=0x5555666677778888
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x7777888822222222
+0x3333333344444444
+EOF
+RUN
+
+NAME=arm64 ESIL ins inserts upper-half lane from lower half
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20041e6e # ins v0.h[7], v1.h[0]
+aei
+aeip
+aer v0l=0x1111111122222222
+aer v0h=0x3333333344444444
+aer v1l=0xaaaabbbbccccdddd
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0x1111111122222222
+0xdddd333344444444
+EOF
+RUN
+
+NAME=arm64 ESIL mov lane insert from GPR keeps other lanes
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 201c0c4e # mov v0.s[1], w1
+aei
+aeip
+aer v0l=0x1111111122222222
+aer v0h=0x3333333344444444
+aer x1=0x11111111deadbeef
+aes
+aer v0l
+aer v0h
+EOF
+EXPECT=<<EOF
+0xdeadbeef22222222
+0x3333333344444444
+EOF
+RUN
+
+NAME=arm64 fixed-point conversions with 32-bit operands
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20f4021e20f4031e20f4181e20f4191e
+aei
+ar w1=-14
+aes
+ar s0
+ar w1=14
+aes
+ar s0
+ar s1=0xbfe00000
+aes
+ar x0
+ar s1=0x3fe00000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0xbfe00000
+0x3fe00000
+0xfffffff2
+0x0000000e
+EOF
+RUN
+
+NAME=arm64 fixed-point conversions with 64-bit operands
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20f4429e20f4439e20f4589e20f4599e
+aei
+ar x1=-14
+aes
+ar d0
+ar x1=0x8000000000000000
+aes
+ar d0
+ar d1=0xbffc000000000000
+aes
+ar x0
+ar d1=0x43b0000000000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0xbffc000000000000
+0x43b0000000000000
+0xfffffffffffffff2
+0x8000000000000000
+EOF
+RUN
+
+NAME=arm64 fixed-point conversions with maximum fractional bits
+FILE=malloc://32
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2080021e2080181e2000429e2000599e2000589e
+aei
+ar w1=0x80000000
+aes
+ar s0
+ar s1=0xbf000000
+aes
+ar x0
+ar x1=0x8000000000000000
+aes
+ar d0
+ar d1=0x3fe0000000000000
+aes
+ar x0
+ar d1=0xbfe0000000000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0xbf000000
+0x80000000
+0xbfe0000000000000
+0x8000000000000000
+0x8000000000000000
+EOF
+RUN
+
+NAME=arm64 fcvtzu preserves the unsigned 64-bit range without scaling
+FILE=malloc://16
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 2000799e2000799e
+aei
+ar d1=0x43e0000000000000
+aes
+ar x0
+ar d1=0xbff0000000000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x8000000000000000
+0x00000000
+EOF
+RUN
+
+NAME=arm.v35 fixed-point conversions with 64-bit operands
+FILE=malloc://32
+REQUIRE=arm.v35
+ARGS=-a arm.v35 -b 64
+CMDS=<<EOF
+wx 20f4429e20f4439e20f4589e20f4599e
+aei
+ar x1=-14
+aes
+ar d0
+ar x1=0x8000000000000000
+aes
+ar d0
+ar d1=0xbffc000000000000
+aes
+ar x0
+ar d1=0x43b0000000000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0xbffc000000000000
+0x43b0000000000000
+0xfffffffffffffff2
+0x8000000000000000
+EOF
+RUN
+
+NAME=arm fixed-point 64-bit conversions saturate
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20f4589e20f4589e20f4589e20f4599e20f4599e20f4599e
+aei
+ar x0=0xffffffffffffffff
+ar d1=0x43b0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0xc3c0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0x7ff8000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0x43c0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0x7ff0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0xc3c0000000000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x7fffffffffffffff
+0x8000000000000000
+0x00000000
+0xffffffffffffffff
+0xffffffffffffffff
+0x00000000
+EOF
+RUN
+
+NAME=arm.v35 fixed-point 64-bit conversions saturate
+FILE=malloc://64
+REQUIRE=arm.v35
+ARGS=-a arm.v35 -b 64
+CMDS=<<EOF
+wx 20f4589e20f4589e20f4589e20f4599e20f4599e20f4599e
+aei
+ar x0=0xffffffffffffffff
+ar d1=0x43b0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0xc3c0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0x7ff8000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0x43c0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0x7ff0000000000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar d1=0xc3c0000000000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x7fffffffffffffff
+0x8000000000000000
+0x00000000
+0xffffffffffffffff
+0xffffffffffffffff
+0x00000000
+EOF
+RUN
+
+NAME=arm fixed-point 32-bit conversions saturate
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20f4181e20f4181e20f4181e20f4191e20f4191e20f4191e
+aei
+ar x0=0xffffffffffffffff
+ar s1=0x4d800000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0xce000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0x7fc00000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0x4e000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0x7f800000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0xce000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x7fffffff
+0x80000000
+0x00000000
+0xffffffff
+0xffffffff
+0x00000000
+EOF
+RUN
+
+NAME=arm.v35 fixed-point 32-bit conversions saturate
+FILE=malloc://64
+REQUIRE=arm.v35
+ARGS=-a arm.v35 -b 64
+CMDS=<<EOF
+wx 20f4181e20f4181e20f4181e20f4191e20f4191e20f4191e
+aei
+ar x0=0xffffffffffffffff
+ar s1=0x4d800000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0xce000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0x7fc00000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0x4e000000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0x7f800000
+aes
+ar x0
+ar x0=0xffffffffffffffff
+ar s1=0xce000000
+aes
+ar x0
+EOF
+EXPECT=<<EOF
+0x7fffffff
+0x80000000
+0x00000000
+0xffffffff
+0xffffffff
+0x00000000
+EOF
+RUN
+
+NAME=arm64 ESIL SVE CLZ CLS CNT REV RBIT stay unemulated
+REQUIRE=cs5+
+FILE=malloc://0x200
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20a0190420a0180420a01a04203838052040340520802705 # clz/cls/cnt/rev/rbit z0.b, rev p0.b
+e asm.esil=true
+ao 6~opcode:,esil:
+EOF
+EXPECT=<<EOF
+opcode: clz z0.b, p0/m, z1.b
+opcode: cls z0.b, p0/m, z1.b
+opcode: cnt z0.b, p0/m, z1.b
+opcode: rev z0.b, z1.b
+opcode: rev p0.b, p1.b
+opcode: rbit z0.b, p0/m, z1.b
+EOF
+RUN
+
+NAME=arm64 ESIL SVE NEG merges or zeroes inactive byte lanes
+REQUIRE=cs5+
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF_CMDS
+wx 20a41704
+aei
+aer p1=0x8105
+aer v0l=0xdeadbeefdeadbeef
+aer v0h=0x1122334455667788
+aer v1l=0x0102030405060780
+aer v1h=0x8102030405060708
+aes
+aer v0l
+aer v0h
+ae 0x0407a420,ARM64_SVE_UNARY
+aer v0l
+aer v0h
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+0xdeadbeefdefabe80
+0x7f223344556677f8
+0x00fa0080
+0x7f000000000000f8
+EOF_EXPECT
+RUN
+
+NAME=arm64 ESIL SVE FABS and FNEG preserve inactive lanes and NaN payloads
+REQUIRE=cs5+
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF_CMDS
+e cfg.bigendian=true
+wx ffbf5c04ffbf5d04
+aei
+aer p7=0x55
+aer v31l=0x8000fe018001bc00
+aer v31h=0x9988776655443322
+aes
+aer v31l
+aer v31h
+aer fpcr=2
+aes
+aer v31l
+aer v31h
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+0x7e0100013c00
+0x9988776655443322
+0x80007e018001bc00
+0x9988776655443322
+EOF_EXPECT
+RUN
+
+NAME=arm64 ESIL SVE upper lanes and NEON alias writes support step-back
+REQUIRE=cs5+
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF_CMDS
+e asm.cpu=sve256
+wx 20a4170420440c6e
+aei
+aer p1=0x10000
+arv z0 2 64 = 0xdeadbeefdeadbeef
+arv z1 2 64 = 0x0102030405060780
+aes
+arvj
+arvj z0 2 64
+arv* z0 2 64
+aes
+arv z0 2 64
+aesb
+arv z0 2 64
+aesb
+arv z0 2 64
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+[{"prefix":"z","count":32,"bits":256},{"prefix":"p","count":16,"bits":32}]
+{"name":"z0","bits":256,"lane_bits":64,"first":2,"values":["0xdeadbeefdeadbe80"]}
+arv z0 2 64 = 0xdeadbeefdeadbe80
+0x0000000000000000
+0xdeadbeefdeadbe80
+0xdeadbeefdeadbeef
+EOF_EXPECT
+RUN
+
+NAME=arm64 ESIL SVE last predicate bit at 2048 bits
+REQUIRE=cs5+
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF_CMDS
+e asm.cpu=sve2048
+wx 20a4170420a41704
+aei
+arv z0 31 64 = 0xdeadbeefdeadbeef
+arv z1 31 64 = 0x0102030405060780
+aes
+arv z0 31 64
+arv p1 3 64 = 0x8000000000000000
+aes
+arv z0 31 64
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+0xdeadbeefdeadbeef
+0xffadbeefdeadbeef
+EOF_EXPECT
+RUN
+
+NAME=arm64 big endian scalar FP aliases clear scalable upper lanes and support step-back
+FILE=malloc://64
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF_CMDS
+e asm.cpu=sve256
+wx 2040201e20c0e01e
+aei
+arv z0 0 64 = 0xdeadbeefdeadbeef
+arv z0 1 64 = 0x1122334455667788
+arv z0 2 64 = 0x0123456789abcdef
+arv z0 3 64 = 0xfedcba9876543210
+aer v1l=0xcafebabe3f800000
+aes
+aer s0
+arvj z0
+aesb
+arvj z0
+aes
+aer v1l=0x112233445566bc00
+aes
+aer h0
+arvj z0
+aer v1l
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+0x3f800000
+{"name":"z0","bits":256,"lane_bits":64,"first":0,"values":["0x000000003f800000","0x0000000000000000","0x0000000000000000","0x0000000000000000"]}
+{"name":"z0","bits":256,"lane_bits":64,"first":0,"values":["0xdeadbeefdeadbeef","0x1122334455667788","0x0123456789abcdef","0xfedcba9876543210"]}
+0x00003c00
+{"name":"z0","bits":256,"lane_bits":64,"first":0,"values":["0x0000000000003c00","0x0000000000000000","0x0000000000000000","0x0000000000000000"]}
+0x112233445566bc00
+EOF_EXPECT
+RUN
+
+NAME=arm64 big endian narrow vector loads and stores agree with scalar aliases
+FILE=malloc://0x200
+ARGS=-a arm -b 64 -e cfg.bigendian=true
+CMDS=<<EOF_CMDS
+wx 1f00403d1f20003d1f00407d1f14007d1f0040bd1f0c00bd
+wx 89abcdef000000000000000000000000 @ 0x100
+aei
+aer x0=0x100
+aer v31l=0xdeadbeefdeadbeef
+aer v31h=0x1122334455667788
+aes
+aer b31
+aer v31l
+aer v31h
+aes
+aes
+aer h31
+aer v31l
+aes
+aes
+aer s31
+aer v31l
+aes
+p8 8 @ 0x108
+EOF_CMDS
+EXPECT=<<EOF_EXPECT
+0x00000089
+0x00000089
+0x00000000
+0x000089ab
+0x000089ab
+0x89abcdef
+0x89abcdef
+890089ab89abcdef
+EOF_EXPECT
+RUN
+
+NAME=ARM64 little-endian FNEG flips lane signs and clears upper bits
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20f8f82e20f8f86e20f8a02e20f8a06e20f8e06e00f8a06e2040e11e2040211e2040611e
+e asm.cpu=sve256
+aei
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0x400000003f800000
+ar v0h=0x4080000040400000
+aes
+ar v0
+ar v1l=0x7c01
+aes
+ar v0
+ar v1l=0x7f800001
+aes
+ar v0
+ar v1l=0x7ff0000000000001
+aes
+ar v0
+ar v1
+EOF
+EXPECT=<<EOF
+0x000000000000000000008000ff808001
+0x00000000
+0x00000000
+0x7ff1a3450000800000008000ff808001
+0x00000000
+0x00000000
+0x000000000000000000000000ff800001
+0x00000000
+0x00000000
+0x7ff123450000000000000000ff800001
+0x00000000
+0x00000000
+0x7ff1234580000000000000007f800001
+0x00000000
+0x00000000
+0xc0800000c0400000c0000000bf800000
+0x0000000000000000000000000000fc01
+0x000000000000000000000000ff800001
+0x0000000000000000fff0000000000001
+0xfff12345800000007ff0000000000001
+EOF
+RUN
+
+NAME=ARM64 big-endian FNEG flips lane signs and clears upper bits
+FILE=malloc://64
+ARGS=-a arm -b 64
+CMDS=<<EOF
+wx 20f8f82e20f8f86e20f8a02e20f8a06e20f8e06e00f8a06e2040e11e2040211e2040611e
+e asm.cpu=sve256
+e cfg.bigendian=true
+aei
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0xffffffffffffffff
+ar v0h=0xffffffffffffffff
+ar z0[2]=0xffffffffffffffff
+ar z0[3]=0xffffffffffffffff
+ar v1l=0x800000007f800001
+ar v1h=0xfff1234580000000
+aes
+ar v0
+ar z0[2]
+ar z0[3]
+ar v0l=0x400000003f800000
+ar v0h=0x4080000040400000
+aes
+ar v0
+ar v1l=0x7c01
+aes
+ar v0
+ar v1l=0x7f800001
+aes
+ar v0
+ar v1l=0x7ff0000000000001
+aes
+ar v0
+ar v1
+EOF
+EXPECT=<<EOF
+0x000000000000000000008000ff808001
+0x00000000
+0x00000000
+0x7ff1a3450000800000008000ff808001
+0x00000000
+0x00000000
+0x000000000000000000000000ff800001
+0x00000000
+0x00000000
+0x7ff123450000000000000000ff800001
+0x00000000
+0x00000000
+0x7ff1234580000000000000007f800001
+0x00000000
+0x00000000
+0xc0800000c0400000c0000000bf800000
+0x0000000000000000000000000000fc01
+0x000000000000000000000000ff800001
+0x0000000000000000fff0000000000001
+0xfff12345800000007ff0000000000001
 EOF
 RUN

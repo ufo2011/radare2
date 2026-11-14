@@ -1,3 +1,27 @@
+NAME=noreturn propagation updates block and function instruction counts
+FILE=bins/elf/noreturn
+CMDS=<<EOF
+e anal.imports=false
+aa
+afij @ sym.might_not_return~{0.ninstrs}
+abj @ 0x1181~{0.ninstr}
+abj @ 0x1181~{0.size}
+tn 0x1050
+aanr
+afij @ sym.might_not_return~{0.ninstrs}
+abj @ 0x1181~{0.ninstr}
+abj @ 0x1181~{0.size}
+EOF
+EXPECT=<<EOF
+93
+9
+45
+48
+2
+10
+EOF
+RUN
+
 NAME=tn symbol
 FILE=bins/elf/analysis/hello-objc-linux
 CMDS=<<EOF
@@ -50,37 +74,26 @@ size: 34
 EOF
 RUN
 
+# merged: no no return; no no return 2
 NAME=without noreturn
 FILE=bins/elf/analysis/hello-objc-linux
 CMDS=<<EOF
 tn-*
 af
 afi~size
-EOF
-EXPECT=<<EOF
-size: 34
-EOF
-RUN
-
-NAME=no no return
-FILE=bins/elf/analysis/hello-objc-linux
-CMDS=<<EOF
+?e --
 af
 af-
 afi~size
-EOF
-EXPECT=<<EOF
-EOF
-RUN
-
-NAME=no no return 2
-FILE=bins/elf/analysis/hello-objc-linux
-CMDS=<<EOF
+?e --
 af
 af-*
 afi~size
 EOF
 EXPECT=<<EOF
+size: 34
+--
+--
 EOF
 RUN
 
@@ -92,9 +105,9 @@ s main
 pdf
 EOF
 EXPECT=<<EOF
-            ; DATA XREF from entry0 @ 0x40048d
+            ; DATA XREF from entry0 @ 0x40048d(r)
 / 41: int main (int argc, char **argv, char **envp);
-|           ; var int64_t var_4h @ rbp-0x4
+| afv: vars(1:sp[0xc..0xc])
 |           0x00400566      55             push rbp
 |           0x00400567      4889e5         mov rbp, rsp
 |           0x0040056a      4883ec10       sub rsp, 0x10
@@ -116,6 +129,7 @@ CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=32
 "wa call 0x10;ret"
+wa ret @ 0x10
 tna 0x10
 af
 pif
@@ -125,9 +139,68 @@ call fcn.00000010
 EOF
 RUN
 
-NAME=noreturn propagation
+NAME=noreturn propagation with anal.imports
 FILE=bins/elf/noreturn
 CMDS=<<EOF
+e anal.imports=true
+aa
+?e -- before --
+afb@sym.might_not_return
+tn 0x00001050 # TODO: this should be done automatically
+aanr
+?e -- after --
+afb@sym.might_not_return
+EOF
+EXPECT=<<EOF
+-- before --
+0x00001167 0x00001172 00:0000 11 j 0x00001172
+0x00001172 0x00001177 00:0000 5 j 0x00001250
+0x00001177 0x00001181 00:0000 10 j 0x0000124b f 0x00001181
+0x00001181 0x0000118b 00:0000 10
+0x0000124b 0x00001250 00:0000 5 j 0x00001250
+0x00001250 0x0000125a 00:0000 10 j 0x00001177 f 0x0000125a
+0x0000125a 0x00001260 00:0000 6 j 0x000012d1 f 0x00001260
+0x00001260 0x00001266 00:0000 6 j 0x000012da f 0x00001266
+0x00001266 0x0000126c 00:0000 6 j 0x000012da f 0x0000126c
+0x0000126c 0x00001272 00:0000 6 j 0x000012da f 0x00001272
+0x00001272 0x0000127d 00:0000 11 j 0x000012da f 0x0000127d
+0x0000127d 0x0000129f 00:0000 34 s 0x0000129f s 0x000012a6 s 0x000012bc s 0x000012c3 s 0x000012ca
+0x0000129f 0x000012a6 00:0000 7 j 0x000012df
+0x000012a6 0x000012b0 00:0000 10
+0x000012bc 0x000012c3 00:0000 7 j 0x000012df
+0x000012c3 0x000012ca 00:0000 7 j 0x000012df
+0x000012ca 0x000012d1 00:0000 7 j 0x000012df
+0x000012d1 0x000012da 00:0000 9 j 0x00001172
+0x000012da 0x000012df 00:0000 5 j 0x000012df
+0x000012df 0x000012e1 00:0000 2
+-- after --
+0x00001167 0x00001172 00:0000 11 j 0x00001172
+0x00001172 0x00001177 00:0000 5 j 0x00001250
+0x00001177 0x00001181 00:0000 10 j 0x0000124b f 0x00001181
+0x00001181 0x0000118b 00:0000 10
+0x0000124b 0x00001250 00:0000 5 j 0x00001250
+0x00001250 0x0000125a 00:0000 10 j 0x00001177 f 0x0000125a
+0x0000125a 0x00001260 00:0000 6 j 0x000012d1 f 0x00001260
+0x00001260 0x00001266 00:0000 6 j 0x000012da f 0x00001266
+0x00001266 0x0000126c 00:0000 6 j 0x000012da f 0x0000126c
+0x0000126c 0x00001272 00:0000 6 j 0x000012da f 0x00001272
+0x00001272 0x0000127d 00:0000 11 j 0x000012da f 0x0000127d
+0x0000127d 0x0000129f 00:0000 34 s 0x0000129f s 0x000012a6 s 0x000012bc s 0x000012c3 s 0x000012ca
+0x0000129f 0x000012a6 00:0000 7 j 0x000012df
+0x000012a6 0x000012b0 00:0000 10
+0x000012bc 0x000012c3 00:0000 7 j 0x000012df
+0x000012c3 0x000012ca 00:0000 7 j 0x000012df
+0x000012ca 0x000012d1 00:0000 7 j 0x000012df
+0x000012d1 0x000012da 00:0000 9 j 0x00001172
+0x000012da 0x000012df 00:0000 5 j 0x000012df
+0x000012df 0x000012e1 00:0000 2
+EOF
+RUN
+
+NAME=noreturn propagation without anal.imports
+FILE=bins/elf/noreturn
+CMDS=<<EOF
+e anal.imports=false
 aa
 ?e -- before --
 afb@sym.might_not_return
@@ -190,5 +263,55 @@ EXPECT=<<EOF
 0x000012d1 0x000012da 00:0000 9 j 0x00001172
 0x000012da 0x000012df 00:0000 5 j 0x000012df
 0x000012df 0x000012e1 00:0000 2
+EOF
+RUN
+
+NAME=noreturn chop keeps blocks reached from outside the entry's tree
+FILE=malloc://128
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx e83b000000c3 @ 0
+wx 90eb0d @ 0x10
+wx e8230000007409 @ 0x18
+wx c3 @ 0x20
+wx c3 @ 0x28
+wx c3 @ 0x40
+af @ 0x40
+tn 0x40
+af @ 0
+afb+ 0 0x10 3 0x20
+afb+ 0 0x18 7 0x28 0x20
+afb+ 0 0x20 1
+afb+ 0 0x28 1
+axC 0x40 @ 0x18
+aanr
+afb
+EOF
+EXPECT=<<EOF
+0x00000000 0x00000005 00:0000 5
+0x00000010 0x00000013 00:0000 3 j 0x00000020
+0x00000018 0x0000001d 00:0000 5
+0x00000020 0x00000021 00:0000 1
+EOF
+RUN
+
+NAME=noreturn chop keeps an entry the chopped block loops back to
+FILE=malloc://128
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 85c0740c @ 0
+wx e837000000ebf5 @ 4
+wx c3 @ 0x10
+wx c3 @ 0x40
+af @ 0x40
+af @ 0
+tn 0x40
+aanr
+afb
+EOF
+EXPECT=<<EOF
+0x00000000 0x00000004 00:0000 4 j 0x00000010 f 0x00000004
+0x00000004 0x00000009 00:0000 5
+0x00000010 0x00000011 00:0000 1
 EOF
 RUN

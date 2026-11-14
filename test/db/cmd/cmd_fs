@@ -43,15 +43,58 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=md r2 codelines
+FILE=bins/elf/dwarf3_line
+CMDS=<<EOF
+e bin.dbginfo=true
+m r2 /r2
+md /r2
+?e --
+md /r2/cl
+?e --
+md /r2/cl/usr/w/g/radare2/test/bins/src
+?e --
+md /r2/cl/usr/w/g/radare2/test/bins/src/dwarf-line
+?e --
+mc /r2/cl/usr/w/g/radare2/test/bins/src/dwarf-line.c~0x00001197[0,1]
+EOF
+EXPECT=<<EOF
+d cfg
+d cl
+d cu
+d flags
+f version
+f seek
+f bsize
+--
+d tmp
+d usr
+--
+d dwarf-line
+f dwarf-line.c
+--
+f bar.c
+--
+0x00001197 8
+EOF
+RUN
+
+# merged: m iso9660 auto
 NAME=md iso
 FILE=bins/fs/iso.img
-CMDS=md /root
+CMDS=<<EOF
+md /root
+?e --
+m
+EOF
 EXPECT=<<EOF
 d .
 d ..
 f LS.
 f README.MD
 f SERVICES.
+--
+iso9660	0x0	/root
 EOF
 RUN
 
@@ -77,14 +120,6 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=m iso9660 auto
-FILE=bins/fs/iso.img
-CMDS=m
-EXPECT=<<EOF
-iso9660	0x0	/root
-EOF
-RUN
-
 NAME=m ext2 auto
 FILE=bins/fs/ext2.img
 CMDS=m
@@ -98,6 +133,19 @@ FILE=bins/fs/hfs.img
 CMDS=m
 EXPECT=<<EOF
 hfs	0x0	/root
+EOF
+RUN
+
+NAME=m hfs oobread
+FILE=bins/fs/hfs-oobread.img
+CMDS=<<EOF
+m
+md /
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+Cannot find the HFS root directory
+ERROR: Cannot mount /root
 EOF
 RUN
 
@@ -161,7 +209,9 @@ EOF
 EXPECT=<<EOF
 d etc
 d bin
+f �eadme~1.swp
 f README.md
+f �eadme~1.swx
 EOF
 RUN
 
@@ -883,6 +933,7 @@ CMDS=<<EOF
 mg /root/bin/ls
 o ./ls
 i~size
+rm ls
 EOF
 EXPECT=<<EOF
 size     0x1ee78
@@ -897,8 +948,716 @@ cd /tmp/fsfat
 mg /root/bin/ls 0x0 5
 o ./ls
 i~size
+rm ls
 EOF
 EXPECT=<<EOF
 size     0x5
 EOF
+RUN
+
+NAME=mdx fat deleted files
+FILE=bins/fs/fat_deleted/fat_deleted.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt fat 0
+mdx /mnt~eadme.md
+EOF
+EXPECT=<<EOF
+x \xe5eadme.md
+EOF
+RUN
+
+NAME=mi fat finds the starting offset of a multi-cluster file
+FILE=bins/fs/fat_deleted/fat_deleted.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt fat 0
+mi /mnt/etc/services
+mis /mnt/etc/services
+s
+p8 7
+mi 0x24e00~mnt
+EOF
+EXPECT=<<EOF
+'f file 19605 0x00024e00
+'f file 19605 0x00024e00
+0x24e00
+23204e6574776f
+/mnt/etc/services
+EOF
+RUN
+
+NAME=mix fat deleted filename by offset
+FILE=bins/fs/fat_deleted/fat_deleted.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt fat 0
+mix 0x2ae00~mnt
+EOF
+EXPECT=<<EOF
+/mnt/\xe5eadme.md
+EOF
+RUN
+
+NAME=md ubifs
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+md /mnt | sort
+EOF
+EXPECT=<<EOF
+d bin
+d dev
+d etc
+d lib
+d mnt
+d overlay
+d proc
+d rom
+d root
+d sbin
+d sys
+d tmp
+d usr
+d www
+l var
+EOF
+RUN
+
+NAME=md ubifs subdirectory
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+md /mnt/etc | sort | head -10
+EOF
+EXPECT=<<EOF
+d board.d
+d config
+d crontabs
+d dropbear
+d hotplug.d
+d init.d
+d iproute2
+d luci-uploads
+d modules-boot.d
+d modules.d
+EOF
+RUN
+
+NAME=mc ubifs cat file
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+mc /mnt/etc/banner
+EOF
+EXPECT=<<EOF
+  _______                     ________        __
+ |       |.-----.-----.-----.|  |  |  |.----.|  |_
+ |   -   ||  _  |  -__|     ||  |  |  ||   _||   _|
+ |_______||   __|_____|__|__||________||__|  |____|
+          |__| W I R E L E S S   F R E E D O M
+ -----------------------------------------------------
+ OpenWrt 18.06.6, r7957-d81a8a3e29
+ -----------------------------------------------------
+
+EOF
+RUN
+
+NAME=mi ubifs file info
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+mi /mnt/etc/banner
+EOF
+EXPECT=<<EOF
+'f file 396 0x004ec398
+EOF
+RUN
+
+NAME=md ubifs nested directory
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+md /mnt/www/luci-static | sort
+EOF
+EXPECT=<<EOF
+d bootstrap
+d resources
+EOF
+RUN
+
+NAME=mis ubifs file info and seek
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+mis /mnt/etc/banner
+s
+EOF
+EXPECT=<<EOF
+'f file 396 0x004ec398
+0x4ec398
+EOF
+RUN
+
+NAME=prgr ubifs print raw from address
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+s 0x4ec398
+prgr 396
+EOF
+EXPECT=<<EOF
+  _______                     ________        __
+ |       |.-----.-----.-----.|  |  |  |.----.|  |_
+ |   -   ||  _  |  -__|     ||  |  |  ||   _||   _|
+ |_______||   __|_____|__|__||________||__|  |____|
+          |__| W I R E L E S S   F R E E D O M
+ -----------------------------------------------------
+ OpenWrt 18.06.6, r7957-d81a8a3e29
+ -----------------------------------------------------
+EOF
+RUN
+
+NAME=cyclic UBIFS index mounts skipping the cycle
+FILE=bins/fs/ubifs-index-cycle.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt ubifs 0
+m
+EOF
+EXPECT=<<EOF
+ubifs	0x0	/mnt
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=reject cyclic BFS directory siblings
+FILE=bins/fs/bfs-sibling-cycle.img
+ARGS=-n
+CMDS=<<EOF
+m /mnt bfs 0
+m
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Failed to walk root directory B+tree
+EOF
+RUN
+
+NAME=haikufs
+FILE=bins/fs/haiku.bfs
+ARGS=-n
+CMDS=<<EOF
+m /mnt bfs 0
+mdd /mnt
+?e --
+mdd /mnt/radare2_test
+mc "/mnt/radare2_test/bfs image disk.md"
+EOF
+EXPECT=<<EOF
+d          0 trash
+d          0 radare2_test
+--
+r        647 bfs image disk.md
+r       5736 gvpr
+# bfs image disk
+
+If you don’t have a separate partition to mount/unmount when needed, you can
+also create an image file that you can mount with a double-click and unmount as
+usual.
+
+- Create the image: dd if=/dev/zero of=./testimage bs=1M count=100 (“count” is
+  the size in MiB as the blocksize (“bs”) is 1 MiB)
+- Do: diskimage register testimage
+- Open DriveSetup, and you’ll see your “testimage” at the bottom.
+- Format it to “BFS” and mount it.
+
+From now on you can mount it with a double-click and unmount when not needed
+and its apps won’t appear in Tracker’s “Open with…” or any file of it in
+queries etc.
+
+
+EOF
+RUN
+
+NAME=mount searches traverse virtual roots and respect directory scope
+FILE=-
+CMDS=<<EOF2
+m /one tmp
+m /two tmp
+md+ /one/dir
+mw /one/dir/a one
+mw /two/b two
+mfn / a
+mfo / 0
+mi 0
+mfo /one/dir 0
+mfn /two '*'
+m- /one
+mfo / 0
+EOF2
+EXPECT=<<EOF2
+/one/dir/a
+/one/dir/a
+/two/b
+/one/dir/a
+/two/b
+/one/dir/a
+/two/b
+/two/b
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount filesystem at slash is searched once
+FILE=-
+CMDS=<<EOF2
+m / tmp
+mw /a hello
+md+ /dir
+mw /dir/b world
+mfn / '*'
+mfo / 0
+EOF2
+EXPECT=<<EOF2
+/a
+/dir
+/dir/b
+/a
+/dir/b
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=CLt source tree without a mount
+FILE=-
+CMDS=<<EOF2
+CL 0x100 src/z.c:1
+CL 0x110 src/include/a.h:2
+CL 0x120 src/z.c:3
+CLt
+CLt src
+m
+EOF2
+EXPECT=<<EOF2
+/cl
+`-- src/
+    |-- include/
+    |   `-- a.h
+    `-- z.c
+/cl/src
+|-- include/
+|   `-- a.h
+`-- z.c
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=CL compilation units distinguish main sources from line files
+FILE=bins/elf/dwarf3_line
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF2
+CLuj
+CLt usr/w/g/radare2/test/bins/src
+CLut usr/w/g/radare2/test/bins/src
+m /r2 r2
+md /r2/cu/usr/w/g/radare2/test/bins/src
+mdt /r2/cu/usr/w/g/radare2/test/bins/src
+mc /r2/cu/usr/w/g/radare2/test/bins/src/dwarf-line.c
+EOF2
+EXPECT=<<EOF2
+["/usr/w/g/radare2/test/bins/src/dwarf-line.c"]
+/cl/usr/w/g/radare2/test/bins/src
+|-- dwarf-line/
+|   `-- bar.c
+`-- dwarf-line.c
+/cu/usr/w/g/radare2/test/bins/src
+`-- dwarf-line.c
+f dwarf-line.c
+/r2/cu/usr/w/g/radare2/test/bins/src
+`-- dwarf-line.c
+/usr/w/g/radare2/test/bins/src/dwarf-line.c
+
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=CL compilation units normalize parent paths
+FILE=bins/elf/dwarf4_many_comp_units.elf
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF2
+CLu
+CLut home/hound/r2test/dwarf/cpp/dump
+m /r2 r2
+mdt /r2/cu/home/hound/r2test/dwarf/cpp/dump
+mc /r2/cu/home/hound/r2test/dwarf/cpp/dump/main.cpp
+EOF2
+EXPECT=<<EOF2
+/home/hound/r2test/dwarf/cpp/dump/clang/../main.cpp
+/home/hound/r2test/dwarf/cpp/dump/clang/../mammal.cpp
+/cu/home/hound/r2test/dwarf/cpp/dump
+|-- main.cpp
+`-- mammal.cpp
+/r2/cu/home/hound/r2test/dwarf/cpp/dump
+|-- main.cpp
+`-- mammal.cpp
+/home/hound/r2test/dwarf/cpp/dump/clang/../main.cpp
+
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=CL trees with no DWARF and invalid source paths
+FILE=-
+CMDS=<<EOF2
+CLt
+CLuj
+CLut
+m /r2 r2
+mdt /r2/cu
+mdt /r2/cup
+?v $?
+mc /r2/cu/missing
+?v $?
+CLt missing
+?v $?
+EOF2
+EXPECT=<<EOF2
+/cl
+[]
+/cu
+/r2/cu
+0x1
+0x1
+0x1
+EOF2
+EXPECT_ERR=<<EOF2
+ERROR: Invalid path
+ERROR: Cannot open /r2/cu/missing
+ERROR: Invalid path
+EOF2
+RUN
+
+NAME=CL source and compilation unit trees honor scr.utf8
+FILE=bins/elf/dwarf3_line
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF2
+e scr.utf8=true
+CLt usr/w/g/radare2/test/bins/src
+CLut usr/w/g/radare2/test/bins/src
+m /r2 r2
+mdt /r2/cu/usr/w/g/radare2/test/bins/src
+e scr.utf8=false
+CLut usr/w/g/radare2/test/bins/src
+EOF2
+EXPECT=<<EOF2
+/cl/usr/w/g/radare2/test/bins/src
+├── dwarf-line/
+│   └── bar.c
+└── dwarf-line.c
+/cu/usr/w/g/radare2/test/bins/src
+└── dwarf-line.c
+/r2/cu/usr/w/g/radare2/test/bins/src
+└── dwarf-line.c
+/cu/usr/w/g/radare2/test/bins/src
+`-- dwarf-line.c
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=xfs directory entry name length is bounded by the block
+FILE=malloc://16384
+CMDS=<<EOF2
+# superblock: XFSB, 4k blocks, root inode 16, one ag, 256-byte inodes
+wx 58465342 @ 0
+wx 10 @ 6
+wx 10 @ 63
+wx 21 @ 87
+wx 0c09080406 @ 120
+# inode 16: root directory, one extent at block 2
+wx 494e41ed0202 @ 4096
+wx 10 @ 4158
+wx 01 @ 4167
+wx 01 @ 4175
+wx 400001 @ 4209
+# inode 17: "file", 15 bytes, one extent at block 3
+wx 494e81a40202 @ 4352
+wx 0f @ 4415
+wx 01 @ 4423
+wx 01 @ 4431
+wx 600001 @ 4465
+# directory block: ".", "..", free space, "file" just before the tail
+wx 58443242 @ 8192
+wx 10012e @ 8215
+wx 10022e2e @ 8231
+wx ffff0fb8 @ 8240
+wx 110466696c65 @ 12271
+wx 03 @ 12283
+wx 68656c6c6f2066726f6d207866730a @ 12288
+m /root xfs 0
+md /root
+mc /root/file
+m-/root
+# name length 23 puts the terminator past the end of the block
+wx 17 @ 12272
+m /root xfs 0
+m
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f file
+hello from xfs
+
+EOF2
+RUN
+
+NAME=xfs inline directory entries are bounded by the inode
+FILE=malloc://16384
+CMDS=<<EOF2
+wx 58465342 @ 0
+wx 10 @ 6
+wx 10 @ 63
+wx 21 @ 87
+wx 0c09080406 @ 120
+# inode 16: root directory in inline format, one entry "file" -> inode 17
+wx 494e41ed0201 @ 4096
+wx 01000000001004000066696c6500000011 @ 4196
+# inode 17: "file", 15 bytes, one extent at block 3
+wx 494e81a40202 @ 4352
+wx 0f @ 4415
+wx 01 @ 4423
+wx 01 @ 4431
+wx 600001 @ 4465
+wx 68656c6c6f2066726f6d207866730a @ 12288
+m /root xfs 0
+md /root
+mc /root/file
+m-/root
+# name length 255 runs past the end of the inode
+wx ff @ 4202
+m /root xfs 0
+m
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f file
+hello from xfs
+
+EOF2
+RUN
+
+NAME=m hfs record key length past the node
+FILE=malloc://4096
+CMDS=<<EOF
+wx 4244 @ 0x400
+wx 00000200 @ 0x414
+wx 0004 @ 0x41c
+wx 03564f4c @ 0x424
+wx 00020002 @ 0x486
+wx 00000002 @ 0x496
+wx 0100000100000001000000010000000100000001000000010200002500000002 @ 0x808
+wx 000e @ 0x9fe
+wx 0100000100000001000000010000000100000001000000010200002500000002 @ 0xc08
+wx 000e @ 0xdfe
+wx ff @ 0xe08
+wx ff000002 @ 0xa08
+wx 09000000000103564f4c01000000000000000002 @ 0xa0e
+wx 0900000000020361626302 @ 0xa22
+wx 00000014 @ 0xa40
+wx 0022000e @ 0xbfc
+m /root hfs 0
+m
+md /root
+m- /root
+wx 28000000000103564f4c01000000000000000002 @ 0xbe0
+wx 01e0 @ 0xbfe
+m /root hfs 0
+m
+md /root
+EOF
+EXPECT=<<EOF
+hfs	0x0	/root
+f abc
+EOF
+EXPECT_ERR=<<EOF
+Cannot find the HFS root directory
+ERROR: Invalid path
+EOF
+RUN
+
+NAME=m hfs volume name length past the catalog key
+FILE=malloc://0x2000
+CMDS=<<EOF
+# 512 byte blocks and a 40 byte length for the volume name "radare"
+wx 4244 @ 0x400
+wx 00000200 @ 0x414
+wx 28726164617265 @ 0x424
+wx 00040002 @ 0x486
+wx 00080004 @ 0x496
+# catalog header node: root node 1, node size 512
+wx 00000001 @ 0x1010
+wx 0200 @ 0x1020
+# leaf node 1: the root folder keyed by the 40 byte name, then the file hello
+wx ff010002 @ 0x1208
+wx 2e000000000128726164617265 @ 0x120e
+wx 01000000000000000002 @ 0x123e
+wx 0b00000000020568656c6c6f02 @ 0x1248
+wx 00000010 @ 0x1268
+wx 0000000e @ 0x126e
+wx 000c0001 @ 0x129e
+wx 0048000e @ 0x13fc
+w hello from hfs @ 0x1800
+m /root hfs 0
+md /root
+mc /root/hello
+EOF
+EXPECT=<<EOF
+f hello
+hello from hfs
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=mc hfs path component past the catalog key
+FILE=malloc://0x2000
+CMDS=<<EOF
+wx 4244 @ 0x400
+wx 00000200 @ 0x414
+wx 06726164617265 @ 0x424
+wx 00040002 @ 0x486
+wx 00080004 @ 0x496
+wx 00000001 @ 0x1010
+wx 0200 @ 0x1020
+# leaf node 1: the root folder, a file with a 41 byte name starting with 30 A, and hello
+wx ff010003 @ 0x1208
+wx 2e000000000106726164617265 @ 0x120e
+wx 01000000000000000002 @ 0x123e
+wx 2f000000000229414141414141414141414141414141414141414141414141414141414141 @ 0x1248
+wx 02 @ 0x1278
+wx 0b00000000020568656c6c6f02 @ 0x12ce
+wx 00000010 @ 0x12ee
+wx 0000000e @ 0x12f4
+wx 000c0001 @ 0x1324
+wx 00ce0048000e @ 0x13fa
+w hello from hfs @ 0x1800
+m /root hfs 0
+md /root
+mc /root/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+mc /root/hello
+EOF
+EXPECT=<<EOF
+f AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+f hello
+hello from hfs
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot open /root/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+EOF
+RUN
+
+NAME=m sfs clamps the extent B-tree node count to the block
+FILE=bins/fs/sfs-btree-nodes.img
+CMDS=<<EOF
+m /mnt sfs 0
+mo /mnt/big.bin
+ph md5 1500
+EOF
+EXPECT=<<EOF
+b0ad504aab73045928568f818d37f71f
+EOF
+RUN
+
+NAME=m sfs rejects an invalid blocksize
+FILE=bins/fs/sfs-blocksize-0.img
+CMDS=<<EOF
+m /mnt sfs 0
+m
+EOF
+EXPECT=
+RUN
+
+NAME=m sfs stops on a directory container cycle
+FILE=bins/fs/sfs-dir-cycle.img
+CMDS=<<EOF
+m /mnt sfs 0
+ls /mnt
+EOF
+EXPECT=<<EOF
+f hello.txt
+EOF
+RUN
+
+NAME=m ntfs refuses resident values outside of the MFT record
+FILE=bins/fs/ntfs-resident-oob.img
+CMDS=<<EOF
+md /root
+mc /root/file
+EOF
+EXPECT=<<EOF
+f file
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot open /root/file
+EOF
+RUN
+
+NAME=ntfs index views are special entries rather than regular files
+FILE=bins/fs/ntfs.img
+CMDS=<<EOF
+m /mnt ntfs 0
+md /mnt/$Extend
+EOF
+EXPECT=<<EOF
+s $ObjId
+s $Quota
+s $Reparse
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=reiserfs preserves symlink types in directory listings
+FILE=bins/fs/reiserfs-link-root.img
+CMDS=<<EOF
+m /mnt reiserfs 0
+md /mnt
+EOF
+EXPECT=<<EOF
+d .
+f hello.txt
+l link
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=reiserfs corrupt symlink remains identifiable without opening it
+FILE=bins/fs/reiserfs-corrupt.img
+CMDS=<<EOF
+m /mnt reiserfs 0
+md /mnt
+EOF
+EXPECT=<<EOF
+d .
+l link
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=ubifs reads file data when the volume size is unknown
+FILE=bins/fs/ubifs-oversize.img
+CMDS=<<EOF
+mc /root/file
+EOF
+EXPECT=<<EOF
+hello world
+EOF
+EXPECT_ERR=
 RUN

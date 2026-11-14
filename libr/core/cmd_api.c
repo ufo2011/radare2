@@ -1,113 +1,55 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2026 - pancake */
 
+#define R_LOG_ORIGIN "cmdapi"
 #include <r_core.h>
-#include "ht_pp.h"
+#include <r_core_priv.h>
+#include <sdb/ht_pp.h>
 
-/*!
- * Number of sub-commands to show as options when displaying the help of a
- * command. When a command has more options than MAX_CHILDREN_SHOW, `?` is shown
- * instead.
- *
- * Example with MAX_CHILDREN_SHOW=3:
- * w -> wa
- *   -> wb
- *   -> wc
- *
- * When doing `?`, you would see:
- * w[abc]
- *
- * If there is also:
- *   -> wd
- * you would see:
- * w[?]
- */
-#define MAX_CHILDREN_SHOW 7
+#define NCMDS (sizeof (cmd->cmds) / sizeof (*cmd->cmds))
 
-static const RCmdDescHelp not_defined_help = {
-	.usage = "Usage not defined",
-	.summary = "Help summary not defined",
-	.description = "Help description not defined.",
-};
+typedef struct {
+	RCmdCtxCb callback;
+	void *user;
+	size_t active_calls;
+	RCmdArgFlags flags;
+	const RCmdTable *table; // sorted rows dispatched by cmd_table_call
+	size_t row_maxlen; // longest table row name
+} RCmdHandler;
 
-static const RCmdDescHelp root_help = {
-	.usage = "[.][times][cmd][~grep][@[@iter]addr!size][|>pipe] ; ...",
-	.description = "",
-};
+typedef struct r_cmd_handler_frame_t {
+	RCmdHandler *handler;
+	struct r_cmd_handler_frame_t *parent;
+} RCmdHandlerFrame;
 
-static int value = 0;
+static R_TH_LOCAL RCmdHandlerFrame *current_handler_frame;
 
-#define NCMDS (sizeof (cmd->cmds)/sizeof(*cmd->cmds))
-R_LIB_VERSION (r_cmd);
-
-static bool cmd_desc_set_parent(RCmdDesc *cd, RCmdDesc *parent) {
-	r_return_val_if_fail (cd && !cd->parent, false);
-	if (parent) {
-		cd->parent = parent;
-		r_pvector_push (&parent->children, cd);
-		parent->n_children++;
+static bool cmd_handler_is_current(const RCmdHandler *handler) {
+	RCmdHandlerFrame *frame;
+	for (frame = current_handler_frame; frame; frame = frame->parent) {
+		if (frame->handler == handler) {
+			return true;
+		}
 	}
-	return true;
+	return false;
 }
 
-static void cmd_desc_unset_parent(RCmdDesc *cd) {
-	r_return_if_fail (cd && cd->parent);
-	RCmdDesc *parent = cd->parent;
-	r_pvector_remove_data (&parent->children, cd);
-	parent->n_children--;
-	cd->parent = NULL;
-}
-
-static bool cmd_desc_remove_from_ht_cmds(RCmd *cmd, RCmdDesc *cd) {
-	void **it_cd;
-	bool res = ht_pp_delete (cmd->ht_cmds, cd->name);
-	r_return_val_if_fail (res, false);
-	r_cmd_desc_children_foreach (cd, it_cd) {
-		RCmdDesc *child_cd = *it_cd;
-		cmd_desc_remove_from_ht_cmds (cmd, child_cd);
+static void cmd_handler_call_end(RCmd *cmd, RCmdHandler *handler) {
+	r_th_lock_enter (cmd->handlers_lock);
+	handler->active_calls--;
+	if (!handler->active_calls) {
+		r_th_cond_signal_all (cmd->handlers_idle);
 	}
-	return res;
-}
-
-static void cmd_desc_free(RCmdDesc *cd) {
-	if (!cd) {
-		return;
-	}
-
-	r_pvector_clear (&cd->children);
-	free (cd->name);
-	free (cd);
-}
-
-static RCmdDesc *create_cmd_desc(RCmd *cmd, RCmdDesc *parent, RCmdDescType type, const char *name, const RCmdDescHelp *help, bool ht_insert) {
-	RCmdDesc *res = R_NEW0 (RCmdDesc);
-	if (!res) {
-		return NULL;
-	}
-	res->type = type;
-	res->name = strdup (name);
-	if (!res->name) {
-		goto err;
-	}
-	res->n_children = 0;
-	res->help = help? help: &not_defined_help;
-	r_pvector_init (&res->children, (RPVectorFree)cmd_desc_free);
-	if (ht_insert && !ht_pp_insert (cmd->ht_cmds, name, res)) {
-		goto err;
-	}
-	cmd_desc_set_parent (res, parent);
-	return res;
-err:
-	cmd_desc_free (res);
-	return NULL;
+	r_th_lock_leave (cmd->handlers_lock);
 }
 
 static void alias_freefn(HtPPKv *kv) {
-	char *k = kv->key;
-	RCmdAliasVal *v = kv->value;
-
-	free (v->data);
-	free (k);
-	free (v);
+	if (kv) {
+		char *k = kv->key;
+		RCmdAliasVal *v = kv->value;
+		free (v->data);
+		free (k);
+		free (v);
+	}
 }
 
 static void *alias_dupkey(const void *k) {
@@ -116,21 +58,16 @@ static void *alias_dupkey(const void *k) {
 
 static void *alias_dupvalue(const void *v_void) {
 	RCmdAliasVal *v = (RCmdAliasVal *)v_void;
-	RCmdAliasVal *vcopy = R_NEW (RCmdAliasVal);
-	if (!vcopy) {
-		return NULL;
-	}
 	ut8 *data = malloc (v->sz);
 	if (!data) {
-		free (vcopy);
 		return NULL;
 	}
+	RCmdAliasVal *vcopy = R_NEW (RCmdAliasVal);
 	vcopy->is_data = v->is_data;
 	vcopy->is_str = v->is_str;
 	vcopy->sz = v->sz;
 	vcopy->data = data;
 	memcpy (vcopy->data, v->data, v->sz);
-
 	return vcopy;
 }
 
@@ -146,23 +83,34 @@ static int alias_cmp(const void *k1, const void *k2) {
 	return strcmp ((const char *)k1, (const char *)k2);
 }
 
-static ut32 alias_hashfn(const void *k_in) {
-	/* djb2 algorithm by Dan Bernstein */
-	ut32 hash = 5381;
-	ut8 c;
-	const char *k = k_in;
-
-	while (*k) {
-		c = *k++;
-		/* hash * 33 + c */
-		hash += (hash << 5) + c;
+static inline ut32 alias_hash(const char *key, size_t len) {
+	if (len > 32) {
+		return (ut32)r_str_hash64_seed (key, len, 0);
 	}
+	ut32 h = 5381;
+	size_t i;
+	for (i = 0; i < len; i++) {
+		h = h * 33 + (ut8)key[i];
+	}
+	return h;
+}
 
-	return hash;
+static ut32 alias_hashfn(const void *key) {
+	// Short callback keys need only one scan, without a separate strlen.
+	const char *name = key;
+	ut32 h = 5381;
+	size_t i = 0;
+	while (i < 32 && name[i]) {
+		h = h * 33 + (ut8)name[i++];
+	}
+	if (i < 32 || !name[i]) {
+		return h;
+	}
+	return (ut32)r_str_hash64_seed (name, i + strlen (name + i), 0);
 }
 
 R_API void r_cmd_alias_init(RCmd *cmd) {
-	HtPPOptions opt = { 0 };
+	HtPPOptions opt = {0};
 	opt.cmp = alias_cmp;
 	opt.hashfn = alias_hashfn;
 	opt.dupkey = alias_dupkey;
@@ -170,120 +118,70 @@ R_API void r_cmd_alias_init(RCmd *cmd) {
 	opt.calcsizeK = alias_calcsizeK;
 	opt.calcsizeV = alias_calcsizeV;
 	opt.freefn = alias_freefn;
-
+	opt.elem_size = sizeof (HtPPKv);
 	cmd->aliases = ht_pp_new_opt (&opt);
 }
 
-R_API RCmd *r_cmd_new(void) {
+R_API RCmd *r_cmd_new(void *data) {
 	int i;
 	RCmd *cmd = R_NEW0 (RCmd);
-	if (!cmd) {
-		return cmd;
-	}
-	cmd->lcmds = r_list_new ();
+	cmd->data = data;
 	for (i = 0; i < NCMDS; i++) {
 		cmd->cmds[i] = NULL;
 	}
-	cmd->nullcallback = cmd->data = NULL;
-	cmd->ht_cmds = ht_pp_new0 ();
-	cmd->root_cmd_desc = create_cmd_desc (cmd, NULL, R_CMD_DESC_TYPE_ARGV, "", &root_help, true);
-	r_core_plugin_init (cmd);
+	cmd->nullcallback = NULL;
+	cmd->handlers = r_trie_new (free);
+	cmd->handlers_lock = r_th_lock_new (false);
+	cmd->handlers_idle = r_th_cond_new ();
+	if (!cmd->handlers || !cmd->handlers_lock || !cmd->handlers_idle) {
+		r_trie_free (cmd->handlers);
+		r_th_lock_free (cmd->handlers_lock);
+		r_th_cond_free (cmd->handlers_idle);
+		free (cmd);
+		return NULL;
+	}
+	// cmd->root_cmd_desc = create_cmd_desc (cmd, NULL, R_CMD_DESC_TYPE_ARGV, "", &root_help, true);
 	r_cmd_macro_init (&cmd->macro);
 	r_cmd_alias_init (cmd);
 	return cmd;
 }
 
-R_API RCmd *r_cmd_free(RCmd *cmd) {
+R_API void r_cmd_free(RCmd *cmd) {
 	int i;
 	if (!cmd) {
-		return NULL;
+		return;
 	}
 	ht_up_free (cmd->ts_symbols_ht);
 	r_cmd_alias_free (cmd);
 	r_cmd_macro_fini (&cmd->macro);
-	ht_pp_free (cmd->ht_cmds);
-	// dinitialize plugin commands
-	r_core_plugin_fini (cmd);
-	r_list_free (cmd->plist);
-	r_list_free (cmd->lcmds);
+	r_core_plugins_fini (cmd);
+	r_trie_free (cmd->handlers);
+	r_th_lock_free (cmd->handlers_lock);
+	r_th_cond_free (cmd->handlers_idle);
 	for (i = 0; i < NCMDS; i++) {
 		if (cmd->cmds[i]) {
 			R_FREE (cmd->cmds[i]);
 		}
 	}
-	cmd_desc_free (cmd->root_cmd_desc);
+	// cmd_desc_free (cmd->root_cmd_desc);
 	free (cmd);
-	return NULL;
-}
-
-R_API RCmdDesc *r_cmd_get_root(RCmd *cmd) {
-	return cmd->root_cmd_desc;
-}
-
-R_API RCmdDesc *r_cmd_get_desc(RCmd *cmd, const char *cmd_identifier) {
-	r_return_val_if_fail (cmd && cmd_identifier, NULL);
-	char *cmdid = strdup (cmd_identifier);
-	char *end_cmdid = cmdid + strlen (cmdid);
-	RCmdDesc *res = NULL;
-	bool is_exact_match = true;
-	// match longer commands first
-	while (*cmdid) {
-		RCmdDesc *cd = ht_pp_find (cmd->ht_cmds, cmdid, NULL);
-		if (cd) {
-			switch (cd->type) {
-			case R_CMD_DESC_TYPE_ARGV:
-				if (!is_exact_match) {
-					break;
-				}
-				// fallthrough
-			case R_CMD_DESC_TYPE_GROUP:
-				// fallthrough
-			case R_CMD_DESC_TYPE_OLDINPUT:
-				res = cd;
-				goto out;
-			case R_CMD_DESC_TYPE_INNER:
-				break;
-			}
-		}
-		is_exact_match = false;
-		*(--end_cmdid) = '\0';
-	}
-out:
-	free (cmdid);
-	return res;
-}
-
-static bool get_keys(void *keylist_in, const void *k, const void *v) {
-	RList *keylist = (RList *) keylist_in;
-	return r_list_append (keylist, (char *) k);
-}
-
-R_API RList *r_cmd_alias_keys(RCmd *cmd) {
-	RList *keylist = r_list_new ();
-	if (!keylist) {
-		return NULL;
-	}
-
-	ht_pp_foreach (cmd->aliases, get_keys, keylist);
-
-	return keylist;
 }
 
 R_API void r_cmd_alias_free(RCmd *cmd) {
+	R_RETURN_IF_FAIL (cmd);
 	ht_pp_free (cmd->aliases);
 	cmd->aliases = NULL;
 }
 
 R_API bool r_cmd_alias_del(RCmd *cmd, const char *k) {
-	return ht_pp_delete(cmd->aliases, k);
+	R_RETURN_VAL_IF_FAIL (cmd && k, false);
+	return ht_pp_delete (cmd->aliases, k);
 }
 
-R_API int r_cmd_alias_set_cmd(RCmd *cmd, const char *k, const char *v) {
+R_API bool r_cmd_alias_set_cmd(RCmd *cmd, const char *k, const char *v) {
+	R_RETURN_VAL_IF_FAIL (cmd && k && v, false);
 	RCmdAliasVal val;
 	val.data = (ut8 *)v;
-	if (!val.data) {
-		return 1;
-	}
 	val.sz = strlen (v) + 1;
 	val.is_str = true;
 	val.is_data = false;
@@ -291,176 +189,86 @@ R_API int r_cmd_alias_set_cmd(RCmd *cmd, const char *k, const char *v) {
 	return ht_pp_update (cmd->aliases, k, &val);
 }
 
-R_API int r_cmd_alias_set_str(RCmd *cmd, const char *k, const char *v) {
-	RCmdAliasVal val;
-	val.data = (ut8 *)strdup (v);
-	if (!val.data) {
-		return 1;
-	}
-	val.is_str = true;
-	val.is_data = true;
-
-	/* No trailing newline */
-	int len = strlen (v);
-	while (len-- > 0) {
-		if (v[len] == '\r' || v[len] == '\n') {
-			val.data[len] = '\0';
-		} else {
-			break;
+R_API bool r_cmd_alias_set_raw(RCmd *cmd, const char *k, const ut8 *v, int sz, bool append) {
+	R_RETURN_VAL_IF_FAIL (cmd && k && sz >= 0 && (v || !sz), false);
+	v = v? v: (const ut8 *)"";
+	ut8 *owned = NULL;
+	RCmdAliasVal *old = append? r_cmd_alias_get (cmd, k): NULL;
+	if (old) {
+		if (!old->is_data) {
+			return false;
 		}
+		const int old_sz = old->sz - old->is_str;
+		if (old_sz < 0 || sz > ST32_MAX - old_sz) {
+			return false;
+		}
+		const int new_sz = old_sz + sz;
+		owned = malloc ((size_t)new_sz + 1);
+		if (!owned) {
+			return false;
+		}
+		memcpy (owned, old->data, old_sz);
+		memcpy (owned + old_sz, v, sz);
+		v = owned;
+		sz = new_sz;
 	}
-	// len is strlen()-1 now
-	val.sz = len + 2;
 
-	int ret = ht_pp_update (cmd->aliases, k, &val);
-	free (val.data);
-	return ret;
-}
-
-R_API int r_cmd_alias_set_raw(RCmd *cmd, const char *k, const ut8 *v, int sz) {
 	int i;
-
-	if (sz < 1) {
-		return 1;
-	}
-
-	RCmdAliasVal val;
-	val.data = malloc (sz);
-	if (!val.data) {
-		return 1;
-	}
-
-	memcpy (val.data, v, sz);
-	val.sz = sz;
-
-	/* If it's a string already, we speed things up later by checking now */
-	const ut8 *firstnull = NULL;
-	bool is_binary = false;
+	bool is_str = true;
+	int len = sz;
 	for (i = 0; i < sz; i++) {
-		/* \0 before expected -> not string */
-		if (v[i] == '\0') {
-			firstnull = &v[i];
+		if (!v[i]) {
+			is_str = i == sz - 1;
+			len = i;
 			break;
 		}
-
-		/* Non-ascii character -> not string */
-		if (!IS_PRINTABLE(v[i]) && !IS_WHITECHAR(v[i])) {
-			is_binary = true;
+		if (!IS_PRINTABLE (v[i]) && !IS_WHITECHAR (v[i])) {
+			is_str = false;
 			break;
 		}
 	}
 
-	if (firstnull == &v[sz-1] && !is_binary) {
-		/* Data is already a string */
-		val.is_str = true;
-	} else if (!firstnull && !is_binary) {
-		/* Data is an unterminated string */
-		val.sz++;
-		ut8 *data = realloc (val.data, val.sz);
-		if (!data) {
-			return 1;
+	if (is_str) {
+		while (len > 0 && (v[len - 1] == '\r' || v[len - 1] == '\n')) {
+			len--;
 		}
-		val.data = data;
-		val.data[val.sz - 1] = '\0';
-		val.is_str = true;
-	} else {
-		/* Data has nulls or non-ascii, not a string */
-		val.is_str = false;
+		if (len == ST32_MAX) {
+			free (owned);
+			return false;
+		}
+		if (!owned) {
+			owned = (ut8 *)(len? r_str_newlen ((const char *)v, len): strdup (""));
+		}
+		if (!owned) {
+			return false;
+		}
+		owned[len] = 0;
 	}
 
-	val.is_data = true;
-
-	if (val.is_str) {
-		/* No trailing newline */
-		int len = val.sz - 1;
-		while (len-- > 0) {
-			if (v[len] == '\r' || v[len] == '\n') {
-				val.data[len] = '\0';
-			} else {
-				break;
-			}
-		}
-		// len is strlen()-1 now
-		val.sz = len + 2;
-	}
-
-	int ret = ht_pp_update (cmd->aliases, k, &val);
-	free (val.data);
+	RCmdAliasVal val = {
+		.data = owned? owned: (ut8 *)v,
+		.sz = is_str? len + 1: sz,
+		.is_str = is_str,
+		.is_data = true
+	};
+	bool ret = ht_pp_update (cmd->aliases, k, &val);
+	free (owned);
 	return ret;
 }
 
 R_API RCmdAliasVal *r_cmd_alias_get(RCmd *cmd, const char *k) {
-	r_return_val_if_fail (cmd && cmd->aliases && k, NULL);
-
-	return ht_pp_find(cmd->aliases, k, NULL);
-}
-
-static ut8 *alias_append_internal(int *out_szp, const RCmdAliasVal *first, const ut8 *second, int second_sz) {
-	ut8* out;
-	int out_sz;
-
-	/* If appending to a string, always overwrite the trailing \0 */
-	int bytes_from_first = first->is_str
-		? first->sz - 1
-		: first->sz;
-
-	out_sz = bytes_from_first + second_sz;
-	out = malloc (out_sz);
-	if (!out) {
-		return NULL;
-	}
-
-	/* Copy full buffer if raw bytes. Stop before \0 if string. */
-	memcpy (out, first->data, bytes_from_first);
-	/* Always copy all bytes from second, including trailing \0 */
-	memcpy (out+bytes_from_first, second, second_sz);
-
-	if (out_sz) {
-		*out_szp = out_sz;
-	}
-	return out;
-}
-
-R_API int r_cmd_alias_append_str(RCmd *cmd, const char *k, const char *a) {
-	RCmdAliasVal *v_old = r_cmd_alias_get (cmd, k);
-	if (v_old) {
-		if (!v_old->is_data) {
-			return 1;
+	R_RETURN_VAL_IF_FAIL (cmd && cmd->aliases && k, NULL);
+	const size_t len = strlen (k);
+	HtPP *aliases = cmd->aliases;
+	HtPPBucket *bucket = &aliases->table[alias_hash (k, len) % aliases->size];
+	ut32 i;
+	for (i = 0; i < bucket->count; i++) {
+		HtPPKv *kv = &bucket->arr[i];
+		if (kv->key_len == len && (kv->key == k || !memcmp (kv->key, k, len))) {
+			return kv->value;
 		}
-
-		int new_len;
-		ut8* new = alias_append_internal (&new_len, v_old, (ut8 *)a, strlen (a) + 1);
-
-		if (!new) {
-			return 1;
-		}
-
-		r_cmd_alias_set_raw (cmd, k, new, new_len);
-		free (new);
-	} else {
-		r_cmd_alias_set_str (cmd, k, a);
 	}
-
-	return 0;
-}
-
-R_API int r_cmd_alias_append_raw(RCmd *cmd, const char *k, const ut8 *a, int sz) {
-	RCmdAliasVal *v_old = r_cmd_alias_get (cmd, k);
-	if (v_old) {
-		if (!v_old->is_data) {
-			return 1;
-		}
-
-		int new_len;
-		ut8 *new = alias_append_internal (&new_len, v_old, a, sz);
-
-		r_cmd_alias_set_raw (cmd, k, new, new_len);
-		free (new);
-	} else {
-		r_cmd_alias_set_raw (cmd, k, a, sz);
-	}
-
-	return 0;
+	return NULL;
 }
 
 /* Returns a new copy of v->data. If !v->is_str, hex escaped */
@@ -468,7 +276,6 @@ R_API char *r_cmd_alias_val_strdup(RCmdAliasVal *v) {
 	if (v->is_str) {
 		return strdup ((char *)v->data);
 	}
-
 	return r_str_escape_raw (v->data, v->sz);
 }
 
@@ -477,353 +284,596 @@ R_API char *r_cmd_alias_val_strdup_b64(RCmdAliasVal *v) {
 	if (v->is_str) {
 		return strdup ((char *)v->data);
 	}
-
-	return r_base64_encode_dyn ((char *)v->data, v->sz);
+	return r_base64_encode_dyn ((const ut8*)v->data, v->sz);
 }
 
 R_API void r_cmd_set_data(RCmd *cmd, void *data) {
 	cmd->data = data;
 }
 
-R_API bool r_cmd_add(RCmd *c, const char *cmd, RCmdCb cb) {
-	int idx = (ut8)cmd[0];
-	RCmdItem *item = c->cmds[idx];
+static const RCmdRow *cmd_table_find(const RCmdTable *table, RStrs name) {
+	const size_t len = r_strs_len (name);
+	size_t lo = 0;
+	size_t hi = table->count;
+	while (lo < hi) {
+		const size_t mid = lo + (hi - lo) / 2;
+		const char *row = table->rows[mid].name;
+		int cmp = strncmp (row, name.a, len);
+		if (!cmp && row[len]) {
+			cmp = 1;
+		}
+		if (!cmp) {
+			return &table->rows[mid];
+		}
+		if (cmp < 0) {
+			lo = mid + 1;
+		} else {
+			hi = mid;
+		}
+	}
+	return NULL;
+}
+
+// Longest row prefixing the command token: exact match first, then shorter prefixes
+static const RCmdRow *cmd_table_row(const RCmdHandler *handler, RStrs input) {
+	RStrs name = input;
+	name.b = name.a;
+	while (name.b < input.b && !isspace ((ut8)*name.b) && r_strs_len (name) < handler->row_maxlen) {
+		name.b++;
+	}
+	for (; !r_strs_empty (name); name.b--) {
+		const RCmdRow *row = cmd_table_find (handler->table, name);
+		if (row) {
+			return row;
+		}
+	}
+	return NULL;
+}
+
+// Shared policy for table rows: help, invalid subcommands, argument counts and $?
+static RCmdResult cmd_table_call(RCmdContext *ctx) {
+	const RCmdRow *row = ctx->handler_user;
+	const RCmdTable *table = current_handler_frame->handler->table;
+	RCore *core = ctx->user;
+	const size_t argc = r_cmdctx_argc (ctx);
+	int rc = 0;
+	if (r_strs_equals_str (ctx->subcmd, "?")) {
+		if (row->help) {
+			r_cons_cmd_help (ctx->cons, row->help);
+		} else if (!r_cons_cmd_help_prefix (ctx->cons, table->help, row->name)) {
+			r_cons_cmd_help (ctx->cons, table->help);
+		}
+	} else if (!r_strs_empty (ctx->subcmd)) {
+		// "b64?" shows the help entries starting with "b64" even without such a row
+		const int typed_len = (int)r_strs_len (ctx->subcmd) - 1;
+		char *typed = r_cmdctx_help (ctx)? r_str_newf ("%s%.*s", row->name, typed_len, ctx->subcmd.a): NULL;
+		const bool shown = typed && r_cons_cmd_help_prefix (ctx->cons, table->help, typed);
+		free (typed);
+		if (!shown) {
+			r_core_return_invalid_command (core, row->name, r_strs_at (ctx->subcmd, 0));
+			return (RCmdResult) { .status = 1 };
+		}
+	} else if (argc < row->min_args || (row->max_args != UT8_MAX && argc > row->max_args) || (row->min_args && !*r_cmdctx_arg (ctx, 0).a)) {
+		R_LOG_ERROR ("Usage: %s%s", row->name, row->usage);
+		rc = 1;
+	} else {
+		rc = row->run (ctx)? 0: 1;
+		if (row->flags & R_CMD_ROW_SETS_VALUE) {
+			return (RCmdResult) { .status = rc };
+		}
+	}
+	r_core_return_value (core, rc);
+	return (RCmdResult) { .status = rc };
+}
+
+R_API bool r_cmd_register(RCmd *cmd, const char *name, RCmdCtxCb callback, void *handler_user) {
+	R_RETURN_VAL_IF_FAIL (cmd && name && callback, false);
+	return r_cmd_register_args (cmd, name, callback, handler_user, R_CMD_ARGS_DEFAULT);
+}
+
+static bool cmd_handler_insert(RCmd *cmd, const char *name, RCmdCtxCb callback, void *handler_user, RCmdArgFlags flags, const RCmdTable *table) {
+	RStrs key = r_strs_from (name);
+	r_th_lock_enter (cmd->handlers_lock);
+	if (r_strs_empty (key) || r_trie_find (cmd->handlers, key)) {
+		r_th_lock_leave (cmd->handlers_lock);
+		return false;
+	}
+	RCmdHandler *handler = R_NEW (RCmdHandler);
+	handler->callback = callback;
+	handler->user = handler_user;
+	handler->active_calls = 0;
+	handler->flags = flags;
+	handler->table = table;
+	handler->row_maxlen = 0;
+	size_t i;
+	for (i = 0; table && i < table->count; i++) {
+		const char *name = table->rows[i].name;
+		if (i && strcmp (table->rows[i - 1].name, name) >= 0) {
+			R_LOG_ERROR ("Command table row '%s' is not sorted after '%s'", name, table->rows[i - 1].name);
+			r_th_lock_leave (cmd->handlers_lock);
+			free (handler);
+			return false;
+		}
+		handler->row_maxlen = R_MAX (handler->row_maxlen, strlen (name));
+	}
+	if (!r_trie_insert (cmd->handlers, key, handler)) {
+		r_th_lock_leave (cmd->handlers_lock);
+		free (handler);
+		return false;
+	}
+	r_th_lock_leave (cmd->handlers_lock);
+	return true;
+}
+
+R_IPI bool r_cmd_register_args(RCmd *cmd, const char *name, RCmdCtxCb callback, void *handler_user, RCmdArgFlags flags) {
+	R_RETURN_VAL_IF_FAIL (cmd && name && callback, false);
+	return cmd_handler_insert (cmd, name, callback, handler_user, flags, NULL);
+}
+
+R_IPI bool r_cmd_register_table(RCmd *cmd, const char *key, const RCmdTable *table) {
+	R_RETURN_VAL_IF_FAIL (cmd && key && table && table->rows, false);
+	return cmd_handler_insert (cmd, key, cmd_table_call, NULL, R_CMD_ARGS_DEFAULT, table);
+}
+
+R_API bool r_cmd_unregister(RCmd *cmd, const char *name) {
+	R_RETURN_VAL_IF_FAIL (cmd && name, false);
+	r_th_lock_enter (cmd->handlers_lock);
+	const RStrs key = r_strs_from (name);
+	RCmdHandler *handler = r_trie_find (cmd->handlers, key);
+	if (!handler || cmd_handler_is_current (handler)) {
+		r_th_lock_leave (cmd->handlers_lock);
+		return false;
+	}
+	handler = r_trie_take (cmd->handlers, key);
+	while (handler->active_calls) {
+		r_th_cond_wait (cmd->handlers_idle, cmd->handlers_lock, 0);
+	}
+	r_th_lock_leave (cmd->handlers_lock);
+	free (handler);
+	return true;
+}
+
+typedef struct {
+	RList *keys;
+	bool valid;
+} RCmdHandlerKeys;
+
+static bool cmd_handler_collect_key(RStrs name, void *value, void *user) {
+	RCmdHandlerKeys *result = user;
+	if (cmd_handler_is_current (value)) {
+		result->valid = false;
+		return false;
+	}
+	const size_t length = r_strs_len (name);
+	if (length > ST32_MAX) {
+		result->valid = false;
+		return false;
+	}
+	char *key = r_str_ndup (name.a, (int)length);
+	if (!key || !r_list_append (result->keys, key)) {
+		free (key);
+		result->valid = false;
+		return false;
+	}
+	return true;
+}
+
+R_API size_t r_cmd_unregister_prefix(RCmd *cmd, const char *prefix) {
+	R_RETURN_VAL_IF_FAIL (cmd && prefix, 0);
+	RCmdHandlerKeys result = {
+		.keys = r_list_newf (free),
+		.valid = true,
+	};
+	if (!result.keys) {
+		return 0;
+	}
+	r_th_lock_enter (cmd->handlers_lock);
+	const bool collected = r_trie_foreach_prefix (cmd->handlers,
+		r_strs_from (prefix), cmd_handler_collect_key, &result);
+	if (!collected || !result.valid) {
+		r_th_lock_leave (cmd->handlers_lock);
+		r_list_free (result.keys);
+		return 0;
+	}
+	RList *handlers = r_list_newf (free);
+	if (!handlers) {
+		r_th_lock_leave (cmd->handlers_lock);
+		r_list_free (result.keys);
+		return 0;
+	}
+	RListIter *iter;
+	char *key;
+	r_list_foreach (result.keys, iter, key) {
+		RCmdHandler *handler = r_trie_take (cmd->handlers, r_strs_from (key));
+		if (handler) {
+			r_list_append (handlers, handler);
+		}
+	}
+	RCmdHandler *handler;
+	r_list_foreach (handlers, iter, handler) {
+		while (handler->active_calls) {
+			r_th_cond_wait (cmd->handlers_idle, cmd->handlers_lock, 0);
+		}
+	}
+	r_th_lock_leave (cmd->handlers_lock);
+	const size_t count = r_list_length (handlers);
+	r_list_free (result.keys);
+	r_list_free (handlers);
+	return count;
+}
+
+typedef struct {
+	const RCmd *cmd;
+	RCmdForeachCb callback;
+	void *user;
+	RStrs prefix;
+} RCmdForeachContext;
+
+// Rows under key matching the prefix, skipping names owned by another handler
+static bool cmd_foreach_rows(RCmdForeachContext *context, RStrs key, const RCmdTable *table) {
+	size_t i;
+	for (i = 0; i < table->count; i++) {
+		RStrs name = r_strs_from (table->rows[i].name);
+		if (!r_strs_startswith_strs (name, key) || !r_strs_startswith_strs (name, context->prefix)
+				|| (!r_strs_equals (name, key) && r_trie_find (context->cmd->handlers, name))) {
+			continue;
+		}
+		if (!context->callback (name, context->user)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool cmd_foreach_handler(RStrs name, void *value, void *user) {
+	RCmdForeachContext *context = user;
+	const RCmdHandler *handler = value;
+	return handler->table
+		? cmd_foreach_rows (context, name, handler->table)
+		: context->callback (name, context->user);
+}
+
+R_API bool r_cmd_foreach_prefix(const RCmd *cmd, const char *prefix, RCmdForeachCb callback, void *user) {
+	R_RETURN_VAL_IF_FAIL (cmd && prefix && callback, false);
+	RCmdForeachContext context = {
+		.cmd = cmd,
+		.callback = callback,
+		.user = user,
+		.prefix = r_strs_from (prefix),
+	};
+	r_th_lock_enter (cmd->handlers_lock);
+	bool res = true;
+	RStrs lookup = context.prefix;
+	size_t matched = 0;
+	// tables under a key shorter than prefix can still hold matching rows
+	while (res && !r_strs_empty (lookup)) {
+		const RCmdHandler *handler = r_trie_find_longest_prefix (cmd->handlers, lookup, &matched);
+		if (!handler || !matched) {
+			break;
+		}
+		if (handler->table && matched < r_strs_len (context.prefix)) {
+			res = cmd_foreach_rows (&context, r_strs_sub (context.prefix, 0, matched), handler->table);
+		}
+		lookup.b = lookup.a + matched - 1;
+	}
+	res = res && r_trie_foreach_prefix (cmd->handlers, context.prefix, cmd_foreach_handler, &context);
+	r_th_lock_leave (cmd->handlers_lock);
+	return res;
+}
+
+R_API bool r_cmd_add(RCmd *cmd, const char *name, RCmdCb cb) {
+	const ut8 idx = name[0];
+	RCmdItem *item = cmd->cmds[idx];
 	if (!item) {
 		item = R_NEW0 (RCmdItem);
-		c->cmds[idx] = item;
+		cmd->cmds[idx] = item;
 	}
-	strncpy (item->cmd, cmd, sizeof (item->cmd)-1);
+	strncpy (item->cmd, name, sizeof (item->cmd)-1);
 	item->callback = cb;
 	return true;
 }
 
 R_API void r_cmd_del(RCmd *cmd, const char *command) {
-	int idx = (ut8)command[0];
+	const ut8 idx = command[0];
 	R_FREE (cmd->cmds[idx]);
 }
 
-R_API int r_cmd_call(RCmd *cmd, const char *input) {
-	struct r_cmd_item_t *c;
-	int ret = -1;
-	RListIter *iter;
-	RCorePlugin *cp;
-	r_return_val_if_fail (cmd && input, -1);
+static RCmdResult cmd_result(RCmdAction action, st64 status) {
+	return (RCmdResult) {
+		.action = action,
+		.status = status
+	};
+}
+
+static RCmdResult cmd_result_from_legacy(int status) {
+	return cmd_result (status == -2? R_CMD_ACTION_QUIT: R_CMD_ACTION_CONTINUE, status);
+}
+
+static int cmd_result_to_legacy(RCmdResult result) {
+	return result.action == R_CMD_ACTION_CONTINUE
+		? (int)R_CLAMP (result.status, (st64)ST32_MIN, (st64)ST32_MAX)
+		: result.action == R_CMD_ACTION_QUIT? -2: -1;
+}
+
+static const char *cmd_decode_escape(const char *src, const char *end, char **dst) {
+	if (src >= end) {
+		*(*dst)++ = '\\';
+		return src;
+	}
+	ut8 ch = *src++;
+	switch (ch) {
+	case 'a': ch = '\a'; break;
+	case 'b': ch = '\b'; break;
+	case 'e': ch = 0x1b; break;
+	case 'f': ch = '\f'; break;
+	case 'n': ch = '\n'; break;
+	case 'r': ch = '\r'; break;
+	case 's': ch = ' '; break;
+	case 't': ch = '\t'; break;
+	case 'v': ch = '\v'; break;
+	case 'x': {
+		ut8 value = 0;
+		if (end - src >= 2 && r_hex_to_byte (&value, src[0]) && r_hex_to_byte (&value, src[1])) {
+			*(*dst)++ = value;
+			return src + 2;
+		}
+		return src;
+	}
+	default:
+		if (IS_OCTAL (ch)) {
+			ut8 value = ch - '0';
+			int i;
+			for (i = 0; i < 2 && src < end && IS_OCTAL (*src); i++, src++) {
+				value = (value * 8) + (*src - '0');
+			}
+			ch = value;
+		}
+		break;
+	}
+	*(*dst)++ = ch;
+	return src;
+}
+
+/* Rebuilds context arguments. Raw calls only split on whitespace, leaving
+ * quoting, escapes and the untouched command tail available to the handler. */
+static bool cmd_context_parse_args(RCmdContext *context, RStrs rest, bool raw) {
+	RVecRStrs_fini (&context->args);
+	free (context->args_storage);
+	context->args_storage = NULL;
+	if (r_strs_empty (rest)) {
+		return true;
+	}
+	char *storage = malloc (r_strs_len (rest) + 1);
+	if (!storage) {
+		return false;
+	}
+	context->args_storage = storage;
+	*storage = 0;
+	const char *src = rest.a;
+	char *dst = storage;
+	while (src < rest.b) {
+		while (src < rest.b && isspace ((ut8)*src)) {
+			src++;
+		}
+		if (src == rest.b) {
+			break;
+		}
+		char quote = 0;
+		char *begin = dst;
+		while (src < rest.b) {
+			char ch = *src;
+			if (!quote && isspace ((ut8)ch)) {
+				break;
+			}
+			src++;
+			if (!raw) {
+				if (ch == '\\') {
+					src = cmd_decode_escape (src, rest.b, &dst);
+					continue;
+				}
+				if (ch == '\'' || ch == '"') {
+					if (!quote) {
+						quote = ch;
+						continue;
+					}
+					if (quote == ch) {
+						quote = 0;
+						continue;
+					}
+				}
+			}
+			*dst++ = ch;
+		}
+		RStrs *arg = RVecRStrs_emplace_back (&context->args);
+		if (!arg) {
+			return false;
+		}
+		*arg = r_strs_new (begin, dst);
+		*dst++ = 0;
+	}
+	return true;
+}
+
+static void cmd_context_fini(RCmdContext *context) {
+	RVecRStrs_fini (&context->args);
+	free (context->args_storage);
+}
+
+static RCons *cmd_legacy_capture_begin(RCmd *cmd, RCmdContext *parent) {
+	RCons *cons = parent
+		? parent->cons
+		: cmd->get_cons? cmd->get_cons (cmd->data): cmd->cons;
+	if (!cmd->cons || !cons || cons == cmd->cons) {
+		return NULL;
+	}
+	r_cons_push (cmd->cons);
+	cmd->cons->context->cmd_str_depth++;
+	if (parent) {
+		parent->cons = cmd->cons;
+	}
+	return cons;
+}
+
+static void cmd_legacy_capture_end(RCmd *cmd, RCmdContext *parent, RCons *cons) {
+	if (parent) {
+		parent->cons = cons;
+	}
+	cmd->cons->context->cmd_str_depth--;
+	r_cons_filter (cmd->cons);
+	r_cons_merge_output (cons, cmd->cons);
+	r_cons_pop (cmd->cons);
+	r_cons_echo (cmd->cons, NULL);
+}
+
+static RCmdResult cmd_call_registered(RCmd *cmd, RCmdContext *parent, RStrs input, bool raw) {
+	RStrs lookup = input;
+	RCmdContext storage = {
+		.parent = parent,
+		.cmd = cmd,
+		.cons = parent? parent->cons: cmd->get_cons? cmd->get_cons (cmd->data): cmd->cons,
+		.user = cmd->data,
+		.remaining_depth = parent? parent->remaining_depth: 0,
+		.blocksize = parent? parent->blocksize: cmd->get_blocksize? cmd->get_blocksize (cmd->data): 0,
+	};
+	RCmdContext *context = &storage;
+	const char *parsed_from = NULL;
+	RCmdArgFlags parsed_flags = R_CMD_ARGS_DEFAULT;
+	while (!r_strs_empty (lookup)) {
+		size_t matched = 0;
+		RCmdCtxCb callback = NULL;
+		void *handler_user = NULL;
+		RCmdArgFlags flags = R_CMD_ARGS_DEFAULT;
+		r_th_lock_enter (cmd->handlers_lock);
+		RCmdHandler *handler = r_trie_find_longest_prefix (cmd->handlers, lookup, &matched);
+		const RCmdRow *row = (handler && handler->table)? cmd_table_row (handler, lookup): NULL;
+		if (handler && handler->table && !row) {
+			// no row under this key, retry the shorter registered prefixes
+			r_th_lock_leave (cmd->handlers_lock);
+			lookup.b = lookup.a + matched - 1;
+			continue;
+		}
+		if (handler && matched) {
+			callback = handler->callback;
+			handler_user = row? (void *)row: handler->user;
+			flags = row? (row->flags & R_CMD_ROW_ARGS_MASK): handler->flags;
+			matched = row? strlen (row->name): matched;
+			handler->active_calls++;
+		}
+		r_th_lock_leave (cmd->handlers_lock);
+		if (!callback) {
+			break;
+		}
+		const char *sub_end = input.a + matched;
+		if (!(flags & R_CMD_ARGS_ATTACHED)) {
+			while (sub_end < input.b && !isspace ((ut8)*sub_end)) {
+				sub_end++;
+			}
+		} else if (sub_end < input.b && *sub_end == '?' &&
+				(sub_end + 1 == input.b || isspace ((ut8)sub_end[1]))) {
+			sub_end++;
+		}
+		context->raw = raw || (flags & R_CMD_ARGS_VERBATIM);
+		if (parsed_from != sub_end || parsed_flags != flags) {
+			RStrs args = r_strs_new (sub_end, input.b);
+			if (flags & R_CMD_ARGS_VERBATIM) {
+				args.a = args.b;
+			}
+			if (!cmd_context_parse_args (context, args, raw)) {
+				cmd_handler_call_end (cmd, handler);
+				cmd_context_fini (context);
+				return cmd_result (R_CMD_ACTION_ABORT, 2);
+			}
+			parsed_from = sub_end;
+			parsed_flags = flags;
+		}
+		context->subcmd = r_strs_new (input.a + matched, sub_end);
+		context->handler_user = handler_user;
+		RCmdHandlerFrame frame = {
+			.handler = handler,
+			.parent = current_handler_frame,
+		};
+		current_handler_frame = &frame;
+		RCmdResult result = callback (context);
+		current_handler_frame = frame.parent;
+		cmd_handler_call_end (cmd, handler);
+		if (result.action != R_CMD_ACTION_UNHANDLED) {
+			cmd_context_fini (context);
+			return result;
+		}
+		lookup.b = lookup.a + matched - 1;
+	}
+	cmd_context_fini (context);
+	return cmd_result (R_CMD_ACTION_UNHANDLED, 127);
+}
+
+R_IPI RCmdResult r_cmd_call_result(RCmd *cmd, RCmdContext *parent, const char *input, bool raw) {
+	RCore *core = cmd->data;
+	RCons *capture = NULL;
+	RCmdResult result;
+	// Skipping redundant single quotes on command calls
+	while (*input == '\'') {
+		input++;
+	}
 	if (!*input) {
-		if (cmd->nullcallback) {
-			ret = cmd->nullcallback (cmd->data);
+		if (!cmd->nullcallback) {
+			return cmd_result (R_CMD_ACTION_UNHANDLED, 127);
 		}
-	} else {
-		char *nstr = NULL;
-		RCmdAliasVal *v = r_cmd_alias_get (cmd, input);
-		if (v && v->is_data) {
-			char *v_str = r_cmd_alias_val_strdup (v);
-			r_cons_strcat (v_str);
-			free (v_str);
-			return true;
-		}
-		r_list_foreach (cmd->plist, iter, cp) {
-			if (cp->call && cp->call (cmd->data, input)) {
-				free (nstr);
-				return true;
-			}
-		}
-		if (!*input) {
-			free (nstr);
-			return -1;
-		}
-		c = cmd->cmds[((ut8)input[0]) & 0xff];
-		if (c && c->callback) {
-			const char *inp = (*input)? input + 1: "";
-			ret = c->callback (cmd->data, inp);
-		} else {
-			ret = -1;
-		}
-		free (nstr);
+		capture = cmd_legacy_capture_begin (cmd, parent);
+		result = cmd_result_from_legacy (cmd->nullcallback (cmd->data));
+		goto beach;
 	}
-	return ret;
-}
-
-static RCmdStatus int2cmdstatus(int v) {
-	if (v == -2) {
-		return R_CMD_STATUS_EXIT;
-	} else if (v < 0) {
-		return R_CMD_STATUS_ERROR;
-	} else {
-		return R_CMD_STATUS_OK;
+	RCmdAliasVal *v = r_cmd_alias_get (cmd, input);
+	if (v && v->is_data) {
+		char *v_str = r_cmd_alias_val_strdup (v);
+		RCons *cons = parent
+			? parent->cons
+			: cmd->get_cons? cmd->get_cons (cmd->data): cmd->cons;
+		r_cons_print (cons, v_str);
+		free (v_str);
+		return cmd_result_from_legacy (true);
 	}
-}
-
-R_API RCmdStatus r_cmd_call_parsed_args(RCmd *cmd, RCmdParsedArgs *args) {
-	RCmdStatus res = R_CMD_STATUS_INVALID;
-
-	// As old RCorePlugin do not register new commands in RCmd, we have no
-	// way of knowing if one of those is able to handle the input, so we
-	// have to pass the input to all of them before looking into the
-	// RCmdDesc tree
+	result = cmd_call_registered (cmd, parent, r_strs_from (input), raw);
+	if (result.action != R_CMD_ACTION_UNHANDLED) {
+		return result;
+	}
+	capture = cmd_legacy_capture_begin (cmd, parent);
 	RListIter *iter;
-	RCorePlugin *cp;
-	char *exec_string = r_cmd_parsed_args_execstr (args);
-	r_list_foreach (cmd->plist, iter, cp) {
-		if (cp->call && cp->call (cmd->data, exec_string)) {
-			res = R_CMD_STATUS_OK;
-			break;
-		}
-	}
-	R_FREE (exec_string);
-	if (res == R_CMD_STATUS_OK) {
-		return res;
-	}
-
-	RCmdDesc *cd = r_cmd_get_desc (cmd, r_cmd_parsed_args_cmd (args));
-	if (!cd) {
-		return R_CMD_STATUS_INVALID;
-	}
-
-	res = R_CMD_STATUS_INVALID;
-	switch (cd->type) {
-	case R_CMD_DESC_TYPE_GROUP:
-		if (!cd->d.group_data.exec_cd) {
-			break;
-		}
-		cd = cd->d.group_data.exec_cd;
-		// fallthrough
-	case R_CMD_DESC_TYPE_ARGV:
-		if (cd->d.argv_data.cb) {
-			res = cd->d.argv_data.cb (cmd->data, args->argc, (const char **)args->argv);
-		}
-		break;
-	case R_CMD_DESC_TYPE_OLDINPUT:
-		exec_string = r_cmd_parsed_args_execstr (args);
-		res = int2cmdstatus (cd->d.oldinput_data.cb (cmd->data, exec_string + strlen (cd->name)));
-		R_FREE (exec_string);
-		break;
-	default:
-		res = R_CMD_STATUS_INVALID;
-		R_LOG_ERROR ("RCmdDesc type not handled\n");
-		break;
-	}
-	return res;
-}
-
-static void fill_children_chars(RStrBuf *sb, RCmdDesc *cd) {
-	if (cd->help->options) {
-		r_strbuf_append (sb, cd->help->options);
-		return;
-	}
-
-	RStrBuf csb;
-	r_strbuf_init (&csb);
-
-	void **it;
-	r_cmd_desc_children_foreach (cd, it) {
-		RCmdDesc *child = *(RCmdDesc **)it;
-		if (r_str_startswith (child->name, cd->name) && strlen (child->name) == strlen (cd->name) + 1) {
-			r_strbuf_appendf (&csb, "%c", child->name[strlen (cd->name)]);
-		}
-	}
-
-	if (r_strbuf_is_empty (&csb) || r_strbuf_length (&csb) >= MAX_CHILDREN_SHOW) {
-		r_strbuf_fini (&csb);
-		r_strbuf_set (&csb, "?");
-	}
-
-	if (!cd->n_children || r_cmd_desc_has_handler (cd)) {
-		r_strbuf_prepend (&csb, "[");
-		r_strbuf_append (&csb, "]");
-	} else {
-		r_strbuf_prepend (&csb, "<");
-		r_strbuf_append (&csb, ">");
-	}
-	char *tmp = r_strbuf_drain_nofree (&csb);
-	r_strbuf_append (sb, tmp);
-	free (tmp);
-}
-
-static bool show_children_shortcut(RCmdDesc *cd) {
-	return cd->n_children || cd->help->options || cd->type == R_CMD_DESC_TYPE_OLDINPUT;
-}
-
-static void fill_usage_strbuf(RStrBuf *sb, RCmdDesc *cd, bool use_color) {
-	RCons *cons = r_cons_singleton ();
-	const char *pal_label_color = use_color? cons->context->pal.label: "",
-		   *pal_args_color = use_color? cons->context->pal.args: "",
-		   *pal_input_color = use_color? cons->context->pal.input: "",
-		   *pal_help_color = use_color? cons->context->pal.help: "",
-		   *pal_reset = use_color? cons->context->pal.reset: "";
-
-	r_strbuf_appendf (sb, "%sUsage: %s", pal_label_color, pal_reset);
-	if (cd->help->usage) {
-		r_strbuf_appendf (sb, "%s%s%s", cd->help->usage, pal_args_color, pal_reset);
-	} else {
-		r_strbuf_appendf (sb, "%s%s", pal_input_color, cd->name);
-		if (show_children_shortcut (cd)) {
-			r_strbuf_append (sb, pal_reset);
-			fill_children_chars (sb, cd);
-		}
-		if (R_STR_ISNOTEMPTY (cd->help->args_str)) {
-			r_strbuf_appendf (sb, "%s%s%s", pal_args_color, cd->help->args_str, pal_reset);
-		}
-	}
-	if (cd->help->summary) {
-		r_strbuf_appendf (sb, "   %s# %s%s", pal_help_color, cd->help->summary, pal_reset);
-	}
-	r_strbuf_append (sb, "\n");
-}
-
-static size_t calc_padding_len(RCmdDesc *cd) {
-	size_t name_len = strlen (cd->name);
-	size_t args_len = 0;
-	size_t children_length = 0;
-	if (show_children_shortcut (cd)) {
-		RStrBuf sb;
-		r_strbuf_init (&sb);
-		fill_children_chars (&sb, cd);
-		children_length += r_strbuf_length (&sb);
-		r_strbuf_fini (&sb);
-	}
-	if (R_STR_ISNOTEMPTY (cd->help->args_str)) {
-		args_len = strlen (cd->help->args_str);
-	}
-	return name_len + args_len + children_length;
-}
-
-static size_t update_max_len(RCmdDesc *cd, size_t max_len) {
-	size_t val = calc_padding_len (cd);
-	return val > max_len? val: max_len;
-}
-
-static void print_child_help(RStrBuf *sb, RCmdDesc *cd, size_t max_len, bool use_color) {
-	size_t str_len = calc_padding_len (cd);
-	int padding = str_len < max_len? max_len - str_len: 0;
-	const char *cd_summary = r_str_get (cd->help->summary);
-
-	RCons *cons = r_cons_singleton ();
-	const char *pal_args_color = use_color? cons->context->pal.args: "",
-		   *pal_opt_color = use_color? cons->context->pal.reset: "",
-		   *pal_help_color = use_color? cons->context->pal.help: "",
-		   *pal_input_color = use_color? cons->context->pal.input: "",
-		   *pal_reset = use_color? cons->context->pal.reset: "";
-
-	r_strbuf_appendf (sb, "| %s%s", pal_input_color, cd->name);
-	if (show_children_shortcut (cd)) {
-		r_strbuf_append (sb, pal_opt_color);
-		fill_children_chars (sb, cd);
-	}
-	if (R_STR_ISNOTEMPTY (cd->help->args_str)) {
-		r_strbuf_appendf (sb, "%s%s", pal_args_color, cd->help->args_str);
-	}
-	r_strbuf_appendf (sb, " %*s%s# %s%s\n", padding, "", pal_help_color, cd_summary, pal_reset);
-}
-
-static char *argv_group_get_help(RCmd *cmd, RCmdDesc *cd, bool use_color) {
-	RStrBuf *sb = r_strbuf_new (NULL);
-	fill_usage_strbuf (sb, cd, use_color);
-
-	void **it_cd;
-	size_t max_len = 0;
-
-	r_cmd_desc_children_foreach (cd, it_cd) {
-		RCmdDesc *child = *(RCmdDesc **)it_cd;
-		max_len = update_max_len (child, max_len);
-	}
-
-	r_cmd_desc_children_foreach (cd, it_cd) {
-		RCmdDesc *child = *(RCmdDesc **)it_cd;
-		print_child_help (sb, child, max_len, use_color);
-	}
-	return r_strbuf_drain (sb);
-}
-
-static char *argv_get_help(RCmd *cmd, RCmdDesc *cd, RCmdParsedArgs *a, size_t detail, bool use_color) {
-	RCons *cons = r_cons_singleton ();
-	const char *pal_help_color = use_color? cons->context->pal.help: "",
-		   *pal_input_color = use_color? cons->context->pal.input: "",
-		   *pal_label_color = use_color? cons->context->pal.label: "",
-		   *pal_reset = use_color? cons->context->pal.reset: "";
-
-	RStrBuf *sb = r_strbuf_new (NULL);
-
-	fill_usage_strbuf (sb, cd, use_color);
-
-	switch (detail) {
-	case 1:
-		return r_strbuf_drain (sb);
-	case 2:
-		if (cd->help->description) {
-			r_strbuf_appendf (sb, "\n%s\n", cd->help->description);
-		}
-		if (cd->help->examples) {
-			r_strbuf_appendf (sb, "\n%sExamples:%s\n", pal_label_color, pal_reset);
-			const RCmdDescExample *it = cd->help->examples;
-			while (it->example) {
-				r_strbuf_appendf (sb, "| %s%s%s %s# %s%s\n", pal_input_color,
-					it->example, pal_reset, pal_help_color, it->comment, pal_reset);
-				it++;
+	if (cmd->libstore) {
+		RCorePluginSession *cps;
+		r_list_foreach (cmd->libstore->plugins, iter, cps) {
+			RCorePlugin *plugin = cps->plugin;
+			if (plugin->call && plugin->call (cps, input)) {
+				result = cmd_result_from_legacy (true);
+				goto beach;
 			}
 		}
-		return r_strbuf_drain (sb);
-	default:
-		r_strbuf_free (sb);
-		return NULL;
 	}
+	const ut8 idx = input[0];
+	RCmdItem *item = cmd->cmds[idx];
+	if (item && item->callback) {
+		result = cmd_result_from_legacy (item->callback (cmd->data, input + 1));
+		goto beach;
+	}
+	if (core && core->sdb) {
+		const char *suggestion = sdb_const_get (core->sdb, input, NULL);
+		if (suggestion) {
+			R_LOG_INFO ("%s", suggestion);
+		}
+	}
+beach:
+	if (capture) {
+		cmd_legacy_capture_end (cmd, parent, capture);
+	}
+	return result;
 }
 
-static char *oldinput_get_help(RCmd *cmd, RCmdDesc *cd, RCmdParsedArgs *a) {
-	const char *s = NULL;
-	r_cons_push ();
-	RCmdStatus status = r_cmd_call_parsed_args (cmd, a);
-	if (status == R_CMD_STATUS_OK) {
-		r_cons_filter ();
-		s = r_cons_get_buffer ();
-	}
-	char *res = strdup (r_str_get (s));
-	r_cons_pop ();
-	return res;
+R_API int r_cmd_call(RCmd *cmd, const char *input) {
+	R_RETURN_VAL_IF_FAIL (cmd && input, -1);
+	return cmd_result_to_legacy (r_cmd_call_result (cmd, NULL, input, false));
 }
 
-R_API char *r_cmd_get_help(RCmd *cmd, RCmdParsedArgs *args, bool use_color) {
-	char *cmdid = strdup (r_cmd_parsed_args_cmd (args));
-	char *cmdid_p = cmdid + strlen (cmdid) - 1;
-	size_t detail = 0;
-	while (cmdid_p >= cmdid && *cmdid_p == '?') {
-		*cmdid_p = '\0';
-		cmdid_p--;
-		detail++;
-	}
-
-	if (detail == 0) {
-		// there should be at least one `?`
-		free (cmdid);
-		return NULL;
-	}
-
-	RCmdDesc *cd = cmdid_p >= cmdid? r_cmd_get_desc (cmd, cmdid): r_cmd_get_root (cmd);
-	free (cmdid);
-	if (!cd || !cd->help) {
-		return NULL;
-	}
-
-	switch (cd->type) {
-	case R_CMD_DESC_TYPE_GROUP:
-		if (detail > 1 && cd->d.group_data.exec_cd) {
-			cd = cd->d.group_data.exec_cd;
-		}
-		// fallthrough
-	case R_CMD_DESC_TYPE_ARGV:
-		if (detail == 1 && !r_pvector_empty (&cd->children)) {
-			if (args->argc > 1) {
-				return NULL;
-			}
-			return argv_group_get_help (cmd, cd, use_color);
-		}
-		return argv_get_help (cmd, cd, args, detail, use_color);
-	case R_CMD_DESC_TYPE_OLDINPUT:
-		return oldinput_get_help (cmd, cd, args);
-	case R_CMD_DESC_TYPE_INNER:
-		r_warn_if_reached ();
-		return NULL;
-	}
-	return NULL;
+R_IPI int r_cmd_call_context(RCmd *cmd, RCmdContext *parent, const char *input, bool raw) {
+	return cmd_result_to_legacy (r_cmd_call_result (cmd, parent, input, raw));
 }
 
 /** macro.c **/
@@ -842,10 +892,10 @@ R_API void r_cmd_macro_item_free(RCmdMacroItem *item) {
 }
 
 R_API void r_cmd_macro_init(RCmdMacro *mac) {
+	R_RETURN_IF_FAIL (mac);
 	mac->counter = 0;
 	mac->_brk_value = 0;
 	mac->brk_value = &mac->_brk_value;
-	mac->cb_printf = (void *)printf;
 	mac->num = NULL;
 	mac->user = NULL;
 	mac->cmd = NULL;
@@ -872,7 +922,9 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 	int lidx;
 
 	if (!*oname) {
-		r_cmd_macro_list (mac);
+		char *list = r_cmd_macro_list (mac, 0);
+		eprintf ("%s\n", list); // TODO: return char *?
+		free (list);
 		return false;
 	}
 
@@ -883,15 +935,15 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 
 	pbody = strchr (name, ';');
 	if (!pbody) {
-		eprintf ("Invalid macro body\n");
+		R_LOG_ERROR ("Invalid macro body in '%s'", name);
 		free (name);
 		return false;
 	}
 	*pbody = '\0';
 	pbody++;
 
-	if (*name && name[1] && name[strlen (name)-1]==')') {
-		eprintf ("r_cmd_macro_add: missing macro body?\n");
+	if (*name && name[1] && name[strlen (name) - 1] == ')') {
+		R_LOG_ERROR ("missing macro body?");
 		free (name);
 		return false;
 	}
@@ -900,7 +952,7 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 	ptr = strchr (name, ' ');
 	if (ptr) {
 		*ptr = '\0';
-		args = ptr +1;
+		args = ptr + 1;
 	}
 	macro_update = false;
 	r_list_foreach (mac->macros, iter, m) {
@@ -925,7 +977,7 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 		macro->name = strdup (name);
 	}
 
-	macro->codelen = (pbody[0])? strlen (pbody)+2 : 4096;
+	macro->codelen = (pbody[0])? strlen (pbody) + 2 : 4096;
 	macro->code = (char *)malloc (macro->codelen);
 	*macro->code = '\0';
 	macro->nargs = 0;
@@ -934,9 +986,9 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 	}
 	macro->args = strdup (args);
 	ptr = strchr (macro->name, ' ');
-	if (ptr != NULL) {
+	if (ptr) {
 		*ptr = '\0';
-		macro->nargs = r_str_word_set0 (ptr+1);
+		macro->nargs = r_str_word_set0 (ptr + 1);
 	}
 
 	for (lidx = 0; pbody[lidx]; lidx++) {
@@ -947,7 +999,7 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 		}
 	}
 	strncpy (macro->code, pbody, macro->codelen);
-	macro->code[macro->codelen-1] = 0;
+	macro->code[macro->codelen - 1] = 0;
 	if (macro_update == false) {
 		r_list_append (mac->macros, macro);
 	}
@@ -956,7 +1008,7 @@ R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *oname) {
 }
 
 R_API bool r_cmd_macro_rm(RCmdMacro *mac, const char *_name) {
-	r_return_val_if_fail (mac && _name, false);
+	R_RETURN_VAL_IF_FAIL (mac && _name, false);
 	RListIter *iter;
 	RCmdMacroItem *m;
 	char *name = strdup (_name);
@@ -971,7 +1023,7 @@ R_API bool r_cmd_macro_rm(RCmdMacro *mac, const char *_name) {
 	r_list_foreach (mac->macros, iter, m) {
 		if (!strcmp (m->name, name)) {
 			r_list_delete (mac->macros, iter);
-			eprintf ("Macro '%s' removed.\n", name);
+			R_LOG_DEBUG ("Macro '%s' removed", name);
 			ret = true;
 			break;
 		}
@@ -980,63 +1032,72 @@ R_API bool r_cmd_macro_rm(RCmdMacro *mac, const char *_name) {
 	return ret;
 }
 
-// TODO: use mac->cb_printf which is r_cons_printf at the end
-R_API void r_cmd_macro_list(RCmdMacro *mac) {
-	RCmdMacroItem *m;
-	int j, idx = 0;
-	RListIter *iter;
-	r_list_foreach (mac->macros, iter, m) {
-		mac->cb_printf ("%d (%s %s; ", idx, m->name, m->args);
-		for (j=0; m->code[j]; j++) {
-			if (m->code[j] == '\n') {
-				mac->cb_printf ("; ");
-			} else {
-				mac->cb_printf ("%c", m->code[j]);
-			}
-		}
-		mac->cb_printf (")\n");
-		idx++;
-	}
-}
-
-// TODO: use mac->cb_printf which is r_cons_printf at the end
-R_API void r_cmd_macro_meta(RCmdMacro *mac) {
+static char *macro_meta(RCmdMacro *mac) {
 	RCmdMacroItem *m;
 	int j;
 	RListIter *iter;
+	RStrBuf *sb = r_strbuf_new ("");
 	r_list_foreach (mac->macros, iter, m) {
-		mac->cb_printf ("(%s %s, ", m->name, m->args);
-		for (j=0; m->code[j]; j++) {
+		r_strbuf_appendf (sb, "\"(%s %s; ", m->name, m->args);
+		for (j = 0; m->code[j]; j++) {
 			if (m->code[j] == '\n') {
-				mac->cb_printf ("; ");
+				r_strbuf_append (sb, ";");
 			} else {
-				mac->cb_printf ("%c", m->code[j]);
+				r_strbuf_appendf (sb, "%c", m->code[j]);
 			}
 		}
-		mac->cb_printf (")\n");
+		r_strbuf_append (sb, ")\"\n");
 	}
+	return r_strbuf_drain (sb);
 }
 
-#if 0
-(define name value
-  f $0 @ $1)
+R_API char *r_cmd_macro_list(RCmdMacro *mac, int mode) {
+	RCmdMacroItem *m;
+	int j, idx = 0;
+	RListIter *iter;
+	if (mode == '*') {
+		return macro_meta (mac);
+	}
+	if (mode == 'j') {
+		PJ *pj = pj_new ();
+		pj_o (pj);
+		pj_ks (pj, "cmd", "(j");
+		pj_ka (pj, "macros");
+		r_list_foreach (mac->macros, iter, m) {
+			pj_o (pj);
+			pj_ks (pj, "name", m->name);
+			pj_ks (pj, "args", m->args);
+			pj_ks (pj, "cmds", r_str_trim_head_ro (m->code));
+			pj_end (pj);
+			idx++;
+		}
+		pj_end (pj);
+		pj_end (pj);
+		return pj_drain (pj);
+	}
 
-(define loop cmd
-  loop:
-  ? $0 == 0
-  ?? .loop:
-  )
-
-.(define patata 3)
-#endif
-
+	RStrBuf *sb = r_strbuf_new ("");
+	r_list_foreach (mac->macros, iter, m) {
+		r_strbuf_appendf (sb, "%d (%s %s; ", idx, m->name, m->args);
+		for (j = 0; m->code[j]; j++) {
+			if (m->code[j] == '\n') {
+				r_strbuf_append (sb, "; ");
+			} else {
+				r_strbuf_appendf (sb, "%c", m->code[j]);
+			}
+		}
+		r_strbuf_append (sb, ")\n");
+		idx++;
+	}
+	return r_strbuf_drain (sb);
+}
 R_API int r_cmd_macro_cmd_args(RCmdMacro *mac, const char *ptr, const char *args, int nargs) {
 	int i, j;
 	char *pcmd, cmd[R_CMD_MAXLEN];
 	const char *arg = args;
 
-	for (*cmd=i=j=0; j<R_CMD_MAXLEN && ptr[j]; i++,j++) {
-		if (ptr[j]=='$') {
+	for (*cmd = i = j = 0; j < R_CMD_MAXLEN && ptr[j]; i++,j++) {
+		if (ptr[j] == '$') {
 			if (ptr[j+1]>='0' && ptr[j+1]<='9') {
 				int wordlen;
 				int w = ptr[j+1]-'0';
@@ -1050,9 +1111,9 @@ R_API int r_cmd_macro_cmd_args(RCmdMacro *mac, const char *ptr, const char *args
 					i += wordlen-1;
 					j++;
 				} else {
-					eprintf ("Undefined argument %d\n", w);
+					R_LOG_ERROR ("Undefined argument %d", w);
 				}
-			} else if (ptr[j+1]=='@') {
+			} else if (ptr[j + 1] == '@') {
 				char off[32];
 				int offlen;
 				offlen = snprintf (off, sizeof (off), "%d",
@@ -1060,7 +1121,7 @@ R_API int r_cmd_macro_cmd_args(RCmdMacro *mac, const char *ptr, const char *args
 				if ((i + offlen + 1) >= sizeof (cmd)) {
 					return -1;
 				}
-				memcpy (cmd+i, off, offlen+1);
+				memcpy (cmd + i, off, offlen + 1);
 				i += offlen-1;
 				j++;
 			} else {
@@ -1076,7 +1137,7 @@ R_API int r_cmd_macro_cmd_args(RCmdMacro *mac, const char *ptr, const char *args
 		;
 	}
 	//eprintf ("-pre %d\n", (int)mac->num->value);
-	int xx = (*pcmd==')')? 0: mac->cmd (mac->user, pcmd);
+	int xx = (*pcmd == ')')? 0: mac->cmd (mac->user, pcmd);
 	//eprintf ("-pos %p %d\n", mac->num, (int)mac->num->value);
 	return xx;
 }
@@ -1086,7 +1147,7 @@ R_API char *r_cmd_macro_label_process(RCmdMacro *mac, RCmdMacroLabel *labels, in
 	for (; *ptr == ' '; ptr++) {
 		;
 	}
-	if (ptr[strlen (ptr) - 1]==':' && !strchr (ptr, ' ')) {
+	if (r_str_endswith (ptr, ":") && !strchr (ptr, ' ')) {
 		/* label detected */
 		if (ptr[0] == '.') {
 		//	eprintf("---> GOTO '%s'\n", ptr+1);
@@ -1098,9 +1159,8 @@ R_API char *r_cmd_macro_label_process(RCmdMacro *mac, RCmdMacroLabel *labels, in
 				}
 			}
 			return NULL;
-		} else
-		/* conditional goto */
-		if (ptr[0]=='?' && ptr[1]=='!' && ptr[2] != '?') {
+			/* conditional goto */
+		} else if (ptr[0] == '?' && ptr[1] == '!' && ptr[2] != '?') {
 			if (mac->num && mac->num->value != 0) {
 				char *label = ptr + 3;
 				for (; *label == ' ' || *label == '.'; label++) {
@@ -1115,9 +1175,8 @@ R_API char *r_cmd_macro_label_process(RCmdMacro *mac, RCmdMacroLabel *labels, in
 				}
 				return NULL;
 			}
-		} else
-		/* conditional goto */
-		if (ptr[0] == '?' && ptr[1] == '?' && ptr[2] != '?') {
+			/* conditional goto */
+		} else if (ptr[0] == '?' && ptr[1] == '?' && ptr[2] != '?') {
 			if (mac->num->value == 0) {
 				char *label = ptr + 3;
 				for (; label[0] == ' ' || label[0] == '.'; label++) {
@@ -1125,7 +1184,7 @@ R_API char *r_cmd_macro_label_process(RCmdMacro *mac, RCmdMacroLabel *labels, in
 				}
 				//		eprintf("===> GOTO %s\n", label);
 				/* goto label ptr+3 */
-				for (i=0; i<*labels_n; i++) {
+				for (i = 0; i < *labels_n; i++) {
 					if (!strcmp (label, labels[i].name)) {
 						return labels[i].ptr;
 					}
@@ -1133,18 +1192,27 @@ R_API char *r_cmd_macro_label_process(RCmdMacro *mac, RCmdMacroLabel *labels, in
 				return NULL;
 			}
 		} else {
+			bool known = false;
 			for (i = 0; i < *labels_n; i++) {
 		//	eprintf("---| chk '%s'\n", labels[i].name);
-				if (!strcmp (ptr + 1, labels[i].name)) {
-					i = 0;
+				if (!strcmp (ptr, labels[i].name)) {
+					known = true;
 					break;
 				}
 			}
 			/* Add label */
 		//	eprintf("===> ADD LABEL(%s)\n", ptr);
-			if (i == 0) {
-				strncpy (labels[*labels_n].name, ptr, 64);
-				labels[*labels_n].ptr = ptr+strlen (ptr)+1;
+			if (!known) {
+				if (*labels_n >= MACRO_LABELS) {
+					R_LOG_ERROR ("Too many labels in macro (max %d)", MACRO_LABELS);
+					return NULL;
+				}
+				if (strlen (ptr) >= sizeof (labels[0].name)) {
+					R_LOG_ERROR ("Label name '%s' is too long", ptr);
+					return NULL;
+				}
+				r_str_ncpy (labels[*labels_n].name, ptr, sizeof (labels[0].name));
+				labels[*labels_n].ptr = ptr + strlen (ptr) + 1;
 				*labels_n = *labels_n + 1;
 			}
 		}
@@ -1153,43 +1221,42 @@ R_API char *r_cmd_macro_label_process(RCmdMacro *mac, RCmdMacroLabel *labels, in
 	return ptr;
 }
 
-/* TODO: add support for spaced arguments */
 R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
-	char *args;
-	int nargs = 0;
-	char *str, *ptr, *ptr2;
+	RCore *core = (RCore *)mac->user;
+	char *ptr2;
 	RListIter *iter;
-	static int macro_level = 0;
 	RCmdMacroItem *m;
+
 	/* labels */
 	int labels_n = 0;
 	struct r_cmd_macro_label_t labels[MACRO_LABELS];
 
-	str = strdup (name);
+	char *str = strdup (name);
 	if (!str) {
-		perror ("strdup");
+		r_sys_perror ("strdup");
 		return false;
 	}
-	ptr = strchr (str, ')');
+	char *ptr = strchr (str, ')');
 	if (!ptr) {
-		eprintf ("Missing end ')' parenthesis.\n");
+		R_LOG_ERROR ("Missing end ')' parenthesis in '%s'", str);
 		free (str);
 		return false;
 	} else {
 		*ptr = '\0';
 	}
 
-	args = strchr (str, ' ');
+	int nargs = 0;
+	char *args = strchr (str, ' ');
 	if (args) {
 		*args = '\0';
 		args++;
 		nargs = r_str_word_set0 (args);
 	}
 
-	macro_level++;
-	if (macro_level > MACRO_LIMIT) {
-		eprintf ("Maximum macro recursivity reached.\n");
-		macro_level--;
+	mac->macro_level++;
+	if (mac->macro_level > MACRO_LIMIT) {
+		R_LOG_ERROR ("Maximum macro recursivity reached");
+		mac->macro_level--;
 		free (str);
 		return 0;
 	}
@@ -1198,38 +1265,48 @@ R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
 		*ptr = 0;
 	}
 
-	r_cons_break_push (NULL, NULL);
+	int Gvalue = 0;
+	r_cons_break_push (core->cons, NULL, NULL);
 	r_list_foreach (mac->macros, iter, m) {
 		if (!strcmp (str, m->name)) {
-			char *ptr = m->code;
-			char *end = strchr (ptr, '\n');
 			if (m->nargs != 0 && nargs != m->nargs) {
-				eprintf ("Macro '%s' expects %d args, not %d\n", m->name, m->nargs, nargs);
-				macro_level --;
+				R_LOG_ERROR ("Macro '%s' expects %d args, not %d", m->name, m->nargs, nargs);
+				mac->macro_level--;
 				free (str);
-				r_cons_break_pop ();
+				r_cons_break_pop (core->cons);
 				return false;
 			}
+			// the body can remove or redefine this same macro, so walk a private copy of its code
+			char *code = strdup (m->code);
+			if (!code) {
+				mac->macro_level--;
+				free (str);
+				r_cons_break_pop (core->cons);
+				return false;
+			}
+			char *ptr = code;
+			char *end = strchr (ptr, '\n');
 			mac->brk = 0;
 			do {
 				if (end) {
 					*end = '\0';
 				}
-				if (r_cons_is_breaked ()) {
-					eprintf ("Interrupted at (%s)\n", ptr);
-					if (end) {
-						*end = '\n';
-					}
+				if (r_cons_is_breaked (core->cons)) {
+					R_LOG_INFO ("Interrupted at (%s)", ptr);
+					free (code);
 					free (str);
-					r_cons_break_pop ();
+					r_cons_break_pop (core->cons);
 					return false;
 				}
-				r_cons_flush ();
+				r_cons_flush (core->cons);
 				/* Label handling */
 				ptr2 = r_cmd_macro_label_process (mac, &(labels[0]), &labels_n, ptr);
 				if (!ptr2) {
-					eprintf ("Oops. invalid label name\n");
-					break;
+					R_LOG_ERROR ("Oops. invalid label name");
+					mac->macro_level--;
+					free (code);
+					free (str);
+					goto out_clean;
 				} else if (ptr != ptr2) {
 					ptr = ptr2;
 					if (end) {
@@ -1240,14 +1317,15 @@ R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
 				}
 				/* Command execution */
 				if (*ptr) {
-					mac->num->value = value;
+					mac->num->value = Gvalue;
 					int r = r_cmd_macro_cmd_args (mac, ptr, args, nargs);
 					// TODO: handle quit? r == 0??
 					// quit, exits the macro. like a break
-					value = mac->num->value;
+					Gvalue = mac->num->value;
 					if (r < 0) {
+						free (code);
 						free (str);
-						r_cons_break_pop ();
+						r_cons_break_pop (core->cons);
 						return r;
 					}
 				}
@@ -1255,7 +1333,8 @@ R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
 					*end = '\n';
 					ptr = end + 1;
 				} else {
-					macro_level --;
+					mac->macro_level--;
+					free (code);
 					free (str);
 					goto out_clean;
 				}
@@ -1263,18 +1342,21 @@ R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name) {
 				/* Fetch next command */
 				end = strchr (ptr, '\n');
 			} while (!mac->brk);
+			free (code);
 			if (mac->brk) {
-				macro_level--;
+				mac->macro_level--;
 				free (str);
 				goto out_clean;
 			}
+			// the list node may have been deleted by the body, do not iterate from it
+			break;
 		}
 	}
-	eprintf ("No macro named '%s'\n", str);
-	macro_level--;
+	R_LOG_ERROR ("No macro named '%s'", str);
+	mac->macro_level--;
 	free (str);
 out_clean:
-	r_cons_break_pop ();
+	r_cons_break_pop (core->cons);
 	return true;
 }
 
@@ -1286,197 +1368,4 @@ R_API int r_cmd_macro_break(RCmdMacro *mac, const char *value) {
 		mac->brk_value = &mac->_brk_value;
 	}
 	return 0;
-}
-
-/* RCmdParsedArgs */
-
-R_API RCmdParsedArgs *r_cmd_parsed_args_new(const char *cmd, int n_args, char **args) {
-	r_return_val_if_fail (cmd && n_args >= 0, NULL);
-	RCmdParsedArgs *res = R_NEW0 (RCmdParsedArgs);
-	res->has_space_after_cmd = true;
-	res->argc = n_args + 1;
-	res->argv = R_NEWS0 (char *, res->argc);
-	res->argv[0] = strdup (cmd);
-	int i;
-	for (i = 1; i < res->argc; i++) {
-		res->argv[i] = strdup (args[i - 1]);
-	}
-	return res;
-}
-
-R_API RCmdParsedArgs *r_cmd_parsed_args_newcmd(const char *cmd) {
-	return r_cmd_parsed_args_new (cmd, 0, NULL);
-}
-
-R_API RCmdParsedArgs *r_cmd_parsed_args_newargs(int n_args, char **args) {
-	return r_cmd_parsed_args_new ("", n_args, args);
-}
-
-R_API void r_cmd_parsed_args_free(RCmdParsedArgs *a) {
-	if (!a) {
-		return;
-	}
-
-	int i;
-	for (i = 0; i < a->argc; i++) {
-		free (a->argv[i]);
-	}
-	free (a->argv);
-	free (a);
-}
-
-static void free_array(char **arr, int n) {
-	int i;
-	for (i = 0; i < n; i++) {
-		free (arr[i]);
-	}
-	free (arr);
-}
-
-R_API bool r_cmd_parsed_args_setargs(RCmdParsedArgs *a, int n_args, char **args) {
-	r_return_val_if_fail (a && a->argv && a->argv[0], false);
-	char **tmp = R_NEWS0 (char *, n_args + 1);
-	if (!tmp) {
-		return false;
-	}
-	tmp[0] = strdup (a->argv[0]);
-	int i;
-	for (i = 1; i < n_args + 1; i++) {
-		tmp[i] = strdup (args[i - 1]);
-		if (!tmp[i]) {
-			goto err;
-		}
-	}
-	free_array (a->argv, a->argc);
-	a->argv = tmp;
-	a->argc = n_args + 1;
-	return true;
-err:
-	free_array (tmp, n_args + 1);
-	return false;
-}
-
-R_API bool r_cmd_parsed_args_setcmd(RCmdParsedArgs *a, const char *cmd) {
-	r_return_val_if_fail (a && a->argv && a->argv[0], false);
-	char *tmp = strdup (cmd);
-	if (!tmp) {
-		return false;
-	}
-	free (a->argv[0]);
-	a->argv[0] = tmp;
-	return true;
-}
-
-static void parsed_args_iterateargs(RCmdParsedArgs *a, RStrBuf *sb) {
-	int i;
-	for (i = 1; i < a->argc; i++) {
-		if (i > 1) {
-			r_strbuf_append (sb, " ");
-		}
-		r_strbuf_append (sb, a->argv[i]);
-	}
-}
-
-R_API char *r_cmd_parsed_args_argstr(RCmdParsedArgs *a) {
-	r_return_val_if_fail (a && a->argv && a->argv[0], NULL);
-	RStrBuf *sb = r_strbuf_new ("");
-	parsed_args_iterateargs (a, sb);
-	return r_strbuf_drain (sb);
-}
-
-R_API char *r_cmd_parsed_args_execstr(RCmdParsedArgs *a) {
-	r_return_val_if_fail (a && a->argv && a->argv[0], NULL);
-	RStrBuf *sb = r_strbuf_new (a->argv[0]);
-	if (a->argc > 1 && a->has_space_after_cmd) {
-		r_strbuf_append (sb, " ");
-	}
-	parsed_args_iterateargs (a, sb);
-	return r_strbuf_drain (sb);
-}
-
-R_API const char *r_cmd_parsed_args_cmd(RCmdParsedArgs *a) {
-	r_return_val_if_fail (a && a->argv && a->argv[0], NULL);
-	return a->argv[0];
-}
-
-/* RCmdDescriptor */
-
-static RCmdDesc *argv_new(RCmd *cmd, RCmdDesc *parent, const char *name, RCmdArgvCb cb, const RCmdDescHelp *help, bool ht_insert) {
-	RCmdDesc *res = create_cmd_desc (cmd, parent, R_CMD_DESC_TYPE_ARGV, name, help, ht_insert);
-	if (!res) {
-		return NULL;
-	}
-
-	res->d.argv_data.cb = cb;
-	return res;
-}
-
-R_API RCmdDesc *r_cmd_desc_argv_new(RCmd *cmd, RCmdDesc *parent, const char *name, RCmdArgvCb cb, const RCmdDescHelp *help) {
-	r_return_val_if_fail (cmd && parent && name, NULL);
-	return argv_new (cmd, parent, name, cb, help, true);
-}
-
-R_API RCmdDesc *r_cmd_desc_inner_new(RCmd *cmd, RCmdDesc *parent, const char *name, const RCmdDescHelp *help) {
-	r_return_val_if_fail (cmd && parent && name, NULL);
-	return create_cmd_desc (cmd, parent, R_CMD_DESC_TYPE_INNER, name, help, false);
-}
-
-R_API RCmdDesc *r_cmd_desc_group_new(RCmd *cmd, RCmdDesc *parent, const char *name, RCmdArgvCb cb, const RCmdDescHelp *help, const RCmdDescHelp *group_help) {
-	r_return_val_if_fail (cmd && parent && name, NULL);
-	RCmdDesc *res = create_cmd_desc (cmd, parent, R_CMD_DESC_TYPE_GROUP, name, group_help, true);
-	if (!res) {
-		return NULL;
-	}
-
-	RCmdDesc *exec_cd = NULL;
-	if (cb && help) {
-		exec_cd = argv_new (cmd, res, name, cb, help, false);
-		if (!exec_cd) {
-			r_cmd_desc_remove (cmd, res);
-			return NULL;
-		}
-	}
-
-	res->d.group_data.exec_cd = exec_cd;
-	return res;
-}
-
-R_API RCmdDesc *r_cmd_desc_oldinput_new(RCmd *cmd, RCmdDesc *parent, const char *name, RCmdCb cb, const RCmdDescHelp *help) {
-	r_return_val_if_fail (cmd && parent && name && cb, NULL);
-	RCmdDesc *res = create_cmd_desc (cmd, parent, R_CMD_DESC_TYPE_OLDINPUT, name, help, true);
-	if (!res) {
-		return NULL;
-	}
-	res->d.oldinput_data.cb = cb;
-	return res;
-}
-
-R_API RCmdDesc *r_cmd_desc_parent(RCmdDesc *cd) {
-	r_return_val_if_fail (cd, NULL);
-	return cd->parent;
-}
-
-R_API bool r_cmd_desc_has_handler(RCmdDesc *cd) {
-	r_return_val_if_fail (cd, false);
-	switch (cd->type) {
-	case R_CMD_DESC_TYPE_ARGV:
-		return cd->d.argv_data.cb;
-	case R_CMD_DESC_TYPE_OLDINPUT:
-		return cd->d.oldinput_data.cb;
-	case R_CMD_DESC_TYPE_INNER:
-		return false;
-	case R_CMD_DESC_TYPE_GROUP:
-		return cd->d.group_data.exec_cd && r_cmd_desc_has_handler (cd->d.group_data.exec_cd);
-	}
-	return false;
-}
-
-R_API bool r_cmd_desc_remove(RCmd *cmd, RCmdDesc *cd) {
-	r_return_val_if_fail (cmd && cd, false);
-	if (cd->parent) {
-		cmd_desc_unset_parent (cd);
-	}
-	cmd_desc_remove_from_ht_cmds (cmd, cd);
-	cmd_desc_free (cd);
-	return true;
 }

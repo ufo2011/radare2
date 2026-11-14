@@ -1,0 +1,80 @@
+NAME=ftw
+FILE=bins/elf/ls
+CMDS=<<EOF
+ftw~$
+EOF
+EXPECT=<<EOF
+0x00018bf7  time  str.ctime
+0x00021298  time  reloc.fixup.ctime
+0x00021780  time  reloc.fixup.time
+0x00021c78  env  reloc.getenv
+0x00021ca0  alloc  reloc.free
+0x00021ca8  process  reloc.abort
+0x00021cd8  string  reloc.strcpy
+0x00021d18  fs  reloc.readlink
+0x00021d28  env  reloc.setenv
+0x00021d68  string  reloc.strlen
+0x00021da8  string  reloc.snprintf
+0x00021dc8  fs  reloc.lseek
+0x00021dd0  time  reloc.gettimeofday
+0x00021e38  alloc  reloc.calloc
+0x00021e88  time  reloc.tzset
+0x00021eb8  alloc  reloc.malloc
+0x00021ee0  time  reloc.mktime
+0x00021ef8  alloc  reloc.realloc
+0x00021f18  time  reloc.timegm
+0x00021f50  env  reloc.unsetenv
+0x00021f90  process  reloc.exit
+EOF
+RUN
+
+NAME=ftw
+FILE=--
+CMDS=<<EOF
+fsp imports sym.imp
+fsp exports sym.exp
+fsp symbols sym
+e cfg.autoflagspace =true
+f sym.imp.patata
+f sym.moniato
+fs-registers
+fs
+EOF
+EXPECT=<<EOF
+    0 . exports
+    1 * imports
+    1 . symbols
+EOF
+RUN
+
+NAME=fzn and fzp with nullable outputs
+FILE=malloc://64
+CMDS=<<EOF
+fz+ first
+s 0x10
+fz+ second
+s 1
+fzn
+?v $$
+s 0xf
+fzp
+?v $$
+EOF
+EXPECT=<<EOF
+0x10
+0x0
+EOF
+RUN
+
+NAME=fz prints zone start address
+FILE=malloc://64
+CMDS=<<EOF
+s 0x1234
+fz+ myzone
+fz myzone
+?e
+EOF
+EXPECT=<<EOF
+0x00001234
+EOF
+RUN

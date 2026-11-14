@@ -1,0 +1,402 @@
+/* radare2 - LGPL - Copyright 2017-2025 - wargio, pancake */
+
+#include <r_util.h>
+#include "asn1_oids.h"
+
+R_API RASN1String *r_asn1_string_new(const char *string, bool allocated, ut32 length) {
+	if (!string || !length) {
+		return NULL;
+	}
+	RASN1String *s = R_NEW0 (RASN1String);
+	s->allocated = allocated;
+	s->length = length;
+	s->string = (char *)string;
+	return s;
+}
+
+static RASN1String *newstr(const char *string) {
+	return r_asn1_string_new (string, false, strlen (string) + 1);
+}
+
+R_API RASN1String *r_asn1_concatenate_strings(RASN1String *s0, RASN1String *s1, bool freestr) {
+	if (!s0 || !s1 || s0->length == 0 || s1->length == 0) {
+		return NULL;
+	}
+	ut32 len = s0->length + s1->length - 1;
+	char *str = (char*) malloc (len);
+	if (!str) {
+		if (freestr) {
+			r_asn1_string_free (s0);
+			r_asn1_string_free (s1);
+		}
+		return NULL;
+	}
+	memcpy (str, s0->string, s0->length);
+	memcpy (str + s0->length - 1, s1->string, s1->length);
+	if (freestr) {
+		r_asn1_string_free (s0);
+		r_asn1_string_free (s1);
+	}
+	RASN1String *res = r_asn1_string_new (str, true, len);
+	if (!res) {
+		free (str);
+	}
+	return res;
+}
+
+R_API RASN1String *r_asn1_stringify_string(const ut8 *buffer, ut32 length) {
+	if (!buffer || length < 1) {
+		return NULL;
+	}
+	char *str = r_str_ndup ((const char *)buffer, length);
+	if (!str) {
+		return NULL;
+	}
+	int str_len = strlen (str);
+	r_str_filter (str, str_len);
+	return r_asn1_string_new (str, true, str_len);
+}
+
+R_API RASN1String *r_asn1_stringify_utctime(const ut8 *buffer, ut32 length) {
+	if (!buffer || length != 13 || buffer[12] != 'Z') {
+		return NULL;
+	}
+	const int str_sz = 24;
+	char *str = malloc (str_sz);
+	if (!str) {
+		return NULL;
+	}
+	str[0] = buffer[4];
+	str[1] = buffer[5];
+	str[2] = '/';
+	str[3] = buffer[2];
+	str[4] = buffer[3];
+	str[5] = '/';
+	str[6] = buffer[0] < '5' ? '2' : '1';
+	str[7] = buffer[0] < '5' ? '0' : '9';
+	str[8] = buffer[0];
+	str[9] = buffer[1];
+	str[10] = ' ';
+	str[11] = buffer[6];
+	str[12] = buffer[7];
+	str[13] = ':';
+	str[14] = buffer[8];
+	str[15] = buffer[9];
+	str[16] = ':';
+	str[17] = buffer[10];
+	str[18] = buffer[11];
+	str[19] = ' ';
+	str[20] = 'G';
+	str[21] = 'M';
+	str[22] = 'T';
+	str[23] = '\0';
+
+	RASN1String* asn1str = r_asn1_string_new (str, true, str_sz);
+	if (!asn1str) {
+		free (str);
+	}
+	return asn1str;
+}
+
+R_API RASN1String *r_asn1_stringify_time(const ut8 *buffer, ut32 length) {
+	if (!buffer || length != 15 || buffer[14] != 'Z') {
+		return NULL;
+	}
+	const int str_sz = 24;
+	char *str = malloc (str_sz);
+	if (!str) {
+		return NULL;
+	}
+
+	str[0] = buffer[6];
+	str[1] = buffer[7];
+	str[2] = '/';
+	str[3] = buffer[4];
+	str[4] = buffer[5];
+	str[5] = '/';
+	str[6] = buffer[0];
+	str[7] = buffer[1];
+	str[8] = buffer[2];
+	str[9] = buffer[3];
+	str[10] = ' ';
+	str[11] = buffer[8];
+	str[12] = buffer[9];
+	str[13] = ':';
+	str[14] = buffer[10];
+	str[15] = buffer[11];
+	str[16] = ':';
+	str[17] = buffer[12];
+	str[18] = buffer[13];
+	str[19] = ' ';
+	str[20] = 'G';
+	str[21] = 'M';
+	str[22] = 'T';
+	str[23] = '\0';
+
+	RASN1String* asn1str = r_asn1_string_new (str, true, str_sz);
+	if (!asn1str) {
+		free (str);
+	}
+	return asn1str;
+}
+
+R_API RASN1String *r_asn1_stringify_bits(const ut8 *buffer, ut32 length) {
+	ut32 i, j, k;
+	ut64 size;
+	ut8 c;
+	char *str;
+	if (!buffer || !length) {
+		return NULL;
+	}
+	size = 1 + ((length - 1)* 8) - buffer[0];
+	str = (char*) malloc (size);
+	if (!str) {
+		return NULL;
+	}
+	for (i = 1, j = 0; i < length && j < size; i++) {
+		c = buffer[i];
+		for (k = 0; k < 8 && j < size; k++, j++) {
+			str[size - j - 1] = c & 0x80 ? '1' : '0';
+			c <<= 1;
+		}
+	}
+	str[size - 1] = '\0';
+	RASN1String* asn1str = r_asn1_string_new (str, true, size);
+	if (!asn1str) {
+		free (str);
+	}
+	return asn1str;
+}
+
+R_API RASN1String *r_asn1_stringify_boolean(const ut8 *buffer, ut32 length) {
+	if (!buffer || length != 1 || (buffer[0] != 0 && buffer[0] != 0xFF)) {
+		return NULL;
+	}
+	return newstr (r_str_bool (buffer[0]));
+}
+
+R_API RASN1String *r_asn1_stringify_integer(const ut8 *buffer, ut32 length) {
+	ut32 i, j;
+	ut64 size;
+	char *str;
+	if (!buffer || !length) {
+		return NULL;
+	}
+	size = 3 * length;
+	str = (char*) malloc (size);
+	if (!str) {
+		return NULL;
+	}
+	memset (str, 0, size);
+	for (i = 0, j = 0; i < length && j < size; i++, j += 3) {
+		r_hex_from_byte (&str[j], buffer[i]);
+		str[j + 2] = ':';
+	}
+	str[size - 1] = '\0';
+	RASN1String* asn1str = r_asn1_string_new (str, true, size);
+	if (!asn1str) {
+		free (str);
+	}
+	return asn1str;
+}
+
+R_API RASN1String* r_asn1_stringify_bytes(const ut8 *buffer, ut32 length) {
+	ut32 i, j, k;
+	ut64 size;
+	ut8 c;
+	char *str;
+	if (!buffer || !length) {
+		return NULL;
+	}
+	size = (4 * length);
+	size += (64 - (size % 64));
+	str = (char*) malloc (size);
+	if (!str) {
+		return NULL;
+	}
+	memset (str, 0x20, size);
+
+	for (i = 0, j = 0, k = 48; i < length && j < size && k < size; i++, j += 3, k++) {
+		c = buffer[i];
+		r_hex_from_byte (&str[j], c);
+		str[j + 2] = ' ';
+		str[k] = (c >= ' ' && c <= '~') ? c : '.';
+		if (i % 16 == 15) {
+			str[j + 19] = '\n';
+			j += 17;
+			k += 49;
+		}
+	}
+	str[size - 1] = '\0';
+	RASN1String* asn1str = r_asn1_string_new (str, true, size);
+	if (!asn1str) {
+		free (str);
+	}
+	return asn1str;
+}
+
+R_API RASN1String *r_asn1_stringify_oid(const ut8* buffer, ut32 length) {
+	ut32 i, slen, bits;
+	if (!buffer || !length) {
+		return NULL;
+	}
+
+	char *str = (char*) calloc (1, ASN1_OID_LEN);
+	if (!str) {
+		return NULL;
+	}
+
+	const ut8 *end = buffer + length;
+	char *t = str;
+	slen = 0;
+	bits = 0;
+	ut64 oid = 0;
+
+	const ut8 *start;
+	for (start = buffer; start < end && slen < ASN1_OID_LEN; start++) {
+		ut8 c = *start;
+		oid <<= 7;
+		oid |= (c & 0x7F);
+		bits += 7;
+		if (!(c & 0x80)) {
+			if (!slen) {
+				ut32 m = oid / 40;
+				ut32 n = oid % 40;
+				snprintf (t, ASN1_OID_LEN, "%01u.%01u", m, n);
+				slen = strlen (str);
+				t = str + slen;
+			} else {
+				snprintf (t, ASN1_OID_LEN - slen, ".%01u", (ut32) oid);
+				slen = strlen (str);
+				t = str + slen;
+			}
+			oid = 0;
+			bits = 0;
+		}
+	}
+	// incomplete oid.
+	// bad structure.
+	if (bits > 0) {
+		free (str);
+		return NULL;
+	}
+	i = 0;
+	do {
+		if (X509OIDList[i].oid[0] == str[0]) {
+			if (!strncmp (str, X509OIDList[i].oid, ASN1_OID_LEN)) {
+				free (str);
+				return newstr (X509OIDList[i].name);
+			}
+		}
+		i++;
+	} while (X509OIDList[i].oid && X509OIDList[i].name);
+	RASN1String* asn1str = r_asn1_string_new (str, true, ASN1_OID_LEN);
+	if (!asn1str) {
+		free (str);
+	}
+	return asn1str;
+}
+
+R_API void r_asn1_string_free(RASN1String* str) {
+	if (str) {
+		if (str->allocated) {
+			free (str->string);
+		}
+		free (str);
+	}
+}
+
+R_API RASN1String *asn1_stringify_tag(RASN1Object *object) {
+	static const char *const tag_names[] = {
+		[TAG_EOC] = "EOC",
+		[TAG_BOOLEAN] = "BOOLEAN",
+		[TAG_INTEGER] = "INTEGER",
+		[TAG_BITSTRING] = "BIT STRING",
+		[TAG_OCTETSTRING] = "OCTET STRING",
+		[TAG_NULL] = "NULL",
+		[TAG_OID] = "OBJECT IDENTIFIER",
+		[TAG_OBJDESCRIPTOR] = "ObjectDescriptor",
+		[TAG_EXTERNAL] = "EXTERNAL",
+		[TAG_REAL] = "REAL",
+		[TAG_ENUMERATED] = "ENUMERATED",
+		[TAG_EMBEDDED_PDV] = "EMBEDDED PDV",
+		[TAG_UTF8STRING] = "UTF8String",
+		[TAG_SEQUENCE] = "SEQUENCE",
+		[TAG_SET] = "SET",
+		[TAG_NUMERICSTRING] = "NumericString",
+		[TAG_PRINTABLESTRING] = "PrintableString",
+		[TAG_T61STRING] = "TeletexString",
+		[TAG_VIDEOTEXSTRING] = "VideotexString",
+		[TAG_IA5STRING] = "IA5String",
+		[TAG_UTCTIME] = "UTCTime",
+		[TAG_GENERALIZEDTIME] = "GeneralizedTime",
+		[TAG_GRAPHICSTRING] = "GraphicString",
+		[TAG_VISIBLESTRING] = "VisibleString",
+		[TAG_GENERALSTRING] = "GeneralString",
+		[TAG_UNIVERSALSTRING] = "UniversalString",
+		[TAG_BMPSTRING] = "BMPString",
+	};
+	if (!object) {
+		return NULL;
+	}
+	const char *s = (object->tag < R_ARRAY_SIZE (tag_names))
+		? tag_names[object->tag] : NULL;
+	return newstr (s? s: "Unknown tag");
+}
+
+R_API RASN1String *asn1_stringify_sector(RASN1Object *object) {
+	if (!object) {
+		return NULL;
+	}
+	switch (object->tag) {
+	case TAG_EOC:
+		return NULL;
+	case TAG_BOOLEAN:
+		if (!object->sector || !object->length) {
+			return NULL;
+		}
+		return newstr (r_str_bool (object->sector[0]));
+	case TAG_REAL:
+	case TAG_INTEGER:
+		if (object->length < 16) {
+			return r_asn1_stringify_integer (object->sector, object->length);
+		} else {
+			return r_asn1_stringify_bytes (object->sector, object->length);
+		}
+	case TAG_BITSTRING:
+		//if (object->length < 8) {
+		return r_asn1_stringify_bits (object->sector, object->length);
+		//} else {
+		//	return asn1_stringify_bytes (object->sector, object->length);
+		//}
+	case TAG_OCTETSTRING:
+		return r_asn1_stringify_bytes (object->sector, object->length);
+	case TAG_NULL:
+		return NULL;
+	case TAG_OID:
+		return r_asn1_stringify_oid (object->sector, object->length);
+		//    case TAG_OBJDESCRIPTOR:
+		//    case TAG_EXTERNAL:
+		//    case TAG_ENUMERATED:
+		//    case TAG_EMBEDDED_PDV:
+	case TAG_UTF8STRING:
+		//    case TAG_SEQUENCE:
+		//    case TAG_SET:
+	case TAG_NUMERICSTRING:
+	case TAG_PRINTABLESTRING:
+		//    case TAG_T61STRING:
+		//    case TAG_VIDEOTEXSTRING:
+	case TAG_IA5STRING:
+	case TAG_VISIBLESTRING:
+		return r_asn1_stringify_string (object->sector, object->length);
+	case TAG_UTCTIME:
+		return r_asn1_stringify_utctime (object->sector, object->length);
+	case TAG_GENERALIZEDTIME:
+		return r_asn1_stringify_time (object->sector, object->length);
+		//    case TAG_GRAPHICSTRING:
+		//    case TAG_GENERALSTRING:
+		//    case TAG_UNIVERSALSTRING:
+		//    case TAG_BMPSTRING:
+	}
+	return NULL;
+}

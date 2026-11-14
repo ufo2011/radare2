@@ -1,8 +1,10 @@
+/* radare - LGPL - Copyright 2020-2022 - HoundThe, Florian Markl */
+
 #include <r_bin.h>
 #include <r_core.h>
 #include <r_anal.h>
-#include "../bin/pdb/types.h"
-#include "base_types.h"
+#include "../bin/format/pdb/types.h"
+#include "../bin/format/pdb/tpi.h"
 
 static bool is_parsable_type(const ELeafType type) {
 	return (type == eLF_STRUCTURE ||
@@ -13,8 +15,8 @@ static bool is_parsable_type(const ELeafType type) {
 
 /**
  * @brief Create a type name from offset
- * 
- * @param offset 
+ *
+ * @param offset
  * @return char* Name or NULL if error
  */
 static char *create_type_name_from_offset(ut64 offset) {
@@ -26,78 +28,71 @@ static char *create_type_name_from_offset(ut64 offset) {
 
 /**
  * @brief Parses class/struct/union member
- * 
+ *
+ * @param ss TPI stream context
  * @param type_info Current type info (member)
  * @param types List of all types
  * @return RAnalStructMember* parsed member, NULL if fail
  */
-static RAnalStructMember *parse_member(STypeInfo *type_info, RList *types) {
-	r_return_val_if_fail (type_info && types, NULL);
+static RAnalStructMember *parse_member(STpiStream *ss, STypeInfo *type_info, RList *types) {
+	R_RETURN_VAL_IF_FAIL (type_info && types, NULL);
 	if (type_info->leaf_type != eLF_MEMBER) {
 		return NULL;
 	}
-	r_return_val_if_fail (type_info->get_name &&
+	R_RETURN_VAL_IF_FAIL (type_info->get_name &&
 			type_info->get_print_type && type_info->get_val, NULL);
 	char *name = NULL;
 	char *type = NULL;
 	int offset = 0;
 
-	type_info->get_val (type_info, &offset); // gets offset
-	type_info->get_name (type_info, &name);
-	type_info->get_print_type (type_info, &type);
+	type_info->get_val (ss, type_info, &offset); // gets offset
+	type_info->get_name (ss, type_info, &name);
+	type_info->get_print_type (ss, type_info, &type);
 	RAnalStructMember *member = R_NEW0 (RAnalStructMember);
-	if (!member) {
-		goto cleanup;
-	}
 	char *sname = r_str_sanitize_sdb_key (name);
 	member->name = sname;
-	member->type = strdup (type); // we assume it's sanitized
+	member->type = type; // type is already allocated, use directly
 	member->offset = offset;
 	return member;
-cleanup:
-	return NULL;
 }
 
 /**
  * @brief Parse enum case
- * 
+ *
+ * @param ss TPI stream context
  * @param type_info Current type info (enum case)
  * @param types List of all types
- * @return RAnalEnumCase* parsed enum case, NULL if fail 
+ * @return RAnalEnumCase* parsed enum case, NULL if fail
  */
-static RAnalEnumCase *parse_enumerate(STypeInfo *type_info, RList *types) {
-	r_return_val_if_fail (type_info && types && type_info->leaf_type == eLF_ENUMERATE, NULL);
-	r_return_val_if_fail (type_info->get_val && type_info->get_name, NULL);
+static RAnalEnumCase *parse_enumerate(STpiStream *ss, STypeInfo *type_info, RList *types) {
+	R_RETURN_VAL_IF_FAIL (type_info && types && type_info->leaf_type == eLF_ENUMERATE, NULL);
+	R_RETURN_VAL_IF_FAIL (type_info->get_val && type_info->get_name, NULL);
 
 	char *name = NULL;
 	int value = 0;
 	// sometimes, the type doesn't have get_val for some reason
-	type_info->get_val (type_info, &value);
-	type_info->get_name (type_info, &name);
+	type_info->get_val (ss, type_info, &value);
+	type_info->get_name (ss, type_info, &name);
 	RAnalEnumCase *cas = R_NEW0 (RAnalEnumCase);
-	if (!cas) {
-		goto cleanup;
-	}
 	char *sname = r_str_sanitize_sdb_key (name);
 	cas->name = sname;
 	cas->val = value;
 	return cas;
-cleanup:
-	return NULL;
 }
 
 /**
  * @brief Parses enum into BaseType and saves it into SDB
- * 
- * @param anal 
+ *
+ * @param anal
+ * @param ss TPI stream context
  * @param type Current type
- * @param types List of all types 
+ * @param types List of all types
  */
-static void parse_enum(const RAnal *anal, SType *type, RList *types) {
-	r_return_if_fail (anal && type && types);
+static void parse_enum(const RAnal *anal, STpiStream *ss, SType *type, RList *types) {
+	R_RETURN_IF_FAIL (anal && type && types);
 	STypeInfo *type_info = &type->type_data;
 	// assert all member functions we need info from
-	r_return_if_fail (type_info->get_members &&
+	R_RETURN_IF_FAIL (type_info->get_members &&
 		type_info->get_name &&
 		type_info->get_utype);
 
@@ -107,125 +102,136 @@ static void parse_enum(const RAnal *anal, SType *type, RList *types) {
 	}
 
 	char *name = NULL;
-	type_info->get_name (type_info, &name);
+	type_info->get_name (ss, type_info, &name);
 	bool to_free_name = false;
 	if (!name) {
 		name = create_type_name_from_offset (type->tpi_idx);
 		to_free_name = true;
 	}
-	type_info->get_utype (type_info, (void **)&type);
+	SType *utype = NULL;
+	type_info->get_utype (ss, type_info, (void **)&utype);
 	int size = 0;
 	char *type_name = NULL;
-	if (type && type->type_data.type_info) {
-		SLF_SIMPLE_TYPE *base_type = type->type_data.type_info;
-		type_name = base_type->type;
-		size = base_type->size;
+	bool to_free_type_name = false;
+	if (utype) {
+		if (utype->type_data.leaf_type == eLF_SIMPLE_TYPE) {
+			SLF_SIMPLE_TYPE *st = utype->type_data.type_info;
+			if (st) {
+				type_name = st->type;
+				size = st->size;
+			}
+		} else if (utype->type_data.get_print_type) {
+			utype->type_data.get_print_type (ss, &utype->type_data, &type_name);
+			to_free_type_name = true;
+		}
 	}
 	RList *members;
-	type_info->get_members (type_info, &members);
+	type_info->get_members (ss, type_info, &members);
 
 	RListIter *it = r_list_iterator (members);
 	while (r_list_iter_next (it)) {
 		STypeInfo *member_info = r_list_iter_get (it);
-		RAnalEnumCase *enum_case = parse_enumerate (member_info, types);
+		RAnalEnumCase *enum_case = parse_enumerate (ss, member_info, types);
 		if (!enum_case) {
 			continue; // skip it, move forward
 		}
-		void *element = r_vector_push (&base_type->struct_data.members, enum_case);
-		if (!element) {
-			goto cleanup;
-		}
+		RAnalEnumCase *slot = RVecAnalEnumCase_emplace_back (&base_type->enum_data.cases);
+		*slot = *enum_case;
+		free (enum_case);
 	}
-	char *sname = r_str_sanitize_sdb_key (name);
-	base_type->name = sname;
-	base_type->size = size;
-	base_type->type = strdup (type_name); // we assume it's sanitized
-
-	r_anal_save_base_type (anal, base_type);
-cleanup:
+	if (type_name) {
+		base_type->name = r_str_sanitize_sdb_key (name);
+		base_type->size = size;
+		base_type->type = strdup (type_name); // we assume it's sanitized
+		r_anal_save_base_type (anal, base_type);
+	}
 	if (to_free_name) {
 		R_FREE (name);
 	}
+	if (to_free_type_name) {
+		free (type_name);
+	}
+	tpi_free_simple_type (utype);
 	r_anal_base_type_free (base_type);
-	return;
 }
 
 /**
  * @brief Parses classes, unions and structures into BaseType and saves them into SDB
- * 
- * @param anal 
+ *
+ * @param anal
+ * @param ss TPI stream context
  * @param type Current type
  * @param types List of all types
  */
-static void parse_structure(const RAnal *anal, SType *type, RList *types) {
-	r_return_if_fail (anal && type && types);
+static void parse_structure(const RAnal *anal, STpiStream *ss, SType *type, RList *types) {
+	R_RETURN_IF_FAIL (anal && type && types);
 	STypeInfo *type_info = &type->type_data;
 	// assert all member functions we need info from
-	r_return_if_fail (type_info->get_members &&
+	R_RETURN_IF_FAIL (type_info->get_members &&
 		type_info->is_fwdref &&
 		type_info->get_name &&
 		type_info->get_val);
 
-	RAnalBaseType *base_type = r_anal_base_type_new (R_ANAL_BASE_TYPE_KIND_STRUCT);
+	bool is_struct = (type_info->leaf_type == eLF_STRUCTURE || type_info->leaf_type == eLF_CLASS);
+	RAnalBaseType *base_type = r_anal_base_type_new (
+		is_struct? R_ANAL_BASE_TYPE_KIND_STRUCT: R_ANAL_BASE_TYPE_KIND_UNION);
 	if (!base_type) {
 		return;
 	}
 
 	char *name = NULL;
-	type_info->get_name (type_info, &name);
+	type_info->get_name (ss, type_info, &name);
 	bool to_free_name = false;
 	if (!name) {
 		name = create_type_name_from_offset (type->tpi_idx);
 		to_free_name = true;
 	}
 	int size;
-	type_info->get_val (type_info, &size); // gets size
+	type_info->get_val (ss, type_info, &size); // gets size
 
 	RList *members;
-	type_info->get_members (type_info, &members);
+	type_info->get_members (ss, type_info, &members);
 
 	RListIter *it = r_list_iterator (members);
 	while (r_list_iter_next (it)) {
 		STypeInfo *member_info = r_list_iter_get (it);
-		RAnalStructMember *struct_member = parse_member (member_info, types);
+		RAnalStructMember *struct_member = parse_member (ss, member_info, types);
 		if (!struct_member) {
 			continue; // skip the failure
 		}
-		void *element = r_vector_push (&base_type->struct_data.members, struct_member);
-		if (!element) {
-			goto cleanup;
+		RAnalTypeMember *slot = RVecAnalTypeMember_emplace_back (r_anal_base_type_members (base_type));
+		if (!slot) {
+			anal_type_member_fini (struct_member);
+			free (struct_member);
+			continue;
 		}
-	}
-	if (type_info->leaf_type == eLF_STRUCTURE || type_info->leaf_type == eLF_CLASS) {
-		base_type->kind = R_ANAL_BASE_TYPE_KIND_STRUCT;
-	} else { // union
-		base_type->kind = R_ANAL_BASE_TYPE_KIND_UNION;
+		*slot = *struct_member;
+		free (struct_member);
 	}
 	char *sname = r_str_sanitize_sdb_key (name);
 	base_type->name = sname;
-	base_type->size = size;
+	base_type->size = (ut64)size * CHAR_BIT; // pdb records bytes, the base type holds bits
 	r_anal_save_base_type (anal, base_type);
-cleanup:
 	if (to_free_name) {
 		R_FREE (name);
 	}
 	r_anal_base_type_free (base_type);
-	return;
 }
 
 /**
  * @brief Delegate the type parsing to appropriate function
- * 
- * @param anal 
+ *
+ * @param anal
+ * @param ss TPI stream context
  * @param type Current type
  * @param types List of all types
  */
-static void parse_type (const RAnal *anal, SType *type, RList *types) {
-	r_return_if_fail (anal && type && types);
+static void parse_type(const RAnal *anal, STpiStream *ss, SType *type, RList *types) {
+	R_RETURN_IF_FAIL (anal && type && types);
 
 	int is_forward_decl;
 	if (type->type_data.is_fwdref) {
-		type->type_data.is_fwdref (&type->type_data, &is_forward_decl);
+		type->type_data.is_fwdref (ss, &type->type_data, &is_forward_decl);
 		if (is_forward_decl) { // we skip those, atleast for now
 			return;
 		}
@@ -234,27 +240,27 @@ static void parse_type (const RAnal *anal, SType *type, RList *types) {
 	case eLF_CLASS:
 	case eLF_STRUCTURE:
 	case eLF_UNION:
-		parse_structure (anal, type, types);
+		parse_structure (anal, ss, type, types);
 		break;
 	case eLF_ENUM:
-		parse_enum (anal, type, types);
+		parse_enum (anal, ss, type, types);
 		break;
 	default:
 		// shouldn't happen, happens when someone modifies leafs that get here
 		// but not how they should be parsed
-		eprintf ("Unknown type record");
+		eprintf ("Unknown type record\n");
 		break;
 	}
 }
 
 /**
  * @brief Saves PDB types from TPI stream into the SDB
- * 
+ *
  * @param anal
  * @param pdb PDB information
  */
-R_API void r_parse_pdb_types(const RAnal *anal, const RPdb *pdb) {
-	r_return_if_fail (anal && pdb);
+R_API void r_parse_pdb_types(const RAnal *anal, const RBinPdb *pdb) {
+	R_RETURN_IF_FAIL (anal && pdb);
 	RList *plist = pdb->pdb_streams;
 	// getting the TPI stream from the streams list
 	STpiStream *tpi_stream = r_list_get_n (plist, ePDB_STREAM_TPI);
@@ -266,7 +272,7 @@ R_API void r_parse_pdb_types(const RAnal *anal, const RPdb *pdb) {
 	while (r_list_iter_next (iter)) { // iterate all types
 		SType *type = r_list_iter_get (iter);
 		if (type && is_parsable_type (type->type_data.leaf_type)) {
-			parse_type (anal, type, tpi_stream->types);
+			parse_type (anal, tpi_stream, type, tpi_stream->types);
 		}
 	}
 }

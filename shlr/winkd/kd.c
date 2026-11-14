@@ -4,7 +4,7 @@
 #include <string.h>
 #include "kd.h"
 
-#define KD_DBG if (false)
+#define KD_DBG if(false)
 
 uint32_t kd_data_checksum(const uint8_t *buf, const uint64_t buf_len) {
 	uint32_t i, acc;
@@ -36,16 +36,15 @@ int kd_send_ctrl_packet(io_desc_t *desc, const uint32_t type, const uint32_t id)
 	return KD_E_OK;
 }
 
-int kd_send_data_packet(io_desc_t *desc, const uint32_t type, const uint32_t id, const uint8_t *req,
-	const int req_len, const uint8_t *buf, const uint32_t buf_len) {
+int kd_send_data_packet(io_desc_t *desc, const uint32_t type, const uint32_t id, const uint8_t *req, const int req_len, const uint8_t *buf, const uint32_t buf_len) {
 	kd_packet_t pkt;
 
 	if (req_len + buf_len > KD_MAX_PAYLOAD) {
 		return KD_E_MALFORMED;
 	}
 
-	//kd_req_t *r = (kd_req_t*) req;
-	//eprintf ("==== Send ====\n%08x\n", r->req);
+	// kd_req_t *r = (kd_req_t*) req;
+	// R_LOG_DEBUG ("==== Send ==== %08x", r->req);
 
 	pkt.leader = KD_PACKET_DATA;
 	pkt.length = req_len + buf_len;
@@ -85,32 +84,32 @@ int kd_read_packet(io_desc_t *desc, kd_packet_t **p) {
 	}
 
 	if (!kd_packet_is_valid (&pkt)) {
-		KD_DBG eprintf ("invalid leader %08x, trying to recover\n", pkt.leader);
-		while (!kd_packet_is_valid (&pkt)) {
-			kd_send_ctrl_packet (desc, KD_PACKET_TYPE_RESEND, 0);
-			char sig[4];
-			// Read byte-by-byte searching for the start of a packet
-			int ret;
-			while ((ret = iob_read (desc, (uint8_t *)&sig, 1)) > 0) {
-				if (sig[0] == '0' || sig[0] == 'i') {
-					if (iob_read (desc, (uint8_t *)&sig + 1, 3) == 3) {
-						if (strncmp (sig, "000", 3) && strncmp (sig, "iii", 3)) {
-							continue;
-						}
-						memcpy (&pkt, sig, sizeof (sig));
-						if (iob_read (desc, (uint8_t *)&pkt + 4, sizeof (kd_packet_t) - 4) <= 0) {
-							return KD_E_IOERR;
-						}
-						break;
-					} else {
-						return KD_E_IOERR;
-					}
-				}
-			}
-			if (!ret) {
+		KD_DBG R_LOG_DEBUG ("invalid leader %08x, trying to recover", pkt.leader);
+		kd_send_ctrl_packet (desc, KD_PACKET_TYPE_RESEND, 0);
+		// Slide a 4-byte window byte-by-byte until a valid leader appears.
+		// Capped to KD_MAX_PAYLOAD bytes so a hostile peer can't make us spin forever.
+		int scanned;
+		for (scanned = 0; scanned < KD_MAX_PAYLOAD; scanned++) {
+			ut8 b;
+			if (iob_read (desc, &b, 1) <= 0) {
 				return KD_E_IOERR;
 			}
+			pkt.leader = (pkt.leader >> 8) | ((ut32)b << 24);
+			if (kd_packet_is_valid (&pkt)) {
+				break;
+			}
 		}
+		if (!kd_packet_is_valid (&pkt)) {
+			return KD_E_MALFORMED;
+		}
+		if (iob_read (desc, (uint8_t *)&pkt + 4, sizeof (kd_packet_t) - 4) <= 0) {
+			return KD_E_IOERR;
+		}
+	}
+
+	if (pkt.length > KD_MAX_PAYLOAD) {
+		KD_DBG R_LOG_DEBUG ("packet length %u exceeds KD_MAX_PAYLOAD", pkt.length);
+		return KD_E_MALFORMED;
 	}
 
 	buf = malloc (sizeof (kd_packet_t) + pkt.length);
@@ -120,11 +119,14 @@ int kd_read_packet(io_desc_t *desc, kd_packet_t **p) {
 	memcpy (buf, &pkt, sizeof (kd_packet_t));
 
 	if (pkt.length) {
-		iob_read (desc, (uint8_t *)buf + sizeof (kd_packet_t), pkt.length);
+		if (iob_read (desc, buf + sizeof (kd_packet_t), pkt.length) != pkt.length) {
+			free (buf);
+			return KD_E_IOERR;
+		}
 	}
 
 	if (pkt.checksum != kd_data_checksum (buf + sizeof (kd_packet_t), pkt.length)) {
-		KD_DBG eprintf ("Checksum mismatch!\n");
+		KD_DBG R_LOG_DEBUG ("Checksum mismatch");
 		free (buf);
 		return KD_E_MALFORMED;
 	}
@@ -135,15 +137,15 @@ int kd_read_packet(io_desc_t *desc, kd_packet_t **p) {
 			iob_read (desc, (uint8_t *)&trailer, 1);
 
 			if (trailer != 0xAA) {
-				KD_DBG eprintf ("Missing trailer 0xAA\n");
+				KD_DBG R_LOG_DEBUG ("Missing trailer 0xAA");
 				free (buf);
 				return KD_E_MALFORMED;
 			}
 		}
-		kd_send_ctrl_packet (desc, KD_PACKET_TYPE_ACKNOWLEDGE, ((kd_packet_t *)buf)->id & ~(0x800));
+		kd_send_ctrl_packet (desc, KD_PACKET_TYPE_ACKNOWLEDGE, ((kd_packet_t *)buf)->id & ~ (0x800));
 	}
 
-	*p = (kd_packet_t *) buf;
+	*p = (kd_packet_t *)buf;
 
 	return KD_E_OK;
 }

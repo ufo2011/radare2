@@ -1,7 +1,6 @@
 include ../../libr/config.mk
 include ../../mk/platform.mk
 include ../../mk/$(COMPILER).mk
-include ../../shlr/zip/deps.mk
 EDITOR?=vim
 CC?=gcc
 CC_AR?=ar
@@ -9,7 +8,7 @@ AR?=$(CC_AR)
 RANLIB?=ranlib
 LIBNAME=libgdbr
 LIBFILE=$(LIBNAME).$(EXT_SO)
-CFLAGS:=-I$(LIBR)/include -I$(LIBR)/include/sdb $(PIC_CFLAGS) $(CFLAGS)
+CFLAGS:=-I$(LIBR)/include $(PIC_CFLAGS) $(CFLAGS)
 CFLAGS+=-Iinclude -I${LIBR}/include
 MAJOR=0
 MINOR=1
@@ -31,8 +30,6 @@ LDFLAGS_SHARED=-shared
 endif
 
 #OSTYPE=windows
-include ../../libr/socket/deps.mk
-include ../../shlr/sdb.mk
 
 # Test variables
 TEST_D= $(PWD)/test
@@ -54,7 +51,10 @@ TEST_C=$(wildcard $(TEST_D)/*.c)
 TEST_O=$(TEST_C:.c=.o)
 
 all: $(LIB)/$(LIBNAME).${EXT_AR}
-#	make
+
+include ../../shlr/zip/deps.mk
+include ../../libr/socket/deps.mk
+include ../../shlr/sdb.mk
 
 default: make
 
@@ -68,7 +68,7 @@ $(LIB)/$(LIBNAME).${EXT_AR}: $(LIB) $(SRC_O)
 ifeq ($(WITHPIC),1)
 	$(LD) $(PIC_CFLAGS) $(LDFLAGS_SHARED) -o $(LIB)/$(LIBFILE) $(CFLAGS) $(SRC_O) $(LDFLAGS) $(LINK)
 endif
-	$(AR) rvs $(LIB)/$(LIBNAME).${EXT_AR} $(SRC_O)
+	$(AR) rcvs $(LIB)/$(LIBNAME).${EXT_AR} $(SRC_O)
 	# required for solaris and w32
 	$(RANLIB) $(LIB)/$(LIBNAME).${EXT_AR}
 

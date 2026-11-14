@@ -1,10 +1,12 @@
+/* radare2 - LGPL - Copyright 2010-2022 - pancake */
+
 #include <r_util.h>
+
+#if HAVE_LIB_GMP
 
 R_API RNumBig *r_big_new(void) {
 	RNumBig *n = R_NEW (RNumBig);
-	if (n) {
-		mpz_init (*n);
-	}
+	mpz_init (*n);
 	return n;
 }
 
@@ -134,3 +136,5 @@ R_API void r_big_powm(RNumBig *c, RNumBig *a, RNumBig *b, RNumBig *m) {
 R_API void r_big_isqrt(RNumBig *c, RNumBig *a) {
 	mpz_sqrt (*c, *a);
 }
+
+#endif

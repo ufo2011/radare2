@@ -25,8 +25,10 @@ RUN
 
 NAME=$FB (fcn-begin)
 FILE=malloc://1024
+ARGS=-1
 CMDS=<<EOF
 e asm.arch=x86
+e asm.bits=32
 s 42
 af
 s 44
@@ -34,7 +36,8 @@ s $FB
 s
 EOF
 EXPECT=<<EOF
-0x2a
+ERROR: Cannot seek to unknown address '$FB' (cant find function)
+0x2c
 EOF
 RUN
 
@@ -145,18 +148,18 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=$j (malloc)
+NAME=$ij (malloc)
 FILE=malloc://1024
 CMDS=<<EOF
 e asm.bits=32
 e asm.arch = x86
 e anal.arch = x86
 wa jmp 0x30
-?v $j
+?v $ij
 wa jz 0x01
-?v $j
+?v $ij
 wa xor eax, eax
-?v $j
+?v $ij
 ?e
 EOF
 EXPECT=<<EOF
@@ -167,18 +170,18 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=$f (malloc)
+NAME=$if (malloc)
 FILE=malloc://1024
 CMDS=<<EOF
 e asm.bits=32
 e asm.arch = x86
 e anal.arch = x86
 wx eb2e
-?v $f
+?v $if
 wx 0f84fbffffff
-?v $f
+?v $if
 wx 31c0
-?v $f
+?v $if
 EOF
 EXPECT=<<EOF
 0xffffffffffffffff
@@ -187,15 +190,15 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=$m (malloc)
+NAME=$ir (malloc)
 FILE=malloc://1024
 CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=32
 wa mov eax, [0x500]
-?v $m
+?v $ir
 wa mov eax, ebx
-?v $m
+?v $ir
 ?e
 EOF
 EXPECT=<<EOF
@@ -205,18 +208,18 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=$l (malloc)
+NAME=$is (malloc)
 FILE=malloc://1024
 CMDS=<<EOF
 e asm.bits=32
 e asm.arch = x86
 e anal.arch = x86
 wa xor eax, eax
-?v $l
+?v $is
 wa mov esp, 0x1
-?v $l
+?v $is
 wx c3
-?v $l
+?v $is
 EOF
 EXPECT=<<EOF
 0x2
@@ -231,13 +234,13 @@ CMDS=<<EOF
 e asm.arch=x86
 e asm.bits=32
 wa inc eax
-?v $e
+?v $ie
 wa jmp 0x01
-?v $e
+?v $ie
 wa ret
-?v $e
+?v $ie
 wa call 0x01
-?v $e
+?v $ie
 EOF
 EXPECT=<<EOF
 0x0
@@ -275,9 +278,10 @@ unit    8
 segment 0000:0008
 string  "\b"
 fvalue  8.0
-float   0.000000f
-double  0.000000
+float   0.000000000000000f
+double  0.000000000000000
 binary  0b00001000
+base36  0_8
 ternary 0t22
 0x8
 int32   0
@@ -288,14 +292,16 @@ unit    0
 segment 0000:0000
 string  "\0"
 fvalue  0.0
-float   0.000000f
-double  0.000000
+float   0.000000000000000f
+double  0.000000000000000
 binary  0b00000000
+base36  0_0
 ternary 0t0
 0x0
 EOF
 RUN
 
+# merged: $o (x86-simple); $b (x86-simple)
 NAME=$$ (x86-simple)
 FILE=bins/elf/analysis/x86-simple
 CMDS=<<EOF
@@ -304,33 +310,13 @@ s 42
 ?v $$
 s-
 ?v $$
-EOF
-EXPECT=<<EOF
-0x8048060
-0x2a
-0x8048060
-EOF
-RUN
-
-NAME=$o (x86-simple)
-FILE=bins/elf/analysis/x86-simple
-CMDS=<<EOF
+?e --
 ?v $o
 s 42
 ?v $o
 s-
 ?v $o
-EOF
-EXPECT=<<EOF
-0x60
-0x2a
-0x60
-EOF
-RUN
-
-NAME=$b (x86-simple)
-FILE=bins/elf/analysis/x86-simple
-CMDS=<<EOF
+?e --
 e asm.bits=32
 e asm.arch = x86
 e anal.arch = x86
@@ -339,6 +325,14 @@ b 123
 ? $b
 EOF
 EXPECT=<<EOF
+0x8048060
+0x2a
+0x8048060
+--
+0x60
+0x2a
+0x60
+--
 0x7b
 int32   123
 uint32  123
@@ -348,9 +342,10 @@ unit    123
 segment 0000:007b
 string  "{"
 fvalue  123.0
-float   0.000000f
-double  0.000000
+float   0.000000000000000f
+double  0.000000000000000
 binary  0b01111011
+base36  0_3f
 ternary 0t11120
 EOF
 RUN
@@ -363,25 +358,20 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: ?p and ?P
 NAME=?p and ?P
 FILE=bins/elf/analysis/simple.elf
 CMDS=<<EOF
 ?p 0x08000060
 ?P 0x00000060
-EOF
-EXPECT=<<EOF
-0x00000060
-0x08000060
-EOF
-RUN
-
-NAME=?p and ?P
-FILE=bins/elf/analysis/simple.elf
-CMDS=<<EOF
+?e --
 ?p 0xdeadbeef
 ?P 0xdeadbeef
 EOF
 EXPECT=<<EOF
+0x00000060
+0x08000060
+--
 no map at 0xdeadbeef
 no map at 0xdeadbeef
 EOF
@@ -399,8 +389,8 @@ s segment.LOAD1
 ?vi $SS
 EOF
 EXPECT=<<EOF
-3   0x00000ed4  0x14c 0x08049ed4  0x150 -rw- LOAD1
-18  0x00000ed4    0x8 0x08049ed4    0x8 -rw- .preinit_array
+3   0x00000ed4  0x14c 0x08049ed4  0x150 -rw- 0x0   MAP  LOAD1
+18  0x00000ed4    0x8 0x08049ed4    0x8 -rw- 0x3   PREINIT_ARRAY .preinit_array
 
 336
 8

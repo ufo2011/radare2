@@ -1,0 +1,316 @@
+NAME=C55x+ rejects reserved Smem modes before wrapping operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+pi 1 @x:624240
+pi 1 @x:625240
+pi 1 @x:626240
+pi 1 @x:62f240
+pi 1 @x:25625240
+pi 1 @x:26625240
+pi 1 @x:60f240
+pi 1 @x:b0f2405678
+pi 1 @x:620280
+EOF
+EXPECT=<<EOF
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+amar *ar2
+EOF
+RUN
+
+NAME=C55x+ rejects truncated instructions and Smem extensions
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+pi 1 @x:90a164
+pi 1 @x:90a16400
+pi 1 @x:90a1640012
+pi 1 @x:90e16400
+pi 1 @x:90e1640012
+pi 1 @x:90e164001234
+pi 1 @x:24
+pi 1 @x:25
+pi 1 @x:38
+pi 1 @x:3820
+EOF
+EXPECT=<<EOF
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+EOF
+RUN
+
+NAME=C55x+ Smem extensions preserve instruction boundaries
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+pi 2 @x:90a16400123421
+pi 2 @x:90e1640012345621
+pi 2 @x:2590a16400123421
+pi 2 @x:60a240123421
+pi 2 @x:b0a2405678123421
+aoj 1 @x:90a164001234~{0.size}
+aoj 1 @x:90e16400123456~{0.size}
+EOF
+EXPECT=<<EOF
+add *abs16(#0x1234) << #16, ac0, ac4
+ret
+add *(#0x123456) << #16, ac0, ac4
+ret
+add lock(*abs16(#0x1234)) << #16, ac0, ac4
+ret
+delay *abs16(#0x1234)
+ret
+bcc #0x005678, *abs16(#0x1234) != #0
+ret
+6
+7
+EOF
+RUN
+
+NAME=C55x+ parallel packets include Smem extensions in either instruction
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+pi 2 @x:3890a1640012342021
+pi 2 @x:382090a16400123421
+pi 2 @x:3325b4e0404032123456b4e1414033789abc21
+aoj 1 @x:3325b4e0404032123456b4e1414033789abc~{0.size}
+pi 1 @x:3790a16400123420
+pi 1 @x:3890a164001234
+pi 1 @x:382090a1640012
+EOF
+EXPECT=<<EOF
+add *abs16(#0x1234) << #16, ac0, ac4 || nop
+ret
+nop || add *abs16(#0x1234) << #16, ac0, ac4
+ret
+mov lock(*(#0x123456)) << t2, ac0 || mov *(#0x789abc) << t3, ac1
+ret
+18
+invalid
+invalid
+invalid
+EOF
+RUN
+
+NAME=C55x+ byte fallback prints the byte after a qualifier
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+pi 2 @x:ff21
+pi 2 @x:24ff21
+EOF
+EXPECT=<<EOF
+.byte 0xff
+ret
+.byte 0xff
+ret
+EOF
+RUN
+
+NAME=C55x+ rejects unknown registers and conditions
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+pi 1 @x:77eb7a
+pi 1 @x:7b3cef
+pi 1 @x:adfd87bb6d
+pi 1 @x:a43d750c
+pi 1 @x:0e97
+pi 1 @x:046d
+pi 1 @x:6a272f
+pi 1 @x:0380
+pi 1 @x:770030
+pi 1 @x:0464
+pi 1 @x:0381
+EOF
+EXPECT=<<EOF
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+invalid
+mov t0, ac0
+xcc ac4 >= #0
+swap ac0, ac2
+EOF
+RUN
+
+NAME=C55x+ rejects reserved and unknown mmap operands
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+pi 1 @x:2461e548
+pi 1 @x:2461e5c8
+pi 1 @x:2461e600
+pi 1 @x:2461e508
+EOF
+EXPECT=<<EOF
+invalid
+invalid
+invalid
+pop mmap(@st1_55)
+EOF
+RUN
+
+NAME=C55x+ control flow analysis
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+s 0x1000
+?e nop;ao 1 @x:2021~type
+?e ret;ao 1 @x:2120~type
+?e nop16;ao 1 @x:0000~type
+?e reti;ao 1 @x:00c0~type
+?e fret;ao 1 @x:00d0~type
+?e b ac;ao 1 @x:0225~type,jump,fail
+?e call ac;ao 1 @x:02a5~type,jump,fail
+?e intr;ao 1 @x:0305~type,val
+?e trap;ao 1 @x:0345~type,val
+?e retcc;ao 1 @x:08e4~type,jump,fail
+?e b rel;ao 1 @x:68fff0~type,jump,fail
+?e call rel;ao 1 @x:690010~type,jump,fail
+?e bcc rel8;ao 1 @x:6af0e4~type,jump,fail
+?e bcc rel16;ao 1 @x:9afff0e4~type,jump,fail
+?e callcc rel16;ao 1 @x:9b0010e4~type,jump,fail
+?e b abs;ao 1 @x:9c123456~type,jump,fail
+?e call abs;ao 1 @x:9d123456~type,jump,fail
+?e b far;ao 1 @x:9e123456~type,jump,fail
+?e call far;ao 1 @x:9f123456~type,jump,fail
+?e bcc abs;ao 1 @x:d8123456e4~type,jump,fail
+?e callcc abs;ao 1 @x:d9123456e4~type,jump,fail
+?e bcc smem;ao 1 @x:b000000010~type,jump,fail
+?e cmp branch;ao 1 @x:da00120010~type,jump,fail
+?e qualified b;ao 1 @x:259c123456~type,jump,fail
+?e qualified ret;ao 1 @x:2421~type
+?e truncated;ao 1 @x:68ff~type,jump
+?e other;ao 1 @x:770030~type
+EOF
+EXPECT=<<EOF
+nop
+type: nop
+ret
+type: ret
+nop16
+type: nop
+reti
+type: ret
+fret
+type: ret
+b ac
+type: ujmp
+call ac
+type: ucall
+fail: 0x00001002
+intr
+val: 0x00000005
+type: swi
+trap
+val: 0x00000005
+type: trap
+retcc
+type: cret
+fail: 0x00001002
+b rel
+type: jmp
+jump: 0x00000ff3
+call rel
+type: call
+jump: 0x00001013
+fail: 0x00001003
+bcc rel8
+type: cjmp
+jump: 0x00000ff3
+fail: 0x00001003
+bcc rel16
+type: cjmp
+jump: 0x00000ff4
+fail: 0x00001004
+callcc rel16
+type: ccall
+jump: 0x00001014
+fail: 0x00001004
+b abs
+type: jmp
+jump: 0x00123456
+call abs
+type: call
+jump: 0x00123456
+fail: 0x00001004
+b far
+type: jmp
+jump: 0x00123456
+call far
+type: call
+jump: 0x00123456
+fail: 0x00001004
+bcc abs
+type: cjmp
+jump: 0x00123456
+fail: 0x00001005
+callcc abs
+type: ccall
+jump: 0x00123456
+fail: 0x00001005
+bcc smem
+type: cjmp
+jump: 0x00001015
+fail: 0x00001005
+cmp branch
+type: cjmp
+jump: 0x00001015
+fail: 0x00001005
+qualified b
+type: jmp
+jump: 0x00123456
+qualified ret
+type: ret
+truncated
+type: ill
+other
+type: unk
+EOF
+RUN
+
+NAME=C55x+ pseudo keeps every operand
+FILE=-
+CMDS=<<EOF
+e asm.arch=tms320
+e asm.cpu=c55x+
+e asm.pseudo=true
+pi 1 @x:25e23a3c6fec0c8384dcba60
+pi 1 @x:770030
+pi 1 @x:21
+EOF
+EXPECT=<<EOF
+macr uns (lock(*ar10(t1))), uns (lo(lock(*ar12-))), ac28 >> #16 :: macr uns (lock(*ar10(t1))), uns (hi(lock(*ar12-))), ac15 >> #16
+mov t0, ac0
+ret
+EOF
+RUN

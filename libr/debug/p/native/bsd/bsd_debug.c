@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2024 - pancake */
 
 #include <r_userconf.h>
 
@@ -27,8 +27,138 @@
 #include <sys/proc.h>
 #endif
 
+#if __KFBSD__ && defined(PT_SYSCALL) && defined(PT_LWPINFO) && defined(PL_FLAG_SCE) && defined(PL_FLAG_SCX)
+static bool bsd_syscall_hooks_suppressed(RDebug *dbg) {
+	return dbg && dbg->options.syscall_hook_suppress;
+}
+
+static const char *bsd_syscall_hook_cmd(RDebug *dbg, const char *key) {
+	if (!strcmp (key, "cmd.syscall.enter")) {
+		return dbg? dbg->options.cmd_syscall_enter: NULL;
+	}
+	if (!strcmp (key, "cmd.syscall.leave")) {
+		return dbg? dbg->options.cmd_syscall_leave: NULL;
+	}
+	return NULL;
+}
+
+static bool bsd_syscall_run_cmd(RDebug *dbg, const char *key) {
+	if (!dbg || !dbg->coreb.cmd) {
+		return true;
+	}
+	const char *cmd = bsd_syscall_hook_cmd (dbg, key);
+	if (R_STR_ISEMPTY (cmd)) {
+		return true;
+	}
+	dbg->coreb.cmd (dbg->coreb.core, cmd);
+	return true;
+}
+
+static int bsd_syscall_stop_type(int pid) {
+	struct ptrace_lwpinfo linfo = {0};
+	if (ptrace (PT_LWPINFO, pid, (caddr_t)&linfo, sizeof (linfo)) == -1) {
+		return 0;
+	}
+	if (linfo.pl_flags & PL_FLAG_SCE) {
+		return PL_FLAG_SCE;
+	}
+	if (linfo.pl_flags & PL_FLAG_SCX) {
+		return PL_FLAG_SCX;
+	}
+	return 0;
+}
+
+static void bsd_syscall_trace_set(R_UNUSED int pid, R_UNUSED bool enable) {
+#if defined(PT_GET_EVENT_MASK) && defined(PT_SET_EVENT_MASK) && defined(PTRACE_SCE) && defined(PTRACE_SCX)
+	// ptrace(2) on FreeBSD reads the event mask "into the integer pointed to
+	// by addr", so this is a plain int here. NetBSD spells the same request
+	// with a ptrace_event_t struct, which does not exist on FreeBSD.
+	int events = 0;
+	if (ptrace (PT_GET_EVENT_MASK, pid, (caddr_t)&events, sizeof (events)) == -1) {
+		return;
+	}
+	const int old = events;
+	if (enable) {
+		events |= PTRACE_SCE | PTRACE_SCX;
+	} else {
+		events &= ~(PTRACE_SCE | PTRACE_SCX);
+	}
+	if (events != old) {
+		(void)ptrace (PT_SET_EVENT_MASK, pid, (caddr_t)&events, sizeof (events));
+	}
+#endif
+}
+#endif
+
+bool bsd_continue(RDebug *dbg, int pid, int sig, bool trace_syscalls) {
+#if defined(PT_SYSCALL)
+	const int request = trace_syscalls? PT_SYSCALL: PT_CONTINUE;
+#else
+	const int request = PT_CONTINUE;
+	trace_syscalls = false;
+#endif
+#if __KFBSD__ && defined(PT_SYSCALL) && defined(PT_LWPINFO) && defined(PL_FLAG_SCE) && defined(PL_FLAG_SCX)
+	if (!trace_syscalls) {
+		bsd_syscall_trace_set (pid, false);
+	}
+#endif
+	ut64 pc = r_debug_reg_get (dbg, "PC");
+	if (ptrace (request, pid, (caddr_t)(size_t)pc, sig) == -1) {
+		r_sys_perror (trace_syscalls? "PT_SYSCALL": "PT_CONTINUE");
+		return false;
+	}
+	return true;
+}
+
+bool bsd_continue_syscall(RDebug * R_UNUSED dbg, R_UNUSED int pid, R_UNUSED int sig) {
+#if defined(PT_SYSCALL)
+	return bsd_continue (dbg, pid, sig, true);
+#else
+	R_LOG_TODO ("continue syscall not implemented yet");
+	return false;
+#endif
+}
+
+bool bsd_syscall_hooks_enabled(RDebug * R_UNUSED dbg) {
+#if __KFBSD__ && defined(PT_SYSCALL) && defined(PT_LWPINFO) && defined(PL_FLAG_SCE) && defined(PL_FLAG_SCX)
+	const char *cmd_enter = bsd_syscall_hook_cmd (dbg, "cmd.syscall.enter");
+	const char *cmd_leave = bsd_syscall_hook_cmd (dbg, "cmd.syscall.leave");
+	return R_STR_ISNOTEMPTY (cmd_enter) || R_STR_ISNOTEMPTY (cmd_leave);
+#else
+	return false;
+#endif
+}
+
+int bsd_handle_syscall_stop(RDebug * R_UNUSED dbg, R_UNUSED int pid) {
+#if __KFBSD__ && defined(PT_SYSCALL) && defined(PT_LWPINFO) && defined(PL_FLAG_SCE) && defined(PL_FLAG_SCX)
+	const int stop_type = bsd_syscall_stop_type (pid);
+	if (!stop_type) {
+		return R_DEBUG_BSD_SYSCALL_STOP_NONE;
+	}
+	if (bsd_syscall_hooks_suppressed (dbg)) {
+		bsd_syscall_trace_set (pid, false);
+		return R_DEBUG_BSD_SYSCALL_STOP_HIT;
+	}
+	if (!bsd_syscall_hooks_enabled (dbg)) {
+		return bsd_continue (dbg, pid, 0, false)
+			? R_DEBUG_BSD_SYSCALL_STOP_CONT
+			: R_DEBUG_BSD_SYSCALL_STOP_HIT;
+	}
+	if (stop_type == PL_FLAG_SCE) {
+		bsd_syscall_run_cmd (dbg, "cmd.syscall.enter");
+	} else {
+		bsd_syscall_run_cmd (dbg, "cmd.syscall.leave");
+	}
+	return bsd_continue (dbg, pid, 0, true)
+		? R_DEBUG_BSD_SYSCALL_STOP_CONT
+		: R_DEBUG_BSD_SYSCALL_STOP_HIT;
+#else
+	return 0;
+#endif
+}
+
 #if __KFBSD__
-static void addr_to_string (struct sockaddr_storage *ss, char *buffer, int buflen) {
+static void addr_tostring(struct sockaddr_storage *ss, char *buffer, int buflen) {
 	char buffer2[INET6_ADDRSTRLEN];
 	struct sockaddr_in6 *sin6;
 	struct sockaddr_in *sin;
@@ -49,7 +179,7 @@ static void addr_to_string (struct sockaddr_storage *ss, char *buffer, int bufle
 	case AF_INET6:
 		sin6 = (struct sockaddr_in6 *)ss;
 		if (inet_ntop (AF_INET6, &sin6->sin6_addr, buffer2,
-				sizeof (buffer2)) != NULL) {
+				sizeof (buffer2))) {
 			snprintf (buffer, buflen, "%s.%d", buffer2,
 				ntohs (sin6->sin6_port));
 		} else {
@@ -89,12 +219,12 @@ int bsd_handle_signals(RDebug *dbg) {
 	dbg->reason.signum = siginfo.si_signo;
 
 	switch (dbg->reason.signum) {
-		case SIGABRT:
-			dbg->reason.type = R_DEBUG_REASON_ABORT;
-			break;
-		case SIGSEGV:
-			dbg->reason.type = R_DEBUG_REASON_SEGFAULT;
-			break;
+	case SIGABRT:
+		dbg->reason.type = R_DEBUG_REASON_ABORT;
+		break;
+	case SIGSEGV:
+		dbg->reason.type = R_DEBUG_REASON_SEGFAULT;
+		break;
 	}
 
 	return 0;
@@ -103,33 +233,45 @@ int bsd_handle_signals(RDebug *dbg) {
 #endif
 }
 
-int bsd_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
+bool bsd_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 	int r = -1;
 	switch (type) {
-		case R_REG_TYPE_GPR:
-			r = ptrace (PT_SETREGS, dbg->pid,
-				(caddr_t)buf, sizeof (struct reg));
-			break;
-		case R_REG_TYPE_DRX:
+	case R_REG_TYPE_GPR:
+		r = ptrace (PT_SETREGS, dbg->pid,
+			(caddr_t)buf, sizeof (struct reg));
+		break;
+	case R_REG_TYPE_DRX:
 #if __KFBSD__ || __NetBSD__
-			r = ptrace (PT_SETDBREGS, dbg->pid, (caddr_t)buf, sizeof (struct dbreg));
+#ifdef PT_SETDBREGS
+		r = ptrace (PT_SETDBREGS, dbg->pid, (caddr_t)buf, sizeof (struct dbreg));
 #endif
-			break;
-		case R_REG_TYPE_FPU:
-			r = ptrace (PT_SETFPREGS, dbg->pid, (caddr_t)buf, sizeof (struct fpreg));
-			break;
+#endif
+		break;
+	case R_REG_TYPE_FPU:
+	case R_REG_TYPE_VEC64: // MMX
+		r = ptrace (PT_SETFPREGS, dbg->pid, (caddr_t)buf, sizeof (struct fpreg));
+		break;
+	case R_REG_TYPE_VEC128: // XMM
+	case R_REG_TYPE_VEC256: // YMM
+	case R_REG_TYPE_VEC512: // ZMM
+#if __i386__ || __x86_64__
+#if __KFBSD__
+		struct ptrace_xstate_info info;
+		r = ptrace (PT_GETXSTATE_INFO, dbg->pid, (caddr_t)&info, sizeof (info));
+		if (info.xsave_len != 0) {
+			r = ptrace (PT_SETXSTATE, dbg->pid,  (caddr_t)buf, info.xsave_len);
+		}
+#endif
+#endif
+	      break;
 	}
-
-	return (r == 0 ? true : false);
+	return r == 0;
 }
 
 RDebugInfo *bsd_info(RDebug *dbg, const char *arg) {
 #if __KFBSD__
 	struct kinfo_proc *kp;
 	RDebugInfo *rdi = R_NEW0 (RDebugInfo);
-	if (!rdi) {
-		return NULL;
-	}
 
 	if (!(kp = kinfo_getproc (dbg->pid))) {
 		free (rdi);
@@ -143,23 +285,23 @@ RDebugInfo *bsd_info(RDebug *dbg, const char *arg) {
 	rdi->exe = strdup (kp->ki_comm);
 
 	switch (kp->ki_stat) {
-		case SSLEEP:
-			rdi->status = R_DBG_PROC_SLEEP;
-			break;
-		case SSTOP:
-			rdi->status = R_DBG_PROC_STOP;
-			break;
-		case SZOMB:
-			rdi->status = R_DBG_PROC_ZOMBIE;
-			break;
-		case SRUN:
-		case SIDL:
-		case SLOCK:
-		case SWAIT:
-			rdi->status = R_DBG_PROC_RUN;
-			break;
-		default:
-			rdi->status = R_DBG_PROC_DEAD;
+	case SSLEEP:
+		rdi->status = R_DBG_PROC_SLEEP;
+		break;
+	case SSTOP:
+		rdi->status = R_DBG_PROC_STOP;
+		break;
+	case SZOMB:
+		rdi->status = R_DBG_PROC_ZOMBIE;
+		break;
+	case SRUN:
+	case SIDL:
+	case SLOCK:
+	case SWAIT:
+		rdi->status = R_DBG_PROC_RUN;
+		break;
+	default:
+		rdi->status = R_DBG_PROC_DEAD;
 	}
 
 	free (kp);
@@ -170,9 +312,6 @@ RDebugInfo *bsd_info(RDebug *dbg, const char *arg) {
 	char err[_POSIX2_LINE_MAX];
 	int rc;
 	RDebugInfo *rdi = R_NEW0 (RDebugInfo);
-	if (!rdi) {
-		return NULL;
-	}
 
 	kvm_t *kd = kvm_openfiles (NULL, NULL, NULL, KVM_NO_FILES, err);
 	if (!kd) {
@@ -188,18 +327,20 @@ RDebugInfo *bsd_info(RDebug *dbg, const char *arg) {
 		rdi->gid = kp->p__pgid;
 		rdi->exe = strdup (kp->p_comm);
 
-		rdi->status = R_DBG_PROC_STOP;
-
-		if (kp->p_psflags & PS_ZOMBIE) {
-				rdi->status = R_DBG_PROC_ZOMBIE;
-		} else if (kp->p_psflags & PS_STOPPED){
-				rdi->status = R_DBG_PROC_STOP;
-		} else if (kp->p_psflags & PS_PPWAIT) {
-				rdi->status = R_DBG_PROC_SLEEP;
-		} else if ((kp->p_psflags & PS_EXEC) || (kp->p_psflags & PS_INEXEC)) {
-				rdi->status = R_DBG_PROC_RUN;
+		switch (kp->p_stat) {
+		case SDEAD:
+			rdi->status = R_DBG_PROC_DEAD;
+			break;
+		case SSTOP:
+			rdi->status = R_DBG_PROC_STOP;
+			break;
+		case SSLEEP:
+			rdi->status = R_DBG_PROC_SLEEP;
+			break;
+		default:
+			rdi->status = R_DBG_PROC_RUN;
+			break;
 		}
-
 	}
 
 	kvm_close (kd);
@@ -210,9 +351,6 @@ RDebugInfo *bsd_info(RDebug *dbg, const char *arg) {
 	char err[_POSIX2_LINE_MAX];
 	int np;
 	RDebugInfo *rdi = R_NEW0 (RDebugInfo);
-	if (!rdi) {
-		return NULL;
-	}
 
 	kvm_t *kd = kvm_openfiles (NULL, NULL, NULL, KVM_NO_FILES, err);
 	if (!kd) {
@@ -220,33 +358,31 @@ RDebugInfo *bsd_info(RDebug *dbg, const char *arg) {
 		return NULL;
 	}
 
-	kp = kvm_getproc2 (kd, KERN_PROC_PID, dbg->pid, sizeof(*kp), &np);
+	kp = kvm_getproc2 (kd, KERN_PROC_PID, dbg->pid, sizeof (*kp), &np);
 	if (kp) {
 		rdi->pid = dbg->pid;
 		rdi->tid = dbg->tid;
 		rdi->uid = kp->p_uid;
 		rdi->gid = kp->p__pgid;
 		rdi->exe = strdup (kp->p_comm);
-
 		rdi->status = R_DBG_PROC_STOP;
-
 		switch (kp->p_stat) {
-			case SDEAD:
-				rdi->status = R_DBG_PROC_DEAD;
-				break;
-			case SSTOP:
-				rdi->status = R_DBG_PROC_STOP;
-				break;
-			case SZOMB:
-				rdi->status = R_DBG_PROC_ZOMBIE;
-				break;
-			case SACTIVE:
-			case SIDL:
-			case SDYING:
-				rdi->status = R_DBG_PROC_RUN;
-				break;
-			default:
-				rdi->status = R_DBG_PROC_SLEEP;
+		case SDEAD:
+			rdi->status = R_DBG_PROC_DEAD;
+			break;
+		case SSTOP:
+			rdi->status = R_DBG_PROC_STOP;
+			break;
+		case SZOMB:
+			rdi->status = R_DBG_PROC_ZOMBIE;
+			break;
+		case SACTIVE:
+		case SIDL:
+		case SDYING:
+			rdi->status = R_DBG_PROC_RUN;
+			break;
+		default:
+			rdi->status = R_DBG_PROC_SLEEP;
 		}
 	}
 
@@ -261,7 +397,7 @@ RList *bsd_pid_list(RDebug *dbg, int pid, RList *list) {
 #ifdef __NetBSD__
 # define KVM_OPEN_FLAG KVM_NO_FILES
 # define KVM_GETPROCS(kd, opt, arg, cntptr) \
-	kvm_getproc2 (kd, opt, arg, sizeof(struct kinfo_proc2), cntptr)
+	kvm_getproc2 (kd, opt, arg, sizeof (struct kinfo_proc2), cntptr)
 # define KP_COMM(x) (x)->p_comm
 # define KP_PID(x) (x)->p_pid
 # define KP_PPID(x) (x)->p_ppid
@@ -270,7 +406,7 @@ RList *bsd_pid_list(RDebug *dbg, int pid, RList *list) {
 #elif defined(__OpenBSD__)
 # define KVM_OPEN_FLAG KVM_NO_FILES
 # define KVM_GETPROCS(kd, opt, arg, cntptr) \
-	kvm_getprocs (kd, opt, arg, sizeof(struct kinfo_proc), cntptr)
+	kvm_getprocs (kd, opt, arg, sizeof (struct kinfo_proc), cntptr)
 # define KP_COMM(x) (x)->p_comm
 # define KP_PID(x) (x)->p_pid
 # define KP_PPID(x) (x)->p_ppid
@@ -378,14 +514,14 @@ RList *bsd_native_sysctl_map(RDebug *dbg) {
 	RList *list = NULL;
 	RDebugMap *map;
 
-	len = sizeof(entry);
+	len = sizeof (entry);
 	mib[0] = CTL_KERN;
 	mib[1] = KERN_PROC_VMMAP;
 	mib[2] = dbg->pid;
 	entry.kve_start = 0;
 
 	if (sysctl (mib, 3, &entry, &len, NULL, 0) == -1) {
-		eprintf ("Could not get memory map: %s\n", strerror(errno));
+		R_LOG_ERROR ("Could not get memory map: %s", strerror(errno));
 		return NULL;
 	}
 
@@ -462,27 +598,27 @@ RList *bsd_desc_list(int pid) {
 				struct sockaddr_un *sun =
 					(struct sockaddr_un *)&kve->kf_sa_local;
 				if (sun->sun_path[0] != 0)
-					addr_to_string (&kve->kf_sa_local, path, sizeof(path));
+					addr_tostring (&kve->kf_sa_local, path, sizeof (path));
 				else
-					addr_to_string (&kve->kf_sa_peer, path, sizeof(path));
+					addr_tostring (&kve->kf_sa_peer, path, sizeof (path));
 			} else {
-				addr_to_string (&kve->kf_sa_local, path, sizeof(path));
+				addr_tostring (&kve->kf_sa_local, path, sizeof (path));
 				strcat (path, " ");
-				addr_to_string (&kve->kf_sa_peer, path + strlen (path),
+				addr_tostring (&kve->kf_sa_peer, path + strlen (path),
 						sizeof (path));
 			}
 #else
 			if (kve->kf_sock_domain == AF_LOCAL) {
 				struct sockaddr_un *sun =
-					(struct sockaddr_un *)&kve->kf_un.kf_sock.kf_sa_local;;
+					(struct sockaddr_un *)&kve->kf_un.kf_sock.kf_sa_local;
 				if (sun->sun_path[0] != 0)
-					addr_to_string (&kve->kf_un.kf_sock.kf_sa_local, path, sizeof(path));
+					addr_tostring (&kve->kf_un.kf_sock.kf_sa_local, path, sizeof (path));
 				else
-					addr_to_string (&kve->kf_un.kf_sock.kf_sa_peer, path, sizeof(path));
+					addr_tostring (&kve->kf_un.kf_sock.kf_sa_peer, path, sizeof (path));
 			} else {
-				addr_to_string (&kve->kf_un.kf_sock.kf_sa_local, path, sizeof(path));
+				addr_tostring (&kve->kf_un.kf_sock.kf_sa_local, path, sizeof (path));
 				strcat (path, " ");
-				addr_to_string (&kve->kf_un.kf_sock.kf_sa_peer, path + strlen (path),
+				addr_tostring (&kve->kf_un.kf_sock.kf_sa_peer, path + strlen (path),
 						sizeof (path));
 			}
 #endif
@@ -551,15 +687,15 @@ RList *bsd_thread_list(RDebug *dbg, int pid, RList *list) {
 		return NULL;
 	}
 
-	len += sizeof(*kp) + len / 10;
-	kp = malloc(len);
+	len += sizeof (*kp) + len / 10;
+	kp = malloc (len);
 	if (sysctl (mib, 4, kp, &len, NULL, 0) == -1) {
 		free (kp);
 		r_list_free (list);
 		return NULL;
 	}
 
-	max = len / sizeof(*kp);
+	max = len / sizeof (*kp);
 	for (i = 0; i < max; i ++) {
 		RDebugPid *pid_info;
 		int pid_stat;
@@ -573,7 +709,7 @@ RList *bsd_thread_list(RDebug *dbg, int pid, RList *list) {
 	free (kp);
 	return list;
 #else
-	eprintf ("bsd_thread_list unsupported on this platform\n");
+	R_LOG_ERROR ("bsd_thread_list unsupported on this platform");
 	r_list_free (list);
 	return NULL;
 #endif

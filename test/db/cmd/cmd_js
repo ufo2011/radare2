@@ -1,0 +1,342 @@
+NAME=js tests, variable scoping
+FILE=-
+CMDS=<<EOF
+js var a = 123
+js r2.log(a)
+js!
+js r2.log(a)
+EOF
+EXPECT=<<EOF
+123
+EOF
+EXPECT_ERR=<<EOF
+ERROR: ReferenceError: a is not defined
+ERROR:     at <eval> (-:1:8)
+EOF
+RUN
+
+NAME=qjs caught stack overflow retains the backtrace
+FILE=-
+CMDS=<<EOF
+'js Error.stackTraceLimit = 2; function recurse() { recurse(); } try { recurse(); } catch (e) { console.error(e); }
+'js console.log("still alive")
+EOF
+EXPECT=<<EOF
+still alive
+EOF
+EXPECT_ERR=<<EOF
+ERROR: RangeError: Maximum call stack size exceeded
+ERROR:     at recurse (-:1:49)
+ERROR:     at recurse (-:1:49)
+EOF
+RUN
+
+NAME=qjs console.error retains Error stacks and accepts plain values
+FILE=-
+CMDS=<<EOF
+'js function fail() { throw new Error("trace-test"); } try { fail(); } catch (e) { console.error(e); }
+'js console.error("plain", 42)
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Error: trace-test
+ERROR:     at fail (-:1:29)
+ERROR:     at <eval> (-:1:58)
+ERROR: plain
+ERROR: 42
+EOF
+RUN
+
+NAME=qjs rejected evaluation promises retain stacks and handled ones stay quiet
+FILE=-
+CMDS=<<EOF
+'js Promise.reject(new Error("promise-test"))
+'js Promise.reject(new Error("handled")).catch(() => console.log("handled"))
+EOF
+EXPECT=<<EOF
+handled
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Error: promise-test
+ERROR:     at <eval> (-:1:20)
+EOF
+RUN
+
+NAME=qjs core callback errors retain the backtrace
+FILE=-
+CMDS=<<EOF
+'js r2.plugin("core", function () { return { name: "qjs-stack", call: function crash(input) { if (input === "tqjscrash") { throw new Error("callback-test"); } return false; } }; });
+tqjscrash
+'js r2.unload("core", "qjs-stack")
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Error: callback-test
+ERROR:     at crash (-:1:130)
+ERROR: Invalid `q` subcommand, try `t?`
+EOF
+RUN
+
+NAME=qjs long backtraces retain the script entry beyond the log buffer size
+FILE=-
+CMDS=<<EOF
+'js function dive(n) { if (n) return dive(n - 1); throw new Error("long-trace"); } dive(40);
+EOF
+EXPECT=
+REGEXP_ERR=at <eval>
+RUN
+
+NAME=js! from a running script must not free the live runtime
+FILE=-
+CMDS=<<EOF
+'js var a = 123; r2.cmd("js!"); r2.log(a)
+'js r2.cmd("js 1"), r2.cmd("#!!"); r2.log(a)
+'js r2.plugin("core", function () { return { name: "x;js!", call: function (s) { return false; } }; }); r2.unload("core", "x;js!"); r2.log(a)
+js!
+'js r2.log(typeof a)
+EOF
+EXPECT=<<EOF
+123
+123
+123
+undefined
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot reset the JavaScript VM while a script is running
+ERROR: Cannot reset the JavaScript VM while a script is running
+ERROR: Cannot reset the JavaScript VM while a script is running
+EOF
+RUN
+
+NAME=qjs echo binding output paths
+FILE=-
+CMDS=<<EOF
+'js r2.log(r2.cmd("echo \"bound value\"").trim())
+'js console.log(r2.cmd("?e adapter value").trim())
+EOF
+EXPECT=<<EOF
+bound value
+adapter value
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=qjs async test
+FILE=-
+CMDS=<<EOF
+'js import("r2pipe").then((r2pipe)=> {console.log(r2pipe.open());}).catch(console.error);
+EOF
+EXPECT=<<EOF
+[object Object]
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=qjs generic HTTP binding and argument errors
+FILE=-
+CMDS=<<EOF
+'js console.log(typeof r2.http)
+'js try { r2.http("GET", "http://localhost/"); } catch (e) { console.log(e.name + ": " + e.message); }
+'js try { r2.http("PUT", "http://localhost/", ""); } catch (e) { console.log(e.name + ": " + e.message); }
+EOF
+EXPECT=<<EOF
+function
+TypeError: http(method, url, headers, data?)
+TypeError: Expected GET or POST
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=qjs HTTP respects sandbox denial
+FILE=-
+ARGS=-e log.level=0
+CMDS=<<EOF
+'js r2.cmd("e cfg.sandbox.grain=none;e cfg.sandbox=true"); for (const method of ["GET", "POST"]) { try { r2.http(method, "http://192.0.2.1/", ""); } catch (e) { console.log(e.name + ": " + e.message); } }
+EOF
+EXPECT=<<EOF
+InternalError: HTTP request failed or denied
+InternalError: HTTP request failed or denied
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=sandbox needs the script grain to run scripts
+FILE=-
+CMDS=<<EOF
+e cfg.sandbox.grain=all,!script
+e cfg.sandbox=true
+js console.log("js")
+#!qjs -e console.log("hashbang")
+#!pipe echo pipe
+?e done
+EOF
+EXPECT=<<EOF
+done
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Scripting is disabled in sandbox mode
+ERROR: Scripting is disabled in sandbox mode
+ERROR: Scripting is disabled in sandbox mode
+EOF
+RUN
+
+NAME=sandbox with the script grain runs scripts
+FILE=-
+CMDS=<<EOF
+e cfg.sandbox.grain=script
+e cfg.sandbox=true
+js console.log("js")
+EOF
+EXPECT=<<EOF
+js
+EOF
+RUN
+
+NAME=qjs loading, running and unloading of core plugins
+FILE=-
+CMDS=<<EOF
+Lc~qjs?
+?e
+'js (function() { function examplePlugin() { function coreCall(input) { if (input.startsWith("t1")) { console.log("This is a QJS test"); return true; } return false; } return { name: "qjs-example", desc: "Example QJS plugin (type 't1') in the r2 shell", call: coreCall, }; }; console.log("load qjs-example", r2.plugin("core", examplePlugin)); })();
+Lc~qjs
+?e
+'js (function() { function examplePlugin() { function coreCall(input) { if (input.startsWith("t1")) { console.log("This is a QJS test"); return true; } return false; } return { name: "qjs-example", desc: "Example QJS plugin (type 't1') in the r2 shell", call: coreCall, }; }; console.log("load qjs-example", r2.plugin("core", examplePlugin)); })();
+Lc~qjs
+?e
+'js (function() { function examplePlugin2() { function coreCall(input) { if (input.startsWith("t2")) { console.log("This is another QJS test"); return true; } return false; } return { name: "qjs-example2", desc: "Example QJS plugin (type 't2') in the r2 shell", call: coreCall, }; }; console.log("load qjs-example2", r2.plugin("core", examplePlugin2)); })();
+Lc~qjs
+t1
+t2
+'js console.log("unload unknown", r2.unload("core", "unknownPlugin"))
+Lc~qjs
+?e
+'js console.log("unload qjs-example", r2.unload("core", "qjs-example"))
+Lc~qjs
+?e
+'js console.log("unload qjs-example again", r2.unload("core", "qjs-example"))
+Lc~qjs
+?e
+'js console.log("unload qjs-example2", r2.unload("core", "qjs-example2"))
+?e
+Lc~qjs?
+EOF
+EXPECT=<<EOF
+0
+
+qjs-example Example QJS plugin (type 't1') in the r2 shell
+
+qjs-example Example QJS plugin (type 't1') in the r2 shell
+
+qjs-example Example QJS plugin (type 't1') in the r2 shell
+qjs-example2 Example QJS plugin (type 't2') in the r2 shell
+qjs-example Example QJS plugin (type 't1') in the r2 shell
+qjs-example2 Example QJS plugin (type 't2') in the r2 shell
+
+qjs-example2 Example QJS plugin (type 't2') in the r2 shell
+
+qjs-example2 Example QJS plugin (type 't2') in the r2 shell
+
+
+0
+load qjs-example true
+load qjs-example false
+load qjs-example2 true
+This is a QJS test
+This is another QJS test
+unload unknown false
+unload qjs-example true
+unload qjs-example again false
+unload qjs-example2 true
+EOF
+EXPECT_ERR=<<EOF
+WARN: r2.plugin with name qjs-example is already registered
+EOF
+RUN
+
+NAME=qjs loading and unloading of arch plugins
+FILE=-
+CMDS=<<EOF
+La~qjs?
+?e
+'js (function() { function archPlugin() { return { name: "myarch qjs plugin", arch: "myarch_qjs", desc: "this is a test arch", license: "LGPL3", decode: function(op) { op.mnemonic = "nop"; return true; } } }; console.log('load plugin1', r2.plugin("arch", archPlugin)); })()
+La~qjs
+?e
+'js (function() { function archPlugin() { return { name: "myarch qjs plugin", arch: "myarch_qjs", desc: "this is a test arch", license: "LGPL3", decode: function(op) { op.mnemonic = "nop"; return true; } } }; console.log('load plugin1 again', r2.plugin("arch", archPlugin)); })()
+La~qjs
+?e
+'js (function() { function archPlugin2() { return { name: "myarch qjs plugin2", arch: "myarch_qjs2", desc: "this is a test arch2", license: "LGPL3", decode: function(op) { op.mnemonic = "nop"; return true; } } }; console.log('load plugin2', r2.plugin("arch", archPlugin2)); })()
+La~qjs
+?e
+'js console.log("unload unknown", r2.unload("arch", "unknownPlugin"))
+La~qjs
+?e
+'js console.log("unload qjs-example", r2.unload("arch", "myarch_qjs"))
+La~qjs
+?e
+'js console.log("unload qjs-example again", r2.unload("arch", "myarch_qjs"))
+La~qjs
+?e
+'js console.log("unload qjs-example2", r2.unload("arch", "myarch_qjs2"))
+?e
+La~qjs?
+EOF
+EXPECT=<<EOF
+0
+
+myarch qjs plugin LGPL3 this is a test arch (myarch_qjs)
+
+myarch qjs plugin LGPL3 this is a test arch (myarch_qjs)
+
+myarch qjs plugin LGPL3 this is a test arch (myarch_qjs)
+myarch qjs plugin2 LGPL3 this is a test arch2 (myarch_qjs2)
+
+myarch qjs plugin LGPL3 this is a test arch (myarch_qjs)
+myarch qjs plugin2 LGPL3 this is a test arch2 (myarch_qjs2)
+
+myarch qjs plugin2 LGPL3 this is a test arch2 (myarch_qjs2)
+
+myarch qjs plugin2 LGPL3 this is a test arch2 (myarch_qjs2)
+
+
+0
+load plugin1 true
+load plugin1 again false
+load plugin2 true
+unload unknown false
+unload qjs-example true
+unload qjs-example again false
+unload qjs-example2 true
+EOF
+EXPECT_ERR=<<EOF
+WARN: r2.plugin with name myarch qjs plugin is already registered
+EOF
+RUN
+
+NAME=js ec changes
+FILE=-
+ARGS=-e scr.color=1
+CMDS=<<EOF
+'js r2.cmd("ec call blue");console.log(r2.cmd("ec*~call"));r2.cmd("ec call red");console.log(r2.cmd("ec*~call"))
+EOF
+EXPECT=<<EOF
+ec call rgb:0037da
+ec ucall rgb:13a10e
+
+ec call rgb:c50f1f
+ec ucall rgb:13a10e
+
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=qjs r2pipe2 helpers
+FILE=-
+CMDS=<<EOF
+s 0x10
+'js const ok = r2.cmd2At("?v $$", 0x33).value === 0x33 && Number(r2.callAt("?v $$", 0x44).trim()) === 0x44 && r2.call2("?v $$").value === 0x10 && r2.call2At("?v $$", 0x55).value === 0x55 && !r2.call2j("?Vj").error && typeof r2.call2j("?Vj").res === "object"; console.log(ok ? "ok" : "no");
+EOF
+EXPECT=<<EOF
+ok
+EOF
+EXPECT_ERR=
+RUN

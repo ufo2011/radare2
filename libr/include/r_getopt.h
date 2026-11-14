@@ -8,13 +8,13 @@ extern "C" {
 #include <r_util.h>
 
 typedef struct r_getopt_t {
-	int err;
+	bool err;
 	int ind;
 	int opt;
-	int reset;
-	const char *arg;
 	// ...
 	int argc;
+	const char *arg;
+	const char *place;
 	const char **argv;
 	const char *ostr;
 } RGetopt;

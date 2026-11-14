@@ -1,33 +1,37 @@
-/* radare2 - LGPL - Copyright 2014-2019 - pancake, Judge_Dredd */
+/* radare2 - LGPL - Copyright 2014-2026 - pancake */
 
 #include <r_cons.h>
 #include <r_regex.h>
 #include <r_util.h>
-#include "pager_private.h"
+#include "private.h"
 
-R_API int r_cons_less_str(const char *str, const char *exitkeys) {
-	r_return_val_if_fail (str && *str, 0);
-	if (!r_cons_is_interactive ()) {
-		eprintf ("Internal less requires scr.interactive=true.\n");
+static const char *r_cons_less_help = \
+	" u/space  - page up/down (same as ^B / ^F)\n"
+	" jk       - line down/up\n"
+	" wheel    - scroll up/down\n"
+	" gG       - begin/end buffer\n"
+	" /        - search in buffer\n"
+	" _        - enter the hud mode\n"
+	" n/p      - next/prev search result\n"
+	" :        - command prompt (w <path>, q; empty returns)\n"
+	" q        - quit\n"
+	" ?        - show this help\n"
+	"\n";
+
+R_API int r_cons_less_str(RCons * R_NONNULL cons, const char * R_NONNULL str, const char * R_NULLABLE exitkeys) {
+	R_RETURN_VAL_IF_FAIL (R_STR_ISNOTEMPTY (str), 0);
+	if (!r_cons_is_interactive (cons)) {
+		r_cons_println (cons, str);
+		R_LOG_WARN ("Internal less requires scr.interactive=true");
 		return 0;
 	}
 
-	static int in_help = false;
-	static const char *r_cons_less_help = \
-		" u/space  - page up/down\n"
-		" jk       - line down/up\n"
-		" gG       - begin/end buffer\n"
-		" /        - search in buffer\n"
-		" _        - enter the hud mode\n"
-		" n/p      - next/prev search result\n"
-		" q        - quit\n"
-		" ?        - show this help\n"
-		"\n";
+	const bool in_help = str == r_cons_less_help;
 	int lines_count = 0;
 	RRegex *rx = NULL;
 	int w, h, ch, to, ui = 1, from = 0, i;
-	const char *sreg;
-	RList **mla;
+	int ret = 0;
+	int last_from = -1, last_w = -1, last_h = -1;
 
 	// rcons kills str after flushing the buffer, so we must keep a copy
 	char *ostr = strdup (str);
@@ -40,96 +44,152 @@ R_API int r_cons_less_str(const char *str, const char *exitkeys) {
 		return 0;
 	}
 	int *lines = pager_splitlines (p, &lines_count);
-	if (lines_count < 1) {
-		mla = NULL;
-	} else {
-		mla = calloc (lines_count, sizeof (RList *));
-		if (!mla) {
-			free (p);
-			free (ostr);
-			free (lines);
-			return 0;
-		}
+	if (!lines) {
+		free (p);
+		free (ostr);
+		return 0;
+	}
+	RList **mla = calloc (lines_count, sizeof (RList *));
+	if (!mla) {
+		free (p);
+		free (ostr);
+		free (lines);
+		return 0;
 	}
 	for (i = 0; i < lines_count; i++) {
-		mla[i] = r_list_new ();
+		mla[i] = r_list_newf (free);
 	}
-	r_cons_set_raw (true);
-	r_cons_show_cursor (false);
-	r_cons_reset ();
+	const bool mouse_enabled = cons->mouse;
+	r_cons_set_raw (cons, true);
+	r_cons_enable_mouse (cons, true);
+	r_cons_show_cursor (cons, false);
+	r_cons_reset (cons);
 	h = 0;
 	while (ui) {
-		w = r_cons_get_size (&h);
-		to = R_MIN (lines_count, from + h);
-		if (from + 3 > lines_count) {
-			from = lines_count - 3;
+		w = r_cons_get_size (cons, &h);
+		h = R_MAX (1, h);
+		from = R_MAX (0, R_MIN (from, lines_count - 1));
+		to = from + R_MIN (h, lines_count - from);
+		if (from != last_from || w != last_w || h != last_h) {
+			pager_printpage (cons, p, lines, mla, from, to, w);
+			last_from = from;
+			last_w = w;
+			last_h = h;
 		}
-		if (from < 0) {
-			from = 0;
+		ch = r_cons_readchar (cons);
+		if (exitkeys && ch > 0 && strchr (exitkeys, ch)) {
+			ret = ch;
+			break;
 		}
-		pager_printpage (p, lines, mla, from, to, w);
-		ch = r_cons_readchar ();
-		if (exitkeys && strchr (exitkeys, ch)) {
-			for (i = 0; i < lines_count; i++) {
-				r_list_free (mla[i]);
-			}
-			free (p);
-			free (mla);
-			free (ostr);
-			free (lines);
-			return ch;
+		ch = r_cons_arrow_to_hjkl (cons, ch);
+		if (cons->mouse_event && (ch == 'h' || ch == 'l')) {
+			continue;
 		}
-		ch = r_cons_arrow_to_hjkl (ch);
 		switch (ch) {
 		case '_':
-			r_cons_hud_string (ostr);
+			free (r_cons_hud_string (cons, ostr));
+			r_cons_set_raw (cons, true);
+			r_cons_enable_mouse (cons, true);
+			r_cons_show_cursor (cons, false);
+			last_from = -1;
 			break;
 		case '?':
 			if (!in_help) {
-				in_help = true;
-				(void)r_cons_less_str (r_cons_less_help, NULL);
-				in_help = false;
+				(void)r_cons_less_str (cons, r_cons_less_help, NULL);
+				r_cons_set_raw (cons, true);
+				r_cons_show_cursor (cons, false);
+				last_from = -1;
 			}
 			break;
+		case 'h': // ^B
 		case 'u':
-			from -= h;
-			if (from < 0) {
-				from = 0;
-			}
+		case 'K':
+			from = R_MAX (0, from - h);
 			break;
-		case ' ': from += h; break;
+		case 'l': // ^F
+		case ' ':
+		case 'J':
+			from += R_MIN (h, lines_count - 1 - from);
+			break;
 		case 'g': from = 0; break;
-		case 'G': from = lines_count-h; break;
+		case 'G': from = lines_count - h; break;
 		case -1: // EOF
 		case '\x03': // ^C
 		case 'q': ui = 0; break;
 		case '\r':
 		case '\n':
-		case 'j': from++; break;
-		case 'J': from+=h; break;
+		case 'j':
+			if (from < lines_count - 1) {
+				from++;
+			}
+			break;
 		case 'k':
 			if (from > 0) {
 				from--;
 			}
 			break;
-		case 'K': from = (from>=h)? from-h: 0;
-			break;
-		case '/': 	/* search */
-			r_cons_reset_colors ();
-			r_line_set_prompt ("/");
-			sreg = r_line_readline ();
-			from = R_MIN (lines_count - 1, from);
-			/* repeat last search if empty string is provided */
-			if (sreg[0]) { /* prepare for a new search */
-				if (rx) {
-					r_regex_free (rx);
-				}
-				rx = r_regex_new (sreg, "");
-			} else { /* we got an empty string */
-				from = pager_next_match (from, mla, lines_count);
+		case ':': {
+			char *prompt = r_line_get_prompt (cons->line);
+			if (!prompt) {
 				break;
 			}
-			if (!rx) {
+			r_cons_reset_colors (cons);
+			for (;;) {
+				const char *command = r_cons_visual_readln (cons, ":", NULL);
+				if (!command) {
+					break;
+				}
+				command = r_str_trim_head_ro (command);
+				if (!*command) {
+					break;
+				}
+				if (!strcmp (command, "q")) {
+					ui = 0;
+					break;
+				}
+				if (*command == 'w' && IS_WHITESPACE (command[1])) {
+					const char *path = r_str_trim_head_ro (command + 1);
+					if (*path) {
+						if (r_file_dump (path, (const ut8 *)ostr, -1, false)) {
+							R_LOG_INFO ("Written to '%s'", path);
+						}
+						continue;
+					}
+				}
+				R_LOG_ERROR ("Use w <path> or q; empty input returns to the pager");
+			}
+			r_line_set_prompt (cons->line, prompt);
+			free (prompt);
+			last_from = -1;
+			break;
+		}
+		case '/': { /* search */
+			last_from = -1;
+			char *prompt = r_line_get_prompt (cons->line);
+			if (!prompt) {
+				break;
+			}
+			r_cons_reset_colors (cons);
+			r_line_set_prompt (cons->line, "/");
+			r_cons_show_cursor (cons, true);
+			const char *sreg = r_line_readline (cons);
+			r_line_set_prompt (cons->line, prompt);
+			free (prompt);
+			r_cons_set_raw (cons, true);
+			r_cons_show_cursor (cons, false);
+			if (!sreg) {
+				break;
+			}
+			/* repeat last search if empty string is provided */
+			if (sreg[0]) { /* prepare for a new search */
+				RRegex *new_rx = r_regex_new (sreg, "");
+				if (!new_rx) {
+					break;
+				}
+				r_regex_free (rx);
+				rx = new_rx;
+			} else { /* we got an empty string */
+				from = pager_next_match (from, mla, lines_count);
 				break;
 			}
 			/* find all occurrences */
@@ -137,6 +197,7 @@ R_API int r_cons_less_str(const char *str, const char *exitkeys) {
 				from = pager_next_match (from, mla, lines_count);
 			}
 			break;
+		}
 		case 'n': 	/* next match */
 			/* search already performed */
 			if (rx) {
@@ -158,21 +219,14 @@ R_API int r_cons_less_str(const char *str, const char *exitkeys) {
 	r_regex_free (rx);
 	free (lines);
 	free (p);
-	r_cons_reset_colors ();
-	r_cons_set_raw (false);
-	r_cons_show_cursor (true);
+	r_cons_reset_colors (cons);
+	r_cons_enable_mouse (cons, mouse_enabled);
+	r_cons_set_raw (cons, false);
+	r_cons_show_cursor (cons, true);
 	free (ostr);
-	return 0;
+	return ret;
 }
 
-R_API void r_cons_less(void) {
-	(void)r_cons_less_str (r_cons_context ()->buffer, NULL);
+R_API void r_cons_less(RCons *cons) {
+	(void)r_cons_less_str (cons, cons->context->buffer, NULL);
 }
-
-#if 0
-main (int argc, char **argv) {
-	char *s = r_file_slurp (argv[1], NULL);
-	r_cons_new ();
-	r_cons_less (s);
-}
-#endif

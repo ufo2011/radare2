@@ -1,7 +1,7 @@
-/* radare - LGPL - Copyright 2015 nodepad */
+/* radare - LGPL - Copyright 2015-2024 nodepad */
 
-#ifndef MZ_H
-#define MZ_H
+#ifndef R_MZ_H
+#define R_MZ_H
 
 #include <r_types.h>
 #include <r_list.h>
@@ -13,12 +13,6 @@ struct r_bin_mz_segment_t {
 	ut64 paddr;
 	ut64 vaddr;
 	ut64 size;
-	int last;
-};
-
-struct r_bin_mz_reloc_t {
-	ut64 paddr;
-	ut64 vaddr;
 	int last;
 };
 
@@ -38,8 +32,8 @@ struct r_bin_mz_obj_t {
 };
 
 RBinAddr *r_bin_mz_get_entrypoint (const struct r_bin_mz_obj_t *bin);
-RList *r_bin_mz_get_segments (const struct r_bin_mz_obj_t *bin);
-struct r_bin_mz_reloc_t *r_bin_mz_get_relocs (const struct r_bin_mz_obj_t *bin);
+bool r_bin_mz_load_segments(const struct r_bin_mz_obj_t *bin, ut64 filesize, RVecRBinSection *segments);
+RVecRBinReloc *r_bin_mz_get_relocs(const struct r_bin_mz_obj_t *bin);
 void *r_bin_mz_free (struct r_bin_mz_obj_t *bin);
 struct r_bin_mz_obj_t *r_bin_mz_new (const char *file);
 struct r_bin_mz_obj_t *r_bin_mz_new_buf(RBuffer *buf);

@@ -1,19 +1,15 @@
 NAME=r_java
-ifeq ($(CC),cccl)
-EXT_AR=lib
-else
-EXT_AR=a
-endif
-LIBAR?=libr_java.$(EXT_AR)
 
 include ../../config-user.mk
+include ../../mk/${COMPILER}.mk
 include ../../libr/config.mk
 include ../../global.mk
 include ../../mk/platform.mk
 _INCLUDE_MK_GCC_=
 include ../../mk/${COMPILER}.mk
 SHLR?=..
-include ../zip/deps.mk
+LIBAR=libr_java.$(EXT_AR)
+CC_AR=$(AR) -rc $(LIBAR)
 
 OSTYPE?=$(shell uname | tr 'A-Z' 'a-z')
 ifeq (${OSTYPE},)
@@ -28,17 +24,18 @@ CFLAGS+=-DMINGW32=1
 endif
 # CFLAGS+=-g
 
-CFLAGS:=-I../../libr/include -I../../libr/include/sdb $(CFLAGS)
+CFLAGS:=-Iinclude -I../../libr/include $(CFLAGS)
 LDFLAGS+=-L../../libr/util
-OBJS=code.o class.o ops.o dsojson.o
+OBJS=code.o class.o descriptor.o ops.o
+
+all: $(LIBAR)
 
 include ../../shlr/sdb.mk
-
-all: libr_java.$(EXT_AR)
+include ../zip/deps.mk
 
 RANLIB?=ranlib
 
-libr_java.$(EXT_AR): ${OBJS}
+$(LIBAR): ${OBJS}
 	rm -f libr_java.$(EXT_AR)
 	${CC_AR} ${OBJS}
 	${RANLIB} libr_java.$(EXT_AR)
@@ -49,4 +46,7 @@ out: ${OBJS} main.o
 		-lr_util ../sdb/src/libsdb.$(EXT_AR) ${LINK} -o out
 
 clean:
-	rm -f ${OBJS} main.o a.out libr_java.$(EXT_AR) out
+	rm -f ${OBJS} ${OBJS:.o=.d} main.o a.out $(LIBAR) out
+
+# autodetect dependencies object
+-include $(OBJS:.o=.d)

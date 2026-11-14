@@ -1,40 +1,42 @@
-/* radare - LGPL3 - Copyright 2016-2021 - c0riolis, x0urc3 */
+/* radare - LGPL3 - Copyright 2016-2025 - c0riolis, x0urc3 */
 
 #include <r_bin.h>
+#include "../i/private.h"
 #include "../format/pyc/pyc.h"
 
-// XXX: to not use globals
-
-static ut64 code_start_offset = 0;
-static struct pyc_version version;
-/* used from marshall.c */
-RList *interned_table = NULL;
-static RList *sections_cache = NULL;
-
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	if (r_buf_size (b) > 4) {
-		ut32 buf;
-		r_buf_read_at (b, 0, (ut8 *)&buf, sizeof (buf));
-		version = get_pyc_version (buf);
-		return version.magic != -1;
+		ut32 buf = r_buf_read_le32_at (b, 0);
+		struct pyc_version v = get_pyc_version (buf);
+		return v.magic != -1;
 	}
 	return false;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	return check_buffer (bf, buf);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	if (!check (bf, buf)) {
+		return false;
+	}
+	ut32 m = r_buf_read_le32_at (buf, 0);
+	RBinPycObj *obj = R_NEW0 (RBinPycObj);
+	RVecRBinSection_init (&obj->sections);
+	obj->version = get_pyc_version (m);
+	bf->bo->bin_obj = obj;
+	return true;
 }
 
-static ut64 get_entrypoint(RBuffer *buf) {
+static ut64 get_entrypoint(RBuffer *buf, ut32 magic, ut64 *out_code_start_offset) {
 	ut8 b;
 	ut64 result;
 	int addr;
 	for (addr = 0x8; addr <= 0x10; addr += 0x4) {
 		r_buf_read_at (buf, addr, &b, sizeof (b));
-		if (pyc_is_code (b, version.magic)) {
-			code_start_offset = addr;
+		if (pyc_is_code (b, magic)) {
+			if (out_code_start_offset) {
+				*out_code_start_offset = addr;
+			}
 			r_buf_seek (buf, addr + 1, R_BUF_SET);
-			if ((result = get_code_object_addr (buf, version.magic)) == 0) {
+			if ((result = get_code_object_addr (buf, magic)) == 0) {
 				return addr;
 			}
 			return result;
@@ -43,100 +45,130 @@ static ut64 get_entrypoint(RBuffer *buf) {
 	return 0;
 }
 
-static RBinInfo *info(RBinFile *arch) {
+static RBinInfo *info(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, NULL);
+	RBinPycObj *obj = (RBinPycObj *)R_UNWRAP3 (bf, bo, bin_obj);
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
-	ret->file = strdup (arch->file);
-	ret->type = r_str_newf ("Python %s byte-compiled file", version.version);
+	ret->file = strdup (bf->file);
+	ret->type = r_str_newf ("Python %s byte-compiled file", obj ? obj->version.version : "");
 	ret->bclass = strdup ("Python byte-compiled file");
 	ret->rclass = strdup ("pyc");
 	ret->arch = strdup ("pyc");
-	ret->machine = r_str_newf ("Python %s VM (rev %s)", version.version,
-		version.revision);
+	ret->machine = r_str_newf ("Python %s VM (rev %s)", obj ? obj->version.version : "",
+		obj ? obj->version.revision : "");
 	ret->os = strdup ("any");
-	ret->bits = version2double (version.version) < 3.6? 16: 8;
-	ret->cpu = strdup (version.version); // pass version info in cpu, Asm plugin will get it
+	ret->bits = 32; // TODO py_version_cmp (version.version, "3.6") >= 0? 32: 16;????
+	ret->cpu = strdup (obj ? obj->version.version : ""); // pass version info in cpu, Asm plugin will get it
 	return ret;
 }
 
-static RList *sections(RBinFile *arch) {
-	return sections_cache;
+static bool sections_vec(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, false);
+	RBinPycObj *obj = (RBinPycObj *)R_UNWRAP3 (bf, bo, bin_obj);
+	if (!obj) {
+		return false;
+	}
+	// sections are collected while walking the code objects in symbols_vec
+	RVecRBinSection_swap (&bf->bo->sections_vec, &obj->sections);
+	return true;
 }
 
-static RList *entries(RBinFile *arch) {
+static RList *entries(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, NULL);
+	RBinPycObj *obj = R_UNWRAP3 (bf, bo, bin_obj);
 	RList *entries = r_list_newf ((RListFree)free);
-	if (!entries) {
-		return NULL;
-	}
 	RBinAddr *addr = R_NEW0 (RBinAddr);
-	if (!addr) {
-		r_list_free (entries);
-		return NULL;
-	}
-	ut64 entrypoint = get_entrypoint (arch->buf);
-	addr->paddr = entrypoint;
-	addr->vaddr = entrypoint;
-	r_buf_seek (arch->buf, entrypoint, R_IO_SEEK_SET);
+	ut64 ep = get_entrypoint (bf->buf, obj ? obj->version.magic : 0, obj ? &obj->code_start_offset : NULL);
+	addr->paddr = ep;
+	addr->vaddr = ep;
+	r_buf_seek (bf->buf, ep, R_IO_SEEK_SET);
 	r_list_append (entries, addr);
 	return entries;
 }
 
-static ut64 baddr(RBinFile *bf) {
-	return 0;
+static bool symbols_vec(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, false);
+	RBinPycObj *obj = R_UNWRAP3 (bf, bo, bin_obj);
+	if (!obj) {
+		return false;
+	}
+	// rebasing reparses the code objects, so drop the previous parse first
+	pyc_object_free (obj->pobj);
+	obj->pobj = NULL;
+	if (obj->cobjs) {
+		r_list_purge (obj->cobjs);
+	} else {
+		obj->cobjs = r_list_newf (NULL); // borrowed pointers into pobj
+	}
+	if (obj->interned_table) {
+		r_list_purge (obj->interned_table);
+	} else {
+		obj->interned_table = r_list_newf ((RListFree)free);
+	}
+	RBuffer *buffer = bf->buf;
+	if (!obj->code_start_offset) {
+		// ensure code_start_offset is initialized
+		(void) get_entrypoint (buffer, obj->version.magic, &obj->code_start_offset);
+	}
+	r_buf_seek (buffer, obj->code_start_offset, R_BUF_SET);
+	RVecRBinSection_clear (&obj->sections);
+	pyc_get_sections_symbols (&obj->sections, &bf->bo->symbols_vec, obj->cobjs, buffer, obj->version.magic, obj->interned_table, &obj->pobj);
+	return true;
 }
 
-static RList *symbols(RBinFile *arch) {
-	RList *shared = r_list_newf ((RListFree)r_list_free);
-	if (!shared) {
+static void destroy(RBinFile *bf) {
+	if (!bf || !bf->bo) {
+		return;
+	}
+	RBinPycObj *obj = (RBinPycObj *)bf->bo->bin_obj;
+	if (obj) {
+		bf->bo->bin_obj = NULL;
+		r_list_free (obj->interned_table);
+		r_list_free (obj->cobjs);
+		pyc_object_free (obj->pobj);
+		RVecRBinSection_fini (&obj->sections);
+		free (obj);
+	}
+}
+
+static const char *get_cc(RBinFile *bf, ut64 vaddr) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->rbin, NULL);
+	RBinSymbol *m = r_bin_object_get_symbol_at (bf->bo, vaddr);
+	if (!m || !m->arg_prefix) {
 		return NULL;
 	}
-	RList *cobjs = r_list_newf ((RListFree)free);
-	if (!cobjs) {
-		r_list_free (shared);
+	RStrBuf *sb = r_strbuf_new ("dyncc:");
+	if (!sb) {
 		return NULL;
 	}
-	interned_table = r_list_newf ((RListFree)free);
-	if (!interned_table) {
-		r_list_free (shared);
-		r_list_free (cobjs);
-		return NULL;
+	if (m->arg_count > 0) {
+		r_strbuf_appendf (sb, "%s%u+%u", m->arg_prefix, m->arg_first, m->arg_count);
 	}
-	r_list_append (shared, cobjs);
-	r_list_append (shared, interned_table);
-	arch->o->bin_obj = shared;
-	RList *sections = r_list_newf (NULL); // (RListFree)free);
-	if (!sections) {
-		r_list_free (shared);
-		arch->o->bin_obj = NULL;
-		return NULL;
+	r_strbuf_append (sb, ":");
+	if (m->ret_count > 0) {
+		r_strbuf_appendf (sb, "r0+%u", m->ret_count);
 	}
-	RList *symbols = r_list_newf ((RListFree)free);
-	if (!symbols) {
-		r_list_free (shared);
-		arch->o->bin_obj = NULL;
-		r_list_free (sections);
-		return NULL;
-	}
-	RBuffer *buffer = arch->buf;
-	r_buf_seek (buffer, code_start_offset, R_BUF_SET);
-	pyc_get_sections_symbols (sections, symbols, cobjs, buffer, version.magic);
-	sections_cache = sections;
-	return symbols;
+	char *s = r_strbuf_drain (sb);
+	const char *ret = r_str_constpool_get (&bf->rbin->constpool, s);
+	free (s);
+	return ret;
 }
 
 RBinPlugin r_bin_plugin_pyc = {
-	.name = "pyc",
-	.desc = "Python byte-compiled file plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "pyc",
+		.author = "c0riolis,x0urc3",
+		.desc = "Python byte-compiled",
+		.license = "LGPL-3.0-only",
+	},
 	.info = &info,
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.load = &load,
+	.check = &check,
 	.entries = &entries,
-	.sections = &sections,
-	.baddr = &baddr,
-	.symbols = &symbols,
+	.sections_vec = &sections_vec,
+	.symbols_vec = &symbols_vec,
+	.get_cc = &get_cc,
+	.destroy = &destroy,
 };
 
 #ifndef R2_PLUGIN_INCORE

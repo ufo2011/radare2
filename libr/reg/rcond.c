@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2014-2020 - pancake */
+/* radare - LGPL - Copyright 2014-2022 - pancake */
 
 #include <r_reg.h>
 
@@ -14,12 +14,11 @@
 #define P f->p
 
 R_API RRegItem *r_reg_cond_get(RReg *reg, const char *name) {
-	int i = R_REG_TYPE_GPR;
+	R_RETURN_VAL_IF_FAIL (reg && name, NULL);
 	RListIter *iter;
 	RRegItem *r;
-	r_return_val_if_fail (reg && name, NULL);
 
-	r_list_foreach (reg->regset[i].regs, iter, r) {
+	r_list_foreach (reg->regset[R_REG_TYPE_GPR].regs, iter, r) {
 		if (r->flags && !strcmp (name, r->flags)) {
 			return r;
 		}
@@ -38,11 +37,10 @@ R_API bool r_reg_cond_set(RReg *r, const char *name, bool val) {
 		r_reg_set_value (r, item, val);
 		return true;
 	}
-	// eprintf ("Cannot find '%s'\n", name);
 	return false;
 }
 
-R_API const char *r_reg_cond_to_string(int n) {
+R_API const char *r_reg_cond_tostring(int n) {
 	const char *cs[] = {
 		"eq", "ne", "cf", "neg", "of", "hi", "he",
 		"lo", "loe", "ge", "gt", "lt", "le"
@@ -54,47 +52,22 @@ R_API const char *r_reg_cond_to_string(int n) {
 }
 
 R_API int r_reg_cond_from_string(const char *str) {
-	if (!strcmp (str, "eq")) {
-		return R_REG_COND_EQ;
+#define CK(x,y) ((x) | ((y)<<8))
+	switch (str[0] | (str[1] << 8)) {
+	case CK('e','q'): return R_REG_COND_EQ;
+	case CK('n','e'): return strcmp (str, "neg")? R_REG_COND_NE: R_REG_COND_NEG;
+	case CK('c','f'): return R_REG_COND_CF;
+	case CK('o','f'): return R_REG_COND_OF;
+	case CK('h','i'): return R_REG_COND_HI;
+	case CK('h','e'): return R_REG_COND_HE;
+	case CK('l','o'): return strcmp (str, "loe")? R_REG_COND_LO: R_REG_COND_LOE;
+	case CK('g','e'): return R_REG_COND_GE;
+	case CK('g','t'): return R_REG_COND_GT;
+	case CK('l','t'): return R_REG_COND_LT;
+	case CK('l','e'): return R_REG_COND_LE;
 	}
-	if (!strcmp (str, "ne")) {
-		return R_REG_COND_NE;
-	}
-	if (!strcmp (str, "cf")) {
-		return R_REG_COND_CF;
-	}
-	if (!strcmp (str, "neg")) {
-		return R_REG_COND_NEG;
-	}
-	if (!strcmp (str, "of")) {
-		return R_REG_COND_OF;
-	}
-	if (!strcmp (str, "hi")) {
-		return R_REG_COND_HI;
-	}
-	if (!strcmp (str, "he")) {
-		return R_REG_COND_HE;
-	}
-	if (!strcmp (str, "lo")) {
-		return R_REG_COND_LO;
-	}
-	if (!strcmp (str, "loe")) {
-		return R_REG_COND_LOE;
-	}
-	if (!strcmp (str, "ge")) {
-		return R_REG_COND_GE;
-	}
-	if (!strcmp (str, "gt")) {
-		return R_REG_COND_GT;
-	}
-	if (!strcmp (str, "lt")) {
-		return R_REG_COND_LT;
-	}
-	if (!strcmp (str, "le")) {
-		return R_REG_COND_LE;
-	}
-	// TODO: move this into core
-	eprintf ("| Usage: drc[=] [condition](=1,0)\n"
+	// TODO: move this help message into the core
+	eprintf ("Usage: drc[=] [condition](=1,0)\n"
 		 "| eq    equal\n"
 		 "| ne    not equal\n"
 		 "| cf    carry flag set\n"
@@ -113,7 +86,7 @@ R_API int r_reg_cond_from_string(const char *str) {
 	return -1;
 }
 
-R_API int r_reg_cond_bits(RReg *r, int type, RRegFlags *f) {
+R_API bool r_reg_cond_bits(RReg *r, int type, RRegFlags *f) {
 	switch (type) {
 	case R_REG_COND_EQ: return Z;
 	case R_REG_COND_NE: return !Z;
@@ -224,8 +197,9 @@ R_API bool r_reg_cond_bits_set(RReg *r, int type, RRegFlags *f, bool v) {
 	return true;
 }
 
-R_API int r_reg_cond(RReg *r, int type) {
-	RRegFlags f = { 0 };
+R_API bool r_reg_cond(RReg *r, int type) {
+	R_RETURN_VAL_IF_FAIL (r, false);
+	RRegFlags f = {0};
 	r_reg_cond_retrieve (r, &f);
 	return r_reg_cond_bits (r, type, &f);
 }
@@ -233,9 +207,6 @@ R_API int r_reg_cond(RReg *r, int type) {
 R_API RRegFlags *r_reg_cond_retrieve(RReg *r, RRegFlags *f) {
 	if (!f) {
 		f = R_NEW0 (RRegFlags);
-	}
-	if (!f) {
-		return NULL;
 	}
 	f->s = r_reg_cond_get_value (r, "sign"); // sign, negate flag, less than zero
 	f->z = r_reg_cond_get_value (r, "zero"); // zero flag
@@ -246,7 +217,7 @@ R_API RRegFlags *r_reg_cond_retrieve(RReg *r, RRegFlags *f) {
 }
 
 R_API void r_reg_cond_apply(RReg *r, RRegFlags *f) {
-	r_return_if_fail (r && f);
+	R_RETURN_IF_FAIL (r && f);
 	r_reg_cond_set (r, "sign", f->s);
 	r_reg_cond_set (r, "zero", f->z);
 	r_reg_cond_set (r, "carry", f->c);

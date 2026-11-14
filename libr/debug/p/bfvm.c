@@ -8,7 +8,7 @@
 static ut8 bfvm_op(BfvmCPU *c) {
 	// XXX: this is slow :(
 	ut8 buf[4] = {0};
-	if (c && c->iob.read_at && !c->iob.read_at (c->iob.io, c->eip, buf, 4)) {
+	if (c && c->iob.read_at && c->iob.read_at (c->iob.io, c->eip, buf, 4) != 4) {
 		return 0xff;
 	}
 	return buf[0];
@@ -103,20 +103,20 @@ R_API ut8 bfvm_get(BfvmCPU *c) {
 
 R_API void bfvm_inc(BfvmCPU *c) {
 	ut8 *mem = bfvm_get_ptr (c);
-	if (mem != NULL) {
+	if (mem) {
 		mem[0]++;
 	}
 }
 
 R_API void bfvm_dec(BfvmCPU *c) {
 	ut8 *mem = bfvm_get_ptr (c);
-	if (mem != NULL) {
+	if (mem) {
 		mem[0]--;
 	}
 }
 
 R_API int bfvm_reg_set(BfvmCPU *c, const char *str) {
-	char *ptr = strchr (str, ' ');
+	const char *ptr = strchr (str, ' ');
 	if (!ptr) {
 		return 0;
 	}
@@ -213,8 +213,7 @@ R_API int bfvm_step(BfvmCPU *c, int over) {
 			if (bfvm_get (c) != 0) {
 				do {
 					/* control underflow */
-					if (c->eip < (c->eip-1)) {
-						c->eip = 0;
+					if (c->eip == 0) {
 						break;
 					}
 					c->eip--;
@@ -266,9 +265,9 @@ R_API int bfvm_cont(BfvmCPU *c, ut64 until) {
 }
 
 R_API int bfvm_trace(BfvmCPU *c, ut64 until) {
-	c->trace=1;
+	c->trace = 1;
 	bfvm_cont (c, until);
-	c->trace=0;
+	c->trace = 0;
 	return 0;
 }
 

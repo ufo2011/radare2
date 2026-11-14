@@ -1,3 +1,4 @@
+ecd
 ec b0x00 rgb:7c7c61
 ec b0x7f rgb:aaff00
 ec b0xff rgb:aaff00
@@ -20,7 +21,7 @@ ec label rgb:66d9ef
 ec math rgb:ffffff
 ec mov rgb:ffffff
 ec nop rgb:FFE792
-ec offset rgb:ababab
+ec addr rgb:ababab
 ec prompt rgb:fc0
 ec pop rgb:ef8d1a
 ec push rgb:df077e
@@ -42,20 +43,22 @@ ec graph.box rgb:5202f0
 ec graph.box2 rgb:ffcc00
 ec graph.box3 rgb:66d9ef
 ec graph.box4 rgb:66d9ef
+ec diff.match rgb:66d9ef
 ec graph.true rgb:009100
 ec graph.false rgb:bc0000
 ec graph.trufae rgb:0043cb
 ec graph.current rgb:fff
 
-ec func_var rgb:99a
-ec func_var_type rgb:df077e
-ec func_var_addr rgb:ababab
+ec var rgb:99a
+ec var.type rgb:df077e
+ec var.addr rgb:ababab
+ec var.name rgb:99a
 
 ec ai.read rgb:be077e
 ec ai.write rgb:df077e
 ec ai.exec rgb:9dd600
 ec ai.seq rgb:9dd600
-ec ai.ascii rgb:d25032
+ec str rgb:d25032
 
-ec widget_bg rgb:099 rgb:444
-ec widget_sel rgb:000 yellow
+ec widget.bg rgb:099 rgb:444
+ec widget.sel rgb:000 yellow

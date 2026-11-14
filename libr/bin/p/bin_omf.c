@@ -1,25 +1,23 @@
-/* radare - LGPL - Copyright 2015-2019 - ampotos, pancake */
+/* radare - LGPL - Copyright 2015-2024 - ampotos, pancake */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
 #include <r_bin.h>
 #include "omf/omf.h"
 
-static bool load_buffer (RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb) {
+static bool load(RBinFile *bf, RBuffer *b, ut64 loadaddr) {
+	R_RETURN_VAL_IF_FAIL (bf && b, false);
 	ut64 size;
 	const ut8 *buf = r_buf_data (b, &size);
-	r_return_val_if_fail (buf, false);
-	*bin_obj = r_bin_internal_omf_load (buf, size);
-	return *bin_obj != NULL;
+	R_RETURN_VAL_IF_FAIL (buf, false);
+	bf->bo->bin_obj = r_bin_internal_omf_load (buf, size);
+	return bf->bo->bin_obj != NULL;
 }
 
 static void destroy(RBinFile *bf) {
-	r_bin_free_all_omf_obj (bf->o->bin_obj);
-	bf->o->bin_obj = NULL;
+	r_bin_free_all_omf_obj (bf->bo->bin_obj);
+	bf->bo->bin_obj = NULL;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	int i;
 	ut8 ch;
 	if (r_buf_read_at (b, 0, &ch, 1) != 1) {
@@ -50,7 +48,7 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 		r_buf_read_at (b, 0, buf, sizeof (buf));
 		return r_bin_checksum_omf_ok (buf, sizeof (buf));
 	}
-	r_return_val_if_fail (buf, false);
+	R_RETURN_VAL_IF_FAIL (buf, false);
 	return r_bin_checksum_omf_ok (buf, length);
 }
 
@@ -65,11 +63,8 @@ static RList *entries(RBinFile *bf) {
 	if (!(ret = r_list_newf (free))) {
 		return NULL;
 	}
-	if (!(addr = R_NEW0 (RBinAddr))) {
-		r_list_free (ret);
-		return NULL;
-	}
-	if (!r_bin_omf_get_entry (bf->o->bin_obj, addr)) {
+	addr = R_NEW0 (RBinAddr);
+	if (!r_bin_omf_get_entry (bf->bo->bin_obj, addr)) {
 		R_FREE (addr);
 	} else {
 		r_list_append (ret, addr);
@@ -77,64 +72,67 @@ static RList *entries(RBinFile *bf) {
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret;
-	ut32 ct_omf_sect = 0;
+static bool append_omf_sections(RBinFile *bf, OMF_segment *section, r_bin_omf_obj *obj) {
+	OMF_data *data = section->data;
+	ut32 ct_name = 1;
 
-	if (!bf || !bf->o || !bf->o->bin_obj) {
-		return NULL;
-	}
-	r_bin_omf_obj *obj = bf->o->bin_obj;
-
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
-
-	while (ct_omf_sect < obj->nb_section) {
-		if (!r_bin_omf_send_sections (ret,\
-			    obj->sections[ct_omf_sect++], bf->o->bin_obj)) {
-			return ret;
+	while (data) {
+		RBinSection *new = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
+		if (section->name_idx && section->name_idx - 1 < obj->nb_name) {
+			new->name = r_str_newf ("%s_%d", obj->names[section->name_idx - 1], ct_name++);
+		} else {
+			new->name = r_str_newf ("no_name_%d", ct_name++);
 		}
+		new->size = data->size;
+		new->vsize = data->size;
+		new->paddr = data->paddr;
+		new->vaddr = section->vaddr + data->offset + OMF_BASE_ADDR;
+		new->perm = R_PERM_RWX;
+		new->add = true;
+		data = data->next;
 	}
-	return ret;
+	return true;
 }
 
-static RList *symbols(RBinFile *bf) {
-	RList *ret;
-	RBinSymbol *sym;
+static bool sections_vec(RBinFile *bf) {
+	ut32 ct_omf_sect = 0;
+
+	if (!bf || !bf->bo || !bf->bo->bin_obj) {
+		return false;
+	}
+	r_bin_omf_obj *obj = bf->bo->bin_obj;
+
+	RVecRBinSection_clear (&bf->bo->sections_vec);
+	while (ct_omf_sect < obj->nb_section) {
+		if (!append_omf_sections (bf, obj->sections[ct_omf_sect++], obj)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool symbols_vec(RBinFile *bf) {
 	OMF_symbol *sym_omf;
 	int ct_sym = 0;
-	if (!bf || !bf->o || !bf->o->bin_obj) {
-		return NULL;
+	if (!bf || !bf->bo || !bf->bo->bin_obj) {
+		return false;
 	}
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
+	RVecRBinSymbol *ret = &bf->bo->symbols_vec;
 
-	ret->free = free;
-
-	while (ct_sym < ((r_bin_omf_obj *) bf->o->bin_obj)->nb_symbol) {
-		if (!(sym = R_NEW0 (RBinSymbol))) {
-			return ret;
-		}
-		sym_omf = ((r_bin_omf_obj *) bf->o->bin_obj)->symbols[ct_sym++];
-		sym->name = strdup (sym_omf->name);
+	while (ct_sym < ((r_bin_omf_obj *) bf->bo->bin_obj)->nb_symbol) {
+		RBinSymbol *sym = RVecRBinSymbol_emplace_back (ret);
+		sym_omf = ((r_bin_omf_obj *) bf->bo->bin_obj)->symbols[ct_sym++];
+		sym->name = r_bin_name_new (sym_omf->name);
 		sym->forwarder = "NONE";
-		sym->paddr = r_bin_omf_get_paddr_sym (bf->o->bin_obj, sym_omf);
-		sym->vaddr = r_bin_omf_get_vaddr_sym (bf->o->bin_obj, sym_omf);
+		sym->paddr = r_bin_omf_get_paddr_sym (bf->bo->bin_obj, sym_omf);
+		sym->vaddr = r_bin_omf_get_vaddr_sym (bf->bo->bin_obj, sym_omf);
 		sym->ordinal = ct_sym;
-		sym->size = 0;
-		r_list_append (ret, sym);
 	}
-	return ret;
+	return true;
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	RBinInfo *ret;
-
-	if (!(ret = R_NEW0 (RBinInfo))) {
-		return NULL;
-	}
+	RBinInfo *ret = R_NEW0 (RBinInfo);
 	ret->file = strdup (bf->file);
 	ret->bclass = strdup ("OMF");
 	ret->rclass = strdup ("omf");
@@ -146,7 +144,7 @@ static RBinInfo *info(RBinFile *bf) {
 	ret->big_endian = false;
 	ret->has_va = true;
 	ret->has_lit = true;
-	ret->bits = r_bin_omf_get_bits (bf->o->bin_obj);
+	ret->bits = r_bin_omf_get_bits (bf->bo->bin_obj);
 	ret->dbg_info = 0;
 	ret->has_nx = false;
 	return ret;
@@ -157,16 +155,20 @@ static ut64 get_vaddr(RBinFile *bf, ut64 baddr, ut64 paddr, ut64 vaddr) {
 }
 
 RBinPlugin r_bin_plugin_omf = {
-	.name = "omf",
-	.desc = "omf bin plugin",
-	.license = "LGPL3",
-	.load_buffer = &load_buffer,
+	.meta = {
+		.name = "omf",
+		.desc = "Object Module Format for 80x86",
+		.author = "ampotos",
+		.license = "LGPL-3.0-only",
+	},
+	.weak_guess = true,
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
 	.entries = &entries,
-	.sections = &sections,
-	.symbols = &symbols,
+	.sections_vec = &sections_vec,
+	.symbols_vec = &symbols_vec,
 	.info = &info,
 	.get_vaddr = &get_vaddr,
 };

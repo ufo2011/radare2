@@ -1,10 +1,12 @@
 #!/bin/sh
+touch libr/xps/deps.h
+touch libr/xps/deps.mk
 case "$1" in
---report|-r|--version|-qV|--quiet-version|--help)
+--report|-r|--version|-V|-qV|--quiet-version|--help)
 	: # nothing to do here
 	;;
 *)
 	[ dist/plugins-cfg/plugins.def.cfg -nt ./plugins.cfg ] && rm -f plugins.cfg
-	./configure-plugins $*
+	WANT_ZYDIS="${WANT_ZYDIS:-1}" ./configure-plugins $*
 	;;
 esac

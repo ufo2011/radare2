@@ -1,0 +1,162 @@
+NAME=leak opening malloc
+FILE=malloc://32
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak opening elf
+FILE=bins/elf/tcache
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak unsupported ELF relocation import
+FILE=malloc://2412
+ARGS=-wn
+CMDS=<<EOF
+wff bins/elf/analysis/hello-linux-i386nold
+wx 7f @ 0x1f8
+obf
+?e ok
+EOF
+EXPECT=<<EOF
+ok
+EOF
+RUN
+
+NAME=leak opening macho
+FILE=bins/mach0/hello-osx-i386
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak analysis elf
+FILE=bins/elf/tcache
+ARGS=-AA
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak analysis macho
+FILE=bins/mach0/hello-osx-i386
+ARGS=-AA
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak macho patched relocs
+FILE=bins/mach0/FileDP
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+# the harness only parses LEAK SUMMARY, so an invalid free needs its own check
+REGEXP_ERR=ERROR SUMMARY: 0 errors
+RUN
+
+NAME=leak opening java class
+FILE=bins/java/Hello.class
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak analysis java class
+FILE=bins/java/Hello.class
+ARGS=-AA
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak opening pe
+FILE=bins/pe/a.exe
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak analysis pe
+FILE=bins/pe/a.exe
+ARGS=-AA
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak opening dotnet
+FILE=bins/dotnet/HelloWorld.exe
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak analysis dotnet
+FILE=bins/dotnet/HelloWorld.exe
+ARGS=-AA
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=leak opening le with relocs applied
+FILE=bins/le/GNUGREP.DLL
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN
+
+NAME=macho zip
+FILE=zip0://bins/mach0/io.zip
+CMDS=<<EOF
+?e hello
+EOF
+EXPECT=<<EOF
+hello
+EOF
+RUN

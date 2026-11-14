@@ -1,72 +1,117 @@
+# merged: armr - functions bits
 NAME=arm - elf - main detection
 FILE=bins/arm/elf/hello_world
 CMDS=<<EOF
 ?v main
 ?v sym.main
-EOF
-EXPECT=<<EOF
-0x50c
-0x50c
-EOF
-RUN
-
-NAME=armr - functions bits
-FILE=bins/arm/elf/hello_world
-CMDS=<<EOF
+?e --
+e anal.emu=true
 aaa
-pi 1@@f
+pid 1@@f
 EOF
 EXPECT=<<EOF
-mov.w fp, 0
-add ip, pc, 0, 12
-ldr r3, [0x00000460]
-ldr r0, [0x00000484]
-ldr r0, [0x000004b8]
-push {r3, lr}
-add ip, pc, 0, 12
-b sym.register_tm_clones
-bx lr
-push {r3, lr}
-push.w {r3, r4, r5, r6, r7, r8, sb, lr}
-push {r7, lr}
-add ip, pc, 0, 12
-push {r3, lr}
-add ip, pc, 0, 12
-str lr, [sp, -4]!
+0x50c
+0x50c
+--
+0x000003c0   sym.imp.__cxa_finalize:
+0x000003c0             00c68fe2  add ip, pc, 0, 12
+0x000003cc   sym.imp.puts:
+0x000003cc             00c68fe2  add ip, pc, 0, 12
+0x000003d8   sym.imp.__libc_start_main:
+0x000003d8             00c68fe2  add ip, pc, 0, 12
+0x000003f0   sym.imp.abort:
+0x000003f0             00c68fe2  add ip, pc, 0, 12
+0x000003fc   r15:
+0x000003fc             4ff0000b  mov.w fp, 0
+0x00000444   sym.call_weak_fn:
+0x00000444             14309fe5  ldr r3, [pc, 0x14]
+0x00000468   sym.deregister_tm_clones:
+0x00000468                 0648  ldr r0, [pc, 0x18]
+0x00000494   sym.register_tm_clones:
+0x00000494                 0848  ldr r0, [pc, 0x20]
+0x000004c8   sym.__do_global_dtors_aux:
+0x000004c8                 08b5  push {r3, lr}
+0x00000508   sym.frame_dummy:
+0x00000508                 c4e7  b sym.register_tm_clones
+0x00000564   sym.__libc_csu_fini:
+0x00000564                 7047  bx lr
+0x00000568   sym._fini:
+0x00000568             08402de9  push {r3, lr}
+0x00000524   sym.__libc_csu_init:
+0x00000524             2de9f843  push.w {r3, r4, r5, r6, r7, r8, sb, lr}
+0x0000050c   sym.main:
+0x0000050c                 80b5  push {r7, lr}
+0x000003a0   sym._init:
+0x000003a0             08402de9  push {r3, lr}
+0x000003ac   fcn.000003ac:
+0x000003ac             04e02de5  str lr, [sp, -4]!
 EOF
 RUN
 
+# merged: x86 - init_array detection2; metadata; base64 metadata commands; pb 4; pxW 10
 NAME=x86 - init_array detection
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=aa;afl~0x080482e0[3]
+CMDS=<<EOF
+aa;afl~0x080482e0[3]
+?e --
+iS~init_array
+?e --
+C
+?e --
+C*
+?e --
+pb 4
+?e --
+pxW 10
+EOF
 EXPECT=<<EOF
 loc.imp.__gmon_start__
-EOF
-RUN
-
-NAME=x86 - init_array detection2
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=iS~init_array
-EXPECT=<<EOF
-18  0x0000059c    0x4 0x0804959c    0x4 -rw- .init_array
-EOF
-RUN
-
-NAME=metadata
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=C
-EXPECT=<<EOF
+--
+18  0x0000059c    0x4 0x0804959c    0x4 -rw- 0x3   INIT_ARRAY  .init_array
+--
 0x00000000 CCu "[29] ---- section size 599 named .strtab"
 0x08048134 CCu "[01] -r-- section size 19 named .interp"
 0x08048148 CCu "[02] -r-- section size 32 named .note.ABI-tag"
 0x08048168 CCu "[03] -r-- section size 36 named .note.gnu.build-id"
 0x0804818c CCu "[04] -r-- section size 32 named .gnu.hash"
 0x080481ac CCu "[05] -r-- section size 80 named .dynsym"
+0x080481ac data Cd 4
+0x080481b0 data Cd 4
+0x080481b4 data Cd 4
+0x080481b8 data Cd 4
+0x080481bc data Cd 4
+0x080481c0 data Cd 4
+0x080481c4 data Cd 4
+0x080481c8 data Cd 4
+0x080481cc data Cd 4
+0x080481d0 data Cd 4
+0x080481d4 data Cd 4
+0x080481d8 data Cd 4
+0x080481dc data Cd 4
+0x080481e0 data Cd 4
+0x080481e4 data Cd 4
+0x080481e8 data Cd 4
+0x080481ec data Cd 4
+0x080481f0 data Cd 4
+0x080481f4 data Cd 4
+0x080481f8 data Cd 4
 0x080481fc CCu "[06] -r-- section size 74 named .dynstr"
+0x080481fd ascii[10] "libc.so.6"
+0x08048207 ascii[15] "_IO_stdin_used"
+0x08048216 ascii[5] "puts"
+0x0804821b ascii[18] "__libc_start_main"
+0x0804822d ascii[15] "__gmon_start__"
+0x0804823c ascii[10] "GLIBC_2.0"
 0x08048246 CCu "[07] -r-- section size 10 named .gnu.version"
 0x08048250 CCu "[08] -r-- section size 32 named .gnu.version_r"
 0x08048270 CCu "[09] -r-- section size 8 named .rel.dyn"
 0x08048278 CCu "[10] -r-- section size 24 named .rel.plt"
+0x08048278 data Cd 4
+0x0804827c data Cd 4
+0x08048280 data Cd 4
+0x08048284 data Cd 4
+0x08048288 data Cd 4
+0x0804828c data Cd 4
 0x08048290 CCu "[11] -r-x section size 35 named .init"
 0x080482c0 CCu "[12] -r-x section size 64 named .plt"
 0x08048300 CCu "[13] -r-x section size 404 named .text"
@@ -80,8 +125,8 @@ EXPECT=<<EOF
 0x080495a0 data Cd 4
 0x080495a0 CCu "[19] -rw- section size 4 named .fini_array"
 0x080495a4 CCu "[20] -rw- section size 4 named .jcr"
-0x080495a8 data Cd 4
 0x080495a8 CCu "[21] -rw- section size 232 named .dynamic"
+0x080495a8 data Cd 4
 0x080495ac data Cd 4
 0x080495b0 data Cd 4
 0x080495b4 data Cd 4
@@ -139,38 +184,64 @@ EXPECT=<<EOF
 0x08049684 data Cd 4
 0x08049688 data Cd 4
 0x0804968c data Cd 4
-0x08049690 data Cd 4
 0x08049690 CCu "[22] -rw- section size 4 named .got"
+0x08049690 data Cd 4
 0x08049694 CCu "[23] -rw- section size 24 named .got.plt"
 0x080496a0 data Cd 4
 0x080496a4 data Cd 4
 0x080496a8 data Cd 4
 0x080496ac CCu "[24] -rw- section size 8 named .data"
 0x080496b4 CCu "[25] -rw- section size 4 named .bss"
-EOF
-RUN
-
-NAME=base64 metadata commands
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=C*
-EXPECT=<<EOF
+--
 CCu base64:WzI5XSAtLS0tIHNlY3Rpb24gc2l6ZSA1OTkgbmFtZWQgLnN0cnRhYg== @ 0x00000000
 CCu base64:WzAxXSAtci0tIHNlY3Rpb24gc2l6ZSAxOSBuYW1lZCAuaW50ZXJw @ 0x08048134
 CCu base64:WzAyXSAtci0tIHNlY3Rpb24gc2l6ZSAzMiBuYW1lZCAubm90ZS5BQkktdGFn @ 0x08048148
 CCu base64:WzAzXSAtci0tIHNlY3Rpb24gc2l6ZSAzNiBuYW1lZCAubm90ZS5nbnUuYnVpbGQtaWQ= @ 0x08048168
 CCu base64:WzA0XSAtci0tIHNlY3Rpb24gc2l6ZSAzMiBuYW1lZCAuZ251Lmhhc2g= @ 0x0804818c
 CCu base64:WzA1XSAtci0tIHNlY3Rpb24gc2l6ZSA4MCBuYW1lZCAuZHluc3lt @ 0x080481ac
+Cd 4 @ 0x080481ac
+Cd 4 @ 0x080481b0
+Cd 4 @ 0x080481b4
+Cd 4 @ 0x080481b8
+Cd 4 @ 0x080481bc
+Cd 4 @ 0x080481c0
+Cd 4 @ 0x080481c4
+Cd 4 @ 0x080481c8
+Cd 4 @ 0x080481cc
+Cd 4 @ 0x080481d0
+Cd 4 @ 0x080481d4
+Cd 4 @ 0x080481d8
+Cd 4 @ 0x080481dc
+Cd 4 @ 0x080481e0
+Cd 4 @ 0x080481e4
+Cd 4 @ 0x080481e8
+Cd 4 @ 0x080481ec
+Cd 4 @ 0x080481f0
+Cd 4 @ 0x080481f4
+Cd 4 @ 0x080481f8
 CCu base64:WzA2XSAtci0tIHNlY3Rpb24gc2l6ZSA3NCBuYW1lZCAuZHluc3Ry @ 0x080481fc
+'@0x080481fd'Cs 10
+'@0x08048207'Cs 15
+'@0x08048216'Cs 5
+'@0x0804821b'Cs 18
+'@0x0804822d'Cs 15
+'@0x0804823c'Cs 10
 CCu base64:WzA3XSAtci0tIHNlY3Rpb24gc2l6ZSAxMCBuYW1lZCAuZ251LnZlcnNpb24= @ 0x08048246
 CCu base64:WzA4XSAtci0tIHNlY3Rpb24gc2l6ZSAzMiBuYW1lZCAuZ251LnZlcnNpb25fcg== @ 0x08048250
 CCu base64:WzA5XSAtci0tIHNlY3Rpb24gc2l6ZSA4IG5hbWVkIC5yZWwuZHlu @ 0x08048270
 CCu base64:WzEwXSAtci0tIHNlY3Rpb24gc2l6ZSAyNCBuYW1lZCAucmVsLnBsdA== @ 0x08048278
+Cd 4 @ 0x08048278
+Cd 4 @ 0x0804827c
+Cd 4 @ 0x08048280
+Cd 4 @ 0x08048284
+Cd 4 @ 0x08048288
+Cd 4 @ 0x0804828c
 CCu base64:WzExXSAtci14IHNlY3Rpb24gc2l6ZSAzNSBuYW1lZCAuaW5pdA== @ 0x08048290
 CCu base64:WzEyXSAtci14IHNlY3Rpb24gc2l6ZSA2NCBuYW1lZCAucGx0 @ 0x080482c0
 CCu base64:WzEzXSAtci14IHNlY3Rpb24gc2l6ZSA0MDQgbmFtZWQgLnRleHQ= @ 0x08048300
 CCu base64:WzE0XSAtci14IHNlY3Rpb24gc2l6ZSAyMCBuYW1lZCAuZmluaQ== @ 0x08048494
 CCu base64:WzE1XSAtci0tIHNlY3Rpb24gc2l6ZSAyMSBuYW1lZCAucm9kYXRh @ 0x080484a8
-Cs 13 @ 0x080484b0 # Hello world!
+'@0x080484b0'Cs 13
 CCu base64:WzE2XSAtci0tIHNlY3Rpb24gc2l6ZSA0NCBuYW1lZCAuZWhfZnJhbWVfaGRy @ 0x080484c0
 CCu base64:WzE3XSAtci0tIHNlY3Rpb24gc2l6ZSAxNzYgbmFtZWQgLmVoX2ZyYW1l @ 0x080484ec
 Cd 4 @ 0x0804959c
@@ -178,8 +249,8 @@ CCu base64:WzE4XSAtcnctIHNlY3Rpb24gc2l6ZSA0IG5hbWVkIC5pbml0X2FycmF5 @ 0x0804959c
 Cd 4 @ 0x080495a0
 CCu base64:WzE5XSAtcnctIHNlY3Rpb24gc2l6ZSA0IG5hbWVkIC5maW5pX2FycmF5 @ 0x080495a0
 CCu base64:WzIwXSAtcnctIHNlY3Rpb24gc2l6ZSA0IG5hbWVkIC5qY3I= @ 0x080495a4
-Cd 4 @ 0x080495a8
 CCu base64:WzIxXSAtcnctIHNlY3Rpb24gc2l6ZSAyMzIgbmFtZWQgLmR5bmFtaWM= @ 0x080495a8
+Cd 4 @ 0x080495a8
 Cd 4 @ 0x080495ac
 Cd 4 @ 0x080495b0
 Cd 4 @ 0x080495b4
@@ -237,85 +308,77 @@ Cd 4 @ 0x08049680
 Cd 4 @ 0x08049684
 Cd 4 @ 0x08049688
 Cd 4 @ 0x0804968c
-Cd 4 @ 0x08049690
 CCu base64:WzIyXSAtcnctIHNlY3Rpb24gc2l6ZSA0IG5hbWVkIC5nb3Q= @ 0x08049690
+Cd 4 @ 0x08049690
 CCu base64:WzIzXSAtcnctIHNlY3Rpb24gc2l6ZSAyNCBuYW1lZCAuZ290LnBsdA== @ 0x08049694
 Cd 4 @ 0x080496a0
 Cd 4 @ 0x080496a4
 Cd 4 @ 0x080496a8
 CCu base64:WzI0XSAtcnctIHNlY3Rpb24gc2l6ZSA4IG5hbWVkIC5kYXRh @ 0x080496ac
 CCu base64:WzI1XSAtcnctIHNlY3Rpb24gc2l6ZSA0IG5hbWVkIC5ic3M= @ 0x080496b4
+--
+0011
+--
+0x08048300 0x895eed31
+0x08048304 0xf0e483e1
 EOF
 RUN
 
+# merged: flags spaces after analysis
 NAME=flags spaces
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=fs
-EXPECT=<<EOF
-    0 * classes
-    5 * format
-    3 * imports
-    3 * relocs
-   30 * sections
-    9 * segments
-    1 * strings
-   34 * symbols
-   26 * symbols.sections
-EOF
-RUN
-
-NAME=flags spaces after analysis
-FILE=bins/elf/analysis/x86-helloworld-gcc
+ARGS=-e bin.types=true
 CMDS=<<EOF
+fs
+?e --
 aa;fs *;fs
 afl~?
 EOF
 EXPECT=<<EOF
     0 * classes
     5 * format
-    0 * functions
+   10 * globals
     3 * imports
     3 * relocs
    30 * sections
     9 * segments
     1 * strings
    34 * symbols
-   26 * symbols.sections
+    0 * trycatch
+--
+    0 * classes
+    5 * format
+    0 * functions
+   10 * globals
+    3 * imports
+    3 * relocs
+   30 * sections
+    9 * segments
+    1 * strings
+   34 * symbols
+    0 * trycatch
 14
 EOF
 RUN
 
 NAME=flags spaces after analysis again
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=s entry0+4; af;fs *;fs
+ARGS=-e bin.types=true
+CMDS=<<EOF
+s entry0+4; af;fs *;fs
+EOF
 EXPECT=<<EOF
     0 * classes
     5 * format
     1 * functions
+   10 * globals
     3 * imports
     3 * relocs
    30 * sections
     9 * segments
     1 * strings
    34 * symbols
-   26 * symbols.sections
-EOF
-RUN
-
-NAME=pb 4
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=pb 4
-EXPECT=<<EOF
-0011
-EOF
-RUN
-
-NAME=pxW 10
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=pxW 10
-EXPECT=<<EOF
-0x08048300 0x895eed31
-0x08048304 0xf0e483e1
+    0 * trycatch
 EOF
 RUN
 
@@ -329,26 +392,23 @@ e search.in=io.maps
 p-
 EOF
 EXPECT=<<EOF
-0x08048000 [^._______ss_s__s_sss_ssssss_ss_ss__sz_s____] 0x0804859c
-0x08048000 [^_sssssszss_____________________________sss] 0x080496b8
+0x08048000 [^._______ss_s__zzzss_ssssss_ss_ss__sz_s____] 0x0804859c
+0x08048000 [^_szzssszss_____________________________sss] 0x080496b8
 EOF
 RUN
 
+# merged: pdn 10
 NAME=pu 10
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=pu 10
-EXPECT=<<EOF
-%31%ed%5e%89%e1%83%e4%f0%50%54
-EOF
-RUN
-
-NAME=pdn 10
-FILE=bins/elf/analysis/x86-helloworld-gcc
 CMDS=<<EOF
+pu 10
+?e --
 e scr.color = 0
 pDi 10
 EOF
 EXPECT=<<EOF
+%31%ed%5e%89%e1%83%e4%f0%50%54
+--
 0x08048300   sym._start:
 0x08048300                 31ed  xor ebp, ebp
 0x08048302                   5e  pop esi
@@ -359,9 +419,15 @@ EXPECT=<<EOF
 EOF
 RUN
 
+# merged: x86 - pdj 4
 NAME=pi 12
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=pi 12
+CMDS=<<EOF
+pi 12
+?e --
+pdj 4~{}
+?e
+EOF
 EXPECT=<<EOF
 xor ebp, ebp
 pop esi
@@ -375,6 +441,81 @@ push sym.__libc_csu_init
 push ecx
 push esi
 push main
+--
+[
+  {
+    "addr": 134513408,
+    "esil": "ebp,ebp,^=,$z,zf,:=,$p,pf,:=,31,$s,sf,:=,0,cf,:=,0,of,:=",
+    "refptr": 0,
+    "fcn_addr": 0,
+    "fcn_last": 0,
+    "size": 2,
+    "opcode": "xor ebp, ebp",
+    "disasm": "xor ebp, ebp",
+    "bytes": "31ed",
+    "family": "cpu",
+    "type": "xor",
+    "reloc": false,
+    "type_num": 28,
+    "type2_num": 0,
+    "flags": [
+      "entry0",
+      "section..text",
+      "sym._start"
+    ],
+    "comment": "WzEzXSAtci14IHNlY3Rpb24gc2l6ZSA0MDQgbmFtZWQgLnRleHQ="
+  },
+  {
+    "addr": 134513410,
+    "esil": "esp,[4],4,esp,+=,esi,=",
+    "refptr": 0,
+    "fcn_addr": 0,
+    "fcn_last": 0,
+    "size": 1,
+    "opcode": "pop esi",
+    "disasm": "pop esi",
+    "bytes": "5e",
+    "family": "cpu",
+    "type": "pop",
+    "reloc": false,
+    "type_num": 14,
+    "type2_num": 0
+  },
+  {
+    "addr": 134513411,
+    "esil": "esp,ecx,=",
+    "refptr": 0,
+    "fcn_addr": 0,
+    "fcn_last": 0,
+    "size": 2,
+    "opcode": "mov ecx, esp",
+    "disasm": "mov ecx, esp",
+    "bytes": "89e1",
+    "family": "cpu",
+    "type": "mov",
+    "reloc": false,
+    "type_num": 9,
+    "type2_num": 0
+  },
+  {
+    "addr": 134513413,
+    "val": 4294967280,
+    "esil": "4294967280,esp,&=,$z,zf,:=,$p,pf,:=,31,$s,sf,:=,0,cf,:=,0,of,:=",
+    "refptr": 0,
+    "fcn_addr": 0,
+    "fcn_last": 0,
+    "size": 3,
+    "opcode": "and esp, 0xfffffff0",
+    "disasm": "and esp, 0xfffffff0",
+    "bytes": "83e4f0",
+    "family": "cpu",
+    "type": "and",
+    "reloc": false,
+    "type_num": 27,
+    "type2_num": 0
+  }
+]
+
 EOF
 RUN
 
@@ -414,25 +555,24 @@ const uint8_t buffer[_BUFFER_SIZE] = {
 EOF
 RUN
 
+# merged: flags
 NAME=flags (total)
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=f~?
-EXPECT=<<EOF
-111
+ARGS=-e bin.types=true
+CMDS=<<EOF
+f~?
+?e --
+f
 EOF
-RUN
-
-NAME=flags
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=f
 EXPECT=<<EOF
+95
+--
 0x00000000 0 section.
 0x00000000 17 section..comment
 0x00000000 262 section..shstrtab
 0x00000000 1104 section..symtab
 0x00000000 599 section..strtab
 0x00000000 0 segment.GNU_STACK
-0x00000000 0 sym..comment
 0x00000000 52 elf_header
 0x00000034 32 elf_phdr
 0x000001fc 74 elf_strtab
@@ -443,37 +583,24 @@ EXPECT=<<EOF
 0x08048034 256 segment.PHDR
 0x08048134 19 section..interp
 0x08048134 19 segment.INTERP
-0x08048134 0 sym..interp
 0x08048148 32 section..note.ABI_tag
 0x08048148 68 segment.NOTE
-0x08048148 0 sym..note.ABI_tag
 0x08048168 36 section..note.gnu.build_id
-0x08048168 0 sym..note.gnu.build_id
 0x0804818c 32 section..gnu.hash
-0x0804818c 0 sym..gnu.hash
 0x080481ac 80 section..dynsym
-0x080481ac 0 sym..dynsym
 0x080481fc 74 section..dynstr
-0x080481fc 0 sym..dynstr
 0x08048246 10 section..gnu.version
-0x08048246 0 sym..gnu.version
 0x08048250 32 section..gnu.version_r
-0x08048250 0 sym..gnu.version_r
 0x08048270 8 section..rel.dyn
-0x08048270 0 sym..rel.dyn
 0x08048278 24 section..rel.plt
-0x08048278 0 sym..rel.plt
 0x08048290 35 section..init
-0x08048290 0 sym..init
 0x08048290 0 sym._init
 0x080482c0 64 section..plt
-0x080482c0 0 sym..plt
 0x080482d0 16 sym.imp.puts
 0x080482e0 16 loc.imp.__gmon_start__
 0x080482f0 16 sym.imp.__libc_start_main
 0x08048300 1 entry0
 0x08048300 404 section..text
-0x08048300 0 sym..text
 0x08048300 0 sym._start
 0x08048330 4 sym.__x86.get_pc_thunk.bx
 0x08048340 0 sym.deregister_tm_clones
@@ -487,140 +614,53 @@ EXPECT=<<EOF
 0x08048420 97 sym.__libc_csu_init
 0x08048490 2 sym.__libc_csu_fini
 0x08048494 20 section..fini
-0x08048494 0 sym..fini
 0x08048494 0 sym._fini
 0x080484a8 21 section..rodata
-0x080484a8 0 sym..rodata
 0x080484a8 4 obj._fp_hw
+0x080484a8 4 global._fp_hw
 0x080484ac 4 obj._IO_stdin_used
+0x080484ac 4 global._IO_stdin_used
 0x080484b0 13 str.Hello_world_
 0x080484c0 44 section..eh_frame_hdr
 0x080484c0 44 segment.GNU_EH_FRAME
-0x080484c0 0 sym..eh_frame_hdr
 0x080484ec 176 section..eh_frame
-0x080484ec 0 sym..eh_frame
 0x08048598 0 obj.__FRAME_END__
+0x08048598 0 global.__FRAME_END__
 0x0804959c 4 section..init_array
 0x0804959c 284 segment.LOAD1
-0x0804959c 0 sym..init_array
 0x0804959c 0 obj.__frame_dummy_init_array_entry
+0x0804959c 0 global.__frame_dummy_init_array_entry
 0x0804959c 0 loc.__init_array_start
 0x080495a0 4 section..fini_array
-0x080495a0 0 sym..fini_array
 0x080495a0 0 obj.__do_global_dtors_aux_fini_array_entry
+0x080495a0 0 global.__do_global_dtors_aux_fini_array_entry
 0x080495a0 0 loc.__init_array_end
 0x080495a4 4 section..jcr
-0x080495a4 0 sym..jcr
 0x080495a4 0 obj.__JCR_LIST__
+0x080495a4 0 global.__JCR_LIST__
 0x080495a4 0 obj.__JCR_END__
 0x080495a8 232 section..dynamic
 0x080495a8 232 segment.DYNAMIC
-0x080495a8 0 sym..dynamic
 0x080495a8 0 obj._DYNAMIC
+0x080495a8 0 global._DYNAMIC
 0x08049690 4 section..got
-0x08049690 0 sym..got
 0x08049694 24 section..got.plt
-0x08049694 0 sym..got.plt
 0x08049694 0 obj._GLOBAL_OFFSET_TABLE_
+0x08049694 0 global._GLOBAL_OFFSET_TABLE_
 0x080496a0 4 reloc.puts
 0x080496a4 4 reloc.__gmon_start__
 0x080496a8 4 reloc.__libc_start_main
 0x080496ac 8 section..data
-0x080496ac 0 sym..data
 0x080496ac 0 loc.data_start
 0x080496ac 0 loc.__data_start
 0x080496b0 0 obj.__dso_handle
+0x080496b0 0 global.__dso_handle
 0x080496b4 4 section..bss
-0x080496b4 0 sym..bss
 0x080496b4 1 obj.completed.5979
+0x080496b4 1 global.completed.5979
 0x080496b4 0 loc._edata
 0x080496b4 0 loc.__bss_start
 0x080496b4 0 obj.__TMC_END__
 0x080496b8 0 loc._end
-EOF
-RUN
-
-NAME=x86 - pdj 4
-FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=<<EOF
-pdj 4~{}
-?e
-EOF
-EXPECT=<<EOF
-[
-  {
-    "offset": 134513408,
-    "esil": "ebp,ebp,^=,$z,zf,:=,$p,pf,:=,31,$s,sf,:=,0,cf,:=,0,of,:=",
-    "refptr": false,
-    "fcn_addr": 0,
-    "fcn_last": 0,
-    "size": 2,
-    "opcode": "xor ebp, ebp",
-    "disasm": "xor ebp, ebp",
-    "bytes": "31ed",
-    "family": "cpu",
-    "type": "xor",
-    "reloc": false,
-    "type_num": 28,
-    "type2_num": 0,
-    "flags": [
-      "entry0",
-      "section..text",
-      "sym..text",
-      "sym._start"
-    ],
-    "comment": "WzEzXSAtci14IHNlY3Rpb24gc2l6ZSA0MDQgbmFtZWQgLnRleHQ="
-  },
-  {
-    "offset": 134513410,
-    "esil": "esp,[4],esi,=,4,esp,+=",
-    "refptr": false,
-    "fcn_addr": 0,
-    "fcn_last": 0,
-    "size": 1,
-    "opcode": "pop esi",
-    "disasm": "pop esi",
-    "bytes": "5e",
-    "family": "cpu",
-    "type": "pop",
-    "reloc": false,
-    "type_num": 14,
-    "type2_num": 0
-  },
-  {
-    "offset": 134513411,
-    "esil": "esp,ecx,=",
-    "refptr": false,
-    "fcn_addr": 0,
-    "fcn_last": 0,
-    "size": 2,
-    "opcode": "mov ecx, esp",
-    "disasm": "mov ecx, esp",
-    "bytes": "89e1",
-    "family": "cpu",
-    "type": "mov",
-    "reloc": false,
-    "type_num": 9,
-    "type2_num": 0
-  },
-  {
-    "offset": 134513413,
-    "val": 4294967280,
-    "esil": "4294967280,esp,&=,$z,zf,:=,$p,pf,:=,31,$s,sf,:=,0,cf,:=,0,of,:=",
-    "refptr": false,
-    "fcn_addr": 0,
-    "fcn_last": 0,
-    "size": 3,
-    "opcode": "and esp, 0xfffffff0",
-    "disasm": "and esp, 0xfffffff0",
-    "bytes": "83e4f0",
-    "family": "cpu",
-    "type": "and",
-    "reloc": false,
-    "type_num": 27,
-    "type2_num": 0
-  }
-]
-
 EOF
 RUN

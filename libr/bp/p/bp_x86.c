@@ -1,16 +1,21 @@
-/* radare - LGPL - Copyright 2009-2015 - pancake */
+/* radare - LGPL - Copyright 2009-2023 - pancake */
 
 #include <r_bp.h>
 #include <r_lib.h>
 
-static struct r_bp_arch_t r_bp_plugin_x86_bps[] = {
+static RBreakpointArch r_bp_plugin_x86_bps[] = {
 	{ 0, 1, 0, (const ut8*)"\xcc" }, // valid for 16, 32, 64
 	{ 0, 2, 0, (const ut8*)"\xcd\x03" },
 	{ 0, 0, 0, NULL },
 };
 
-struct r_bp_plugin_t r_bp_plugin_x86 = {
-	.name = "x86",
+RBreakpointPlugin r_bp_plugin_x86 = {
+	.meta = {
+		.name = "x86",
+		.desc = "",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.arch = "x86",
 	.nbps = 2,
 	.bps = r_bp_plugin_x86_bps,

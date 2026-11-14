@@ -1,16 +1,15 @@
-/* radare - LGPL - Copyright 2011-2019 - pancake */
+/* radare - LGPL - Copyright 2011-2024 - pancake */
 
-#include <r_asm.h>
 #include <r_debug.h>
 #undef R_API
 #define R_API static inline
 #include "bfvm.c"
 
 typedef struct {
-        int desc;
-        ut8 *buf;
-        ut32 size;
-        BfvmCPU *bfvm;
+	int desc;
+	ut8 *buf;
+	ut32 size;
+	BfvmCPU *bfvm;
 } RIOBdescbg;
 
 struct bfvm_regs {
@@ -25,16 +24,18 @@ struct bfvm_regs {
 	ut32 memi;
 };
 
-static struct bfvm_regs r;
+typedef struct plugin_data_t {
+	struct bfvm_regs r;
+} PluginData;
 
 static bool is_io_bf(RDebug *dbg) {
 	RIODesc *d = dbg->iob.io->desc;
-	if (d && d->plugin && d->plugin->name) {
-		if (!strcmp ("bfdbg", d->plugin->name)) {
+	if (d && d->plugin && d->plugin->meta.name) {
+		if (!strcmp ("bfdbg", d->plugin->meta.name)) {
 			return true;
 		}
 	}
-	eprintf ("error: the iodesc data is not brainfuck friendly\n");
+	R_LOG_ERROR ("the iodesc data is not brainfuck friendly");
 	return false;
 }
 
@@ -61,33 +62,34 @@ static bool r_debug_bf_step(RDebug *dbg) {
 	return true;
 }
 
-static int r_debug_bf_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
-	r_return_val_if_fail (dbg && buf && size > 0, -1);
+static bool r_debug_bf_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
+	R_RETURN_VAL_IF_FAIL (dbg && buf && size > 0, -1);
 	if (!is_io_bf (dbg)) {
-		return 0;
-	}
-	if (!(dbg->iob.io) || !(dbg->iob.io->desc) || !(dbg->iob.io->desc->data)) {
-		return 0;
-	}
-	RIOBdescbg *o = dbg->iob.io->desc->data;
-	r.pc = o->bfvm->eip;
-	r.ptr = o->bfvm->ptr;
-	r.sp = o->bfvm->esp;
-	r.scr = o->bfvm->screen;
-	r.scri = o->bfvm->screen_idx;
-	r.inp = o->bfvm->input;
-	r.inpi = o->bfvm->input_idx;
-	r.mem = o->bfvm->base;
-	r.memi = o->bfvm->ptr;
-	memcpy (buf, &r, sizeof (r));
-	//r_io_system (dbg->iob.io, "dr");
-	return sizeof (r);
-}
-
-static int r_debug_bf_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
-	if (!dbg) {
 		return false;
 	}
+	if (!(dbg->iob.io) || !(dbg->iob.io->desc) || !(dbg->iob.io->desc->data)) {
+		return false;
+	}
+	RIOBdescbg *o = dbg->iob.io->desc->data;
+	if (o && dbg->current) {
+		PluginData *pd = dbg->current->plugin_data;
+		pd->r.pc = o->bfvm->eip;
+		pd->r.ptr = o->bfvm->ptr;
+		pd->r.sp = o->bfvm->esp;
+		pd->r.scr = o->bfvm->screen;
+		pd->r.scri = o->bfvm->screen_idx;
+		pd->r.inp = o->bfvm->input;
+		pd->r.inpi = o->bfvm->input_idx;
+		pd->r.mem = o->bfvm->base;
+		pd->r.memi = o->bfvm->ptr;
+		memcpy (buf, &pd->r, sizeof (pd->r));
+	}
+	//r_io_system (dbg->iob.io, "dr");
+	return true; // sizeof (r);
+}
+
+static bool r_debug_bf_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	if (!is_io_bf (dbg)) {
 		return 0;
 	}
@@ -95,16 +97,19 @@ static int r_debug_bf_reg_write(RDebug *dbg, int type, const ut8 *buf, int size)
 		return 0;
 	}
 	RIOBdescbg *o = dbg->iob.io->desc->data;
-	memcpy (&r, buf, sizeof (r));
-	o->bfvm->eip = r.pc;
-	o->bfvm->ptr = r.ptr; // dup
-	o->bfvm->esp = r.sp;
-	o->bfvm->screen = r.scr;
-	o->bfvm->screen_idx = r.scri;
-	o->bfvm->input = r.inp;
-	o->bfvm->input_idx = r.inpi;
-	o->bfvm->base = r.mem;
-	o->bfvm->ptr = r.memi; // dup
+	if (o && dbg->current) {
+		PluginData *pd = dbg->current->plugin_data;
+		memcpy (&pd->r, buf, sizeof (pd->r));
+		o->bfvm->eip = pd->r.pc;
+		o->bfvm->ptr = pd->r.ptr; // dup
+		o->bfvm->esp = pd->r.sp;
+		o->bfvm->screen = pd->r.scr;
+		o->bfvm->screen_idx = pd->r.scri;
+		o->bfvm->input = pd->r.inp;
+		o->bfvm->input_idx = pd->r.inpi;
+		o->bfvm->base = pd->r.mem;
+		o->bfvm->ptr = pd->r.memi; // dup
+	}
 	return true;
 }
 
@@ -151,10 +156,12 @@ static char *r_debug_bf_reg_profile(RDebug *dbg) {
 	"gpr	inpi	.32	24	0\n"
 	"gpr	mem	.32	28	0\n"
 	"gpr	memi	.32	32	0\n"
+	"gpr	brk	.32	36	0\n"
+	"gpr	kbd	.32	40	0\n"
 	);
 }
 
-static int r_debug_bf_breakpoint (struct r_bp_t *bp, RBreakpointItem *b, bool set) {
+static bool r_debug_bf_breakpoint(struct r_bp_t *bp, RBreakpointItem *b, bool set) {
 	//r_io_system (dbg->iob.io, "db");
 	return false;
 }
@@ -191,7 +198,7 @@ static RList *r_debug_native_map_get(RDebug *dbg) {
 	return list;
 }
 
-static int r_debug_bf_stop(RDebug *dbg) {
+static bool r_debug_bf_stop(RDebug *dbg) {
 	if (!is_io_bf (dbg)) {
 		return false;
 	}
@@ -201,11 +208,35 @@ static int r_debug_bf_stop(RDebug *dbg) {
 	return true;
 }
 
+static bool init_plugin(RDebug *dbg, RDebugPluginSession *ds) {
+	R_RETURN_VAL_IF_FAIL (dbg && ds, false);
+
+	ds->plugin_data = R_NEW0 (PluginData);
+	return !!ds->plugin_data;
+}
+
+static bool fini_plugin(RDebug *dbg, RDebugPluginSession *ds) {
+	R_RETURN_VAL_IF_FAIL (dbg && ds, false);
+
+	if (!ds->plugin_data) {
+		return false;
+	}
+
+	R_FREE (ds->plugin_data);
+	return true;
+}
+
 RDebugPlugin r_debug_plugin_bf = {
-	.name = "bf",
+	.meta = {
+		.name = "bf",
+		.author = "pancake",
+		.desc = "BF debug plugin",
+		.license = "LGPL-3.0-only",
+	},
 	.arch = "bf",
-	.license = "LGPL3",
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
+	.init_plugin = init_plugin,
+	.fini_plugin = fini_plugin,
 	.step = r_debug_bf_step,
 	.step_over = r_debug_bf_step_over,
 	.cont = r_debug_bf_continue,

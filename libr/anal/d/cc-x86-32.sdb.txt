@@ -2,45 +2,99 @@ default.cc=cdecl
 
 cdecl=cc
 cc.cdecl.argn=stack
-cc.cdecl.ret=eax
+cc.cdecl.pop=caller
+cc.cdecl.clobber=eax,ecx,edx
+cc.cdecl.preserve=ebx,esi,edi,ebp,esp
+cc.cdecl.ret0=eax
 
 cdecl-fastcall-ms=cc
 cc.cdecl-fastcall-ms.arg0=ecx
 cc.cdecl-fastcall-ms.argn=stack
-cc.cdecl-fastcall-ms.ret=eax
+cc.cdecl-fastcall-ms.pop=callee
+cc.cdecl-fastcall-ms.ret0=eax
+
+thiscall=cc
+cc.thiscall.arg0=ecx
+cc.thiscall.argn=stack
+cc.thiscall.pop=callee
+cc.thiscall.clobber=eax,ecx,edx
+cc.thiscall.preserve=ebx,esi,edi,ebp,esp
+cc.thiscall.ret0=eax
 
 optlink=cc
 cc.optlink.arg0=eax
 cc.optlink.arg1=edx
 cc.optlink.arg2=ecx
 cc.optlink.argn=stack
-cc.optlink.ret=eax
+cc.optlink.pop=callee
+cc.optlink.ret0=eax
 
 stdcall=cc
 cc.stdcall.argn=stack
-cc.stdcall.ret=eax
+cc.stdcall.pop=callee
+cc.stdcall.clobber=eax,ecx,edx
+cc.stdcall.preserve=ebx,esi,edi,ebp,esp
+cc.stdcall.ret0=eax
 
 fastcall=cc
 cc.fastcall.arg0=ecx
 cc.fastcall.arg1=edx
 cc.fastcall.argn=stack
-cc.fastcall.ret=eax
+cc.fastcall.pop=callee
+cc.fastcall.clobber=eax,ecx,edx
+cc.fastcall.preserve=ebx,esi,edi,ebp,esp
+cc.fastcall.ret0=eax
 
 borland=cc
-cc.borland.ret=eax
+cc.borland.ret0=eax
 cc.borland.arg0=eax
 cc.borland.arg1=edx
 cc.borland.arg2=ecx
 cc.borland.argn=stack_rev
+cc.borland.pop=callee
 
 watcom=cc
-cc.watcom.ret=eax
+cc.watcom.ret0=eax
 cc.watcom.arg0=eax
 cc.watcom.arg1=edx
 cc.watcom.arg2=ebx
 cc.watcom.arg3=ecx
 cc.watcom.argn=stack
+cc.watcom.pop=callee
 
 pascal=cc
-cc.pascal.ret=eax
+cc.pascal.ret0=eax
 cc.pascal.argn=stack_rev
+cc.pascal.pop=callee
+
+# reverse argument calling convention. only for gcc and dmd, ldc2 uses normal cdecl CC
+dlang=cc
+cc.dlang.ret0=eax
+cc.dlang.ret1=edx
+cc.dlang.retn=2
+cc.dlang.revarg=1
+cc.dlang.arg0=edi
+cc.dlang.arg1=esi
+cc.dlang.arg2=edx
+cc.dlang.arg3=ecx
+cc.dlang.arg4=r8d
+cc.dlang.arg5=r9d
+cc.dlang.argn=stack_rev
+cc.dlang.pop=callee
+
+# Go on x86-32 passes both arguments and results on the stack.
+golang=cc
+cc.golang.argn=stack
+cc.golang.stackalloc=lower
+cc.golang.pop=caller
+cc.golang.ret0=stack
+
+x86syscall=cc
+cc.x86syscall.arg0=ebx
+cc.x86syscall.arg1=ecx
+cc.x86syscall.arg2=edx
+cc.x86syscall.arg3=esi
+cc.x86syscall.arg4=edi
+cc.x86syscall.arg5=ebp
+cc.x86syscall.clobber=eax
+cc.x86syscall.ret0=eax

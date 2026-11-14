@@ -1,0 +1,50 @@
+#include "types.h"
+#include "stream_pe.h"
+#include "stream_file.h"
+
+void parse_pe_stream(STpiStream *ss, void *stream, R_STREAM_FILE *stream_file) {
+	int data_size = stream_file_get_size (stream_file);
+	if (data_size < 1) {
+		return;
+	}
+	char *data = (char *)malloc (data_size);
+	if (!data) {
+		return;
+	}
+	if (!stream_file_get_data (stream_file, data)) {
+		free (data);
+		return;
+	}
+
+	SPEStream *pe_stream = (SPEStream *)stream;
+	int sctn_header_size = sizeof (SIMAGE_SECTION_HEADER);
+	char *ptmp = data;
+	pe_stream->sections_hdrs = R_NEWS0 (SIMAGE_SECTION_HEADER, data_size / sctn_header_size + 1);
+	pe_stream->sections_count = 0;
+	if (!pe_stream->sections_hdrs) {
+		free (data);
+		return;
+	}
+	int read_bytes = 0;
+	while (read_bytes + sctn_header_size <= data_size) {
+		SIMAGE_SECTION_HEADER *sctn_header = &pe_stream->sections_hdrs[pe_stream->sections_count++];
+		memcpy (sctn_header->name, ptmp, PDB_SIZEOF_SECTION_NAME);
+		sctn_header->misc.virtual_address = r_read_le32 (ptmp + 8);
+		sctn_header->virtual_address = r_read_le32 (ptmp + 12);
+		sctn_header->size_of_raw_data = r_read_le32 (ptmp + 16);
+		sctn_header->pointer_to_raw_data = r_read_le32 (ptmp + 20);
+		sctn_header->pointer_to_relocations = r_read_le32 (ptmp + 24);
+		sctn_header->pointer_to_line_numbers = r_read_le32 (ptmp + 28);
+		sctn_header->number_of_relocations = r_read_le16 (ptmp + 32);
+		sctn_header->number_of_line_numbers = r_read_le16 (ptmp + 34);
+		sctn_header->charactestics = r_read_le32 (ptmp + 36);
+		ptmp += sctn_header_size;
+		read_bytes += sctn_header_size;
+	}
+	free (data);
+}
+
+void free_pe_stream(STpiStream *ss, void *stream) {
+	SPEStream *pe_stream = (SPEStream *)stream;
+	free (pe_stream->sections_hdrs);
+}

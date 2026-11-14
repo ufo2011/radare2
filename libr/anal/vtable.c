@@ -1,14 +1,16 @@
-/* radare - LGPL - Copyright 2009-2020 - pancake, maijin, thestr4ng3r */
+/* radare - LGPL - Copyright 2009-2025 - pancake, maijin, thestr4ng3r */
 
 #include "r_util.h"
 #include "r_anal.h"
+#include <r_vec.h>
 
 #define VTABLE_BUFF_SIZE 10
+#define VTABLE_METHODS_MAX 0x4000
 
 #define VTABLE_READ_ADDR_FUNC(fname, read_fname, sz) \
 	static bool fname(RAnal *anal, ut64 addr, ut64 *buf) {\
 		ut8 tmp[sz];\
-		if (!anal->iob.read_at (anal->iob.io, addr, tmp, sz)) {\
+		if (anal->iob.read_at (anal->iob.io, addr, tmp, sz) != sz) {\
 			return false;\
 		}\
 		*buf = read_fname (tmp);\
@@ -27,36 +29,39 @@ R_API void r_anal_vtable_info_free(RVTableInfo *vtable) {
 	if (!vtable) {
 		return;
 	}
-	r_vector_clear (&vtable->methods);
+	RVecRVTableMethodInfo_fini (&vtable->methods);
 	free (vtable);
 }
 
 R_API ut64 r_anal_vtable_info_get_size(RVTableContext *context, RVTableInfo *vtable) {
-	return (ut64)vtable->methods.len * context->word_size;
+	return RVecRVTableMethodInfo_length (&vtable->methods) * context->word_size;
 }
 
 R_API bool r_anal_vtable_begin(RAnal *anal, RVTableContext *context) {
 	context->anal = anal;
-	context->abi = anal->cpp_abi;
-	context->word_size = (ut8) (anal->bits / 8);
-	const bool is_arm = anal->cur->arch && r_str_startswith (anal->cur->arch, "arm");
+	context->abi = anal->cxxabi;
+	context->word_size = (ut8) (anal->config->bits / 8);
+	const bool is_arm = r_str_startswith (anal->config->arch, "arm");
 	if (is_arm && context->word_size < 4) {
 		context->word_size = 4;
 	}
+	const bool be = R_ARCH_CONFIG_IS_BIG_ENDIAN (anal->config);
 	switch (context->word_size) {
 	case 1:
-		context->read_addr = anal->big_endian ? vtable_read_addr_be8 : vtable_read_addr_le8;
+		context->read_addr = be? vtable_read_addr_be8 : vtable_read_addr_le8;
 		break;
 	case 2:
-		context->read_addr = anal->big_endian ? vtable_read_addr_be16 : vtable_read_addr_le16;
+		context->read_addr = be? vtable_read_addr_be16 : vtable_read_addr_le16;
 		break;
 	case 4:
-		context->read_addr = anal->big_endian ? vtable_read_addr_be32 : vtable_read_addr_le32;
+		context->read_addr = be? vtable_read_addr_be32 : vtable_read_addr_le32;
 		break;
 	case 8:
-		context->read_addr = anal->big_endian ? vtable_read_addr_be64 : vtable_read_addr_le64;
+		context->read_addr = be? vtable_read_addr_be64 : vtable_read_addr_le64;
 		break;
 	default:
+		// cant be null. assume 32bit "->read_addr = NULL;
+		context->read_addr = be? vtable_read_addr_be32 : vtable_read_addr_le32;
 		return false;
 	}
 	return true;
@@ -71,7 +76,7 @@ static bool vtable_addr_in_text_section(RVTableContext *context, ut64 curAddress
 
 static bool vtable_is_value_in_text_section(RVTableContext *context, ut64 curAddress, ut64 *value) {
 	//value at the current address
-	ut64 curAddressValue;
+	ut64 curAddressValue = UT64_MAX;
 	if (!context->read_addr (context->anal, curAddress, &curAddressValue)) {
 		return false;
 	}
@@ -92,6 +97,13 @@ static bool vtable_section_can_contain_vtables(RBinSection *section) {
 		!strcmp (section->name, ".data.rel.ro") ||
 		!strcmp (section->name, ".data.rel.ro.local") ||
 		r_str_endswith (section->name, "__const");
+}
+
+// memory the loader fills with zeros instead of taking it from the file
+static bool vtable_addr_is_zerofill(RAnal *anal, ut64 addr) {
+	RIOMap *map = anal->iob.map_get_at (anal->iob.io, addr);
+	const char *name = map? anal->iob.fd_get_name (anal->iob.io, map->fd): NULL;
+	return name && r_str_startswith (name, "null://");
 }
 
 static bool section_can_contain_rtti(RBinSection *section) {
@@ -131,42 +143,42 @@ static bool vtable_is_addr_vtable_start_itanium(RVTableContext *context, RBinSec
 }
 
 static bool vtable_is_addr_vtable_start_msvc(RVTableContext *context, ut64 curAddress) {
-	RAnalRef *xref;
-	RListIter *xrefIter;
-
 	if (!curAddress || curAddress == UT64_MAX) {
 		return false;
 	}
 	if (curAddress && !vtable_is_value_in_text_section (context, curAddress, NULL)) {
 		return false;
 	}
-	// total xref's to curAddress
-	RList *xrefs = r_anal_xrefs_get (context->anal, curAddress);
-	if (r_list_empty (xrefs)) {
-		r_list_free (xrefs);
+
+	// total xrefs to curAddress
+	RVecAnalRef *xrefs = r_anal_xrefs_get (context->anal, curAddress);
+	if (!xrefs || RVecAnalRef_empty (xrefs)) {
+		RVecAnalRef_free (xrefs);
 		return false;
 	}
-	r_list_foreach (xrefs, xrefIter, xref) {
-		// section in which currenct xref lies
+
+	ut8 buf[VTABLE_BUFF_SIZE];
+	RAnalRef *xref;
+	R_VEC_FOREACH (xrefs, xref) {
+		// section in which current xref lies
 		if (vtable_addr_in_text_section (context, xref->addr)) {
-			ut8 buf[VTABLE_BUFF_SIZE];
-			context->anal->iob.read_at (context->anal->iob.io, xref->addr, buf, sizeof(buf));
-
-			RAnalOp analop = { 0 };
-			r_anal_op (context->anal, &analop, xref->addr, buf, sizeof(buf), R_ANAL_OP_MASK_BASIC);
-
-			if (analop.type == R_ANAL_OP_TYPE_MOV
-				|| analop.type == R_ANAL_OP_TYPE_LEA) {
-				r_list_free (xrefs);
+			const int nread = context->anal->iob.read_at (context->anal->iob.io, xref->addr, buf, sizeof (buf));
+			if (nread < 1) {
+				continue;
+			}
+			RAnalOp analop = {0};
+			r_anal_op (context->anal, &analop, xref->addr, buf, nread, R_ARCH_OP_MASK_BASIC);
+			if (analop.type == R_ANAL_OP_TYPE_MOV || analop.type == R_ANAL_OP_TYPE_LEA) {
+				RVecAnalRef_free (xrefs);
 				r_anal_op_fini (&analop);
 				return true;
 			}
-
 			r_anal_op_fini (&analop);
 		}
 	}
-	r_list_free (xrefs);
-	return false;
+
+	RVecAnalRef_free (xrefs);
+	return false; // XXX true?
 }
 
 static bool vtable_is_addr_vtable_start(RVTableContext *context, RBinSection *section, ut64 curAddress) {
@@ -176,7 +188,7 @@ static bool vtable_is_addr_vtable_start(RVTableContext *context, RBinSection *se
 	if (context->abi == R_ANAL_CPP_ABI_ITANIUM) {
 		return vtable_is_addr_vtable_start_itanium (context, section, curAddress);
 	}
-	r_return_val_if_reached (false);
+	R_RETURN_VAL_IF_REACHED (false);
 	return false;
 }
 
@@ -193,51 +205,60 @@ R_API RVTableInfo *r_anal_vtable_parse_at(RVTableContext *context, ut64 addr) {
 
 	vtable->saddr = addr;
 
-	r_vector_init (&vtable->methods, sizeof (RVTableMethodInfo), NULL, NULL);
+	RVecRVTableMethodInfo_init (&vtable->methods);
 
 	RVTableMethodInfo meth;
 	while (vtable_is_value_in_text_section (context, addr, &meth.addr)) {
-		meth.vtable_offset = addr - vtable->saddr;
-		if (!r_vector_push (&vtable->methods, &meth)) {
+		// zero-filled memory holds no vtable slots, only a file does
+		if (vtable_addr_is_zerofill (context->anal, addr)) {
 			break;
 		}
+		meth.vtable_offset = addr - vtable->saddr;
+		RVTableMethodInfo *slot = RVecRVTableMethodInfo_emplace_back (&vtable->methods);
+		if (!slot) {
+			break;
+		}
+		*slot = meth;
 
 		addr += context->word_size;
-
-		// a ref means the vtable has ended
-		RList *ll = r_anal_xrefs_get (context->anal, addr);
-		if (!r_list_empty (ll)) {
-			r_list_free (ll);
+		if (RVecRVTableMethodInfo_length (&vtable->methods) >= VTABLE_METHODS_MAX) {
 			break;
 		}
-		r_list_free (ll);
+
+		// a ref means the vtable has ended
+		const ut64 number_of_refs = r_anal_xrefs_count_at (context->anal, addr);
+		const bool has_refs = number_of_refs > 0;
+		if (has_refs) {
+			break;
+		}
 	}
 	return vtable;
 }
 
 R_API RList *r_anal_vtable_search(RVTableContext *context) {
-	RAnal *anal = context->anal;
-	if (!anal) {
+	if (!context || !context->anal) {
 		return NULL;
 	}
+	RAnal *anal = context->anal;
 
 	RList *vtables = r_list_newf ((RListFree)r_anal_vtable_info_free);
 	if (!vtables) {
 		return NULL;
 	}
 
-	RList *sections = anal->binb.get_sections (anal->binb.bin);
+	if (!anal->binb.get_sections_vec) {
+		r_list_free (vtables);
+		return NULL;
+	}
+	RVecRBinSection *sections = anal->binb.get_sections_vec (anal->binb.bin);
 	if (!sections) {
 		r_list_free (vtables);
 		return NULL;
 	}
 
-	r_cons_break_push (NULL, NULL);
-
-	RListIter *iter;
 	RBinSection *section;
-	r_list_foreach (sections, iter, section) {
-		if (r_cons_is_breaked ()) {
+	R_VEC_FOREACH (sections, section) {
+		if (r_print_is_interrupted (anal->print)) {
 			break;
 		}
 
@@ -252,10 +273,14 @@ R_API RList *r_anal_vtable_search(RVTableContext *context) {
 			break;
 		}
 		while (startAddress <= endAddress) {
-			if (r_cons_is_breaked ()) {
+			if (r_print_is_interrupted (anal->print)) {
 				break;
 			}
 			if (!anal->iob.is_valid_offset (anal->iob.io, startAddress, 0)) {
+				break;
+			}
+			// vtables are constant data, the rest of the section has no contents
+			if (vtable_addr_is_zerofill (anal, startAddress)) {
 				break;
 			}
 
@@ -274,8 +299,6 @@ R_API RList *r_anal_vtable_search(RVTableContext *context) {
 		}
 	}
 
-	r_cons_break_pop ();
-
 	if (r_list_empty (vtables)) {
 		// stripped binary?
 		r_list_free (vtables);
@@ -284,8 +307,8 @@ R_API RList *r_anal_vtable_search(RVTableContext *context) {
 	return vtables;
 }
 
-R_API void r_anal_list_vtables(RAnal *anal, int rad) {
-	RVTableContext context;
+R_API char *r_anal_vtables_list(RAnal *anal, int rad) {
+	RVTableContext context = {0};
 	r_anal_vtable_begin (anal, &context);
 
 	const char *noMethodName = "No Name found";
@@ -297,15 +320,12 @@ R_API void r_anal_list_vtables(RAnal *anal, int rad) {
 
 	if (rad == 'j') {
 		PJ *pj = pj_new ();
-		if (!pj) {
-			return;
-		}
 		pj_a (pj);
 		r_list_foreach (vtables, vtableIter, table) {
 			pj_o (pj);
 			pj_kN (pj, "offset", table->saddr);
 			pj_ka (pj, "methods");
-			r_vector_foreach (&table->methods, curMethod) {
+			R_VEC_FOREACH (&table->methods, curMethod) {
 				RAnalFunction *fcn = r_anal_get_fcn_in (anal, curMethod->addr, 0);
 				const char *const name = fcn ? fcn->name : NULL;
 				pj_o (pj);
@@ -317,37 +337,40 @@ R_API void r_anal_list_vtables(RAnal *anal, int rad) {
 			pj_end (pj);
 		}
 		pj_end (pj);
-		r_cons_println (pj_string (pj));
-		pj_free (pj);
-	} else if (rad == '*') {
+		return pj_drain (pj);
+	}
+	RStrBuf *sb = r_strbuf_new ("");
+	if (rad == '*') {
 		r_list_foreach (vtables, vtableIter, table) {
-			r_cons_printf ("f vtable.0x%08"PFMT64x" %"PFMT64d" @ 0x%08"PFMT64x"\n",
+			r_strbuf_appendf (sb, "f vtable.0x%08"PFMT64x" %"PFMT64d" @ 0x%08"PFMT64x"\n",
 						   table->saddr,
 						   r_anal_vtable_info_get_size (&context, table),
 						   table->saddr);
-			r_vector_foreach (&table->methods, curMethod) {
-				r_cons_printf ("Cd %d @ 0x%08"PFMT64x"\n", context.word_size, table->saddr + curMethod->vtable_offset);
+			R_VEC_FOREACH (&table->methods, curMethod) {
+				r_strbuf_appendf (sb, "Cd %d @ 0x%08"PFMT64x"\n", context.word_size, table->saddr + curMethod->vtable_offset);
 				RAnalFunction *fcn = r_anal_get_fcn_in (anal, curMethod->addr, 0);
-				const char *const name = fcn ? fcn->name : NULL;
+				char *name = fcn? r_name_filter_dup (fcn->name): NULL;
 				if (name) {
-					r_cons_printf ("f %s=0x%08"PFMT64x"\n", name, curMethod->addr);
+					r_strbuf_appendf (sb, "'f %s=0x%08"PFMT64x"\n", name, curMethod->addr);
+					free (name);
 				} else {
-					r_cons_printf ("f method.virtual.0x%08"PFMT64x"=0x%08"PFMT64x"\n", curMethod->addr, curMethod->addr);
+					r_strbuf_appendf (sb, "'f method.virtual.0x%08"PFMT64x"=0x%08"PFMT64x"\n", curMethod->addr, curMethod->addr);
 				}
 			}
 		}
 	} else {
 		r_list_foreach (vtables, vtableIter, table) {
 			ut64 vtableStartAddress = table->saddr;
-			r_cons_printf ("\nVtable Found at 0x%08"PFMT64x"\n", vtableStartAddress);
-			r_vector_foreach (&table->methods, curMethod) {
+			r_strbuf_appendf (sb, "\nVtable Found at 0x%08"PFMT64x"\n", vtableStartAddress);
+			R_VEC_FOREACH (&table->methods, curMethod) {
 				RAnalFunction *fcn = r_anal_get_fcn_in (anal, curMethod->addr, 0);
 				const char *const name = fcn ? fcn->name : NULL;
-				r_cons_printf ("0x%08"PFMT64x" : %s\n", vtableStartAddress, r_str_get_fail (name, noMethodName));
+				r_strbuf_appendf (sb, "0x%08"PFMT64x" : %s\n", vtableStartAddress, r_str_get_fail (name, noMethodName));
 				vtableStartAddress += context.word_size;
 			}
-			r_cons_newline ();
+			r_strbuf_append (sb, "\n");
 		}
 	}
 	r_list_free (vtables);
+	return r_strbuf_drain (sb);
 }

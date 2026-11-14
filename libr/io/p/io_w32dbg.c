@@ -1,17 +1,22 @@
-/* radare - LGPL - Copyright 2008-2021 - pancake */
+/* radare - LGPL - Copyright 2008-2025 - pancake */
 
 #include <r_userconf.h>
 
 #include <r_io.h>
-#include <r_lib.h>
 #include <r_cons.h>
-#include <r_util.h>
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 
 #include <windows.h>
+// r_w32.h defines NTSTATUS as a macro for old SDKs; winternl.h provides the
+// real typedef, so drop the macro before including it.
+#ifdef NTSTATUS
+#undef NTSTATUS
+#endif
+#include <winternl.h>
 #include <tlhelp32.h>
 #include <r_util/r_w32dw.h>
+#include <r_util/r_w32.h>
 
 #define RW32Dw_PID(x) (((RW32Dw*)x->data)->pi.dwProcessId)
 
@@ -89,19 +94,17 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
 }
 
 static bool __plugin_open(RIO *io, const char *file, bool many) {
-	if (!strncmp (file, "attach://", 9)) {
+	if (r_str_startswith (file, "attach://")) {
 		return true;
 	}
-	return !strncmp (file, "w32dbg://", 9);
+	return r_str_startswith (file, "w32dbg://");
 }
 
 static int __w32_first_thread(int pid) {
-	HANDLE th;
-	HANDLE thid;
-	THREADENTRY32 te32;
-	te32.dwSize = sizeof (THREADENTRY32);
-
-	th = CreateToolhelp32Snapshot (TH32CS_SNAPTHREAD, pid);
+	THREADENTRY32 te32 = {
+		.dwSize = sizeof (THREADENTRY32)
+	};
+	HANDLE th = CreateToolhelp32Snapshot (TH32CS_SNAPTHREAD, pid);
 	if (th == INVALID_HANDLE_VALUE) {
 		return -1;
 	}
@@ -112,7 +115,7 @@ static int __w32_first_thread(int pid) {
 	do {
 		/* get all threads of process */
 		if (te32.th32OwnerProcessID == pid) {
-			thid = OpenThread (THREAD_ALL_ACCESS, 0, te32.th32ThreadID);
+			HANDLE thid = OpenThread (R_W32_THREAD_ALL_ACCESS, 0, te32.th32ThreadID);
 			if (!thid) {
 				r_sys_perror ("__w32_first_thread/OpenThread");
 				goto err_first_th;
@@ -122,7 +125,7 @@ static int __w32_first_thread(int pid) {
 		}
 	} while (Thread32Next (th, &te32));
 err_first_th:
-	eprintf ("Could not find an active thread for pid %d\n", pid);
+	R_LOG_ERROR ("Could not find an active thread for pid %d", pid);
 	CloseHandle (th);
 	return pid;
 }
@@ -134,7 +137,7 @@ static int __open_proc(RIO *io, int pid, bool attach) {
 		io->dbgwrap = r_w32dw_new ();
 	}
 
-	HANDLE h_proc = OpenProcess (PROCESS_ALL_ACCESS, FALSE, pid);
+	HANDLE h_proc = OpenProcess (R_W32_PROCESS_ALL_ACCESS, FALSE, pid);
 
 	if (!h_proc) {
 		r_sys_perror ("__open_proc/OpenProcess");
@@ -143,11 +146,11 @@ static int __open_proc(RIO *io, int pid, bool attach) {
 	RW32Dw *wrap = (RW32Dw *)io->dbgwrap;
 	wrap->pi.dwProcessId = pid;
 	if (attach) {
-		/* Attach to the process */	
+		/* Attach to the process */
 		wrap->params.type = W32_ATTACH;
 		r_w32dw_waitret (wrap);
 		if (!r_w32dw_ret (wrap)) {
-			r_w32dw_err (wrap);
+			(void)r_w32dw_err (wrap);
 			r_sys_perror ("__open_proc/DebugActiveProcess");
 			goto att_exit;
 		}
@@ -157,12 +160,12 @@ static int __open_proc(RIO *io, int pid, bool attach) {
 		wrap->params.wait.de = &de;
 		r_w32dw_waitret (wrap);
 		if (!r_w32dw_ret (wrap)) {
-			r_w32dw_err (wrap);
+			(void)r_w32dw_err (wrap);
 			r_sys_perror ("__open_proc/WaitForDebugEvent");
 			goto att_exit;
 		}
 		if (de.dwDebugEventCode != CREATE_PROCESS_DEBUG_EVENT) {
-			eprintf ("exception code 0x%04x\n", (ut32)de.dwDebugEventCode);
+			R_LOG_ERROR ("exception code 0x%04x", (ut32)de.dwDebugEventCode);
 			goto att_exit;
 		}
 		wrap->winbase = (ut64)de.u.CreateProcessInfo.lpBaseOfImage;
@@ -181,7 +184,11 @@ att_exit:
 static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	if (__plugin_open (io, file, 0)) {
 		RIODesc *ret;
-		if (__open_proc (io, atoi (file + 9), !strncmp (file, "attach://", 9)) == -1) {
+		if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+			return NULL;
+		}
+		bool must_attach = r_str_startswith (file, "attach://");
+		if (__open_proc (io, atoi (file + 9), must_attach) == -1) {
 			return NULL;
 		}
 		RW32Dw *wrap = io->dbgwrap;
@@ -189,11 +196,11 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 			wrap->pi.dwThreadId = __w32_first_thread (wrap->pi.dwProcessId);
 		}
 		if (!wrap->pi.hThread) {
-			wrap->pi.hThread = OpenThread (THREAD_ALL_ACCESS, FALSE, wrap->pi.dwThreadId);
+			wrap->pi.hThread = OpenThread (R_W32_THREAD_ALL_ACCESS, FALSE, wrap->pi.dwThreadId);
 		}
 		ret = r_io_desc_new (io, &r_io_plugin_w32dbg,
 				file, rw | R_PERM_X, mode, wrap);
-		ret->name = r_sys_pid_to_path (wrap->pi.dwProcessId);
+		ret->name = r_sys_pidpath (wrap->pi.dwProcessId);
 		return ret;
 	}
 	return NULL;
@@ -208,7 +215,7 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 		io->off += (int)offset;
 		break;
 	case 2: // end
-		io->off = UT64_MAX;
+		io->off = UT64_MAX - 1; // UT64_MAX reserved for error case
 		break;
 	}
 	return io->off;
@@ -230,21 +237,41 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	/* XXX ugly hack for testing purposes */
 	if (!strcmp (cmd, "")) {
 		// do nothing
-	} else if (!strncmp (cmd, "pid", 3)) {
+	} else if (!strcmp (cmd, "tls")) {
+		typedef struct _CLIENT_ID {
+			PVOID UniqueProcess;
+			PVOID UniqueThread;
+		} CLIENT_ID;
+		typedef struct {
+			NTSTATUS ExitStatus;
+			PVOID TebBaseAddress;
+			CLIENT_ID ClientId;
+			KAFFINITY AffinityMask;
+			KPRIORITY Priority;
+			KPRIORITY BasePriority;
+		} THREAD_BASIC_INFORMATION;
+		THREAD_BASIC_INFORMATION tbi = {0};
+		NTSTATUS status = r_w32_NtQueryInformationThread (wrap->pi.hThread, 0, &tbi, sizeof (tbi), NULL);
+		if (status == 0) {
+			return r_str_newf ("0x%"PFMT64x"\n", (ut64)tbi.TebBaseAddress);
+		} else {
+			R_LOG_ERROR ("NtQueryInformationThread failed");
+		}
+	} else if (r_str_startswith (cmd, "pid")) {
 		if (cmd[3] == ' ') {
 			int pid = atoi (cmd + 3);
 			if (pid > 0 && pid != wrap->pi.dwThreadId && pid != wrap->pi.dwProcessId) {
-				HANDLE ht = OpenThread (PROCESS_ALL_ACCESS, FALSE, pid);
+				HANDLE ht = OpenThread (R_W32_THREAD_ALL_ACCESS, FALSE, pid);
 				if (ht) {
 					wrap->pi.hThread = ht;
 				} else {
-					eprintf ("Cannot attach to %d (%s)\n", pid, cmd);
+					R_LOG_ERROR ("Cannot attach to %d (%s)", pid, cmd);
 				}
 			}
 		}
 		return r_str_newf ("%lu", wrap->pi.dwProcessId);
 	} else {
-		eprintf ("Try: '=!pid'\n");
+		eprintf ("Try: ':pid' or ':tls'\n");
 	}
 	return NULL;
 }
@@ -272,9 +299,12 @@ static bool __getbase(RIODesc *fd, ut64 *base) {
 }
 
 RIOPlugin r_io_plugin_w32dbg = {
-	.name = "w32dbg",
-	.desc = "w32 debugger io plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "w32dbg",
+		.author = "pancake",
+		.desc = "w32 debugger io plugin",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "w32dbg://,attach://",
 	.open = __open,
 	.close = __close,
@@ -290,7 +320,9 @@ RIOPlugin r_io_plugin_w32dbg = {
 };
 #else
 RIOPlugin r_io_plugin_w32dbg = {
-	.name = NULL
+	.meta = {
+		.name = NULL
+	},
 };
 #endif
 

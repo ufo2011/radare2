@@ -1,21 +1,24 @@
 BINR_PROGRAM=1
+all::
 include ../../libr/config.mk
 include ../../shlr/zip/deps.mk
 include ../../shlr/sdb.mk
 
 # despite libs are pic, some systems/compilers dont
 # like relocatable executables, so here we do the magic
-USE_PIE=0
-ifeq (,$(findstring tcc,${CC}))
-ifeq (,$(findstring vinix,${CC}))
-USE_PIE=1
+USE_PIE=$(shell echo "$(CC) $(COMPILER) $(OSTYPE)" | grep -E "emcc|ios-sdk|macos-sdk|tcc|vinix|wasm|wasi" >/dev/null && echo 0 || echo 1)
+
+ifeq (${OSTYPE},solaris)
+USE_PIE := 0
 endif
+ifeq ($(WASM),1)
+USE_PIE := 0
 endif
 
 ifeq ($(USE_PIE),1)
-CFLAGS+=-pie
+LDFLAGS+=-pie
 endif
-CFLAGS:=-I$(LTOP)/include -I$(LTOP)/include/sdb $(CFLAGS)
+CFLAGS:=-I$(LTOP)/include $(CFLAGS)
 
 ifeq (${ANDROID},1)
 LDFLAGS+=-lm
@@ -31,12 +34,22 @@ endif
 ifeq ($(USE_LTO),1)
 LDFLAGS+=-flto
 endif
+ifeq (${OSTYPE},android)
+LDFLAGS+=-Wl,--allow-shlib-undefined
+endif
 
 ifeq (${COMPILER},wasi)
-LINK+=$(SHLR)/zip/librz.a
+ifeq ($(USE_LIB_ZIP),1)
+LINK+=$(LIBZIP)
+else
+LINK+=$(SHLR)/../subprojects/otezip/libotezip.a
+endif
 LINK+=$(SHLR)/gdb/lib/libgdbr.a
-LINK+=$(SHLR)/capstone/libcapstone.a
-LINK+=$(SHLR)/sdb/src/libsdb.a
+LINK+=$(CS_LDFLAGS)
+ifneq ($(filter p/x86_zydis.mk,$(STATIC_ARCH_PLUGINS)),)
+LINK+=$(ZYDIS_LDFLAGS)
+endif
+LINK+=$(SHLR)/../subprojects/sdb/src/libsdb.a
 
 # instead of libr.a
 LINK+=$(LIBR)/util/libr_util.a
@@ -49,23 +62,36 @@ LINK+=$(LIBR)/reg/libr_reg.a
 LINK+=$(LIBR)/bp/libr_bp.a
 LINK+=$(LIBR)/io/libr_io.a
 LINK+=$(LIBR)/flag/libr_flag.a
-LINK+=$(LIBR)/hash/libr_hash.a
 LINK+=$(LIBR)/syscall/libr_syscall.a
 LINK+=$(LIBR)/egg/libr_egg.a
 LINK+=$(LIBR)/fs/libr_fs.a
-LINK+=$(LIBR)/parse/libr_parse.a
 LINK+=$(LIBR)/bin/libr_bin.a
 LINK+=$(LIBR)/asm/libr_asm.a
 LINK+=$(LIBR)/search/libr_search.a
 LINK+=$(LIBR)/cons/libr_cons.a
 LINK+=$(LIBR)/lang/libr_lang.a
 LINK+=$(LIBR)/config/libr_config.a
-LINK+=$(LIBR)/crypto/libr_crypto.a
+LINK+=$(LIBR)/muta/libr_muta.a
 LINK+=$(LIBR)/main/libr_main.a
+# libr_anal and libr_bin members reference the java class parser
+LINK+=$(SHLR)/java/libr_java.a
+# extra libs required by XPS static plugins (e.g. libc++ for r2ghidra)
+LINK+=$(EXTERNAL_LINK)
+else ifeq (${COMPILER},wasm)
+LINK+=$(SHLR)/libr_shlr.a
+LINK+=$(SHLR)/../subprojects/sdb/src/libsdb.a
+LINK+=$(CS_LDFLAGS)
+ifneq ($(filter p/x86_zydis.mk,$(STATIC_ARCH_PLUGINS)),)
+LINK+=$(ZYDIS_LDFLAGS)
+endif
+EXT_EXE=.wasm
 else ifeq (${COMPILER},emscripten)
 LINK+=$(SHLR)/libr_shlr.a
-LINK+=$(SHLR)/sdb/src/libsdb.a
-include $(SHLR)/capstone.mk
+LINK+=$(SHLR)/../subprojects/sdb/src/libsdb.a
+LINK+=$(CS_LDFLAGS)
+ifneq ($(filter p/x86_zydis.mk,$(STATIC_ARCH_PLUGINS)),)
+LINK+=$(ZYDIS_LDFLAGS)
+endif
 CFLAGS+= -s SIDE_MODULE=1
 #CFLAGS+=-s ERROR_ON_UNDEFINED_SYMBOLS=0
 #EXT_EXE=.js
@@ -109,22 +135,25 @@ ifeq ($(OSTYPE),linux)
 LDFLAGS+=-static
 endif
 
-all: ${BEXE} ${BINS}
+all:: ${BEXE} ${BINS}
 
 ifeq ($(WITH_LIBR),1)
+# libr.a carries every libr symbol, the -lr_* from the deps would link the
+# shared libs next to it and the tool would pay their relocations at startup
+LIBR_LDFLAGS=$(filter-out -lr_%,$(LDFLAGS))
 ${BINS}: ${OBJS}
-	${CC} ${CFLAGS} $@.c ${OBJS} ../../libr/libr.a -o $@ $(LDFLAGS)
+	${CC} ${CFLAGS} $@.c ${OBJS} ../../libr/libr.a -o $@ $(LIBR_LDFLAGS)
 
 ${BEXE}: ${OBJ} ${SHARED_OBJ}
-ifeq ($(COMPILER),wasi)
+ ifeq ($(COMPILER),wasi)
+  ifeq ($(OSTYPE),wasi-api)
+	${CC} ${CFLAGS} $+ -L.. -o $@ $(LDFLAGS) -Wl,--no-entry -Wl,--export-all -mexec-model=reactor
+  else
 	${CC} ${CFLAGS} $+ -L.. -o $@ $(LDFLAGS)
-else
-ifeq ($(CC),emcc)
-	emcc $(BIN).c ../../shlr/libr_shlr.a ../../shlr/capstone/libcapstone.a ../../libr/libr.a ../../shlr/gdb/lib/libgdbr.a ../../shlr/zip/librz.a -I ../../libr/include -o $(BIN).js
-else
-	${CC} ${CFLAGS} $+ -L.. -o $@ ../../libr/libr.a $(LDFLAGS)
-endif
-endif
+  endif
+ else
+	${CC} ${CFLAGS} $+ -L.. -o $@ ../../libr/libr.a $(LIBR_LDFLAGS)
+ endif
 else
 
 ${BINS}: ${OBJS}
@@ -133,8 +162,10 @@ ifneq ($(SILENT),)
 endif
 	${CC} ${CFLAGS} $@.c ${OBJS} ${REAL_LDFLAGS} $(LINK) -o $@
 
-# -static fails because -ldl -lpthread static-gcc ...
+include ../../config-user.mk
+
 ${BEXE}: ${OBJ} ${SHARED_OBJ}
+# -static fails because -ldl -lpthread static-gcc ...
 ifneq ($(SILENT),)
 	@echo LD $@
 endif

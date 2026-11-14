@@ -4,6 +4,7 @@ r_bp_sources = [
   'bp_plugin.c',
   'bp_traptrace.c',
   'bp_watch.c',
+  'p/bp_null.c',
   'p/bp_arm.c',
   'p/bp_bf.c',
   'p/bp_mips.c',
@@ -22,8 +23,20 @@ r_bp = library('r_bp', r_bp_sources,
   soversion: r2_libversion
 )
 
-r_bp_dep = declare_dependency(link_with: r_bp,
-                              include_directories: [platform_inc])
+r_bp_dep = declare_dependency(link_with: r_bp, include_directories: [platform_inc])
+
+if get_option('blob')
+r_bp_static = static_library('r_bp_static', r_bp_sources,
+  include_directories: [platform_inc],
+  c_args: library_cflags,
+  dependencies: [r_util_static_dep],
+  install: true,
+  implicit_include_directories: false,
+)
+
+r_bp_static_dep = declare_dependency(link_with: r_bp_static,
+  include_directories: [platform_inc])
+endif
 
 pkgconfig_mod.generate(r_bp,
   subdirs: 'libr',

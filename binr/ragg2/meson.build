@@ -6,12 +6,11 @@ executable('ragg2', 'ragg2.c',
     r_egg_dep,
     r_bin_dep,
     r_core_dep,
-    r_hash_dep,
     r_debug_dep,
     r_fs_dep,
     r_config_dep,
     r_bp_dep,
-    r_crypto_dep
+    r_muta_dep
   ],
   install: true,
   install_rpath: rpath_exe,

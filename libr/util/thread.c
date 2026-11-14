@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2018 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_th.h>
 #include <r_util.h>
@@ -17,40 +17,102 @@
 #include <kernel/scheduler.h>
 #endif
 
-#if __WINDOWS__
+#if HAVE_PTHREAD || R2__WINDOWS__
+#if R2__WINDOWS__
 static DWORD WINAPI _r_th_launcher(void *_th) {
 #else
 static void *_r_th_launcher(void *_th) {
 #endif
-	int ret;
+	int ret = 0;
+	bool repeat = true;
 	RThread *th = _th;
-	th->ready = true;
-	if (th->delay > 0) {
-		r_sys_sleep (th->delay);
-	} else if (th->delay < 0) {
-		r_th_lock_wait (th->lock);
-	}
-	r_th_lock_enter (th->lock);
 	do {
+		r_th_lock_enter (th->lock);
+		bool is_ready = th->ready;
 		r_th_lock_leave (th->lock);
-		th->running = true;
-		ret = th->fun (th);
-		if (ret < 0) {
-			// th has been freed
+		while (!is_ready) {
+			// spinlock
+#ifdef __GNUC__
+			__asm__ volatile ("nop");
+#else
+			// r_sys_usleep (1);
+#endif
+			r_th_lock_enter (th->lock);
+			if (th->breaked) {
+				th->running = false;
+				r_th_lock_leave (th->lock);
+				return 0;
+			}
+			is_ready = th->ready;
+			r_th_lock_leave (th->lock);
+		}
+		r_th_lock_enter (th->lock);
+		if (th->delay) {
+			ut32 delay = th->delay;
+			th->delay = 0;
+			r_th_lock_leave (th->lock);
+			while (delay > 0 && !th->breaked) {
+				r_sys_usleep (10000);
+				delay = (delay > 10) ? delay - 10 : 0;
+			}
+			r_th_lock_enter (th->lock);
+		}
+		if (th->breaked) {
+			th->running = false;
+			r_th_lock_leave (th->lock);
 			return 0;
 		}
-		th->running = false;
-		r_th_lock_enter (th->lock);
-	} while (ret);
+		ret = th->fun (th);
+		switch (ret) {
+		case R_TH_STOP:
+			repeat = false;
+		case R_TH_PAUSE:
+			r_th_lock_enter (th->lock);
+			th->ready = false;
+			r_th_lock_leave (th->lock);
+		case R_TH_REPEAT:
+			r_th_lock_leave (th->lock);
+			break;
+		case R_TH_FREED:
+		default:
+			th->ready = false;
+			th->running = false;
+			r_th_lock_leave (th->lock);
+#if HAVE_PTHREAD
+			pthread_exit (&ret);
+#endif
+			return 0;
+		}
+	} while (repeat && !th->breaked);
+	r_th_lock_enter (th->lock);
+	th->running = false;
 	r_th_lock_leave (th->lock);
 #if HAVE_PTHREAD
 	pthread_exit (&ret);
 #endif
 	return 0;
 }
+#endif
 
-R_API int r_th_push_task(struct r_th_t *th, void *user) {
+R_API bool r_th_is_running(RThread *th) {
+	r_th_lock_enter (th->lock);
+	bool res = th->running;
+	r_th_lock_leave (th->lock);
+	return res;
+}
+
+R_API void r_th_set_running(RThread *th, bool b) {
+	r_th_lock_enter (th->lock);
+	th->running = b;
+	r_th_lock_leave (th->lock);
+}
+
+R_API int r_th_push_task(RThread *th, void *user) {
+	// Push a new task into the thread safely
+	R_RETURN_VAL_IF_FAIL (th, false);
 	int ret = true;
+	// Protect user pointer with lock
+	r_th_lock_enter (th->lock);
 	th->user = user;
 	r_th_lock_leave (th->lock);
 	return ret;
@@ -59,11 +121,18 @@ R_API int r_th_push_task(struct r_th_t *th, void *user) {
 R_API R_TH_TID r_th_self(void) {
 #if HAVE_PTHREAD
 	return pthread_self ();
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 	return GetCurrentThread ();
 #else
-#pragma message("Not implemented on this platform")
-	return (R_TH_TID)-1;
+	return (R_TH_TID)0;
+#endif
+}
+
+R_API bool r_th_tid_equal(R_TH_TID a, R_TH_TID b) {
+#if HAVE_PTHREAD
+	return pthread_equal (a, b) != 0;
+#else
+	return a == b;
 #endif
 }
 
@@ -71,24 +140,24 @@ R_API bool r_th_setname(RThread *th, const char *name) {
 #if defined(HAVE_PTHREAD_NP) && HAVE_PTHREAD_NP
 #if __linux__ || __sun
 	if (pthread_setname_np (th->tid, name) != 0) {
-		eprintf ("Failed to set thread name\n");
+		R_LOG_ERROR ("Failed to set thread name");
 		return false;
 	}
 #elif __APPLE__
 	if (pthread_setname_np (name) != 0) {
-		eprintf ("Failed to set thread name\n");
+		R_LOG_ERROR ("Failed to set thread name");
 		return false;
 	}
 #elif __FreeBSD__ || __OpenBSD__ || __DragonFly__ || __sun
 	pthread_set_name_np (th->tid, name);
 #elif __NetBSD__
 	if (pthread_setname_np (th->tid, "%s", (void *)name) != 0) {
-		eprintf ("Failed to set thread name\n");
+		R_LOG_ERROR ("Failed to set thread name");
 		return false;
 	}
 #elif __HAIKU__
 	if (rename_thread ((thread_id)th->tid, name) != B_OK) {
-		eprintf ("Failed to set thread name\n");
+		R_LOG_ERROR ("Failed to set thread name");
 		return false;
 	}
 #else
@@ -102,17 +171,17 @@ R_API bool r_th_getname(RThread *th, char *name, size_t len) {
 #if defined(HAVE_PTHREAD_NP) && HAVE_PTHREAD_NP
 #if __linux__ || __NetBSD__ || __APPLE__ || __sun
 	if (pthread_getname_np (th->tid, name, len) != 0) {
-		eprintf ("Failed to get thread name\n");
+		R_LOG_ERROR ("Failed to get thread name");
 		return false;
 	}
-#elif (__FreeBSD__ &&  __FreeBSD_version >= 1200000) || __DragonFly__  || (__OpenBSD__ && OpenBSD >= 201905)
+#elif __DragonFly__ ||(__FreeBSD__ && __FreeBSD_version >= 1200000) ||(__OpenBSD__ && OpenBSD >= 201905)
 	pthread_get_name_np (th->tid, name, len);
 #elif defined(__HAIKU__)
 	thread_info ti;
-	size_t flen = len < B_OS_NAME_LENGTH ? len : B_OS_NAME_LENGTH;
+	size_t flen = len < B_OS_NAME_LENGTH? len: B_OS_NAME_LENGTH;
 
 	if (get_thread_info ((thread_id)th->tid, &ti) != B_OK) {
-		eprintf ("Failed to get thread name\n");
+		R_LOG_ERROR ("Failed to get thread name");
 		return false;
 	}
 
@@ -124,94 +193,41 @@ R_API bool r_th_getname(RThread *th, char *name, size_t len) {
 	return true;
 }
 
-R_API bool r_th_setaffinity(RThread *th, int cpuid) {
-#if defined(__wasi__) || defined(_WASI_EMULATED_SIGNAL)
-	return true;
-#elif __linux__
-#if defined(__GLIBC__) && defined (__GLIBC_MINOR__) && (__GLIBC__ <= 2) && (__GLIBC_MINOR__ <= 2)
-	// Old versions of GNU libc don't have this feature
-#pragma message("warning r_th_setaffinity not implemented")
-#else
-	cpu_set_t c;
-	CPU_ZERO(&c);
-	CPU_SET(cpuid, &c);
-
-	if (sched_setaffinity (th->tid, sizeof (c), &c) != 0) {
-		eprintf ("Failed to set cpu affinity\n");
-		return false;
-	}
-#endif
-#elif __FreeBSD__ || __DragonFly__
-	cpuset_t c;
-	CPU_ZERO(&c);
-	CPU_SET(cpuid, &c);
-
-	if (pthread_setaffinity_np (th->tid, sizeof (c), &c) != 0) {
-		eprintf ("Failed to set cpu affinity\n");
-		return false;
-	}
-#elif __NetBSD__
-	cpuset_t *c;
-	c = cpuset_create ();
-
-	if (pthread_setaffinity_np (th->tid, cpuset_size(c), c) != 0) {
-		cpuset_destroy (c);
-		eprintf ("Failed to set cpu affinity\n");
-		return false;
-	}
-
-	cpuset_destroy (c);
-#elif __APPLE__
-	thread_affinity_policy_data_t c = {cpuid};
-	if (thread_policy_set (pthread_mach_thread_np (th->tid),
-		THREAD_AFFINITY_POLICY, (thread_policy_t)&c, 1) != KERN_SUCCESS) {
-		eprintf ("Failed to set cpu affinity\n");
-		return false;
-	}
-#elif __WINDOWS__
-	if (SetThreadAffinityMask (th->tid, (DWORD_PTR)1 << cpuid) == 0) {
-		eprintf ("Failed to set cpu affinity\n");
-		return false;
-	}
-#elif __sun
-	psetid_t c;
-
-	pset_create (&c);
-	pset_assign (c, cpuid, NULL);
-
-	if (pset_bind (c, P_PID, r_sys_getpid (), NULL)) {
-		pset_destroy (c);
-		eprintf ("Failed to set cpu affinity\n");
-		return false;
-	}
-
-	pset_destroy (c);
-#else
-#pragma message("warning r_th_setaffinity not implemented")
-#endif
-	return true;
-}
-
-R_API RThread *r_th_new(R_TH_FUNCTION(fun), void *user, int delay) {
+R_API RThread *r_th_new(RThreadFunction fun, void *user, ut32 delay) {
 	RThread *th = R_NEW0 (RThread);
-	if (th) {
-		th->lock = r_th_lock_new (false);
-		th->running = false;
-		th->fun = fun;
-		th->user = user;
-		th->delay = delay;
-		th->breaked = false;
-		th->ready = false;
+	th->lock = r_th_lock_new (true);
+	th->running = false;
+	th->fun = fun;
+	th->user = user;
+	th->delay = delay;
+	th->breaked = false;
+	th->ready = false;
 #if HAVE_PTHREAD
-		pthread_create (&th->tid, NULL, _r_th_launcher, th);
-#elif __WINDOWS__
-		th->tid = CreateThread (NULL, 0, _r_th_launcher, th, 0, 0);
-#endif
+	const size_t THREAD_STACK_SIZE = 8 * 1024 * 1024; // 8MB
+	pthread_attr_t *pattr = NULL;
+	pthread_attr_t attr;
+	int rc = pthread_attr_init (&attr);
+	if (rc != -1) {
+		if (pthread_attr_setstacksize (&attr, THREAD_STACK_SIZE) != -1) {
+			pattr = &attr;
+		}
 	}
+	if (pthread_create (&th->tid, pattr, _r_th_launcher, th) != 0) {
+		r_th_lock_free (th->lock);
+		free (th);
+		return NULL;
+	}
+#elif R2__WINDOWS__
+	th->tid = CreateThread (NULL, 0, _r_th_launcher, th, 0, 0);
+#endif
+	th->running = !!th->tid;
 	return th;
 }
 
+// Signal the thread to stop at the next opportunity
 R_API void r_th_break(RThread *th) {
+	R_RETURN_IF_FAIL (th);
+	// Set break flag without acquiring thread lock to avoid deadlock
 	th->breaked = true;
 }
 
@@ -219,40 +235,45 @@ R_API bool r_th_kill(RThread *th, bool force) {
 	if (!th || !th->tid) {
 		return false;
 	}
+	// First set breaked flag to signal thread to stop
+	// Protect break flag with lock to ensure visibility
+	r_th_lock_enter (th->lock);
 	th->breaked = true;
-	r_th_break (th);
-	r_th_wait (th);
+	r_th_lock_leave (th->lock);
+	// If force is true, kill the thread immediately
+	if (force) {
 #if HAVE_PTHREAD
 #ifdef __ANDROID__
-	pthread_kill (th->tid, 9);
+		pthread_kill (th->tid, 9);
 #else
-	pthread_cancel (th->tid);
+		pthread_cancel (th->tid);
 #endif
-#elif __WINDOWS__
-	TerminateThread (th->tid, -1);
+#elif R2__WINDOWS__
+		TerminateThread (th->tid, -1);
 #endif
-	return 0;
+	}
+	// Wait for thread to finish
+	r_th_wait (th);
+	return false;
 }
 
-R_API bool r_th_start(RThread *th, int enable) {
-	bool ret = true;
-	if (enable) {
-		if (!th->running) {
-			// start thread
-			while (!th->ready) {
-				/* spinlock */
-			}
-			r_th_lock_leave (th->lock);
-		}
-	} else {
-		if (th->running) {
-			// stop thread
-			//r_th_kill (th, 0);
-			r_th_lock_enter (th->lock); // deadlock?
-		}
+// enable should be bool and th->ready must be protected with locks
+R_API bool r_th_start(RThread *th) {
+	R_RETURN_VAL_IF_FAIL (th, false);
+	r_th_lock_enter (th->lock);
+	if (!th->running) {
+		// thread already exited, cannot launch
+		r_th_lock_leave (th->lock);
+		return false;
 	}
-	th->running = enable;
-	return ret;
+	if (th->ready) {
+		// thread is currently running and has launched user function
+		r_th_lock_leave (th->lock);
+		return true;
+	}
+	th->ready = true;
+	r_th_lock_leave (th->lock);
+	return true;
 }
 
 R_API int r_th_wait(struct r_th_t *th) {
@@ -261,23 +282,28 @@ R_API int r_th_wait(struct r_th_t *th) {
 #if HAVE_PTHREAD
 		void *thret;
 		ret = pthread_join (th->tid, &thret);
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 		ret = WaitForSingleObject (th->tid, INFINITE);
 #endif
-		th->running = false;
 	}
 	return ret;
 }
 
+// Check if a thread is still running without blocking
 R_API int r_th_wait_async(struct r_th_t *th) {
-	return th->running;
+	R_RETURN_VAL_IF_FAIL (th, false);
+	// Safely read the running flag
+	r_th_lock_enter (th->lock);
+	bool running = th->running;
+	r_th_lock_leave (th->lock);
+	return running;
 }
 
 R_API void *r_th_free(struct r_th_t *th) {
 	if (!th) {
 		return NULL;
 	}
-#if __WINDOWS__
+#if R2__WINDOWS__
 	CloseHandle (th->tid);
 #endif
 	r_th_lock_free (th->lock);
@@ -293,17 +319,3 @@ R_API void *r_th_kill_free(struct r_th_t *th) {
 	r_th_free (th);
 	return NULL;
 }
-
-#if 0
-
-// Thread Pipes
-typedef struct r_th_pipe_t {
-	RList *msglist;
-	RThread *th;
-	//RThreadLock *lock;
-} RThreadPipe;
-
-r_th_pipe_new();
-
-#endif
-

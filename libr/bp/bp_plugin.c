@@ -2,62 +2,44 @@
 
 #include <r_bp.h>
 
-R_API int r_bp_plugin_del(RBreakpoint *bp, const char *name) {
-	RListIter *iter;
-	RBreakpointPlugin *h;
-	if (name && *name) {
-		r_list_foreach (bp->plugins, iter, h) {
-			if (!strcmp (h->name, name)) {
-				if (bp->cur == h) {
-					bp->cur = NULL;
-				}
-				r_list_delete (bp->plugins, iter);
-				bp->nbps--;
-				return true;
-			}
+R_API bool r_bp_plugin_del(RBreakpoint *bp, const char *name) {
+	R_RETURN_VAL_IF_FAIL (bp && name, false);
+	RBreakpointPlugin *h = r_libstore_find_name (bp->libstore, name);
+	if (h) {
+		if (bp->cur == h) {
+			bp->cur = NULL;
 		}
+		r_list_delete_data (bp->libstore->plugins, h);
+		return true;
 	}
 	return false;
 }
 
-R_API int r_bp_plugin_add(RBreakpoint *bp, RBreakpointPlugin *foo) {
-	RListIter *iter;
-	RBreakpointPlugin *h;
-	if (!bp) {
-		eprintf ("Cannot add plugin because dbg->bp is null and/or plugin is null\n");
-		return false;
-	}
-	/* avoid dupped plugins */
-	r_list_foreach (bp->bps, iter, h) {
-		if (!strcmp (h->name, foo->name)) {
-			return false;
-		}
-	}
-	bp->nbps++;
-	r_list_append (bp->plugins, foo);
-	return true;
+R_API bool r_bp_plugin_remove(RBreakpoint *bp, RBreakpointPlugin *plugin) {
+	R_RETURN_VAL_IF_FAIL (bp && plugin, false);
+	return r_bp_plugin_del (bp, plugin->meta.name);
 }
 
-R_API int r_bp_use(RBreakpoint *bp, const char *name, int bits) {
-	RListIter *iter;
+R_API bool r_bp_use(RBreakpoint *bp, const char *name, int bits) {
+	R_RETURN_VAL_IF_FAIL (bp && name, false);
 	bp->bits = bits;
-	RBreakpointPlugin *h;
-	r_list_foreach (bp->plugins, iter, h) {
-		if (!strcmp (h->name, name)) {
-			bp->cur = h;
-			return true;
-		}
+	RBreakpointPlugin *h = r_libstore_find_name (bp->libstore, name);
+	if (h) {
+		bp->cur = h;
+		return true;
 	}
 	return false;
 }
 
-// TODO: deprecate
-R_API void r_bp_plugin_list(RBreakpoint *bp) {
+R_API char *r_bp_plugin_list(RBreakpoint *bp) {
+	R_RETURN_VAL_IF_FAIL (bp, NULL);
 	RListIter *iter;
 	RBreakpointPlugin *b;
-	r_list_foreach (bp->plugins, iter, b) {
-		bp->cb_printf ("bp %c %s\n",
-			(bp->cur && !strcmp (bp->cur->name, b->name))? '*': '-',
-			b->name);
+	RStrBuf *sb = r_strbuf_new ("");
+	r_list_foreach (bp->libstore->plugins, iter, b) {
+		r_strbuf_appendf (sb, "bp %c %s\n",
+			(bp->cur && !strcmp (bp->cur->meta.name, b->meta.name))? '*': '-',
+			b->meta.name);
 	}
+	return r_strbuf_drain (sb);
 }

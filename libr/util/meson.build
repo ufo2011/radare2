@@ -1,101 +1,138 @@
-subdir('d')
-
 r_util_sources = [
-  'ascii_table.c',
-  'assert.c',
-  'w32.c',
-  'w32dw.c',
   'alloc.c',
-  'charset.c',
-  'donut.c',
-  'table.c',
-  'sstext.c',
-  'getopt.c',
-  'print_code.c',
+  'arena.c',
+  'atree.c',
+  'asn1_str.c',
+  'asn1.c',
+  'assert.c',
+  'axml.c',
+  'base32.c',
+  'base36.c',
   'base85.c',
   'base91.c',
   'bdiff.c',
   'bitmap.c',
+  'bitset.c',
+  'bloom.c',
+  'bplist.c',
+  'bscanf.c',
   'buf.c',
-  'cache.c',
-  'calc.c',
+  'cfloat.c',
+  'chartable.c',
   'chmod.c',
   'debruijn.c',
-  'udiff.c',
+  'donut.c',
+  'emoji.c',
   'event.c',
   'file.c',
-  'flist.c',
-  'graph.c',
+  'format.c',
+  'fonts.c',
+  'getopt.c',
   'graph_drawable.c',
+  'graph.c',
   'hex.c',
   'idpool.c',
-  'json_parser.c',
+  'intervaltree.c',
   'json_indent.c',
+  'json_parser.c',
+  'jwt.c',
   'lib.c',
+  'libstore.c',
   'list.c',
   'log.c',
+  'markdown.c',
+  'math.c',
+  'mmap.c',
   'mem.c',
   'name.c',
   'new_rbtree.c',
-  'format.c',
   'pie.c',
-  'seven.c',
+  'pj.c',
+  'pkcs7.c',
+  'print_code.c',
   'print.c',
+  'print_regcolor.c',
   'prof.c',
+  'protobuf.c',
   'punycode.c',
   'qrcode.c',
   'queue.c',
-  'asn1.c',
-  'astr.c',
-  'axml.c',
-  'pkcs7.c',
-  'x509.c',
-  'utype.c',
   'randomart.c',
   'range.c',
   'rbtree.c',
-  'intervaltree.c',
+  'regex/regcomp.c',
+  'regex/regerror.c',
+  'regex/regexec.c',
+  'rlz4.c',
+  'rprintf.c',
+  'rstr.c',
+  'rvc_git.c',
+  'rvc_rvc.c',
+  'rvc.c',
+  'rxml.c',
+  'rxmldom.c',
   'sandbox.c',
   'signal.c',
   'skiplist.c',
   'spaces.c',
+  'sstext.c',
   'stack.c',
-  'str.c',
   'str_constpool.c',
+  'str_pseudo.c',
+  'str_pseudo.c',
+  'str_strip.c',
   'str_trim.c',
+  'str.c',
   'strbuf.c',
+  'strs.c',
+  'strs_store.c',
   'strpool.c',
+  'sys_sh.c',
+  'sys_w32.c',
   'sys.c',
   'syscmd.c',
-  'thread.c',
-  'thread_sem.c',
-  'thread_lock.c',
+  'table.c',
+  'thread_chan.c',
   'thread_cond.c',
+  'thread_lock.c',
   'thread_pipe.c',
+  'thread_sem.c',
+  'thread.c',
   'time.c',
+  'token.c',
   'tree.c',
-  'pj.c',
+  'trie.c',
+  'treemap.c',
   'ubase64.c',
+  'udiff.c',
   'uleb128.c',
   'unum.c',
-  'utf8.c',
   'utf16.c',
   'utf32.c',
-  'vector.c',
-  'skyline.c',
-  'sys_w32.c',
+  'utf8.c',
+  'utype.c',
+  'w32.c',
+  'w32dw.c',
+  'x509.c',
+  'xdg.c',
   'zip.c',
-  'protobuf.c',
-  'regex/regcomp.c',
-  'regex/regexec.c',
-  'regex/regerror.c'
 ]
 
-if get_option('sdb_cgen')
-  r_util_sources += r_util_d_sources
+# No d subdirectory for util, so no r_util_d_sources to include
+
+if get_option('use_sys_lz4')
+  lz4_dep = dependency('liblz4', required: false)
+else
+  # the bundled rlz4 is used, do not link (and leak into static builds) the system one
+  lz4_dep = dependency('', required: false)
+  library_cflags += ['-DUSE_RLZ4']
 endif
 
-r_util_deps = [ldl, mth, spp_dep, pth, utl, sdb_dep, zlib_dep, platform_deps]
+r_util_deps = [ldl, mth, spp_dep, pth, sdb_dep, lz4_dep, platform_deps]
+if get_option('use_zip')
+  r_util_deps += [ zlib_dep, zip_dep ]
+endif
+
 if host_machine.system().startswith('freebsd') or host_machine.system().startswith('netbsd') or host_machine.system().startswith('haiku')
   # backtrace_symbols_fd requires -lexecinfo
   r_util_deps += [cc.find_library('execinfo')]
@@ -108,6 +145,7 @@ else
   r_util_sources += ['big.c']
 endif
 
+
 r_util = library('r_util', r_util_sources,
   include_directories: platform_inc,
   c_args: library_cflags,
@@ -119,8 +157,22 @@ r_util = library('r_util', r_util_sources,
 )
 
 r_util_dep = declare_dependency(link_with: r_util,
-                                include_directories: platform_inc,
-                                dependencies: r_util_deps)
+  include_directories: platform_inc,
+  dependencies: r_util_deps)
+
+if get_option('blob')
+  r_util_static = static_library('r_util_static', r_util_sources,
+    include_directories: platform_inc,
+    c_args: library_cflags,
+    dependencies: r_util_deps,
+    install: true,
+    implicit_include_directories: false,
+    install_rpath: rpath_lib,
+  )
+  r_util_static_dep = declare_dependency(link_with: r_util_static,
+    include_directories: platform_inc,
+    dependencies: r_util_deps)
+endif
 
 pkgconfig_mod.generate(r_util,
   subdirs: ['libr', 'libr/sdb'],

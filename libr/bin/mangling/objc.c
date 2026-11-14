@@ -1,50 +1,51 @@
-/* radare - LGPL - Copyright 2012-2019 - pancake */
+/* radare - LGPL - Copyright 2012-2025 - pancake */
 
 #include <r_bin.h>
 #include "../i/private.h"
 
 R_API char *r_bin_demangle_objc(RBinFile *bf, const char *sym) {
-	r_return_val_if_fail ((!bf || (bf && bf->o && bf->o->classes)) && sym, NULL);
-	char *ret = NULL;
+	R_RETURN_VAL_IF_FAIL ((!bf || (bf && bf->bo && bf->bo->classes)) && sym, NULL);
+	const char *rawname = sym;
 	char *clas = NULL;
 	char *name = NULL;
 	char *args = NULL;
 	int i, nargs = 0;
 	const char *type = NULL;
 
-	if (bf && bf->o && bf->o->classes) {
+	if (bf && bf->bo && bf->bo->classes) {
 		bf = NULL;
 	}
 	/* classes */
-	if (!strncmp (sym, "_OBJC_Class_", 12)) {
-		const char *className = sym + 12;
-		ret = r_str_newf ("class %s", className);
-		if (bf) {
-			r_bin_file_add_class (bf, className, NULL, R_BIN_CLASS_PUBLIC);
+	if (r_str_startswith (sym, "_OBJC_")) {
+		const char *sym2 = sym + strlen ("_OBJC_");
+		if (r_str_startswith (sym2, "Class_")) {
+			const char *className = sym + 12;
+			if (bf) {
+				r_bin_file_add_class (bf, className, NULL, R_BIN_ATTR_PUBLIC);
+			}
+			return r_str_newf ("class %s", className);
 		}
-		return ret;
-	}
-	if (!strncmp (sym, "_OBJC_CLASS_$_", 14)) {
-		const char *className = sym + 14;
-		ret = r_str_newf ("class %s", className);
-		if (bf) {
-			r_bin_file_add_class (bf, className, NULL, R_BIN_CLASS_PUBLIC);
+		if (r_str_startswith (sym2, "CLASS_$_")) {
+			const char *className = sym + 14;
+			if (bf) {
+				r_bin_file_add_class (bf, className, NULL, R_BIN_ATTR_PUBLIC);
+			}
+			return r_str_newf ("class %s", className);
 		}
-		return ret;
-	}
-	/* fields */
-	if (!strncmp (sym, "_OBJC_IVAR_$_", 13)) {
-		clas = strdup (sym + 13);
-		char *p = strchr (clas, '.');
-		type = "field";
-		if (p) {
-			*p = 0;
-			name = strdup (p + 1);
-		} else {
-			name = NULL;
-		}
-		if (bf) {
-			r_bin_file_add_field (bf, clas, name);
+		/* fields */
+		if (r_str_startswith (sym2, "IVAR_$_")) {
+			type = "field";
+			clas = strdup (sym + 13);
+			char *p = strchr (clas, '.');
+			if (p) {
+				*p = 0;
+				name = strdup (p + 1);
+			} else {
+				name = NULL;
+			}
+			if (bf) {
+				r_bin_file_add_field (bf, clas, name);
+			}
 		}
 	}
 	/* methods */
@@ -61,15 +62,14 @@ R_API char *r_bin_demangle_objc(RBinFile *bf, const char *sym) {
 			if (name) {
 				*name++ = 0;
 				name = strdup (name);
-				if (!name){
+				if (!name) {
 					free (clas);
 					return NULL;
 				}
 				for (i = 0; name[i]; i++) {
-					if (name[i]==']') {
+					if (name[i] == ']') {
 						name[i] = 0;
-					}
-					if (name[i]==':') {
+					} else if (name[i] == ':') {
 						nargs++;
 						name[i] = 0;
 					}
@@ -79,17 +79,14 @@ R_API char *r_bin_demangle_objc(RBinFile *bf, const char *sym) {
 	}
 	if (sym[0] == '_' && sym[1] && sym[2] == '_') { // gnu style
 		free (clas);
+		free (name);
 		clas = strdup (sym + 3);
 		args = strstr (clas, "__");
 		if (!args) {
 			free (clas);
-			if (name != clas) {
-				free (name);
-			}
 			return NULL;
 		}
 		*args = 0;
-		free (name);
 		name = strdup (args + 2);
 		if (!name) {
 			free (clas);
@@ -108,27 +105,27 @@ R_API char *r_bin_demangle_objc(RBinFile *bf, const char *sym) {
 			type = "static";
 		}
 	}
+	char *ret = NULL;
 	if (type) {
 		if (!strcmp (type, "field")) {
 			ret = r_str_newf ("field int %s::%s", clas, name);
 		} else {
 			if (nargs) {
-				const char *arg = "int";
-				args = malloc (((strlen (arg) + 4) * nargs) + 1);
-				args[0] = 0;
-				for (i = 0;i < nargs; i++) {
-					strcat (args, arg);
+				RStrBuf *sb = r_strbuf_new ("");
+				for (i = 0; i < nargs; i++) {
+					r_strbuf_append (sb, "int");
 					if (i + 1 < nargs) {
-						strcat (args, ", ");
+						r_strbuf_append (sb, ", ");
 					}
 				}
+				args = r_strbuf_drain (sb);
 			} else {
 				args = strdup ("");
 			}
-			if (type && name && *name) {
+			if (R_STR_ISNOTEMPTY (name) && type) {
 				ret = r_str_newf ("%s int %s::%s(%s)", type, clas, name, args);
 				if (bf) {
-					r_bin_file_add_method (bf, clas, name, nargs);
+					r_bin_file_add_method (bf, rawname, clas, name, nargs);
 				}
 			}
 		}

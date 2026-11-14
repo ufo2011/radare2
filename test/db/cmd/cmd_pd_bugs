@@ -1,10 +1,43 @@
+NAME=Relative global substitution preserves a following immediate
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+o malloc://128 0x2000 rw
+e asm.arch=x86
+e asm.bits=64
+e asm.bytes=false
+e asm.comments=false
+f global.slot 8 @ 0x2000
+wx 48c705f51f0000ffffffff @ 0
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      mov qword [global.slot], 0xffffffffffffffff
+EOF
+RUN
+
+NAME=pd asmdescribe on string
+FILE=bins/mach0/mac-ls4
+ARGS=-a arm -b64
+CMDS=<<EOF
+s 0x100003ac0
+Csz
+e asm.describe=1
+pd 2
+EOF
+EXPECT=<<EOF
+            0x100003ac0     .string "\xbf\n" ; len=3
+            0x100003ac3      f9             unaligned
+EOF
+RUN
+
 NAME=pd call sym bug
 FILE=bins/mach0/hello-objc-arm
 CMDS=<<EOF
 e asm.lines.jmp=0
 e asm.bytes=0
 e asm.comments=0
-s sym.static_int_Test::callMeNot__
+s method.class.Test.callMeNot
 pd 20~?NSLog
 af
 pd 20~?NSLog
@@ -12,6 +45,63 @@ EOF
 EXPECT=<<EOF
 1
 1
+EOF
+RUN
+
+NAME=pd+reloff+colors
+FILE=bins/elf/analysis/ls-alxchk
+CMDS=<<EOF
+af
+e asm.var.summary=0
+e asm.addr.relto=func
+pd 10
+e scr.color=1
+pd 10
+EOF
+EXPECT=<<EOF
+/ 41: entry0 (int64_t arg1);
+|           ; arg int64_t arg1 @ rdx
+|           entry0                         31ed           xor ebp, ebp
+|           entry0+0x2                     4989d1         mov r9, rdx  ; arg1
+|           entry0+0x5                     5e             pop rsi
+|           entry0+0x6                     4889e2         mov rdx, rsp
+|           entry0+0x9                     4883e4f0       and rsp, 0xfffffffffffffff0
+|           entry0+0xd                     50             push rax
+|           entry0+0xe                     54             push rsp
+|           entry0+0xf                     4c8b05e693..   mov r8, qword [reloc.fixup.UHH_] ; [0x1f220:8]=0x16ee0
+|           entry0+0x16                    488b0de793..   mov rcx, qword [reloc.fixup.UHAWAVAUATSH8] ; [0x1f228:8]=0x16e60
+|           entry0+0x1d                    488b3de893..   mov rdi, qword [reloc.fixup.UHAWAVAUATSHH] ; [0x1f230:8]=0x3bd0 main
+[36m/[0m 41: [33mentry0[0m (int64_t arg1);
+[36m|[0m           [37m; [37marg [36mint64_t [33marg1 [32m@ rdx[0m
+[36m|[0m           [32mentry0[0m                          [33m31[36med[0m           [33mxor[37m ebp[0m,[37m ebp[0m[0m
+[36m|[0m           [32mentry0[0m+0x2                      [33m49[36m89[36md1[0m         [36mmov[37m r9[0m,[37m rdx[0m[0m [37m; arg1[0m
+[36m|[0m           [32mentry0[0m+0x5                      [33m5e[0m             [35mpop[37m rsi[0m[0m
+[36m|[0m           [32mentry0[0m+0x6                      [33m48[36m89[36me2[0m         [36mmov[37m rdx[0m,[37m rsp[0m[0m
+[36m|[0m           [32mentry0[0m+0x9                      [33m48[36m83[36me4[36mf0[0m       [33mand[37m rsp[0m,[33m[33m [32m0xfffffffffffffff0[0m[0m
+[36m|[0m           [32mentry0[0m+0xd                      [33m50[0m             [35mpush[37m rax[0m[0m
+[36m|[0m           [32mentry0[0m+0xe                      [33m54[0m             [35mpush[37m rsp[0m[0m
+[36m|[0m           [32mentry0[0m+0xf                      [33m4c[36m8b[36m05[36me6[36m93[36m..[0m   [36mmov[37m r8[0m,[33m qword[33m [0m[[33mreloc.fixup.UHH_[0m][37m[0m[31m [31m; [[31m0x1f220[31m:8]=0x16ee0[0m
+[36m|[0m           [32mentry0[0m+0x16                     [33m48[36m8b[36m0d[36me7[36m93[36m..[0m   [36mmov[37m rcx[0m,[33m qword[33m [0m[[33mreloc.fixup.UHAWAVAUATSH8[0m][37m[0m[31m [31m; [[31m0x1f228[31m:8]=0x16e60[0m
+[36m|[0m           [32mentry0[0m+0x1d                     [33m48[36m8b[33m3d[36me8[36m93[36m..[0m   [36mmov[37m rdi[0m,[33m qword[33m [0m[[33mreloc.fixup.UHAWAVAUATSHH[0m][37m[0m[31m [31m; [[31m0x1f230[31m:8]=0x3bd0 main[0m
+EOF
+RUN
+
+NAME=pd flag without realname
+FILE=malloc://512
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+e scr.color=0
+e asm.bytes=0
+e asm.comments=1
+wx a100010000 @ 0
+f first @ 0x100
+f second @ 0x100
+fN second base64:
+pd 1 @ 0
+EOF
+EXPECT=<<EOF
+            0x00000000      mov eax, dword [first]                     ; second
+                                                                       ; [0x100:4]=0
 EOF
 RUN
 
@@ -48,7 +138,7 @@ CMDS=<<EOF
 e asm.lines.jmp=0
 e asm.bytes=0
 e asm.comments=0
-s sym.static_int_Test::callMeNot
+s method.class.Test.callMeNot
 # s+2
 pi 2
 EOF
@@ -76,7 +166,6 @@ RUN
 
 NAME=call fcn eip 64bit
 FILE=bins/elf/analysis/ls-alxchk
-BROKEN=1
 CMDS=<<EOF
 s 0x5e50
 e asm.bits=64
@@ -87,7 +176,7 @@ e asm.bytes=0
 e asm.comments=0
 EOF
 EXPECT=<<EOF
-|           0x00005f16      e835ffffff     call fcn.eip
+            0x00005f16      e835ffffff     call eip
 EOF
 RUN
 
@@ -165,7 +254,6 @@ pi 2
 EOF
 EXPECT=<<EOF
             ;-- section..text:
-            ;-- .text:
             ;-- entry0:
             ;-- _start:
             0x004005c0      31ed           xor ebp, ebp                ; [14] -r-x section size 584 named .text
@@ -237,5 +325,237 @@ EXPECT=<<EOF
             ;-- entry0:
             ;-- func.1000013d8:
             0x1000013d8      55             push rbp
+EOF
+RUN
+
+NAME=asm.tabs.once
+FILE=bins/mach0/ls-osx-x86_64
+CMDS=<<EOF
+e asm.tabs=8
+e asm.tabs.once=true
+e asm.bytes=false
+e asm.lines=false
+pd 5
+pdJ 3~{}
+EOF
+EXPECT=<<EOF
+;-- main:
+;-- entry0:
+;-- func.1000013d8:
+0x1000013d8      push     rbp
+0x1000013d9      mov      rbp, rsp
+0x1000013dc      push     r15
+0x1000013de      push     r14
+0x1000013e0      push     r13
+[
+  {
+    "addr": 4294972376,
+    "text": ";-- main:"
+  },
+  {
+    "addr": 4294972376,
+    "text": ";-- entry0:"
+  },
+  {
+    "addr": 4294972376,
+    "text": ";-- func.1000013d8:"
+  },
+  {
+    "addr": 4294972376,
+    "text": "0x1000013d8      push     rbp"
+  },
+  {
+    "addr": 4294972377,
+    "text": "0x1000013d9      mov      rbp, rsp"
+  },
+  {
+    "addr": 4294972380,
+    "text": "0x1000013dc      push     r15"
+  }
+]
+EOF
+RUN
+
+NAME=pdi negative count without analysis
+FILE=malloc://32
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+wx 1e0080d2e50300aa1f2003d5c0035fd6
+s 8
+pdi -2
+EOF
+EXPECT=<<EOF
+0x00000000             1e0080d2  mov x30, 0
+0x00000004             e50300aa  mov x5, x0
+EOF
+RUN
+
+NAME=pdi negative count with invalid instruction in window
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 64
+wow 1f2003d5
+wx ffffffff @ 0x24
+s 0x40
+pdi -9
+EOF
+EXPECT=<<EOF
+0x0000001c             1f2003d5  nop
+0x00000020             1f2003d5  nop
+0x00000024             ffffffff  invalid
+0x00000028             1f2003d5  nop
+0x0000002c             1f2003d5  nop
+0x00000030             1f2003d5  nop
+0x00000034             1f2003d5  nop
+0x00000038             1f2003d5  nop
+0x0000003c             1f2003d5  nop
+EOF
+RUN
+
+NAME=pdi negative count near start of file
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 64
+wow 1f2003d5
+s 8
+pdi -4
+EOF
+EXPECT=<<EOF
+0x00000000             1f2003d5  nop
+0x00000004             1f2003d5  nop
+0x00000008             1f2003d5  nop
+0x0000000c             1f2003d5  nop
+EOF
+RUN
+
+NAME=pd negative count near start of file does not wrap around
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 64
+wow 1f2003d5
+s 8
+pd -4
+EOF
+EXPECT=<<EOF
+            0x00000000      1f2003d5       nop
+            0x00000004      1f2003d5       nop
+            0x00000008      1f2003d5       nop
+            0x0000000c      1f2003d5       nop
+EOF
+RUN
+
+NAME=pi negative count at the very start of the file shows the forward window like pd
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 64
+wow 1f2003d5
+s 0
+e asm.lines=0
+pi -4
+EOF
+EXPECT=<<EOF
+nop
+nop
+nop
+nop
+EOF
+RUN
+
+NAME=pd got.plt stub slot not decoded as string
+FILE=bins/elf/analysis/ls-alxchk
+CMDS=pd 1 @ 0x3520
+EXPECT=<<EOF
+            ;-- fwrite_unlocked:
+            0x00003520      ff253abe0100   jmp qword [reloc.fwrite_unlocked] ; [0x1f360:8]=0x3526
+EOF
+RUN
+
+NAME=pd Cs string at a pointer slot is not overruled
+FILE=bins/elf/analysis/ls-alxchk
+ARGS=-e asm.bytes=0
+CMDS=<<EOF
+Cs 2 @ 0x1f228
+pd 1 @ 0x5e3a
+EOF
+EXPECT=<<EOF
+            0x00005e3a      mov rcx, qword [reloc.fixup.UHAWAVAUATSH8] ; [0x1f228:8]=0x16e60 ; "`n"
+EOF
+RUN
+
+NAME=pd Cs covering a pointer slot is not overruled
+FILE=bins/elf/analysis/ls-alxchk
+ARGS=-e asm.bytes=0
+CMDS=<<EOF
+Cs 16 @ 0x1f220
+pd 1 @ 0x5e3a
+EOF
+EXPECT=<<EOF
+            0x00005e3a      mov rcx, qword [reloc.fixup.UHAWAVAUATSH8] ; [0x1f228:8]=0x16e60 ; "`n\x01"
+EOF
+RUN
+
+NAME=pd string before a relocated slot keeps its comment
+FILE=bins/elf/ls
+ARGS=-e asm.bytes=0 -e io.cache=true
+CMDS=<<EOF
+wx 41424300 @ 0x21d74
+f str.ABC 4 @ 0x21d74
+wa lea rsi, [0x21d74] @ 0x5f9a
+pd 1 @ 0x5f9a
+EOF
+EXPECT=<<EOF
+            0x00005f9a      lea rsi, str.ABC                           ; 0x21d74 ; "ABC"
+EOF
+RUN
+
+NAME=pd unflagged got slot not decoded as string
+FILE=bins/elf/analysis/ls-alxchk
+ARGS=-e asm.bytes=0 -e io.cache=true
+CMDS=<<EOF
+wx 4142434445460000 @ 0x1f228
+f-*
+pd 1 @ 0x5e3a
+EOF
+EXPECT=<<EOF
+            0x00005e3a      mov rcx, qword [0x0001f228]                ; [0x1f228:8]=0x464544434241
+EOF
+RUN
+
+NAME=pd 32bit stub slot not decoded as string
+FILE=bins/mach0/hellocxx-osx-i386
+ARGS=-e asm.bytes=0
+CMDS=pd 1 @ 0x1dee
+EXPECT=<<EOF
+            ;-- section.2.__TEXT.__symbol_stub:
+            ;-- class.std::string:
+            ;-- sym.std::string._ZNKSs4sizeEv:
+            ;-- std::string::size() const:
+            0x00001dee      jmp dword [reloc.std::string::size___const] ; 0x2030 ; [02] -r-x section size 54 named 2.__TEXT.__symbol_stub
+EOF
+RUN
+
+NAME=pd without a loaded arch plugin does not crash
+FILE=malloc://8
+CMDS=<<EOF
+e asm.arch=nonexistent
+e asm.ucase=true
+pd 1
+e asm.ucase=false
+e asm.capitalize=true
+pd 1
+e asm.tabs=4
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      00             invalid
+            0x00000000      00             invalid
+            0x00000000      00             invalid
+EOF
+EXPECT_ERR=<<EOF
+ERROR: asm.arch: cannot find 'nonexistent'
 EOF
 RUN

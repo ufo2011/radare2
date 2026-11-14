@@ -1,20 +1,13 @@
-/* radare - Copyright 2011-2019 pancake<nopcode.org> */
+/* radare - Copyright 2011-2025 pancake<nopcode.org> */
 /* $OpenBSD: magic.c,v 1.8 2009/10/27 23:59:37 deraadt Exp $ */
 
 #include <r_userconf.h>
 #include <r_magic.h>
+#include <r_lib.h>
+#include <r_util.h>
+#include <limits.h>
 
-R_LIB_VERSION (r_magic);
-
-#ifdef _MSC_VER
-# include <io.h>
-# include <sys\stat.h>
-# define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
-# define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
-# define S_IFIFO (-1)
-# define S_ISFIFO(m) (((m) & S_IFIFO) == S_IFIFO)
-# define MAXPATHLEN 255
-#endif
+R_LIB_VERSION(r_magic);
 
 #if USE_LIB_MAGIC
 
@@ -24,17 +17,76 @@ R_LIB_VERSION (r_magic);
 #undef R_API
 #define R_API
 
-R_API RMagic* r_magic_new(int flags) { return magic_open (flags); }
-R_API void r_magic_free(RMagic* m) { if (m) { magic_close (m); } }
-R_API const char *r_magic_file(RMagic* m, const char * f) { return magic_file (m, f); } 
-R_API const char *r_magic_descriptor(RMagic* m, int fd) { return magic_descriptor (m, fd); }
-R_API const char *r_magic_buffer(RMagic* m, const void *b, size_t s) { return magic_buffer (m, b, s); }
-R_API const char *r_magic_error(RMagic* m) { return magic_error (m); }
-R_API void r_magic_setflags(RMagic* m, int f) { magic_setflags (m, f); }
-R_API bool r_magic_load(RMagic* m, const char *f) { return magic_load (m, f) != -1; }
-R_API bool r_magic_compile(RMagic* m, const char *x) { return magic_compile (m, x) != -1; }
-R_API bool r_magic_check(RMagic* m, const char *x) { return magic_check (m, x) != -1; }
-R_API int r_magic_errno(RMagic* m) { return magic_errno (m); }
+R_API RMagic *r_magic_new(int flags) {
+	flags &= ~R_MAGIC_CHECK_TEXT;
+	return magic_open (flags);
+}
+R_API void r_magic_free(RMagic *m) {
+	R_RETURN_IF_FAIL (m);
+	magic_close (m);
+}
+R_API const char *r_magic_buffer(RMagic *m, const void *b, size_t s) {
+	R_RETURN_VAL_IF_FAIL (m, NULL);
+	return magic_buffer (m, b, s);
+}
+R_API const char *r_magic_file(RMagic *m, const char *f) {
+	R_RETURN_VAL_IF_FAIL (m, NULL);
+	return magic_file (m, f);
+}
+R_API const char *r_magic_descriptor(RMagic *m, int fd) {
+	R_RETURN_VAL_IF_FAIL (m && fd >= 0, NULL);
+	return magic_descriptor (m, fd);
+}
+R_API const char *r_magic_error(RMagic *m) {
+	R_RETURN_VAL_IF_FAIL (m, NULL);
+	return magic_error (m);
+}
+R_API int r_magic_getflags(RMagic *m) {
+	R_RETURN_VAL_IF_FAIL (m, -1);
+	return magic_getflags (m);
+}
+R_API void r_magic_setflags(RMagic *m, int f) {
+	R_RETURN_IF_FAIL (m);
+	f &= ~R_MAGIC_CHECK_TEXT;
+	magic_setflags (m, f);
+}
+R_API char *r_magic_getpath(const char *magicfile, int action) {
+	const char *path = magic_getpath (magicfile, action);
+	return path? strdup (path): NULL;
+}
+R_API bool r_magic_load(RMagic *m, const char *f) {
+	R_RETURN_VAL_IF_FAIL (m, false);
+	return magic_load (m, f) != -1;
+}
+R_API bool r_magic_load_buffer(RMagic *m, const ut8 *magicdata, size_t magicdata_size) {
+	R_RETURN_VAL_IF_FAIL (m && magicdata && magicdata_size > 0, false);
+	const void *buffers[] = { magicdata };
+	const size_t sizes[] = { magicdata_size };
+	return magic_load_buffers (m, (void **)buffers, (size_t *)sizes, 1) != -1;
+}
+R_API bool r_magic_compile(RMagic *m, const char *x) {
+	R_RETURN_VAL_IF_FAIL (m, false);
+	return magic_compile (m, x) != -1;
+}
+R_API bool r_magic_check(RMagic *m, const char *x) {
+	R_RETURN_VAL_IF_FAIL (m, false);
+	return magic_check (m, x) != -1;
+}
+R_API bool r_magic_list(RMagic *m, const char *x) {
+	R_RETURN_VAL_IF_FAIL (m, false);
+	return magic_list (m, x) != -1;
+}
+R_API bool r_magic_load_buffers(RMagic *m, const void *const *buffers, const size_t *sizes, size_t nbuffers) {
+	R_RETURN_VAL_IF_FAIL (m && buffers && sizes && nbuffers > 0, false);
+	return magic_load_buffers (m, (void **)buffers, (size_t *)sizes, nbuffers) != -1;
+}
+R_API int r_magic_errno(RMagic *m) {
+	R_RETURN_VAL_IF_FAIL (m, -1);
+	return magic_errno (m);
+}
+R_API int r_magic_api_version(void) {
+	return magic_version ();
+}
 
 #else
 
@@ -42,263 +94,255 @@ R_API int r_magic_errno(RMagic* m) { return magic_errno (m); }
 
 #include "file.h"
 
-#ifndef PIPE_BUF 
-/* Get the PIPE_BUF from pathconf */
-#ifdef _PC_PIPE_BUF
-#define PIPE_BUF pathconf(".", _PC_PIPE_BUF)
-#else
-#define PIPE_BUF 512
-#endif
-#endif
-
-static void free_mlist(struct mlist *mlist) {
+static ut32 mlist_bytes_max(const RVecMagicMList *mlist) {
 	struct mlist *ml;
-	if (!mlist) {
-		return;
+	ut32 max_bytes = 0;
+
+	R_VEC_FOREACH (mlist, ml) {
+		max_bytes = R_MAX (max_bytes, ml->bytes_max);
 	}
-	for (ml = mlist->next; ml != mlist;) {
-		struct mlist *next = ml->next;
-		struct r_magic *mg = ml->magic;
-		file_delmagic (mg, ml->mapped, ml->nmagic);
-		free (ml);
-		ml = next;
-	}
-	free (ml);
+	return max_bytes;
 }
 
-static int info_from_stat(RMagic *ms, unsigned short md) {
-	/* We cannot open it, but we were able to stat it. */
-	if (md & 0222) {
-		if (file_printf (ms, "writable, ") == -1) {
-			return -1;
-		}
+static char *magic_default_path(int action) {
+	char *prefix = r_sys_prefix (NULL);
+	char *system_magic = prefix? r_file_new (prefix, R2_SDB_MAGIC, NULL): NULL;
+	char *user_magic = action == FILE_LOAD? r_xdg_datadir ("magic"): NULL;
+	char *path = NULL;
+
+	free (prefix);
+	if (R_STR_ISNOTEMPTY (user_magic) && R_STR_ISNOTEMPTY (system_magic)) {
+		path = r_str_newf ("%s%s%s", user_magic, R_SYS_ENVSEP, system_magic);
+	} else if (R_STR_ISNOTEMPTY (user_magic)) {
+		path = strdup (user_magic);
+	} else if (R_STR_ISNOTEMPTY (system_magic)) {
+		path = strdup (system_magic);
 	}
-	if (md & 0111) {
-		if (file_printf (ms, "executable, ") == -1) {
-			return -1;
-		}
-	}
-	if (S_ISREG (md)) {
-		if (file_printf (ms, "regular file, ") == -1) {
-			return -1;
-		}
-	}
-	if (file_printf (ms, "no read permission") == -1) {
-		return -1;
-	}
-	return 0;
+	free (user_magic);
+	free (system_magic);
+	return path;
 }
 
-static void close_and_restore (const RMagic *ms, const char *name, int fd, const struct stat *sb) {
-	if (fd >= 0) {
-		close (fd);
+static bool magic_load_path(RMagic *ms, const char *magicfile, int action, RVecMagicMList *ml) {
+	char *path = r_magic_getpath (magicfile, action);
+	if (R_STR_ISNOTEMPTY (path)) {
+		const bool ok = __magic_file_apprentice (ms, path, strlen (path), action, ml);
+		free (path);
+		return ok;
+	} else if (ms) {
+		__magic_file_error (ms, 0, "could not find any magic files!");
 	}
-}
-
-static const char *file_or_fd(RMagic *ms, const char *inname, int fd) {
-	bool ispipe = false;
-	int rv = -1;
-	unsigned char *buf;
-	struct stat sb;
-	int nbytes = 0;	/* number of bytes read from a datafile */
-
-	/*
-	 * one extra for terminating '\0', and
-	 * some overlapping space for matches near EOF
-	 */
-#define SLOP (1 + sizeof(union VALUETYPE))
-	if (!(buf = malloc (HOWMANY + SLOP))) {
-		return NULL;
-	}
-
-	if (file_reset (ms) == -1) {
-		goto done;
-	}
-
-	switch (file_fsmagic (ms, inname, &sb)) {
-	case -1: goto done;		/* error */
-	case 0:	break;			/* nothing found */
-	default: rv = 0; goto done;	/* matched it and printed type */
-	}
-
-	if (!inname) {
-		if (fstat (fd, &sb) == 0 && S_ISFIFO (sb.st_mode)) {
-			ispipe = true;
-		}
-	} else {
-		int flags = O_RDONLY|O_BINARY;
-
-		if (stat (inname, &sb) == 0 && S_ISFIFO (sb.st_mode)) {
-#if O_NONBLOCK
-			flags |= O_NONBLOCK;
-#endif
-			ispipe = true;
-		}
-		errno = 0;
-		if ((fd = open (inname, flags)) < 0) {
-			eprintf ("couldn't open file\n");
-			if (info_from_stat (ms, sb.st_mode) == -1) {
-				goto done;
-			}
-			rv = 0;
-			goto done;
-		}
-#ifdef O_NONBLOCK
-		if ((flags = fcntl (fd, F_GETFL)) != -1) {
-			flags &= ~O_NONBLOCK;
-			(void)fcntl (fd, F_SETFL, flags);
-		}
-#endif
-	}
-
-	/*
-	 * try looking at the first HOWMANY bytes
-	 */
-#ifdef O_NONBLOCK
-	if (ispipe) {
-		ssize_t r = 0;
-
-		//while ((r = sread(fd, (void *)&buf[nbytes],
-		while ((r = read(fd, (void *)&buf[nbytes],
-		    (size_t)(HOWMANY - nbytes))) > 0) {
-			nbytes += r;
-			if (r < PIPE_BUF) {
-				break;
-			}
-		}
-
-		if (nbytes == 0) {
-			/* We can not read it, but we were able to stat it. */
-			if (info_from_stat (ms, sb.st_mode) == -1) {
-				goto done;
-			}
-			rv = 0;
-			goto done;
-		}
-	} else {
-#endif
-		if ((nbytes = read(fd, (char *)buf, HOWMANY)) == -1) {
-			file_error(ms, errno, "cannot read `%s'", inname);
-			goto done;
-		}
-#ifdef O_NONBLOCK
-	}
-#endif
-
-	(void)memset (buf + nbytes, 0, SLOP); /* NUL terminate */
-	if (file_buffer (ms, fd, inname, buf, (size_t)nbytes) == -1) {
-		goto done;
-	}
-	rv = 0;
-done:
-	free (buf);
-	close_and_restore (ms, inname, fd, &sb);
-	return rv == 0 ? file_getbuffer(ms) : NULL;
+	free (path);
+	return false;
 }
 
 /* API */
 
+extern void init_file_tables(RMagic *m);
+
 // TODO: reinitialize all the time
-R_API RMagic* r_magic_new(int flags) {
+R_API RMagic *r_magic_new(int flags) {
 	RMagic *ms = R_NEW0 (RMagic);
-	if (!ms) {
-		return NULL;
-	}
+	init_file_tables (ms);
 	r_magic_setflags (ms, flags);
-	ms->o.buf = ms->o.pbuf = NULL;
+	r_strbuf_init (&ms->o.sb);
+	ms->o.pbuf = NULL;
+	RVecMagicMList_init (&ms->mlist);
 	ms->c.li = malloc ((ms->c.len = 10) * sizeof (*ms->c.li));
 	if (!ms->c.li) {
 		free (ms);
 		return NULL;
 	}
-	file_reset (ms);
-	ms->mlist = NULL;
 	ms->file = "unknown";
 	ms->line = 0;
+	ms->bytes_max = 0;
+	ms->maxmagic = 0;
+	__magic_file_reset (ms);
 	return ms;
 }
 
 R_API void r_magic_free(RMagic *ms) {
-	if (ms) {
-		free_mlist (ms->mlist);
-		free (ms->o.pbuf);
-		free (ms->o.buf);
-		free (ms->c.li);
-		free (ms);
-	}
+	R_RETURN_IF_FAIL (ms);
+	file_magic_mlist_vec_fini (&ms->mlist);
+	free (ms->o.pbuf);
+	r_strbuf_fini (&ms->o.sb);
+	free (ms->c.li);
+	free (ms);
 }
 
-R_API bool r_magic_load_buffer(RMagic* ms, const ut8 *magicdata, size_t magicdata_size) {
-	if (magicdata_size > 0 && *magicdata == '#') {
-		struct mlist *ml = file_apprentice (ms, (const char *)magicdata, magicdata_size, FILE_LOAD);
-		if (ml) {
-			free_mlist (ms->mlist);
+R_API bool r_magic_load_buffer(RMagic *ms, const ut8 *magicdata, size_t magicdata_size) {
+	R_RETURN_VAL_IF_FAIL (ms, false);
+	if (magicdata && magicdata_size > 0) {
+		RVecMagicMList ml;
+		RVecMagicMList_init (&ml);
+		if (__magic_file_apprentice_buffer (ms, magicdata, magicdata_size, FILE_LOAD, &ml)) {
+			file_magic_mlist_vec_fini (&ms->mlist);
 			ms->mlist = ml;
+			ms->bytes_max = mlist_bytes_max (&ms->mlist);
 			return true;
 		}
+		file_magic_mlist_vec_fini (&ml);
 	} else {
-		eprintf ("Magic buffers should start with #\n");
+		__magic_file_error (ms, 0, "magic buffer is empty");
 	}
 	return false;
 }
 
-R_API bool r_magic_load(RMagic* ms, const char *magicfile) {
-	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_LOAD);
-	if (ml) {
-		free_mlist (ms->mlist);
+R_API bool r_magic_load(RMagic *ms, const char *magicfile) {
+	R_RETURN_VAL_IF_FAIL (ms, false);
+	RVecMagicMList ml;
+	RVecMagicMList_init (&ml);
+	if (magic_load_path (ms, magicfile, FILE_LOAD, &ml)) {
+		file_magic_mlist_vec_fini (&ms->mlist);
 		ms->mlist = ml;
+		ms->bytes_max = mlist_bytes_max (&ms->mlist);
 		return true;
 	}
+	file_magic_mlist_vec_fini (&ml);
 	return false;
 }
 
 R_API bool r_magic_compile(RMagic *ms, const char *magicfile) {
-	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_COMPILE);
-	free_mlist (ml);
-	return ml != NULL;
+	R_RETURN_VAL_IF_FAIL (ms, false);
+	RVecMagicMList ml;
+	RVecMagicMList_init (&ml);
+	const bool ok = magic_load_path (ms, magicfile, FILE_COMPILE, &ml);
+	file_magic_mlist_vec_fini (&ml);
+	return ok;
 }
 
 R_API bool r_magic_check(RMagic *ms, const char *magicfile) {
-	struct mlist *ml = file_apprentice (ms, magicfile, strlen (magicfile), FILE_CHECK);
-	free_mlist (ml);
-	return ml != NULL;
+	R_RETURN_VAL_IF_FAIL (ms, false);
+	RVecMagicMList ml;
+	RVecMagicMList_init (&ml);
+	const bool ok = magic_load_path (ms, magicfile, FILE_CHECK, &ml);
+	file_magic_mlist_vec_fini (&ml);
+	return ok;
 }
 
-R_API const char* r_magic_descriptor(RMagic *ms, int fd) {
-	return file_or_fd (ms, NULL, fd);
-}
-
-R_API const char * r_magic_file(RMagic *ms, const char *inname) {
-	return file_or_fd (ms, inname, 0); // 0 = stdin
-}
-
-R_API const char * r_magic_buffer(RMagic *ms, const void *buf, size_t nb) {
-	if (file_reset (ms) == -1) {
+R_API const char *r_magic_buffer(RMagic *ms, const void *buf, size_t nb) {
+	R_RETURN_VAL_IF_FAIL (ms, NULL);
+	if (__magic_file_reset (ms) == -1) {
 		return NULL;
 	}
-	if (file_buffer (ms, -1, NULL, buf, nb) == -1) {
+	if (__magic_file_buffer (ms, -1, NULL, buf, nb) == -1) {
 		return NULL;
 	}
-	return file_getbuffer (ms);
+	return __magic_file_getbuffer (ms);
+}
+
+R_API const char *r_magic_file(RMagic *ms, const char *filename) {
+	R_RETURN_VAL_IF_FAIL (ms && filename, NULL);
+	const size_t limit = ms->bytes_max? ms->bytes_max: HOWMANY;
+	int osz = 0;
+	char *buf = r_file_slurp_range (filename, 0, (int)R_MIN (limit, (size_t)INT_MAX), &osz);
+	if (!buf) {
+		__magic_file_error (ms, errno, "cannot read `%s'", filename);
+		return NULL;
+	}
+	const char *const res = r_magic_buffer (ms, buf, (size_t)osz);
+	free (buf);
+	return res;
+}
+
+R_API const char *r_magic_descriptor(RMagic *ms, int fd) {
+	R_RETURN_VAL_IF_FAIL (ms && fd >= 0, NULL);
+	__magic_file_error (ms, 0, "descriptor lookups are not supported");
+	return NULL;
 }
 
 R_API const char *r_magic_error(RMagic *ms) {
-	if (ms && ms->haderr) {
-		return ms->o.buf;
+	R_RETURN_VAL_IF_FAIL (ms, NULL);
+	if (ms->haderr) {
+		return r_strbuf_get (&ms->o.sb);
 	}
 	return NULL;
 }
 
+R_API int r_magic_getflags(RMagic *ms) {
+	R_RETURN_VAL_IF_FAIL (ms, -1);
+	return ms->flags;
+}
+
 R_API int r_magic_errno(RMagic *ms) {
-	if (ms && ms->haderr) {
+	R_RETURN_VAL_IF_FAIL (ms, -1);
+	if (ms->haderr) {
 		return ms->error;
 	}
 	return 0;
 }
 
 R_API void r_magic_setflags(RMagic *ms, int flags) {
-	if (ms) {
-		ms->flags = flags;
+	R_RETURN_IF_FAIL (ms);
+	ms->flags = flags;
+}
+
+R_API char *r_magic_getpath(const char *magicfile, int action) {
+	if (magicfile) {
+		return strdup (magicfile);
 	}
+	char *env = r_sys_getenv ("MAGIC");
+	if (R_STR_ISNOTEMPTY (env)) {
+		return env;
+	}
+	free (env);
+	return magic_default_path (action);
+}
+
+R_API bool r_magic_load_buffers(RMagic *ms, const void *const *buffers, const size_t *sizes, size_t nbuffers) {
+	RVecMagicMList merged;
+	RVecMagicMList_init (&merged);
+	size_t i;
+	R_RETURN_VAL_IF_FAIL (ms && buffers && sizes && nbuffers > 0, false);
+	for (i = 0; i < nbuffers; i++) {
+		RVecMagicMList ml;
+		RVecMagicMList_init (&ml);
+		if (!__magic_file_apprentice_buffer (ms, (const ut8 *)buffers[i], sizes[i], FILE_LOAD, &ml)) {
+			file_magic_mlist_vec_fini (&ml);
+			file_magic_mlist_vec_fini (&merged);
+			return false;
+		}
+		const size_t total = RVecMagicMList_length (&merged) + RVecMagicMList_length (&ml);
+		if (!RVecMagicMList_reserve (&merged, total)) {
+			file_magic_mlist_vec_fini (&ml);
+			file_magic_mlist_vec_fini (&merged);
+			__magic_file_oomem (ms, total * sizeof (struct mlist));
+			return false;
+		}
+		RVecMagicMList_append (&merged, &ml, NULL);
+		RVecMagicMList_fini (&ml);
+	}
+	file_magic_mlist_vec_fini (&ms->mlist);
+	ms->mlist = merged;
+	ms->bytes_max = mlist_bytes_max (&ms->mlist);
+	return true;
+}
+
+R_API bool r_magic_list(RMagic *ms, const char *magicfile) {
+	RVecMagicMList ml;
+	struct mlist *it;
+	R_RETURN_VAL_IF_FAIL (ms, false);
+	RVecMagicMList_init (&ml);
+	if (!magic_load_path (ms, magicfile, FILE_LOAD, &ml)) {
+		return false;
+	}
+	R_VEC_FOREACH (&ml, it) {
+		ut32 i;
+		for (i = 0; i < it->nmagic; i++) {
+			char *line = __magic_file_mrender (ms, &it->magic[i]);
+			if (!line) {
+				file_magic_mlist_vec_fini (&ml);
+				return false;
+			}
+			(void)fprintf (stdout, "%s\n", line);
+			free (line);
+		}
+	}
+	file_magic_mlist_vec_fini (&ml);
+	return true;
+}
+
+R_API int r_magic_api_version(void) {
+	return R_MAGIC_VERSION;
 }
 #endif

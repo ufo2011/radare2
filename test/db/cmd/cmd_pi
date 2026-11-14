@@ -1,12 +1,23 @@
+# merged: pi1pd1
 NAME=tbz
 FILE=bins/other/tbz.arm64
 ARGS=-a arm -b64 -m 0x100000000
-CMDS=pi 4
+CMDS=<<EOF
+pi 4
+?e --
+e asm.lines=0
+e asm.bytes=0
+pi1
+pd1
+EOF
 EXPECT=<<EOF
 tbz x0, 0x20, 0x100004000
 tbz x0, 0x20, 0xffff8004
 tbnz x0, 0x20, 0x100004008
 tbnz x0, 0x20, 0xffff800c
+--
+tbz x0, 0x20, 0x100004000
+0x100000000      tbz x0, 0x20, 0x100004000
 EOF
 RUN
 
@@ -24,9 +35,60 @@ mov rdx, rsp
 and rsp, 0xfffffffffffffff0
 mov rdx, rsp
 and rsp, 0xfffffffffffffff0
-mov ecx, edx
+mov r9, rdx
 pop rsi
-mov ecx, edx
+mov r9, rdx
 pop rsi
+EOF
+RUN
+
+NAME=pI and pD with a negative length bigger than the blocksize
+FILE=malloc://1024
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wow 90 @!255
+wx c3 @ 255
+b 4
+s 256
+pI -256~nop?
+pI -256~ret?
+pD -256~nop?
+pD -256~ret?
+b
+s
+EOF
+EXPECT=<<EOF
+255
+1
+255
+1
+0x4
+0x100
+EOF
+RUN
+
+NAME=pi with more bytes than the block can grow to
+FILE=malloc://1024
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+wx 9090c3
+bm 512
+piE 600
+piE -600 @ 1000
+piE 3
+?e alive
+EOF
+EXPECT=<<EOF
+0x00000000 ,
+0x00000001 ,
+0x00000002 rsp,[8],rip,=,8,rsp,+=
+alive
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Block size 600 is too big
+ERROR: Cannot read that much!
+ERROR: Block size 600 is too big
+ERROR: Cannot read that much!
 EOF
 RUN

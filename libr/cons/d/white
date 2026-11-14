@@ -1,3 +1,4 @@
+ecd
 ec label rgb:c60
 ec help blue
 ec math blue
@@ -11,8 +12,8 @@ ec nop black
 ec jmp blue
 ec cjmp magenta
 ec ujmp green
-ec call magenta bold
-ec ucall magenta bold
+ec call magenta
+ec ucall magenta
 ec input black
 ec fline green
 ec prompt black
@@ -29,7 +30,7 @@ ec b0x7f gray
 ec b0xff red
 ec b0x00 rgb:777
 ec btext black
-ec offset black
+ec addr black
 ec flow blue
 ec flow2 green
 ec mov black
@@ -39,21 +40,23 @@ ec graph.box blue
 ec graph.box2 green
 ec graph.box3 red
 ec graph.box4 blue
+ec diff.match blue
 ec graph.true green
 ec graph.false red
 ec graph.trufae blue
 ec graph.current rgb:0ff
 ec graph.traced red
 
-ec func_var magenta
-ec func_var_type blue
-ec func_var_addr magenta
+ec var magenta
+ec var.type blue
+ec var.addr magenta
+ec var.name magenta
 
 ec ai.read magenta
 ec ai.write magenta
 ec ai.exec blue
 ec ai.seq black
-ec ai.ascii black
+ec str black
 
-ec widget_bg blue white
-ec widget_sel black yellow
+ec widget.bg blue white
+ec widget.sel black yellow

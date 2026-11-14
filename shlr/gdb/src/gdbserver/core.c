@@ -9,23 +9,16 @@
 #include "libgdbr.h"
 #include "packet.h"
 #include "utils.h"
-#include "r_util/r_str.h"
+#include <r_util.h>
 
 static int _server_handle_qSupported(libgdbr_t *g) {
 	int ret;
-	char *buf;
-	if (!(buf = malloc (128))) {
-		return -1;
-	}
-	snprintf (buf, 127, "PacketSize=%x;QStartNoAckMode+;qXfer:exec-file:read+",
-		  (ut32) (g->read_max - 1));
+	char buf[128];
+	snprintf (buf, sizeof (buf), "PacketSize=%x;QStartNoAckMode+;qXfer:exec-file:read+", (ut32) (g->read_max - 1));
 	if ((ret = handle_qSupported (g)) < 0) {
-		free (buf);
 		return -1;
 	}
-	ret = send_msg (g, buf);
-	free (buf);
-	return ret;
+	return send_msg (g, buf);
 }
 
 static int _server_handle_qTStatus(libgdbr_t *g) {
@@ -40,7 +33,7 @@ static int _server_handle_qTStatus(libgdbr_t *g) {
 
 static int _server_handle_qOffsets(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
 	char buf[64], *ptr;
-	ptr = buf + sprintf (buf, "TextSeg=");
+	ptr = buf + snprintf (buf, sizeof (buf), "TextSeg=");
 	if (send_ack (g) < 0) {
 		return -1;
 	}
@@ -53,7 +46,7 @@ static int _server_handle_qOffsets(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void
 
 static int _server_handle_exec_file_read(libgdbr_t *g, gdbr_server_cmd_cb cb,
 					 void *core_ptr) {
-	char *buf, *ptr, cmd[64] = { 0 };
+	char *buf, *ptr, cmd[64] = {0};
 	size_t buflen = 512;
 	int ret;
 	if (send_ack (g) < 0) {
@@ -106,7 +99,7 @@ static int _server_handle_M(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_
 	}
 	snprintf (buf, memlen2 + 63, "wx 0x%s @ 0x%"PFMT64x, memstr, addr);
 	buf[memlen2 + 63] = '\0';
-	eprintf ("buf: %s\n", buf);
+	R_LOG_DEBUG ("%s: buf: %s", __func__, buf);
 	if (cmd_cb (g, core_ptr, buf, NULL, 0) < 0) {
 		free (buf);
 		return send_msg (g, "E01");
@@ -156,7 +149,7 @@ static int _server_handle_c(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_
 }
 
 static int _server_handle_ques(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
-	char message[64] = { 0 };
+	char message[64] = {0};
 	if (send_ack (g) < 0) {
 		return -1;
 	}
@@ -208,7 +201,9 @@ static int _server_handle_z(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_
 	int type;
 	ut64 addr;
 	char cmd[64];
-	sscanf (g->data, "%c%d,%"PFMT64x, &set, &type, &addr);
+	if (sscanf (g->data, "%c%d,%"PFMT64x, &set, &type, &addr) != 3) {
+		return send_msg (g, "E01");
+	}
 	if (type != 0) {
 		// TODO handle hw breakpoints and watchpoints
 		return send_msg (g, "E01");
@@ -234,6 +229,7 @@ static int _server_handle_z(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_
 
 static int _server_handle_vCont(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
 	char *action = NULL;
+	char *save_ptr = NULL;
 	if (send_ack (g) < 0) {
 		return -1;
 	}
@@ -242,11 +238,11 @@ static int _server_handle_vCont(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *c
 		// Query about everything we support
 		return send_msg (g, "vCont;c;s");
 	}
-	if (!(action = strtok (g->data, ";"))) {
+	if (!(action = r_str_tok_r (g->data, ";", &save_ptr))) {
 		return send_msg (g, "E01");
 	}
-	while ((action = strtok (NULL, ";"))) {
-		eprintf ("action: %s\n", action);
+	while ((action = r_str_tok_r (NULL, ";", &save_ptr))) {
+		R_LOG_DEBUG ("%s: action: %s", __func__, action);
 		switch (action[0]) {
 		case 's':
 			// TODO handle thread selections
@@ -286,19 +282,21 @@ static int _server_handle_Hg(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core
 	// We don't yet support multiprocess. Client is not supposed to send Hgp. If we receive it anyway,
 	// send error
 	char cmd[32];
-	int tid;
+	unsigned int tid;
 	if (send_ack (g) < 0) {
 		return -1;
 	}
-	if (g->data_len <= 2 || isalpha ((unsigned char)g->data[2])) {
+	if (g->data_len <= 2 || isalpha ((ut8)g->data[2])) {
 		return send_msg (g, "E01");
 	}
 	// Hg-1 = "all threads", Hg0 = "pick any thread"
 	if (g->data[2] == '0' || !strncmp (g->data + 2, "-1", 2)) {
 		return send_msg (g, "OK");
 	}
-	sscanf (g->data + 2, "%x", &tid);
-	snprintf (cmd, sizeof (cmd) - 1, "dpt=%d", tid);
+	if (sscanf (g->data + 2, "%x", &tid) != 1) {
+		return send_msg (g, "E01");
+	}
+	snprintf (cmd, sizeof (cmd) - 1, "dpt=%u", tid);
 	// Set thread for future operations
 	if (cmd_cb (g, core_ptr, cmd, NULL, 0) < 0) {
 		send_msg (g, "E01");
@@ -311,19 +309,21 @@ static int _server_handle_Hg(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core
 static int _server_handle_Hc(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
 	// Usually this is only sent with Hc-1. Still. Set the threads for next operations
 	char cmd[32];
-	int tid;
+	unsigned int tid;
 	if (send_ack (g) < 0) {
 		return -1;
 	}
-	if (g->data_len <= 2 || isalpha ((unsigned char)g->data[2])) {
+	if (g->data_len <= 2 || isalpha ((ut8)g->data[2])) {
 		return send_msg (g, "E01");
 	}
 	// Hc-1 = "all threads", Hc0 = "pick any thread"
 	if (g->data[2] == '0' || !strncmp (g->data + 2, "-1", 2)) {
 		return send_msg (g, "OK");
 	}
-	sscanf (g->data + 2, "%x", &tid);
-	snprintf (cmd, sizeof (cmd) - 1, "dpt=%d", tid);
+	if (sscanf (g->data + 2, "%x", &tid) != 1) {
+		return send_msg (g, "E01");
+	}
+	snprintf (cmd, sizeof (cmd) - 1, "dpt=%u", tid);
 	// Set thread for future operations
 	if (cmd_cb (g, core_ptr, cmd, NULL, 0) < 0) {
 		send_msg (g, "E01");
@@ -359,43 +359,55 @@ static int _server_handle_qsThreadInfo(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, 
 	return 0;
 }
 
-static int _server_handle_g(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
-	char *buf;
-	// To be very safe
-	int buf_len = 4096;
-	int ret;
-	if (send_ack (g) < 0) {
-		return -1;
+static int server_read_registers(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr, const char *cmd, size_t size) {
+	if (size > INT_MAX - 4) {
+		return send_msg (g, "E01");
 	}
-	if (!(buf = malloc (buf_len))) {
-		send_msg (g, "E01");
-		return -1;
+	if (size + 4 > g->send_max) {
+		char *buf = realloc (g->send_buff, size + 4);
+		if (!buf) {
+			return send_msg (g, "E01");
+		}
+		g->send_buff = buf;
+		g->send_max = size + 4;
 	}
-	memset (buf, 0, buf_len);
-	if ((buf_len = cmd_cb (g, core_ptr, "dr", buf, buf_len)) < 0) {
-		free (buf);
-		send_msg (g, "E01");
-		return -1;
+	char *buf = calloc (1, size);
+	if (!buf) {
+		return send_msg (g, "E01");
 	}
-	ret = send_msg (g, buf);
+	int len = cmd_cb (g, core_ptr, cmd, buf, size);
+	int ret = send_msg (g, len < 0 || len >= size? "E01": buf);
 	free (buf);
 	return ret;
 }
 
+static int _server_handle_g(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
+	if (send_ack (g) < 0) {
+		return -1;
+	}
+	if (!g->registers) {
+		return send_msg (g, "E01");
+	}
+	size_t size = 1;
+	gdb_reg_t *reg;
+	for (reg = g->registers; *reg->name; reg++) {
+		if (!reg->size || (reg->size & 7) || reg->size / 4 > INT_MAX - size) {
+			return send_msg (g, "E01");
+		}
+		size += reg->size / 4;
+	}
+	return server_read_registers (g, cmd_cb, core_ptr, "dr", size);
+}
+
 static int _server_handle_m(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
-	ut64 addr;
 	int length;
-	char *cmd, *buf;
 	if (send_ack (g) < 0) {
 		return -1;
 	}
 	g->data[g->data_len] = 0;
-	sscanf (g->data, "m%"PFMT64x, &addr);
-	if (!(cmd = strdup (g->data))) {
-		send_msg (g, "E01");
-		return -1;
-	}
-	if (!(buf = malloc (g->data_max / 2))) {
+	char *cmd = strdup (g->data);
+	char *buf = malloc (g->data_max / 2);
+	if (!buf) {
 		free (cmd);
 		send_msg (g, "E01");
 		return -1;
@@ -415,15 +427,18 @@ static int _server_handle_m(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_
 
 // Read register number
 static int _server_handle_p(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
-	char message[128] = { 0 }, cmd[128] = { 0 };
+	char cmd[128];
 	int regnum, i;
 	if (send_ack (g) < 0) {
 		return -1;
 	}
-	if (!isxdigit ((unsigned char)g->data[1])) {
+	if (!isxdigit ((ut8)g->data[1]) || !g->registers) {
 		return send_msg (g, "E01");
 	}
 	regnum = strtol (g->data + 1, NULL, 16);
+	if (regnum < 0) {
+		return send_msg (g, "E01");
+	}
 	// We need to do this because length of register set is not known
 	for (i = 0; i < regnum; i++) {
 		if (!*g->registers[i].name) {
@@ -434,39 +449,53 @@ static int _server_handle_p(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_
 		send_msg (g, "E01");
 		return -1;
 	}
-	if (cmd_cb (g, core_ptr, cmd, message, sizeof (message)) < 0) {
-		send_msg (g, "E01");
-		return -1;
+	const ut64 size = g->registers[regnum].size;
+	if (!*g->registers[regnum].name || !size || (size & 7) || size / 4 > INT_MAX - 1) {
+		return send_msg (g, "E01");
 	}
-	return send_msg (g, message);
+	return server_read_registers (g, cmd_cb, core_ptr, cmd, size / 4 + 1);
 }
 
 // Write register number
 static int _server_handle_P(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
-	char *ptr, *cmd;
-	int regnum, len, i;
+	char *ptr, *end, *cmd;
+	int regnum, i;
 	if (send_ack (g) < 0) {
 		return -1;
 	}
-	if (!isxdigit ((unsigned char)g->data[1]) || !(ptr = strchr (g->data, '='))) {
+	if (g->data_len < 4 || !g->registers || !isxdigit ((ut8)g->data[1])) {
 		return send_msg (g, "E01");
 	}
+	ptr = memchr (g->data + 2, '=', g->data_len - 2);
+	if (!ptr) {
+		return send_msg (g, "E01");
+	}
+	long parsed_regnum = strtol (g->data + 1, &end, 16);
+	if (parsed_regnum < 0 || parsed_regnum > INT_MAX || end != ptr) {
+		return send_msg (g, "E01");
+	}
+	regnum = (int)parsed_regnum;
 	ptr++;
-	if (!isxdigit ((unsigned char)*ptr)) {
+	size_t value_len = g->data_len - (ptr - g->data);
+	if (!value_len || value_len > ST32_MAX) {
 		return send_msg (g, "E01");
 	}
-	regnum = strtol (g->data + 1, NULL, 16);
+	size_t value_pos;
+	for (value_pos = 0; value_pos < value_len; value_pos++) {
+		if (!isxdigit ((ut8)ptr[value_pos])) {
+			return send_msg (g, "E01");
+		}
+	}
 	// We need to do this because length of register set is not known
 	for (i = 0; i < regnum; i++) {
 		if (!*g->registers[i].name) {
 			return send_msg (g, "E01");
 		}
 	}
-	len = strlen (g->registers[regnum].name) + strlen (ptr) + 10;
-	if (!(cmd = calloc (len, sizeof (char)))) {
+	cmd = r_str_newf ("dr %s=0x%.*s", g->registers[regnum].name, (int)value_len, ptr);
+	if (!cmd) {
 		return send_msg (g, "E01");
 	}
-	snprintf (cmd, len - 1, "dr %s=0x%s", g->registers[regnum].name, ptr);
 	if (cmd_cb (g, core_ptr, cmd, NULL, 0) < 0) {
 		free (cmd);
 		send_msg (g, "E01");
@@ -492,13 +521,12 @@ static int _server_handle_qTfV(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *co
 }
 
 int gdbr_server_serve(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
-	int ret;
-	if (!g) {
-		return -1;
-	}
-	while (1) {
+	R_RETURN_VAL_IF_FAIL (g, -1);
+	int ret = -1;
+	for (;;) {
 		if (read_packet (g, false) < 0) {
-			continue;
+			break;
+			// continue;
 		}
 		if (g->data_len == 0) {
 			continue;
@@ -646,9 +674,7 @@ int gdbr_server_serve(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
 				return -1;
 			}
 			g->no_ack = true;
-			if (g->server_debug) {
-				eprintf ("[noack mode enabled]\n");
-			}
+			R_LOG_DEBUG ("[noack mode enabled]");
 			if (send_msg (g, "OK") < 0) {
 				return -1;
 			}
@@ -657,7 +683,7 @@ int gdbr_server_serve(libgdbr_t *g, gdbr_server_cmd_cb cmd_cb, void *core_ptr) {
 		// Unrecognized packet
 		if (send_ack (g) < 0 || send_msg (g, "") < 0) {
 			g->data[g->data_len] = '\0';
-			eprintf ("Unknown packet: %s\n", g->data);
+			R_LOG_ERROR ("%s: Unknown packet: %s", __func__, g->data);
 			return -1;
 		}
 	};

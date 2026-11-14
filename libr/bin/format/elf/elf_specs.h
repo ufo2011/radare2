@@ -58,7 +58,7 @@
 #ifndef _INCLUDE_ELF_SPECS_H
 #define _INCLUDE_ELF_SPECS_H
 
-#define ELF_STRING_LENGTH 256
+#define ELF_STRING_LENGTH 512
 
 // not strictly ELF, but close enough:
 #define        CGCMAG          "\177CGC"
@@ -95,7 +95,7 @@
 #define EM_EXCESS              111        /* eXcess: 16/32/64-bit configurable embedded CPU */
 #define EM_DXP                 112        /* Icera Semiconductor Inc. Deep Execution Processor */
 
-// http://www.sco.com/developers/gabi/latest/ch4.eheader.html
+// https://www.sco.com/developers/gabi/latest/ch4.eheader.html
 
 #define EM_CRX                 114        /* National Semiconductor CompactRISC CRX microprocessor */
 #define EM_XGATE               115        /* Motorola XGATE embedded processor */
@@ -183,14 +183,17 @@
 #define EM_MOXIE               223        /* Moxie processor family */
 #define EM_AMDGPU              224        /* AMD GPU architecture */
 #define EM_RISCV               243        /* RISC-V */
-
+#define EM_TI_C6000 140
+#define EM_TI_C2000 141
+#define EM_TI_C5500 142
 
 // specific OpenBSD sections
 #ifndef PT_OPENBSD_RANDOMIZE
 #define PT_OPENBSD_RANDOMIZE	0x65a3dbe6	/* Random data */
 #define PT_OPENBSD_WXNEEDED	0x65a3dbe7	/* Allowing writable/executable mapping */
+// https://undeadly.org/cgi?action=article;sid=20230714121907 // -Wl,-z,nobtcfi */
+#define PT_OPENBSD_NOBTCFI      0x65a3dbe8	/* Branch Target Control Flow Integrity disabled */
 #define PT_OPENBSD_BOOTDATA	0x65a41be6	/* Boot time data */
 #endif
-
 
 #endif // _INCLUDE_ELF_SPECS_H

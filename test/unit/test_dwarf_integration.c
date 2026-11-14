@@ -4,41 +4,74 @@
 
 #define MODE 2
 
-#define check_kv(k, v)                                                         \
-	do {                                                                   \
-		value = sdb_get (sdb, k, NULL);                    \
+// Global test context to prevent leaks on early returns
+static RBin *bin = NULL;
+static RIO *io = NULL;
+static RAnal *anal = NULL;
+
+static bool setup(void) {
+	bin = r_bin_new ();
+	io = r_io_new ();
+	anal = r_anal_new ();
+	if (!bin || !io || !anal) {
+		r_bin_free (bin);
+		r_io_free (io);
+		r_anal_free (anal);
+		return false;
+	}
+	anal->binb.demangle = r_bin_demangle;
+
+	r_io_bind (io, &bin->iob);
+	return true;
+}
+
+static bool teardown(void) {
+	r_anal_free (anal);
+	r_bin_free (bin);
+	r_io_free (io);
+	anal = NULL;
+	bin = NULL;
+	io = NULL;
+	return true;
+}
+
+#define check_kv(k, v) \
+	do { \
+		value = sdb_const_get (sdb, k, NULL); \
 		mu_assert_nullable_streq (value, v, "Wrong key - value pair"); \
 	} while (0)
 
 static bool test_parse_dwarf_types(void) {
-	RBin *bin = r_bin_new ();
-	mu_assert_notnull (bin, "Couldn't create new RBin");
-	RIO *io = r_io_new ();
-	mu_assert_notnull (io, "Couldn't create new RIO");
-	RAnal *anal = r_anal_new ();
-	mu_assert_notnull (anal, "Couldn't create new RAnal");
-	r_io_bind (io, &bin->iob);
-	anal->binb.demangle = r_bin_demangle;
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt;
+	r_bin_file_options_init (&opt, -1, UT64_MAX, 0, 0);
 	bool res = r_bin_open (bin, "bins/pe/vista-glass.exe", &opt);
 	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
-	anal->cpu = strdup ("x86");
-	anal->bits = 32;
+	r_str_ncpy (anal->config->arch, "x86", sizeof (anal->config->arch));
+	anal->config->bits = 32;
 	mu_assert ("pe/vista-glass.exe binary could not be opened", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
-	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
-	mu_assert_notnull (info, "Couldn't parse debug_info section");
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Couldn't get current bin file");
+	RVecDwarfAbbrevDecl *abbrevs = r_bin_dwarf_parse_abbrev (bf);
+	if (!abbrevs) {
+		mu_assert ("Couldn't parse Abbreviations", false);
+		return MU_ERR;
+	}
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bf, abbrevs);
+	if (!info) {
+		RVecDwarfAbbrevDecl_free (abbrevs);
+		mu_assert ("Couldn't parse debug_info section", false);
+		return MU_ERR;
+	}
 
-	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 4);
+	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bf, 4);
 	RAnalDwarfContext ctx = {
 		.info = info,
 		.loc = loc_table
 	};
 	r_anal_dwarf_process_info (anal, &ctx);
 
-	char * value = NULL;
+	const char *value = NULL;
 	Sdb *sdb = anal->sdb_types;
 	check_kv ("_cairo_status", "enum");
 	check_kv ("enum._cairo_status.0x0", "CAIRO_STATUS_SUCCESS");
@@ -70,35 +103,34 @@ static bool test_parse_dwarf_types(void) {
 	check_kv ("union.unaligned.u2", "short unsigned int,0,0");
 	check_kv ("union.unaligned.s8", "long long int,0,0");
 	r_bin_dwarf_free_debug_info (info);
-	r_bin_dwarf_free_debug_abbrev (abbrevs);
-	r_anal_free (anal);
-	r_bin_free (bin);
-	r_io_free (io);
+	r_bin_dwarf_free_loc (loc_table);
+	RVecDwarfAbbrevDecl_free (abbrevs);
 	mu_end;
 }
 
 static bool test_dwarf_function_parsing_cpp(void) {
-	RBin *bin = r_bin_new ();
-	mu_assert_notnull (bin, "Couldn't create new RBin");
-	RIO *io = r_io_new ();
-	mu_assert_notnull (io, "Couldn't create new RIO");
-	RAnal *anal = r_anal_new ();
-	mu_assert_notnull (anal, "Couldn't create new RAnal");
-	r_io_bind (io, &bin->iob);
-	anal->binb.demangle = r_bin_demangle;
+	r_str_ncpy (anal->config->arch, "x86", sizeof (anal->config->arch));
+	anal->config->bits = 64;
 
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt;
+	r_bin_file_options_init (&opt, -1, UT64_MAX, 0, 0);
 	bool res = r_bin_open (bin, "bins/elf/dwarf4_many_comp_units.elf", &opt);
-	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
-	anal->cpu = strdup ("x86");
-	anal->bits = 64;
 	mu_assert ("elf/dwarf4_many_comp_units.elf binary could not be opened", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
-	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
-	mu_assert_notnull (info, "Couldn't parse debug_info section");
-	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 8);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Couldn't get current bin file");
+	RVecDwarfAbbrevDecl *abbrevs = r_bin_dwarf_parse_abbrev (bf);
+	if (!abbrevs) {
+		mu_assert ("Couldn't parse Abbreviations", false);
+		return MU_ERR;
+	}
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bf, abbrevs);
+	if (!info) {
+		RVecDwarfAbbrevDecl_free (abbrevs);
+		mu_assert ("Couldn't parse debug_info section", false);
+		return MU_ERR;
+	}
+	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bf, 8);
 
 	RAnalDwarfContext ctx = {
 		.info = info,
@@ -108,53 +140,75 @@ static bool test_dwarf_function_parsing_cpp(void) {
 
 	Sdb *sdb = sdb_ns (anal->sdb, "dwarf", 0);
 	mu_assert_notnull (sdb, "No dwarf function information in db");
-	char *value = NULL;
+	const char *value = NULL;
 	check_kv ("Mammal", "fcn");
 	check_kv ("fcn.Mammal.addr", "0x401300");
 	check_kv ("fcn.Mammal.sig", "void Mammal(Mammal * this);");
 	check_kv ("fcn.Dog::walk__.addr", "0x401380");
 	check_kv ("fcn.Dog::walk__.sig", "int Dog::walk()(Dog * this);");
 	check_kv ("fcn.Dog::walk__.name", "Dog::walk()");
-	check_kv ("fcn.Mammal::walk__.vars", "this");
-	check_kv ("fcn.Mammal::walk__.var.this", "b,-8,Mammal *");
+	check_kv ("fcn.Mammal::walk__.args", "this");
+	check_kv ("fcn.Mammal::walk__.arg.0", "this,b,-8,Mammal *");
+	check_kv ("fcn.Mammal::walk__.vars", NULL);
 
 	check_kv ("main", "fcn");
 	check_kv ("fcn.main.addr", "0x401160");
 	check_kv ("fcn.main.sig", "int main();");
 	check_kv ("fcn.main.vars", "b,m,output");
 	check_kv ("fcn.main.var.output", "b,-40,int");
+	const char *typed_main = sdb_const_get (sdb, "fcn.main.typed_name", NULL);
+	mu_assert_notnull ("Missing typed name for main", typed_main);
+	sdb = anal->sdb_types;
+	char *typed_main_kind = strdup (typed_main);
+	check_kv (typed_main_kind, "func");
+	free (typed_main_kind);
+	char *typed_main_ret = r_str_newf ("func.%s.ret", typed_main);
+	check_kv (typed_main_ret, "int");
+	free (typed_main_ret);
+
+	Sdb *dwarf_sdb2 = sdb_ns (anal->sdb, "dwarf", 0);
+	const char *typed_walk = sdb_const_get (dwarf_sdb2, "fcn.Dog::walk__.typed_name", NULL);
+	mu_assert_notnull ("Missing typed name for Dog::walk()", typed_walk);
+	char *typed_walk_kind = strdup (typed_walk);
+	check_kv (typed_walk_kind, "func");
+	free (typed_walk_kind);
+	char *typed_walk_ret = r_str_newf ("func.%s.ret", typed_walk);
+	check_kv (typed_walk_ret, "int");
+	free (typed_walk_ret);
+	char *typed_walk_args = r_str_newf ("func.%s.args", typed_walk);
+	check_kv (typed_walk_args, "1");
+	free (typed_walk_args);
 
 	r_bin_dwarf_free_debug_info (info);
-	r_bin_dwarf_free_debug_abbrev (abbrevs);
+	RVecDwarfAbbrevDecl_free (abbrevs);
 	r_bin_dwarf_free_loc (loc_table);
-	r_anal_free (anal);
-	r_bin_free (bin);
-	r_io_free (io);
 	mu_end;
 }
 
 static bool test_dwarf_function_parsing_go(void) {
-	RBin *bin = r_bin_new ();
-	mu_assert_notnull (bin, "Couldn't create new RBin");
-	RIO *io = r_io_new ();
-	mu_assert_notnull (io, "Couldn't create new RIO");
-	RAnal *anal = r_anal_new ();
-	mu_assert_notnull (anal, "Couldn't create new RAnal");
-	r_io_bind (io, &bin->iob);
-	anal->binb.demangle = r_bin_demangle;
-
-	RBinFileOptions opt = { 0 };
-	bool res = r_bin_open (bin, "bins/elf/dwarf_go_tree", &opt);
 	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
-	anal->cpu = strdup ("x86");
-	anal->bits = 64;
+	r_str_ncpy (anal->config->arch, "x86", sizeof (anal->config->arch));
+	anal->config->bits = 64;
+
+	RBinFileOptions opt;
+	r_bin_file_options_init (&opt, -1, UT64_MAX, 0, 0);
+	bool res = r_bin_open (bin, "bins/elf/dwarf_go_tree", &opt);
 	mu_assert ("bins/elf/dwarf_go_tree", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
-	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
-	mu_assert_notnull (info, "Couldn't parse debug_info section");
-	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 8);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Couldn't get current bin file");
+	RVecDwarfAbbrevDecl *abbrevs = r_bin_dwarf_parse_abbrev (bf);
+	if (!abbrevs) {
+		mu_assert ("Couldn't parse Abbreviations", false);
+		return MU_ERR;
+	}
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bf, abbrevs);
+	if (!info) {
+		RVecDwarfAbbrevDecl_free (abbrevs);
+		mu_assert ("Couldn't parse debug_info section", false);
+		return MU_ERR;
+	}
+	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bf, 8);
 
 	RAnalDwarfContext ctx = {
 		.info = info,
@@ -163,8 +217,14 @@ static bool test_dwarf_function_parsing_go(void) {
 	r_anal_dwarf_process_info (anal, &ctx);
 
 	Sdb *sdb = sdb_ns (anal->sdb, "dwarf", 0);
-	mu_assert_notnull (sdb, "No dwarf function information in db");
-	char *value = NULL;
+	if (!sdb) {
+		r_bin_dwarf_free_debug_info (info);
+		RVecDwarfAbbrevDecl_free (abbrevs);
+		r_bin_dwarf_free_loc (loc_table);
+		mu_assert ("No dwarf function information in db", false);
+		return MU_ERR;
+	}
+	const char *value = NULL;
 
 	check_kv ("main_main", "fcn");
 	check_kv ("fcn.main_main.name", "main.main");
@@ -176,39 +236,39 @@ static bool test_dwarf_function_parsing_go(void) {
 	check_kv ("fcn.main_tree_iterInorder.sig", "void main.tree.iterInorder(main.tree t,func(int) visit);");
 
 	/* We do not parse variable information from .debug_frame that is this Go binary using, so
-	   don't check variable information and add it in the future */
+	don't check variable information and add it in the future */
 
 	r_bin_dwarf_free_debug_info (info);
-	r_bin_dwarf_free_debug_abbrev (abbrevs);
+	RVecDwarfAbbrevDecl_free (abbrevs);
 	r_bin_dwarf_free_loc (loc_table);
-	r_anal_free (anal);
-	r_bin_free (bin);
-	r_io_free (io);
 	mu_end;
 }
 
 static bool test_dwarf_function_parsing_rust(void) {
-	RBin *bin = r_bin_new ();
-	mu_assert_notnull (bin, "Couldn't create new RBin");
-	RIO *io = r_io_new ();
-	mu_assert_notnull (io, "Couldn't create new RIO");
-	RAnal *anal = r_anal_new ();
-	mu_assert_notnull (anal, "Couldn't create new RAnal");
-	r_io_bind (io, &bin->iob);
-	anal->binb.demangle = r_bin_demangle;
+	r_str_ncpy (anal->config->arch, "x86", sizeof (anal->config->arch));
+	anal->config->bits = 64;
 
-	RBinFileOptions opt = { 0 };
+	RBinFileOptions opt;
+	r_bin_file_options_init (&opt, -1, UT64_MAX, 0, 0);
 	bool res = r_bin_open (bin, "bins/elf/dwarf_rust_bubble", &opt);
 	// TODO fix, how to correctly promote binary info to the RAnal in unit tests?
-	anal->cpu = strdup ("x86");
-	anal->bits = 64;
+	free (anal->config->cpu);
 	mu_assert ("bins/elf/dwarf_rust_bubble", res);
 	mu_assert_notnull (anal->sdb_types, "Couldn't create new RAnal.sdb_types");
-	RBinDwarfDebugAbbrev *abbrevs = r_bin_dwarf_parse_abbrev (bin, MODE);
-	mu_assert_notnull (abbrevs, "Couldn't parse Abbreviations");
-	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (abbrevs, bin, MODE);
-	mu_assert_notnull (info, "Couldn't parse debug_info section");
-	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bin, 8);
+	RBinFile *bf = r_bin_cur (bin);
+	mu_assert_notnull (bf, "Couldn't get current bin file");
+	RVecDwarfAbbrevDecl *abbrevs = r_bin_dwarf_parse_abbrev (bf);
+	if (!abbrevs) {
+		mu_assert ("Couldn't parse Abbreviations", false);
+		return MU_ERR;
+	}
+	RBinDwarfDebugInfo *info = r_bin_dwarf_parse_info (bf, abbrevs);
+	if (!info) {
+		RVecDwarfAbbrevDecl_free (abbrevs);
+		mu_assert ("Couldn't parse debug_info section", false);
+		return MU_ERR;
+	}
+	HtUP /*<offset, List *<LocListEntry>*/ *loc_table = r_bin_dwarf_parse_loc (bf, 8);
 
 	RAnalDwarfContext ctx = {
 		.info = info,
@@ -218,37 +278,134 @@ static bool test_dwarf_function_parsing_rust(void) {
 
 	Sdb *sdb = sdb_ns (anal->sdb, "dwarf", 0);
 	mu_assert_notnull (sdb, "No dwarf function information in db");
-	char *value = NULL;
+	const char *value = NULL;
 
-	check_kv ("fcn.main.addr", "0x5750");
-	check_kv ("fcn.main.name", "main");
-	check_kv ("fcn.main.var.numbers", "s,128,i32[11]");
-	check_kv ("fcn.main.var.strings", "s,312,&str[6]");
-	// check_kv ("fcn.main.vars", "numbers,arg0,arg0,strings,arg0,arg0"); Fix these collision by unique renaming in future
-	check_kv ("fcn.lang_start_internal.sig", "isize lang_start_internal(&Fn<()> main,isize argc,u8 ** argv);");
+	check_kv ("fcn.rust::main::h523dcf5432fcfd88.addr", "0x5750");
+	check_kv ("fcn.rust::main::h523dcf5432fcfd88.name", "rust::main::h523dcf5432fcfd88");
+	check_kv ("fcn.rust::main::h523dcf5432fcfd88.var.numbers", "s,128,i32[10]");
+	check_kv ("fcn.rust::main::h523dcf5432fcfd88.var.strings", "s,312,&str[5]");
+	// check_kv ("fcn.rust::main::h523dcf5432fcfd88.vars", "numbers,arg0,arg0,strings,arg0,arg0"); Fix these collision by unique renaming in future
+	check_kv ("fcn.std::rt::lang_start_internal::h58283c2b5ed737c9.sig", "isize std::rt::lang_start_internal::h58283c2b5ed737c9(&Fn<()> main,isize argc,u8 ** argv);");
 
-	check_kv ("bubble_sort__str_", "fcn");
-	check_kv ("bubble_sort_i32_", "fcn");
-	check_kv ("fcn.bubble_sort_i32_.vars", "values,n,swapped,iter,__next,val,i");
-	check_kv ("fcn.bubble_sort_i32_.var.iter", "s,112,Range<usize>");
-	check_kv ("fcn.bubble_sort_i32_.var.i", "s,176,usize");
-	check_kv ("fcn.bubble_sort_i32_.name", "bubble_sort<i32>");
-	check_kv ("fcn.bubble_sort_i32_.addr", "0x5270");
+	check_kv ("rust::bubble_sort::h7ea83ee077a91c25", "fcn");
+	check_kv ("rust::bubble_sort::h0777bc845caabc60", "fcn");
+	check_kv ("fcn.rust::bubble_sort::h0777bc845caabc60.args", "values");
+	check_kv ("fcn.rust::bubble_sort::h0777bc845caabc60.vars", "n,swapped,iter,__next,val,i");
+	check_kv ("fcn.rust::bubble_sort::h0777bc845caabc60.var.iter", "s,112,Range<usize>");
+	check_kv ("fcn.rust::bubble_sort::h0777bc845caabc60.var.i", "s,176,usize");
+	check_kv ("fcn.rust::bubble_sort::h0777bc845caabc60.name", "rust::bubble_sort::h0777bc845caabc60");
+	check_kv ("fcn.rust::bubble_sort::h0777bc845caabc60.addr", "0x5270");
+	const char *typed_bubble = sdb_const_get (sdb, "fcn.rust::bubble_sort::h0777bc845caabc60.typed_name", NULL);
+	mu_assert_notnull ("Missing typed name for rust::bubble_sort::h0777bc845caabc60", typed_bubble);
+	sdb = anal->sdb_types;
+	char *typed_bubble_kind = strdup (typed_bubble);
+	check_kv (typed_bubble_kind, "func");
+	free (typed_bubble_kind);
+	char *typed_bubble_ret = r_str_newf ("func.%s.ret", typed_bubble);
+	check_kv (typed_bubble_ret, "void");
+	free (typed_bubble_ret);
+	char *typed_bubble_args = r_str_newf ("func.%s.args", typed_bubble);
+	check_kv (typed_bubble_args, "1");
+	free (typed_bubble_args);
 
 	r_bin_dwarf_free_debug_info (info);
-	r_bin_dwarf_free_debug_abbrev (abbrevs);
+	RVecDwarfAbbrevDecl_free (abbrevs);
 	r_bin_dwarf_free_loc (loc_table);
-	r_anal_free (anal);
-	r_bin_free (bin);
-	r_io_free (io);
 	mu_end;
 }
 
+// offsets are the position in the unit, starting at 1
+#define NESTED_INT_OFFSET 2
+
+static void push_nested_die(RBinDwarfCompUnit *unit, ut16 tag, bool has_children, const char *name, ut64 addr) {
+	static const ut8 reg0[] = { DW_OP_reg0 };
+	RBinDwarfDie die = {
+		.tag = tag,
+		.abbrev_code = tag? 1: 0,
+		.offset = RVecDwarfDie_length (unit->dies) + 1,
+		.attr_idx = RVecDwarfAttrValue_length (unit->attrs),
+		.has_children = has_children
+	};
+	if (tag) {
+		RBinDwarfAttrValue av = { .attr_name = DW_AT_name, .kind = DW_AT_KIND_STRING, .string = { .content = name } };
+		RVecDwarfAttrValue_push_back (unit->attrs, &av);
+	}
+	if (tag == DW_TAG_subprogram) {
+		RBinDwarfAttrValue av = { .attr_name = DW_AT_low_pc, .kind = DW_AT_KIND_ADDRESS, .address = addr };
+		RVecDwarfAttrValue_push_back (unit->attrs, &av);
+	} else if (tag == DW_TAG_variable || tag == DW_TAG_member) {
+		RBinDwarfAttrValue type = { .attr_name = DW_AT_type, .kind = DW_AT_KIND_REFERENCE, .reference = NESTED_INT_OFFSET };
+		RVecDwarfAttrValue_push_back (unit->attrs, &type);
+		RBinDwarfAttrValue loc = { .attr_name = DW_AT_location, .kind = DW_AT_KIND_BLOCK, .block = { sizeof (reg0), reg0 } };
+		RVecDwarfAttrValue_push_back (unit->attrs, &loc);
+	}
+	die.attr_count = RVecDwarfAttrValue_length (unit->attrs) - die.attr_idx;
+	RVecDwarfDie_push_back (unit->dies, &die);
+}
+
+static bool test_dwarf_nested_scopes(void) {
+	r_str_ncpy (anal->config->arch, "x86", sizeof (anal->config->arch));
+	anal->config->bits = 64;
+
+	RBinDwarfCompUnit unit = { .dies = RVecDwarfDie_new (), .attrs = RVecDwarfAttrValue_new () };
+	push_nested_die (&unit, DW_TAG_compile_unit, true, "nested.c", 0);
+	push_nested_die (&unit, DW_TAG_base_type, false, "int", 0);
+	push_nested_die (&unit, DW_TAG_subprogram, true, "outer", 0x1000);
+	push_nested_die (&unit, DW_TAG_variable, false, "ov", 0);
+	push_nested_die (&unit, DW_TAG_subprogram, true, "inner", 0x2000);
+	push_nested_die (&unit, DW_TAG_variable, false, "iv", 0);
+	push_nested_die (&unit, 0, false, NULL, 0);
+	push_nested_die (&unit, DW_TAG_lexical_block, true, "block", 0);
+	push_nested_die (&unit, DW_TAG_variable, false, "bv", 0);
+	push_nested_die (&unit, 0, false, NULL, 0);
+	push_nested_die (&unit, DW_TAG_variable, false, "after", 0);
+	push_nested_die (&unit, 0, false, NULL, 0);
+	push_nested_die (&unit, DW_TAG_structure_type, true, "Outer", 0);
+	push_nested_die (&unit, DW_TAG_member, false, "a", 0);
+	push_nested_die (&unit, DW_TAG_structure_type, true, "Inner", 0);
+	push_nested_die (&unit, DW_TAG_member, false, "x", 0);
+	push_nested_die (&unit, 0, false, NULL, 0);
+	push_nested_die (&unit, DW_TAG_member, false, "z", 0);
+	push_nested_die (&unit, 0, false, NULL, 0);
+	push_nested_die (&unit, 0, false, NULL, 0);
+
+	RBinDwarfDebugInfo info = { .comp_units = RVecDwarfCompUnit_new () };
+	RVecDwarfCompUnit_push_back (info.comp_units, &unit);
+	RAnalDwarfContext ctx = { .info = &info };
+	r_anal_dwarf_process_info (anal, &ctx);
+
+	const char *value = NULL;
+	Sdb *sdb = sdb_ns (anal->sdb, "dwarf", 0);
+	mu_assert_notnull (sdb, "No dwarf function information in db");
+	// a nested function owns its variables, the blocks of a function do not
+	check_kv ("fcn.outer.vars", "ov,bv,after");
+	check_kv ("fcn.inner.vars", "iv");
+	sdb = anal->sdb_types;
+	check_kv ("struct.Outer", "a,z");
+	check_kv ("struct.Inner", "x");
+
+	RVecDwarfDie_free (unit.dies);
+	RVecDwarfAttrValue_free (unit.attrs);
+	RVecDwarfCompUnit_free (info.comp_units);
+	mu_end;
+}
+
+#define run_test_with_setup(test_func) \
+	do { \
+		if (!setup ()) { \
+			fprintf (stderr, "Setup failed for " #test_func "\n"); \
+			return 1; \
+		} \
+		mu_run_test (test_func); \
+		teardown (); \
+	} while (0)
+
 int all_tests(void) {
-	mu_run_test (test_parse_dwarf_types);
-	mu_run_test (test_dwarf_function_parsing_cpp);
-	mu_run_test (test_dwarf_function_parsing_go);
-	mu_run_test (test_dwarf_function_parsing_rust);
+	run_test_with_setup (test_parse_dwarf_types);
+	run_test_with_setup (test_dwarf_function_parsing_cpp);
+	run_test_with_setup (test_dwarf_function_parsing_rust);
+	run_test_with_setup (test_dwarf_function_parsing_go);
+	run_test_with_setup (test_dwarf_nested_scopes);
 	return tests_passed != tests_run;
 }
 

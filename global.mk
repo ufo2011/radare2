@@ -16,6 +16,7 @@ TOP:=$(dir $(lastword $(MAKEFILE_LIST)))
 LTOP:=$(TOP)/libr
 STOP:=$(TOP)/shlr
 BTOP:=$(TOP)/binr
+SPRJ:=$(TOP)/subprojects
 
 ifeq ($(MAKEFLAGS),s)
 SILENT=1
@@ -38,16 +39,31 @@ endif
 	$(CC) $(LDFLAGS) -c $(CFLAGS) -o $@ $<
 
 .c.o:
-ifneq ($(SILENT),)
-	@echo "[$(shell $(LIBR)/count.sh)] CC $<"
-	@$(CC) -c $(CFLAGS) -o $@ $<
-else
+ifeq ($(SILENT),)
 	$(CC) -c $(CFLAGS) -o $@ $<
+else
+	#@echo "[$(shell $(LIBR)/count.sh)] CC $<"
+	@echo "[$(shell basename `pwd`)] CC $<"
+	@$(CC) -c $(CFLAGS) -o $@ $<
 endif
 
 -include $(TOP)/config-user.mk
 -include $(TOP)/mk/platform.mk
 -include $(TOP)/mk/${COMPILER}.mk
 
-WWWROOT=${DATADIR}/radare2/${VERSION}/www
+WWWROOT=$(DATADIR)/radare2/${VERSION}/www
+PANELS=$(DATADIR)/radare2/${VERSION}/panels
 endif
+
+## global sdb stuff
+
+USE_SDBTOOL=0
+SDBPATH=$(LTOP)/../subprojects/sdb/
+ifeq ($(BUILD_OS),windows)
+BUILD_EXT_EXE=.exe
+else
+BUILD_EXT_EXE=
+endif
+
+SDB=$(SDBPATH)/sdb${BUILD_EXT_EXE}
+SDBTOOL=$(SDBPATH)/sdb${BUILD_EXT_EXE} -r

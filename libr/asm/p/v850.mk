@@ -1,14 +1,15 @@
-OBJ_V850=asm_v850.o
-OBJ_V850+=$(LIBR)/asm/arch/v850/v850_disas.o
-CFLAGS+=-I$(LIBR)/asm/arch/v850
+OBJ_V850PSEUDO+=$(LIBR)/arch/p/v850/pseudo.o
 
+TARGET_V850PSEUDO=parse_v850_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_V850PSEUDO}
+STATIC_OBJ+=${OBJ_V850PSEUDO}
 
-STATIC_OBJ+=${OBJ_V850}
-TARGET_V850=asm_v850.${EXT_SO}
-
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_V850}
-
-${TARGET_V850}: ${OBJ_V850}
-	${CC} ${LDFLAGS} ${CFLAGS} -o ${TARGET_V850} ${OBJ_V850}
+ifeq ($(CC),cccl)
+V850_CFLAGS:=${CFLAGS}
+else
+V850_CFLAGS:=${CFLAGS} ${LINK}
 endif
+
+${TARGET_V850PSEUDO}: ${OBJ_V850PSEUDO}
+	${CC} $(call libname,parse_v850_pseudo) -L../../util -llibr_util \
+		$(LDFLAGS_SHARED) ${V850_CFLAGS} -o ${TARGET_V850PSEUDO} ${OBJ_V850PSEUDO}

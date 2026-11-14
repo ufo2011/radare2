@@ -7,7 +7,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *     https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -31,39 +31,39 @@ static unsigned char UDS[] = {
 
 #if 0
 static int is_unique_UDS(unsigned int position) {
-    unsigned int j, flag;
-    flag = 0;
-    for (j = 0; j < UDS_SIZE; j++) {
-        if (firmware[position] == UDS[j]) {
-            flag = 1;
-            break;
-        }
-    }
+	unsigned int j, flag;
+	flag = 0;
+	for (j = 0; j < UDS_SIZE; j++) {
+		if (firmware[position] == UDS[j]) {
+			flag = 1;
+			break;
+		}
+	}
 
-    if (flag == 1) {
-        for (j = position - CANDB_SIZE / 2; j < position + CANDB_SIZE / 2; j++) {
-            if ((firmware[j] == firmware[position]) && (j != position)) {
-                flag = 0;
-                break;
-            }
-        }
-    }
-    return flag;
+	if (flag == 1) {
+		for (j = position - CANDB_SIZE / 2; j < position + CANDB_SIZE / 2; j++) {
+			if ((firmware[j] == firmware[position]) && (j != position)) {
+				flag = 0;
+				break;
+			}
+		}
+	}
+	return flag;
 }
 #endif
 
 R_API RList *r_search_find_uds(RSearch *search, ut64 addr, const ut8 *data, size_t size, bool verbose) {
 	RList *list = r_list_newf (free);
 	if (size < (CANDB_SIZE * 2)) {
-		eprintf ("requires at least 1024 bytes. %zd\n", size);
+		eprintf ("requires at least 1024 bytes. %d\n", (int)size);
 		r_list_free (list);
 		return NULL;
 	}
 	unsigned int i, j, k, max_score, stride;
 	unsigned int candb_position = 0;
 
-	unsigned int *score = (unsigned int *)calloc (size, sizeof (int));
-	unsigned int *stride_score = (unsigned int *)calloc (size, sizeof (int));
+	unsigned int *score = (unsigned int *)calloc (size, sizeof (unsigned int));
+	unsigned int *stride_score = (unsigned int *)calloc (size, sizeof (unsigned int));
 
 	unsigned char UDS_local[UDS_SIZE];
 	for (i = 1; i < size - (CANDB_SIZE * 2); i++) {
@@ -110,9 +110,6 @@ R_API RList *r_search_find_uds(RSearch *search, ut64 addr, const ut8 *data, size
 			continue;
 		}
 		RSearchUds *uh = R_NEW0 (RSearchUds);
-		if (!uh) {
-			break;
-		}
 		uh->score = max_score;
 		uh->stride = max_stride;
 		uh->addr = addr + candb_position;

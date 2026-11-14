@@ -1,15 +1,11 @@
-OBJ_XTENSA=asm_xtensa.o
-OBJ_XTENSA+=../arch/xtensa/gnu/xtensa-dis.o
-OBJ_XTENSA+=../arch/xtensa/gnu/xtensa-isa.o
-OBJ_XTENSA+=../arch/xtensa/gnu/xtensa-modules.o
-OBJ_XTENSA+=../arch/xtensa/gnu/elf32-xtensa.o
+OBJ_XTENSAPSEUDO+=$(LIBR)/arch/p/xtensa/pseudo.o
 
-STATIC_OBJ+=${OBJ_XTENSA}
-TARGET_XTENSA=asm_xtensa.${EXT_SO}
+TARGET_XTENSAPSEUDO=parse_xtensa_pseudo.${EXT_SO}
+STATIC_OBJ+=${OBJ_XTENSAPSEUDO}
 
 ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_XTENSA}
-
-${TARGET_XTENSA}: ${OBJ_XTENSA}
-	${CC} $(call libname,asm_xtensa) ${LDFLAGS} ${CFLAGS} -o asm_xtensa.${EXT_SO} ${OBJ_XTENSA}
+ALL_TARGETS+=${TARGET_XTENSAPSEUDO}
+${TARGET_XTENSAPSEUDO}: ${OBJ_XTENSAPSEUDO}
+	${CC} $(call libname,parse_xtensa_pseudo) ${LIBDEPS} $(LDFLAGS) \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_XTENSAPSEUDO} ${OBJ_XTENSAPSEUDO}
 endif

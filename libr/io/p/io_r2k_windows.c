@@ -1,8 +1,10 @@
+#define R_LOG_ORIGIN "r2k"
+
 #include "io_r2k_windows.h"
 
 HANDLE gHandleDriver = NULL;
 
-static BOOL InstallService(const char * rutaDriver, LPCTSTR  lpServiceName, LPCTSTR  lpDisplayName) {
+static BOOL InstallService(const char *rutaDriver, LPCTSTR  lpServiceName, LPCTSTR  lpDisplayName) {
 	HANDLE hService;
 	BOOL ret = FALSE;
 	HANDLE hSCManager = OpenSCManager (NULL, NULL, SC_MANAGER_CREATE_SERVICE);
@@ -46,17 +48,17 @@ BOOL StartStopService(LPCTSTR lpServiceName, BOOL bStop) {
 		if (hService) {
 			if (!bStop) {
 				if (StartService (hService, 0, NULL)) {
-					eprintf ("Service started [OK]\n");
+					R_LOG_DEBUG ("Service started [OK]");
 					ret = TRUE;
 				} else {
-					eprintf ("Service started [FAIL]\n");
+					R_LOG_DEBUG ("Service started [FAIL]");
 				}
 			} else {
 				if (ControlService (hService, SERVICE_CONTROL_STOP, &ssStatus)) {
-					eprintf ("Service Stopped [OK]\n");
+					R_LOG_DEBUG ("Service Stopped [OK]");
 					ret = TRUE;
 				} else {
-					eprintf ("Service Stopped [FAIL]\n");
+					R_LOG_DEBUG ("Service Stopped [FAIL]");
 				}
 			}
 			CloseServiceHandle (hService);
@@ -86,28 +88,33 @@ static const char *GetFileName(const char *path) {
 	return pfile;
 }
 
-int GetSystemModules(RIO *io) {
+char *r2k_windows_GetSystemModules(RIO *io) {
 	DWORD bRead = 0;
 	int i;
-	LPVOID lpBufMods = NULL;
 	int bufmodsize = 1024 * 1024;
-	if(gHandleDriver) {
-		if (!(lpBufMods = malloc (bufmodsize))) {
-			eprintf ("[r2k] GetSystemModules: Error can't allocate %i bytes of memory.\n", bufmodsize);
-			return -1;
-		}
-		if (DeviceIoControl (gHandleDriver, IOCTL_GET_SYSTEM_MODULES, lpBufMods, bufmodsize, lpBufMods, bufmodsize, &bRead, NULL)) {
-			PRTL_PROCESS_MODULES pm = (PRTL_PROCESS_MODULES)lpBufMods;
-			PRTL_PROCESS_MODULE_INFORMATION pMod = pm->Modules;
-			for (i = 0; i < pm->NumberOfModules; i++) {
-				const char *fileName = GetFileName((const char*)pMod[i].FullPathName);
-				io->cb_printf ("f nt.%s 0x%x @ 0x%p\n", fileName, pMod[i].ImageSize, pMod[i].ImageBase);
-			}
-		}
-	} else {
-		eprintf ("Driver not initialized.\n");
+	if (!gHandleDriver) {
+		R_LOG_ERROR ("Driver not initialized");
+		return NULL;
 	}
-	return 1;
+	LPVOID lpBufMods = malloc (bufmodsize);
+	if (!lpBufMods) {
+		R_LOG_ERROR ("GetSystemModules: Cannot allocate %i bytes of memory", bufmodsize);
+		return NULL;
+	}
+	if (DeviceIoControl (gHandleDriver, IOCTL_GET_SYSTEM_MODULES, lpBufMods, bufmodsize, lpBufMods, bufmodsize, &bRead, NULL)) {
+		PRTL_PROCESS_MODULES pm = (PRTL_PROCESS_MODULES)lpBufMods;
+		PRTL_PROCESS_MODULE_INFORMATION pMod = pm->Modules;
+		RStrBuf *sb = r_strbuf_new ("");
+		for (i = 0; i < pm->NumberOfModules; i++) {
+			const char *fileName = GetFileName((const char*)pMod[i].FullPathName);
+			r_strbuf_appendf (sb, "f nt.%s 0x%"PFMT64x" @ 0x"PFMT64x"\n", fileName, (ut64)pMod[i].ImageSize, (ut64)pMod[i].ImageBase);
+		}
+		char *res = r_strbuf_drain (sb);
+		free (lpBufMods);
+		return res;
+	}
+	free (lpBufMods);
+	return NULL;
 }
 
 int ReadKernelMemory (ut64 address, ut8 *buf, int len) {
@@ -116,10 +123,10 @@ int ReadKernelMemory (ut64 address, ut8 *buf, int len) {
 	int bufsize;
 	PPA p;
 	memset (buf, '\xff', len);
-	if(gHandleDriver) {
+	if (gHandleDriver) {
 		bufsize = sizeof (PA) + len;
 		if (!(lpBuffer = malloc (bufsize))) {
-			eprintf ("[r2k] ReadKernelMemory: Error can't allocate %i bytes of memory.\n", bufsize);
+			R_LOG_ERROR ("ReadKernelMemory: Cannot allocate %i bytes of memory", bufsize);
 			return -1;
 		}
 		p = (PPA)lpBuffer;
@@ -130,24 +137,22 @@ int ReadKernelMemory (ut64 address, ut8 *buf, int len) {
 			ret = len;
 		} else {
 			ret = -1;
-			//eprintf("[r2k] ReadKernelMemory: Error IOCTL_READ_KERNEL_MEM.\n");
 		}
 		free (lpBuffer);
 	} else {
-		eprintf ("Driver not initialized.\n");
+		R_LOG_ERROR ("Driver not initialized");
 	}
 	return ret;
 }
 
-int WriteKernelMemory (ut64 address, const ut8 *buf, int len) {
+int WriteKernelMemory(ut64 address, const ut8 *buf, int len) {
 	DWORD ret = -1, bRead = 0;
 	LPVOID lpBuffer = NULL;
 	int bufsize;
 	PPA p;
-	if(gHandleDriver) {
+	if (gHandleDriver) {
 		bufsize = sizeof (PA) + len;
 		if (!(lpBuffer = malloc (bufsize))) {
-			eprintf ("[r2k] WriteKernelMemory: Error can't allocate %i bytes of memory.\n", bufsize);
 			return -1;
 		}
 		p = (PPA)lpBuffer;
@@ -157,32 +162,32 @@ int WriteKernelMemory (ut64 address, const ut8 *buf, int len) {
 		if (DeviceIoControl (gHandleDriver, IOCTL_WRITE_KERNEL_MEM, lpBuffer, bufsize, lpBuffer, bufsize, &bRead, NULL)) {
 			ret = len;
 		} else {
-			eprintf ("[r2k] WriteKernelMemory: Error IOCTL_WRITE_KERNEL_MEM.\n");
+			R_LOG_ERROR ("WriteKernelMemory: IOCTL_WRITE_KERNEL_MEM");
 			ret = -1;
 		}
 		free (lpBuffer);
 	} else {
-		eprintf ("Driver not initialized.\n");
+		R_LOG_ERROR ("Driver not initialized");
 	}
 	return ret;
 }
 
-int Init (const char * driverPath) {
+int Init(const char * driverPath) {
 	BOOL ret = FALSE;
 	if (InitDriver () == FALSE) {
-		if (strlen (driverPath)) {
+		if (R_STR_ISNOTEMPTY (driverPath)) {
 			StartStopService (TEXT ("r2k"),TRUE);
 			RemoveService (TEXT ("r2k"));
-			eprintf ("Installing driver: %s\n", driverPath);
+			R_LOG_INFO ("Installing driver: %s", driverPath);
 			if (InstallService (driverPath, TEXT ("r2k"), TEXT ("r2k"))) {
 				StartStopService (TEXT ("r2k"),FALSE);
 				ret = InitDriver ();
 			}
 		} else {
-			eprintf ("Error initalizating driver, try r2k://pathtodriver\nEx: radare2.exe r2k://c:\\r2k.sys");
+			R_LOG_ERROR ("Cannot load the r2k driver, try `r2 r2k://path/to/r2k.sys`");
 		}
 	} else {
-		eprintf ("Driver present [OK]\n");
+		R_LOG_DEBUG ("Driver was already present [OK]");
 		ret = TRUE;
 	}
 	return ret;

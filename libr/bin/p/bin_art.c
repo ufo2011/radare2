@@ -1,8 +1,5 @@
-/* radare - LGPL - Copyright 2015-2018 - pancake */
+/* radare - LGPL - Copyright 2015-2024 - pancake */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
 #include <r_bin.h>
 
 #ifdef _MSC_VER
@@ -34,78 +31,66 @@ typedef struct {
 	RBuffer *buf;
 } ArtObj;
 
-static int art_header_load(ArtObj *ao, Sdb *db) {
+static bool art_header_load(ArtObj *ao, Sdb *db) {
 	/* TODO: handle read errors here */
 	if (r_buf_size (ao->buf) < sizeof (ARTHeader)) {
 		return false;
 	}
 	ARTHeader *art = &ao->art;
+	r_strf_buffer (64);
 	(void) r_buf_fread_at (ao->buf, 0, (ut8 *) art, "IIiiiiiiiiiiii", 1);
-	sdb_set (db, "img.base", sdb_fmt ("0x%x", art->image_base), 0);
-	sdb_set (db, "img.size", sdb_fmt ("0x%x", art->image_size), 0);
-	sdb_set (db, "art.checksum", sdb_fmt ("0x%x", art->checksum), 0);
-	sdb_set (db, "art.version", sdb_fmt ("%c%c%c",
+	sdb_set (db, "img.base", r_strf ("0x%x", art->image_base), 0);
+	sdb_set (db, "img.size", r_strf ("0x%x", art->image_size), 0);
+	sdb_set (db, "art.checksum", r_strf ("0x%x", art->checksum), 0);
+	sdb_set (db, "art.version", r_strf ("%c%c%c",
 			art->version[0], art->version[1], art->version[2]), 0);
-	sdb_set (db, "oat.begin", sdb_fmt ("0x%x", art->oat_file_begin), 0);
-	sdb_set (db, "oat.end", sdb_fmt ("0x%x", art->oat_file_end), 0);
-	sdb_set (db, "oat_data.begin", sdb_fmt ("0x%x", art->oat_data_begin), 0);
-	sdb_set (db, "oat_data.end", sdb_fmt ("0x%x", art->oat_data_end), 0);
-	sdb_set (db, "patch_delta", sdb_fmt ("0x%x", art->patch_delta), 0);
-	sdb_set (db, "image_roots", sdb_fmt ("0x%x", art->image_roots), 0);
-	sdb_set (db, "compile_pic", sdb_fmt ("0x%x", art->compile_pic), 0);
+	sdb_set (db, "oat.begin", r_strf ("0x%x", art->oat_file_begin), 0);
+	sdb_set (db, "oat.end", r_strf ("0x%x", art->oat_file_end), 0);
+	sdb_set (db, "oat_data.begin", r_strf ("0x%x", art->oat_data_begin), 0);
+	sdb_set (db, "oat_data.end", r_strf ("0x%x", art->oat_data_end), 0);
+	sdb_set (db, "patch_delta", r_strf ("0x%x", art->patch_delta), 0);
+	sdb_set (db, "image_roots", r_strf ("0x%x", art->image_roots), 0);
+	sdb_set (db, "compile_pic", r_strf ("0x%x", art->compile_pic), 0);
 	return true;
 }
 
 static Sdb *get_sdb(RBinFile *bf) {
-	RBinObject *o = bf->o;
-	if (!o) {
-		return NULL;
-	}
-	ArtObj *ao = o->bin_obj;
-	return ao? ao->kv: NULL;
+	ArtObj *ao = (ArtObj *)R_UNWRAP3 (bf, bo, bin_obj);
+	return ao ? ao->kv : NULL;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
 	ArtObj *ao = R_NEW0 (ArtObj);
-	if (ao) {
-		ao->kv = sdb_new0 ();
-		if (!ao->kv) {
-			free (ao);
-			return false;
-		}
-		ao->buf = r_buf_ref (buf);
-		art_header_load (ao, ao->kv);
-		sdb_ns_set (sdb, "info", ao->kv);
-		*bin_obj = ao;
-		return true;
+	ao->kv = sdb_new0 ();
+	if (!ao->kv) {
+		free (ao);
+		return false;
 	}
-	return false;
+	ao->buf = r_ref (buf);
+	art_header_load (ao, ao->kv);
+	sdb_ns_set (bf->sdb, "info", ao->kv);
+	bf->bo->bin_obj = ao;
+	return true;
 }
 
 static void destroy(RBinFile *bf) {
-	ArtObj *obj = bf->o->bin_obj;
-	r_buf_free (obj->buf);
+	ArtObj *obj = bf->bo->bin_obj;
+	r_unref (obj->buf);
 	free (obj);
 }
 
 static ut64 baddr(RBinFile *bf) {
-	ArtObj *ao = bf->o->bin_obj;
+	ArtObj *ao = bf->bo->bin_obj;
 	return ao? ao->art.image_base: 0;
 }
 
-static RList *strings(RBinFile *bf) {
-	return NULL;
-}
-
 static RBinInfo *info(RBinFile *bf) {
-	r_return_val_if_fail (bf && bf->o && bf->o->bin_obj, NULL);
-	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
+	ArtObj *ao = bf->bo->bin_obj;
+	if (!ao) {
 		return NULL;
 	}
-	ArtObj *ao = bf->o->bin_obj;
-	ret->lang = NULL;
-	ret->file = bf->file? strdup (bf->file): NULL;
+	RBinInfo *ret = R_NEW0 (RBinInfo);
+	ret->file = bf->file ? strdup (bf->file) : NULL;
 	ret->type = strdup ("ART");
 
 	ret->bclass = malloc (5);
@@ -126,7 +111,7 @@ static RBinInfo *info(RBinFile *bf) {
 	return ret;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *buf) {
+static bool check(RBinFile *bf, RBuffer *buf) {
 	char tmp[4];
 	int r = r_buf_read_at (buf, 0, (ut8 *)tmp, sizeof (tmp));
 	return r == 4 && !strncmp (tmp, "art\n", 4);
@@ -134,93 +119,73 @@ static bool check_buffer(RBinFile *bf, RBuffer *buf) {
 
 static RList *entries(RBinFile *bf) {
 	RList *ret = r_list_newf (free);
-	if (ret) {
-		RBinAddr *ptr = R_NEW0 (RBinAddr);
-		if (ptr) {
-			ptr->paddr = ptr->vaddr = 0;
-			r_list_append (ret, ptr);
-		}
+	if (!ret) {
+		return NULL;
 	}
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
+	r_list_append (ret, ptr);
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	ArtObj *ao = bf->o->bin_obj;
+static bool sections_vec(RBinFile *bf) {
+	ArtObj *ao = bf->bo->bin_obj;
 	if (!ao) {
-		return NULL;
+		return false;
 	}
 	ARTHeader art = ao->art;
-	RList *ret = NULL;
-	RBinSection *ptr = NULL;
-
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
-	ret->free = free;
-
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	RVecRBinSection_clear (&bf->bo->sections_vec);
+	RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("load");
 	ptr->size = r_buf_size (bf->buf);
-	ptr->vsize = art.image_size; // TODO: align?
-	ptr->paddr = 0;
+	ptr->vsize = art.image_size;
 	ptr->vaddr = art.image_base;
-	ptr->perm = R_PERM_R; // r--
+	ptr->perm = R_PERM_R;
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("bitmap");
 	ptr->size = art.bitmap_size;
 	ptr->vsize = art.bitmap_size;
 	ptr->paddr = art.bitmap_offset;
 	ptr->vaddr = art.image_base + art.bitmap_offset;
-	ptr->perm = R_PERM_RX; // r-x
+	ptr->perm = R_PERM_RX;
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("oat");
 	ptr->paddr = art.bitmap_offset;
 	ptr->vaddr = art.oat_file_begin;
 	ptr->size = art.oat_file_end - art.oat_file_begin;
 	ptr->vsize = ptr->size;
-	ptr->perm = R_PERM_RX; // r-x
+	ptr->perm = R_PERM_RX;
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("oat_data");
 	ptr->paddr = art.bitmap_offset;
 	ptr->vaddr = art.oat_data_begin;
 	ptr->size = art.oat_data_end - art.oat_data_begin;
 	ptr->vsize = ptr->size;
-	ptr->perm = R_PERM_R; // r--
+	ptr->perm = R_PERM_R;
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
-	return ret;
+	return true;
 }
 
 RBinPlugin r_bin_plugin_art = {
-	.name = "art",
-	.desc = "Android Runtime",
-	.license = "LGPL3",
+	.meta = {
+		.name = "art",
+		.author = "pancake",
+		.desc = "Android Runtime",
+		.license = "LGPL-3.0-only",
+	},
 	.get_sdb = &get_sdb,
-	.load_buffer = &load_buffer,
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
 	.entries = entries,
-	.strings = &strings,
 	.info = &info,
 };
 

@@ -3,23 +3,28 @@
 #include <stdlib.h>
 #include "minunit.h"
 
-bool test_buf(RBuffer *b) {
-	ut8 buffer[1024] = { 0 };
+#define BROKEN 0
+
+static bool test_buf(RBuffer *b) {
+	ut8 buffer[1024] = {0};
 	const char *content = "Something To\nSay Here..";
-	const int length = 23;
+	const int length = strlen (content);
 	int r;
+	size_t computed_size = 0;
 
 	ut64 buf_sz = r_buf_size (b);
-	mu_assert_eq (buf_sz, length, "file size should be computed");
+	mu_assert_eq (buf_sz, length, "test-buf: file size should be computed");
 
 	r = r_buf_read (b, buffer, length);
-	mu_assert_eq (r, length, "r_buf_read_at failed");
+	mu_assert_eq (length, r, "r_buf_read_at failed");
 	mu_assert_memeq (buffer, (ut8 *)content, length, "r_buf_read_at has corrupted content");
+	// return true;
 
-	const char *s = "This is a new content";
-	const size_t sl = strlen (s);
+	const char s[] = "This is a new content";
+	const size_t sl = strlen (s); // 21
 	bool res = r_buf_set_bytes (b, (ut8 *)s, sl);
-	mu_assert ("New content should be written", res);
+	mu_assert ("r_buf_set_bytes must be there", res);
+	computed_size += sl;
 
 	r_buf_seek (b, 0, R_BUF_SET);
 	r = r_buf_read (b, buffer, sl);
@@ -36,11 +41,15 @@ bool test_buf(RBuffer *b) {
 
 	const char *s2 = ", hello world";
 	const size_t s2l = strlen (s2);
+
 	res = r_buf_append_string (b, s2);
+	computed_size += s2l;
 	mu_assert ("string should be appended", res);
 
 	buf_sz = r_buf_size (b);
-	mu_assert_eq (buf_sz, sl + s2l, "file size should be computed");
+	// eprintf ("bufsz %d\n", buf_sz);
+	mu_assert_eq (sl + s2l, buf_sz, "file size should be computed");
+	mu_assert_eq (computed_size, buf_sz, "test_buf: file size should be computed");
 
 	res = r_buf_resize (b, 10);
 	mu_assert ("file should be resized", res);
@@ -50,9 +59,10 @@ bool test_buf(RBuffer *b) {
 	const int rl = r_buf_read_at (b, 1, buffer, sizeof (buffer));
 	mu_assert_eq (rl, 9, "only 9 bytes can be read from offset 1");
 	mu_assert_memeq (buffer, (ut8 *)"his is a ", 9, "read right bytes from offset 1");
+	//mu_assert_memeq (buffer, (ut8 *)"his is , ", 9, "read right bytes from offset 1");
 
 	r_buf_set_bytes (b, (ut8 *)"World", strlen ("World"));
-	char *base = r_buf_to_string (b);
+	char *base = r_buf_tostring (b);
 	mu_assert_notnull (base, "string should be there");
 	mu_assert_streq (base, "World", "World there");
 	free (base);
@@ -60,13 +70,13 @@ bool test_buf(RBuffer *b) {
 	const char *s3 = "Hello ";
 	res = r_buf_prepend_bytes (b, (const ut8 *)s3, strlen (s3));
 	mu_assert ("bytes should be prepended", res);
-	char *st = r_buf_to_string (b);
+	char *st = r_buf_tostring (b);
 	mu_assert_notnull (st, "string should be there");
 	mu_assert_streq (st, "Hello World", "hello world there");
 	free (st);
 
 	r_buf_insert_bytes (b, 5, (ut8 *)",", 1);
-	char *st2 = r_buf_to_string (b);
+	char *st2 = r_buf_tostring (b);
 	mu_assert_notnull (st2, "string should be there");
 	mu_assert_streq (st2, "Hello, World", "comma inserted");
 	free (st2);
@@ -84,35 +94,55 @@ bool test_buf(RBuffer *b) {
 	RBuffer *sec_buf = r_buf_new_with_bytes ((ut8 *)" second", 7);
 	res = r_buf_append_buf (b, sec_buf);
 	mu_assert ("append buf should succeed", res);
-	char *st3 = r_buf_to_string (b);
+	char *st3 = r_buf_tostring (b);
 	mu_assert_streq (st3, "Hello second", "append buf correctly");
 	free (st3);
-	r_buf_free (sec_buf);
+	r_unref (sec_buf);
 
 	sec_buf = r_buf_new_with_bytes ((ut8 *)"123456789", 9);
 	res = r_buf_append_buf_slice (b, sec_buf, 5, 3);
 	mu_assert ("append buf slice should succeed", res);
-	char *st4 = r_buf_to_string (b);
+	char *st4 = r_buf_tostring (b);
 	mu_assert_streq (st4, "Hello second678", "append buf slice correctly");
 	free (st4);
-	r_buf_free (sec_buf);
+	r_unref (sec_buf);
 
 	return MU_PASSED;
 }
 
-bool test_r_buf_file(void) {
-	RBuffer *b;
+static bool test_r_buf_cache(void) {
+	const char bytes[] = "ABCDEFGHIJKLMNOP";
+	RBuffer *b0 = r_buf_new_with_bytes ((const ut8*)bytes, sizeof (bytes));
+	RBuffer *b1 = r_buf_new_with_cache (b0, false);
+	char buf[5] = {0};
+	r_buf_read_at (b0, 2, (ut8*)buf, 4);
+	mu_assert_streq (buf, "CDEF", "read original buffer");
+	r_buf_read_at (b1, 2, (ut8*)buf, 4);
+	mu_assert_streq (buf, "CDEF", "read cache buffer");
+	r_buf_write_at (b1, 2, (const ut8*)"XY", 2);
+	r_buf_read_at (b1, 2, (ut8*)buf, 4);
+	mu_assert_streq (buf, "XYEF", "read patched cache buffer");
+
+	r_unref (b0);
+	r_unref (b1);
+	mu_end;
+}
+
+static bool test_r_buf_file(void) {
 	char *filename = "r2-XXXXXX";
 	const char *content = "Something To\nSay Here..";
-	const int length = 23;
+	const int length = strlen (content); // 23
 
 	// Prepare file
+	r_file_rm (filename);
 	int fd = r_file_mkstemp ("", &filename);
 	mu_assert_neq ((ut64)fd, (ut64)-1, "mkstemp failed...");
-	write (fd, content, length);
+	if (write (fd, content, length) != length) {
+		return false;
+	}
 	close (fd);
 
-	b = r_buf_new_file (filename, O_RDWR, 0);
+	RBuffer *b = r_buf_new_file (filename, O_RDWR, 0);
 	mu_assert_notnull (b, "r_buf_new_file failed");
 
 	if (test_buf (b) != MU_PASSED) {
@@ -120,18 +150,17 @@ bool test_r_buf_file(void) {
 	}
 
 	// Cleanup
-	r_buf_free (b);
+	r_unref (b);
 	unlink (filename);
 	free (filename);
 	mu_end;
 }
 
-bool test_r_buf_bytes(void) {
-	RBuffer *b;
-	const char *content = "Something To\nSay Here..";
-	const int length = 23;
+static bool test_r_buf_bytes(void) {
+	const char content[] = "Something To\nSay Here..";
+	const int length = strlen (content); // 23;
 
-	b = r_buf_new_with_bytes ((const ut8 *)content, length);
+	RBuffer *b = r_buf_new_with_bytes ((const ut8 *)content, length);
 	mu_assert_notnull (b, "r_buf_new_with_bytes failed");
 
 	if (test_buf (b) != MU_PASSED) {
@@ -139,43 +168,44 @@ bool test_r_buf_bytes(void) {
 	}
 
 	// Cleanup
-	r_buf_free (b);
+	r_unref (b);
 	mu_end;
 }
 
-bool test_r_buf_mmap(void) {
-	RBuffer *b;
+static bool test_r_buf_mmap(void) {
 	char *filename = "r2-XXXXXX";
-	const char *content = "Something To\nSay Here..";
-	const int length = 23;
+	const char content[] = "Something To\nSay Here..";
+	const int length = strlen (content); // 23
 
 	// Prepare file
 	int fd = r_file_mkstemp ("", &filename);
 	mu_assert_neq ((long long)fd, -1LL, "mkstemp failed...");
-	write (fd, content, length);
+	if (write (fd, content, length) != length) {
+		return false;
+	}
 	close (fd);
 
-	b = r_buf_new_mmap (filename, R_PERM_RW);
+	RBuffer *b = r_buf_new_mmap (filename, R_PERM_RW);
 	mu_assert_notnull (b, "r_buf_new_mmap failed");
 
 	if (test_buf (b) != MU_PASSED) {
-		unlink(filename);
+		unlink (filename);
 		mu_fail ("test failed");
 	}
 
 	// Cleanup
-	r_buf_free (b);
-	unlink(filename);
+	r_unref (b);
+	unlink (filename);
 	free (filename);
 	mu_end;
 }
 
-bool test_r_buf_io(void) {
-	RBuffer *b;
-	const char *content = "Something To\nSay Here..";
-	const int length = 23;
+static bool test_r_buf_io(void) {
+	const char content[] = "Something To\nSay Here..";
+	const int length = strlen (content); // 23
 
 	RIO *io = r_io_new ();
+	r_file_rm ("/tmp/r-buf-io.test");
 	RIODesc *desc = r_io_open_at (io, "file:///tmp/r-buf-io.test", R_PERM_RW | R_PERM_CREAT, 0644, 0);
 	mu_assert_notnull (desc, "file should be opened for writing");
 
@@ -185,7 +215,7 @@ bool test_r_buf_io(void) {
 	RIOBind bnd;
 	r_io_bind (io, &bnd);
 
-	b = r_buf_new_with_io(&bnd, desc->fd);
+	RBuffer *b = r_buf_new_with_io (&bnd, desc->fd);
 	mu_assert_notnull (b, "r_buf_new_file failed");
 
 	if (test_buf (b) != MU_PASSED) {
@@ -193,18 +223,47 @@ bool test_r_buf_io(void) {
 	}
 
 	// Cleanup
-	r_buf_free (b);
+	r_unref (b);
 	r_io_close (io);
 	r_io_free (io);
 	mu_end;
 }
 
-bool test_r_buf_sparse(void) {
-	RBuffer *b;
+#if BROKEN
+static bool test_r_buf_io2(void) {
 	const char *content = "Something To\nSay Here..";
-	const int length = 23;
+	const int length = strlen (content); // 23
 
-	b = r_buf_new_sparse (0);
+	RIO *io = r_io_new ();
+	RIODesc *desc = r_io_open_at (io, "malloc://23", R_PERM_RW, 0644, 0);
+	mu_assert_notnull (desc, "file should be opened for writing");
+
+	bool res = r_io_write_at (io, 0, (ut8 *)content, length);
+	mu_assert ("initial content should be written", res);
+
+	RIOBind bnd;
+	r_io_bind (io, &bnd);
+
+	RBuffer *b = r_buf_new_with_io (&bnd, desc->fd);
+	mu_assert_notnull (b, "r_buf_new_file failed");
+
+	if (test_buf (b) != MU_PASSED) {
+		mu_fail ("test failed");
+	}
+
+	// Cleanup
+	r_unref (b);
+	r_io_close (io);
+	r_io_free (io);
+	mu_end;
+}
+#endif
+
+static bool test_r_buf_sparse(void) {
+	const char content[] = "Something To\nSay Here..";
+	const int length = strlen (content); // 23
+
+	RBuffer *b = r_buf_new_sparse (0);
 	mu_assert_notnull (b, "r_buf_new_file failed");
 
 	r_buf_write (b, (ut8 *)content, length);
@@ -215,11 +274,11 @@ bool test_r_buf_sparse(void) {
 	}
 
 	// Cleanup
-	r_buf_free (b);
+	r_unref (b);
 	mu_end;
 }
 
-bool test_r_buf_sparse2(void) {
+static bool test_r_buf_sparse2(void) {
 	RBuffer *b = r_buf_new_sparse (0xff);
 	r_buf_write (b, (ut8 *)"aaaa", 4);
 	r_buf_write (b, (ut8 *)"bbbbb", 5);
@@ -261,23 +320,21 @@ bool test_r_buf_sparse2(void) {
 	sz = r_buf_size (b);
 	mu_assert_eq (sz, 0x106, "size is 0x106");
 
-	r_buf_free (b);
+	r_unref (b);
 	mu_end;
 }
 
 bool test_r_buf_bytes_steal(void) {
-	RBuffer *b;
-	const char *content = "Something To\nSay Here..";
-	const int length = 23;
-
-	b = r_buf_new_with_bytes ((const ut8 *)content, length);
+	const char content[] = "Something To\nSay Here..";
+	const int length = strlen (content); // 23
+	RBuffer *b = r_buf_new_with_bytes ((const ut8 *)content, length);
 	mu_assert_notnull (b, "r_buf_new_file failed");
-	char *s = r_buf_to_string (b);
+	char *s = r_buf_tostring (b);
 	mu_assert_streq (s, content, "content is right");
 	free (s);
 
 	// Cleanup
-	r_buf_free (b);
+	r_unref (b);
 	mu_end;
 }
 
@@ -296,29 +353,29 @@ bool test_r_buf_format(void) {
 	mu_assert_eq (a[2], 0xfeca, "third");
 	mu_assert_eq (a[3], 0xbeba, "fourth");
 
-	r_buf_free (b);
+	r_unref (b);
 	mu_end;
 }
 
-bool test_r_buf_with_buf(void) {
-	const char *content = "Something To\nSay Here..";
-	const int length = 23;
+static bool test_r_buf_with_buf(void) {
+	const char content[] = "Something To\nSay Here..";
+	const int length = strlen (content); // 23;
 	RBuffer *buf = r_buf_new_with_bytes ((ut8 *)content, length);
 
 	RBuffer *b = r_buf_new_with_buf (buf);
 	mu_assert_notnull (b, "r_buf_new_with_buf failed");
-	r_buf_free (buf);
+	r_unref (buf);
 
 	if (test_buf (b) != MU_PASSED) {
 		mu_fail ("r_buf_with_buf failed");
 	}
 
 	// Cleanup
-	r_buf_free (b);
+	r_unref (b);
 	mu_end;
 }
 
-bool test_r_buf_slice(void) {
+static bool test_r_buf_slice(void) {
 	const char *content = "AAAAAAAAAASomething To\nSay Here..BBBBBBBBBB";
 	const int length = strlen (content);
 	RBuffer *buf = r_buf_new_with_bytes ((ut8 *)content, length);
@@ -348,12 +405,12 @@ bool test_r_buf_slice(void) {
 	mu_assert_eq (buf_sz, 30, "file size should be 30");
 
 	// Cleanup
-	r_buf_free (b);
-	r_buf_free (buf);
+	r_unref (b);
+	r_unref (buf);
 	mu_end;
 }
 
-bool test_r_buf_get_string(void) {
+static bool test_r_buf_get_string(void) {
 	ut8 *ch = malloc (128);
 	memset (ch, 'A', 127);
 	ch[127] = '\0';
@@ -367,7 +424,7 @@ bool test_r_buf_get_string(void) {
 	s = r_buf_get_string (b, 127);
 	mu_assert_streq (s, "\x00", "the string is empty");
 	free (s);
-	r_buf_free (b);
+	r_unref (b);
 	free (ch);
 	mu_end;
 }
@@ -380,7 +437,7 @@ bool test_r_buf_get_string_nothing(void) {
 	s = r_buf_get_string (b, 0);
 	mu_assert_streq (s, "\x33\x22", "now there is a string because of the null terminator");
 	free (s);
-	r_buf_free (b);
+	r_unref (b);
 	mu_end;
 }
 
@@ -396,18 +453,22 @@ bool test_r_buf_slice_too_big(void) {
 	mu_assert ("the resize should be successful", res);
 	sz = r_buf_size (sl);
 	mu_assert_eq (sz, 3, "but it should just use the biggest value");
-	r_buf_free (sl);
-	r_buf_free (buf);
+	r_unref (sl);
+	r_unref (buf);
 	mu_end;
 }
 
-int all_tests() {
-	mu_run_test (test_r_buf_file);
+int all_tests(void) {
+	mu_run_test (test_r_buf_cache);
 	mu_run_test (test_r_buf_bytes);
 	mu_run_test (test_r_buf_mmap);
 	mu_run_test (test_r_buf_with_buf);
 	mu_run_test (test_r_buf_slice);
+	mu_run_test (test_r_buf_file);
 	mu_run_test (test_r_buf_io);
+#if BROKEN
+	mu_run_test (test_r_buf_io2);
+#endif
 	mu_run_test (test_r_buf_sparse);
 	mu_run_test (test_r_buf_sparse2);
 	mu_run_test (test_r_buf_bytes_steal);

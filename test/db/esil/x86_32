@@ -2,7 +2,6 @@ NAME=2step push x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -25,7 +24,6 @@ NAME=movsb 1 byte x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -55,7 +53,6 @@ NAME=mov eax, 1 x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -75,7 +72,6 @@ NAME=rep movsb string x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -108,7 +104,6 @@ NAME=mov byte [0x20000000], 0x64 x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -131,7 +126,6 @@ NAME=mov eax, [esp + 4] x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -154,7 +148,6 @@ NAME=mov [esp + 4], eax x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -175,13 +168,12 @@ RUN
 
 NAME=rep movsb 0x1000 randombytes x86-32
 FILE=-
-BROKEN=1
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
+e esil.gotolimit=8192
 aeim
 aer esp=0x00108000
 aeim 0x10000000 0x1000 source
@@ -191,14 +183,15 @@ aer edi=0x20000000
 aer esi=0x10000000
 aer ecx=0x1000
 .aer*
-"wx f3a4"
+wx f3a4
 aes
 .aer*
 s 0x10000000
+b 0x1000
 cX 0x20000000
-aer?edi
-aer?esi
-aer?ecx
+aer edi
+aer esi
+aer ecx
 EOF
 EXPECT=<<EOF
 0x20001000
@@ -211,7 +204,6 @@ NAME=lodsb ++ x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -237,7 +229,6 @@ NAME=lodsb -- x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -263,7 +254,6 @@ NAME=lodsw ++ x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -289,7 +279,6 @@ NAME=lodsw -- x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -315,7 +304,6 @@ NAME=lodsd ++ x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -341,7 +329,6 @@ NAME=lodsd -- x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -367,7 +354,6 @@ NAME=stosb ++ x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -393,7 +379,6 @@ NAME=stosb -- x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -419,7 +404,6 @@ NAME=stosw ++ x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -445,7 +429,6 @@ NAME=stosw -- x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -471,7 +454,6 @@ NAME=stosd ++ x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -497,7 +479,6 @@ NAME=stosd -- x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -523,7 +504,6 @@ NAME=shr eax(9) >> 1 x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -549,7 +529,6 @@ NAME=shr eax(0x1b) >> 1 x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -575,7 +554,6 @@ NAME=shr eax(5) >> 2 x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -601,7 +579,6 @@ NAME=shr byte [esp + 4], 2 x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -626,7 +603,6 @@ NAME=add byte [esp + 4], 0xa x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -651,7 +627,6 @@ NAME=add eax, [esp + 4] x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -674,7 +649,6 @@ NAME=add dword [0x20000000], eax x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -697,7 +671,6 @@ NAME=add byte cf,zf check x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -723,7 +696,6 @@ NAME=add word cf,zf check x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -749,7 +721,6 @@ NAME=add dword cf,zf check x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -775,7 +746,6 @@ NAME=adc byte cf,zf check x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -802,7 +772,6 @@ NAME=adc word cf,zf check x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -829,7 +798,6 @@ NAME=adc dword cf,zf check x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -856,7 +824,6 @@ NAME=dec byte [edi] check zf x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -883,7 +850,6 @@ NAME=dec byte [edi] check sf x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -910,7 +876,6 @@ NAME=inc byte [edi] check zf x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -939,7 +904,6 @@ NAME=inc byte [edi] check sf x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -966,7 +930,6 @@ NAME=adc [esi + 0x14], ecx x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -991,7 +954,6 @@ NAME=div cl x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -1012,7 +974,6 @@ NAME=pushal(pushad in intel documentation) x86_32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -1054,7 +1015,6 @@ NAME=popal(popad in intel documentation) x86_32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -1107,7 +1067,6 @@ NAME=pop x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -1136,7 +1095,6 @@ NAME=pushd followed by popfd x86-32
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -1248,7 +1206,7 @@ pd 1 @ 0x1523
 EOF
 EXPECT=<<EOF
             0x00001557      lea eax, [esi - 0x220c]                    ; "  fwhibbit{" str.__fwhibbit
-            0x000011c0      lea eax, [ebx - 0x2448]                    ; "   -os--/sosdmmNNMMNy         .+// " str.____os___sosdmmNNMMNy_________.___
+            0x000011c0      lea eax, [ebx - 0x2448]                    ; "   -os--/sosdmmNNMMNy         .+// " str.____os___sosdmmNNMMNy_________.__
             0x00001523      lea eax, [esi - 0x2218]                    ; "\n  Red Pill" str._n__Red_Pill
 EOF
 RUN
@@ -2344,9 +2302,9 @@ EOF
 EXPECT=<<EOF
 [
   {
-    "offset": 0,
+    "addr": 0,
     "esil": "0,cf,:=,32,eax,%,1,<<,32,eax,/,esp,+,[4],&,?{,1,cf,:=,},32,eax,%,1,<<,32,eax,/,esp,+,|=[4]",
-    "refptr": false,
+    "refptr": 4,
     "fcn_addr": 0,
     "fcn_last": 0,
     "size": 4,
@@ -2364,11 +2322,13 @@ EOF
 RUN
 
 NAME=bsf reg32, reg32
+REQUIRE=gas linux x86
 CMDS=<<EOF
 #
 # Common parts
 #
 e asm.arch=x86
+e asm.bits=32
 ?== x86 `e asm.arch`
 ?!e asm.assembler=x86.as
 ??e asm.assembler=x86.nz
@@ -2425,13 +2385,14 @@ EOF
 RUN
 
 NAME=bsr reg32, reg32
+REQUIRE=gas linux x86
 CMDS=<<EOF
 #
 # Common parts
 #
 e asm.arch=x86
-e asm.assembler=x86.as
 e asm.bits=32
+e asm.assembler=x86.as
 wa bsr eax, ebx
 #
 # BSR: test ZF
@@ -2465,7 +2426,7 @@ EXPECT=<<EOF
 0x00000001
 0x00000000
 0x00000000
-0x00000000
+0x0000001f
 0x00000000
 EOF
 RUN
@@ -2478,7 +2439,6 @@ EXPECT=<<EOF
 EOF
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=32
 aei
@@ -2487,5 +2447,372 @@ aeim
 aer?eflags
 aes
 aer?eflags
+EOF
+RUN
+
+NAME=push esp,,pop esp
+FILE=-
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+aei
+aeim
+ar eip=0 ; wa push esp,,pop esp @ 0 ; ?en esp before : ; dr?esp ; 2aes  ; ?en esp after  : ; dr?esp
+EOF
+EXPECT=<<EOF
+esp before :0x00178000
+esp after :0x00178000
+EOF
+RUN
+
+NAME=x86 shl cf/of/sf from result and destination width
+FILE=malloc://64
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+aei
+aeim
+wx d1e0
+ar eax=1
+ar eip=0
+aes
+ar cf
+ar of
+ar sf
+ar eax=0x80000000
+ar eip=0
+aes
+ar cf
+ar of
+ar zf
+wx c1e005
+ar eax=0x04000000
+ar eip=0
+aes
+ar cf
+ar sf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000000
+0x00000001
+0x00000001
+0x00000001
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=x86 neg pf from parity and of on int_min
+FILE=malloc://64
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+aei
+aeim
+wx f7d8
+ar eax=4
+ar eip=0
+aes
+ar pf
+ar of
+ar eax=0x80000000
+ar eip=0
+aes
+ar of
+ar pf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=x86 shl variants 8/16-bit cl and memory destination
+FILE=malloc://64
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+aei
+aeim
+wx d0e0
+ar al=0x40
+ar eip=0
+s 0
+aes
+ar cf
+ar sf
+ar of
+wx 66d1e0
+ar ax=0x4000
+ar eip=0
+s 0
+aes
+ar cf
+ar sf
+wx d3e0
+ar eax=0x10000000
+ar ecx=3
+ar eip=0
+s 0
+aes
+ar cf
+ar sf
+wx d120
+ar eax=0x20
+wv4 0x80000000 @ 0x20
+ar eip=0
+s 0
+aes
+ar cf
+ar of
+ar zf
+pv4 @ 0x20
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000001
+0x00000000
+0x00000001
+0x00000000
+0x00000001
+0x00000001
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=x86 neg variants 8/16-bit and memory destination
+FILE=malloc://64
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+aei
+aeim
+wx f6d8
+ar al=4
+ar eip=0
+s 0
+aes
+ar pf
+ar cf
+wx 66f7d8
+ar ax=0x8000
+ar eip=0
+s 0
+aes
+ar of
+wx f718
+ar eax=0x20
+wv4 4 @ 0x20
+ar eip=0
+s 0
+aes
+ar pf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=byte mul and idiv use al and ax in 32-bit mode too
+FILE=malloc://0x200
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx f6e1
+aei
+ar eax=0x112233ff
+ar ecx=0x99aabbff
+s 0
+aeip
+aes
+ar ax
+wx f6f9
+ar eax=0x1122fff9
+ar ecx=0x99aabb02
+s 0
+aeip
+aes
+ar al
+ar ah
+EOF
+EXPECT=<<EOF
+0x0000fe01
+0x000000fd
+0x000000ff
+EOF
+RUN
+
+NAME=xadd stores through the source register it overwrites
+FILE=malloc://0x200
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 11000000 @ 0x40
+wx 0fc136 @ 0
+aei
+aeim
+ar esi=0x40
+s 0
+aeip
+aes
+ar esi
+p8 4 @ 0x40
+EOF
+EXPECT=<<EOF
+0x00000011
+51000000
+EOF
+RUN
+
+NAME=x86-32 esil does not depend on asm.syntax
+FILE=malloc://0x200
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx 8739
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx a5
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx 6bc805
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx 83f8ab
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: ecx,[4],edi,^,edi,=,edi,ecx,[4],^,ecx,=[4],ecx,[4],edi,^,edi,=
+esil: ecx,[4],edi,^,edi,=,edi,ecx,[4],^,ecx,=[4],ecx,[4],edi,^,edi,=
+esil: esi,[4],edi,=[4],df,?{,4,esi,-=,4,edi,-=,},df,!,?{,4,esi,+=,4,edi,+=,}
+esil: esi,[4],edi,=[4],df,?{,4,esi,-=,4,edi,-=,},df,!,?{,4,esi,+=,4,edi,+=,}
+esil: 32,5,~,32,eax,~,*,DUP,ecx,=,32,ecx,~,-,!,!,DUP,cf,:=,of,:=
+esil: 32,5,~,32,eax,~,*,DUP,ecx,=,32,ecx,~,-,!,!,DUP,cf,:=,of,:=
+esil: 18446744073709551531,eax,==,$z,zf,:=,32,$b,cf,:=,$p,pf,:=,31,$s,sf,:=,18446744073709551531,0x80000000,-,!,31,$o,^,of,:=,4,$b,af,:=
+esil: 18446744073709551531,eax,==,$z,zf,:=,32,$b,cf,:=,$p,pf,:=,31,$s,sf,:=,18446744073709551531,0x80000000,-,!,31,$o,^,of,:=,4,$b,af,:=
+EOF
+RUN
+
+NAME=att string move copies from esi to edi
+FILE=malloc://0x200
+ARGS=-a x86 -b 32 -e asm.syntax=att
+CMDS=<<EOF
+wx 11223344 @ 0x40
+wx a5 @ 0
+aei
+aeim
+ar esi=0x40
+ar edi=0x80
+s 0
+aeip
+aes
+pv4 @ 0x80
+ar esi
+ar edi
+EOF
+EXPECT=<<EOF
+0x44332211
+0x00000044
+0x00000084
+EOF
+RUN
+
+NAME=zydis sar on narrow memory operands sign-fills at -b 32
+FILE=malloc://0x200
+ARGS=-a x86 -b 32 -e anal.arch=x86.zydis
+CMDS=<<EOF
+wx d138; aei; aeim; wx 00000080 @ 0x100; ar eax=0x100; aes; pv4 @ 0x100
+wx 66d138 @ 0; ar PC=0; wx 0080 @ 0x100; aes; pv4 @ 0x100
+wx d038 @ 0; ar PC=0; wx 80 @ 0x100; aes; pv4 @ 0x100
+wx d138 @ 0; ar PC=0; wx 00000040 @ 0x100; aes; pv4 @ 0x100
+EOF
+EXPECT=<<EOF
+0xc0000000
+0xc000c000
+0xc000c0c0
+0x20000000
+EOF
+RUN
+
+NAME=AVX XMM xor uses both sources and preserves flags
+FILE=malloc://256
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx c5f1efc2c5f157c2c5f057c2c5f1ef00c5f1efc0
+aei
+ar eax=0x80
+wx 0f000000000000005555555555555555 @ 0x80
+ar xmm0l=0xff
+ar xmm0h=0xff
+ar xmm1l=0x33
+ar xmm1h=0xaaaaaaaaaaaaaaaa
+ar xmm2l=0x0f
+ar xmm2h=0x5555555555555555
+ar eflags=0xad7
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+ar xmm1
+ar xmm2
+ar eflags
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff000000000000003c
+0xffffffffffffffff000000000000003c
+0xffffffffffffffff000000000000003c
+0xffffffffffffffff000000000000003c
+0x5555555555555555000000000000000f
+0xaaaaaaaaaaaaaaaa0000000000000033
+0x5555555555555555000000000000000f
+0x00000ad7
+EOF
+RUN
+
+NAME=AVX and SSE XMM moves preserve both chunks in memory and registers
+FILE=malloc://256
+ARGS=-a x86 -b 32
+CMDS=<<EOF
+wx c5fa7f00c5fa6f10c5fa6ff8f30f7f00f30f6f18
+aei
+ar eax=0x81
+ar xmm0l=0x1122334455667788
+ar xmm0h=0x99aabbccddeeff00
+aes
+p8 16 @ 0x81
+aes
+ar xmm2
+aes
+ar xmm7
+ar xmm0l=0x0123456789abcdef
+ar xmm0h=0xfedcba9876543210
+aes
+p8 16 @ 0x81
+aes
+ar xmm3
+EOF
+EXPECT=<<EOF
+887766554433221100ffeeddccbbaa99
+0x99aabbccddeeff001122334455667788
+0x99aabbccddeeff001122334455667788
+efcdab89674523011032547698badcfe
+0xfedcba98765432100123456789abcdef
 EOF
 RUN

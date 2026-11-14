@@ -1,4 +1,4 @@
-/* radare - LGPL3 - Copyright 2016-2020 - c0riolis, x0urc3 */
+/* radare - LGPL3 - Copyright 2016-2025 - c0riolis, x0urc3 */
 
 #ifndef PYC_H
 #define PYC_H
@@ -10,7 +10,18 @@
 #include "pyc_magic.h"
 #include "marshal.h"
 
-bool pyc_get_sections_symbols(RList *sections, RList *symbols, RList *mem, RBuffer *buf, ut32 magic);
+// RBinPycObj holds all per-file state for the pyc bin plugin.
+// This struct is stored in bf->bo->bin_obj and accessed by the arch plugin.
+typedef struct {
+	ut64 code_start_offset;
+	struct pyc_version version;
+	RVecRBinSection sections;  // filled by symbols_vec, moved into bo->sections_vec
+	RList *interned_table;     // RList<char*>
+	RList *cobjs;              // RList<pyc_code_object*> (borrowed ptrs)
+	pyc_object *pobj;          // root object tree (owns cobjs data)
+} RBinPycObj;
+
+bool pyc_get_sections_symbols(RVecRBinSection *sections, RVecRBinSymbol *symbols, RList *mem, RBuffer *buf, ut32 magic, RList *interned_table, pyc_object **out_pobj);
 bool pyc_is_code(ut8 b, ut32 magic);
 
 #endif

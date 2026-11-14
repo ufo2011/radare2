@@ -3,7 +3,7 @@
 
 #include <r_types.h>
 #include <r_util.h>
-#include <r_list.h>
+#include <r_vec.h>
 #include <r_skiplist.h>
 
 #ifdef __cplusplus
@@ -12,62 +12,98 @@ extern "C" {
 
 R_LIB_VERSION_HEADER(r_flag);
 
-#define R_FLAG_NAME_SIZE 512
-
 /* zones.c */
-
-#define R_FLAG_ZONE_USE_SDB 0
 
 typedef struct r_flag_zone_item_t {
 	ut64 from;
 	ut64 to;
-#if R_FLAG_ZONE_USE_SDB
-	const char *name;
-#else
 	char *name;
-#endif
 } RFlagZoneItem;
+
+static inline void r_flag_zone_item_fini(RFlagZoneItem *zi) {
+	if (zi) {
+		free (zi->name);
+	}
+}
+
+R_VEC_TYPE_WITH_FINI (RVecFlagZoneItem, RFlagZoneItem, r_flag_zone_item_fini);
 
 /* flag.c */
 
-typedef struct r_flags_at_offset_t {
-	ut64 off;
-	RList *flags;   /* list of RFlagItem at offset */
+typedef struct r_flag_item_t RFlagItem;
+
+R_VEC_TYPE (RVecFlagItemPtr, RFlagItem *);
+
+#define r_flag_item_vec_foreach(list, it, pos) \
+	if (list) \
+		for (it = R_VEC_START_ITER (list); it != R_VEC_END_ITER (list) && (pos = *it, 1); it++)
+
+static inline RFlagItem *r_flag_item_vec_last(const RVecFlagItemPtr *list) {
+	RFlagItem **item = list? RVecFlagItemPtr_last (list): NULL;
+	return item? *item: NULL;
+}
+
+static inline size_t r_flag_item_vec_length(const RVecFlagItemPtr *list) {
+	return list? RVecFlagItemPtr_length (list): 0;
+}
+
+/* All the flags stored at one address. Only flag.c may mutate `flags`: while
+ * it holds a single item its storage is `inline_flag`, which lives inside
+ * this struct, so most addresses need no second allocation. The vector goes
+ * first so it keeps the 16-byte alignment of the allocation it lives in */
+typedef struct r_flags_at_addr_t {
+	RVecFlagItemPtr flags; /* RFlagItem at addr, read-only outside flag.c */
+	ut64 addr;
+	RFlagItem *inline_flag;
 } RFlagsAtOffset;
 
-typedef struct r_flag_item_t {
-	char *name;     /* unique name, escaped to avoid issues with r2 shell */
-	char *realname; /* real name, without any escaping */
-	bool demangled; /* real name from demangling? */
-	ut64 offset;    /* offset flagged by this item */
-	ut64 size;      /* size of the flag item */
-	RSpace *space;  /* flag space this item belongs to */
+typedef struct r_flag_item_meta_t {
+	char *type;
 	char *color;    /* item color */
 	char *comment;  /* item comment */
 	char *alias;    /* used to define a flag based on a math expression (e.g. foo + 3) */
-	char *type;
-} RFlagItem;
+} RFlagItemMeta;
+
+struct r_flag_item_t {
+	ut32 id;        /* unique identifier, maybe use ut64? */
+	bool demangled; /* real name from demangling? */
+	bool name_pooled; /* true if name is owned by RFlag.names */
+	bool realname_pooled; /* true if realname is owned by RFlag.names */
+	bool rawname_pooled; /* true if rawname is owned by RFlag.names */
+	char *name;     /* unique name, escaped to avoid issues with r2 shell */
+	char *realname; /* real demangled, display name, without any escaping */
+	char *rawname; /* real name, without any escaping */
+	ut64 addr;      /* address of the flag */
+	ut64 size;      /* size of the flag item */
+	RSpace *space;  /* flag space this item belongs to */
+};
 
 typedef struct r_flag_t {
 	RSpaces spaces;   /* handle flag spaces */
 	st64 base;         /* base address for all flag items */
 	bool realnames;
+	bool autospace;    /* auto-assign flagspace by name prefix */
+	R_DIRTY_VAR;
+	bool utf8;        /* preserve UTF-8 in new flag names */
+	ut32 lastid;
 	Sdb *tags;
 	RNum *num;
-	RSkipList *by_off; /* flags sorted by offset, value=RFlagsAtOffset */
-	HtPP *ht_name; /* hashmap key=item name, value=RFlagItem * */
-	PrintfCallback cb_printf;
-	RList *zones;
+	RSkipList *by_addr; /* flags sorted by addr, value=RFlagsAtOffset */
+	HtPP *ht_name; /* hashmap key=item name, value=RFlagItem */
+	HtUP *ht_meta; // hashtable for the flags metadata
+	RVecFlagZoneItem zones;
 	ut64 mask;
+	RThreadLock *lock;
+	RArena *names; /* bump pool for flag name strings */
 } RFlag;
 
 /* compile time dependency */
 
-typedef bool (*RFlagExistAt)(RFlag *f, const char *flag_prefix, ut16 fp_size, ut64 off);
+typedef bool (*RFlagExistAt)(RFlag *f, const char *flag_prefix, ut16 fp_size, ut64 addr);
 typedef RFlagItem* (*RFlagGet)(RFlag *f, const char *name);
-typedef RFlagItem* (*RFlagGetAtAddr) (RFlag *f, ut64);
+typedef RFlagItem* (*RFlagGetAtAddr) (RFlag *f, bool prionospace, ut64);
 typedef RFlagItem* (*RFlagGetAt)(RFlag *f, ut64 addr, bool closest);
-typedef const RList* (*RFlagGetList)(RFlag *f, ut64 addr);
+typedef const RVecFlagItemPtr* (*RFlagGetVec)(RFlag *f, ut64 addr);
 typedef RFlagItem* (*RFlagSet)(RFlag *f, const char *name, ut64 addr, ut32 size);
 typedef bool (*RFlagUnset)(RFlag *f, RFlagItem *item);
 typedef bool (*RFlagUnsetName)(RFlag *f, const char *name);
@@ -84,49 +120,64 @@ typedef struct r_flag_bind_t {
 	RFlagExistAt exist_at;
 	RFlagGet get;
 	RFlagGetAt get_at;
-	RFlagGetList get_list;
+	RFlagGetVec get_vec;
 	RFlagSet set;
 	RFlagUnset unset;
 	RFlagUnsetName unset_name;
-	RFlagUnsetOff unset_off;
+	RFlagUnsetOff unset_addr;
 	RFlagSetSpace set_fs;
 	RFlagPushSpace push_fs;
 	RFlagPopSpace pop_fs;
 } RFlagBind;
 
-#define r_flag_bind_init(x) memset(&x,0,sizeof(x))
-R_API void r_flag_bind(RFlag *io, RFlagBind *bnd);
-
 #ifdef R_API
-R_API RFlag * r_flag_new(void);
-R_API RFlag * r_flag_free(RFlag *f);
-R_API void r_flag_list(RFlag *f, int rad, const char *pfx);
-R_API bool r_flag_exist_at(RFlag *f, const char *flag_prefix, ut16 fp_size, ut64 off);
+
+/* flag */
+R_API RFlagItemMeta * R_NULLABLE r_flag_get_meta(RFlag *f, ut32 id);
+R_API RFlagItemMeta *r_flag_get_meta2(RFlag *f, ut32 id);
+R_API void r_flag_del_meta(RFlag *f, ut32 id);
+
+#define r_flag_bind_init(x) memset (&x, 0, sizeof (x))
+R_API void r_flag_bind(RFlag *io, RFlagBind *bnd);
+R_API RFlag *r_flag_new(void);
+static inline bool r_flag_name_filter(RFlag *f, char *name) {
+	return r_name_filter_utf8 (name, -1, f->utf8);
+}
+R_API void r_flag_free(RFlag *f);
+R_API void r_flag_reserve(RFlag *f, ut64 count);
+R_API char *r_flag_list(RFlag *f, int rad, const char *pfx);
+R_API bool r_flag_exist_at(RFlag *f, const char *flag_prefix, ut16 fp_size, ut64 addr);
 R_API RFlagItem *r_flag_get(RFlag *f, const char *name);
-R_API RFlagItem *r_flag_get_i(RFlag *f, ut64 off);
-R_API RFlagItem *r_flag_get_by_spaces(RFlag *f, ut64 off, ...);
-R_API RFlagItem *r_flag_get_at(RFlag *f, ut64 off, bool closest);
-R_API RList *r_flag_all_list(RFlag *f, bool by_space);
-R_API const RList* /*<RFlagItem*>*/ r_flag_get_list(RFlag *f, ut64 off);
-R_API char *r_flag_get_liststr(RFlag *f, ut64 off);
+R_API RFlagItem *r_flag_get_in(RFlag *f, ut64 addr);
+R_API RFlagItem *r_flag_get_by_spaces(RFlag *f, bool prionospace, ut64 addr, ...);
+R_API RFlagItem *r_flag_get_at(RFlag *f, ut64 addr, bool closest);
+R_API RFlagItem *r_flag_closest_in_space(RFlag *f, const char *space, ut64 addr, ut64 radius);
+R_API RFlagItem *r_flag_closest_with_prefix(RFlag *f, const char *pfx, ut64 addr, ut64 radius);
+R_API RVecFlagItemPtr *r_flag_all_list(RFlag *f, bool by_space);
+R_API const RVecFlagItemPtr* /*<RFlagItem*>*/ r_flag_get_vec(RFlag *f, ut64 addr);
+R_API char *r_flag_get_liststr(RFlag *f, ut64 addr);
 R_API bool r_flag_unset(RFlag *f, RFlagItem *item);
 R_API bool r_flag_unset_name(RFlag *f, const char *name);
-R_API void r_flag_item_set_type(RFlagItem *fi, const char *type);
-R_API bool r_flag_unset_off(RFlag *f, ut64 addr);
-R_API void r_flag_unset_all (RFlag *f);
+R_API bool r_flag_unset_addr(RFlag *f, ut64 addr);
+R_API void r_flag_unset_all(RFlag *f);
 R_API RFlagItem *r_flag_set(RFlag *fo, const char *name, ut64 addr, ut32 size);
-R_API RFlagItem *r_flag_set_inspace(RFlag *f, const char *space, const char *name, ut64 off, ut32 size);
+R_API RFlagItem *r_flag_set_inspace(RFlag *f, const char *space, const char *name, ut64 addr, ut32 size);
 R_API RFlagItem *r_flag_set_next(RFlag *fo, const char *name, ut64 addr, ut32 size);
-R_API void r_flag_item_set_alias(RFlagItem *item, const char *alias);
-R_API void r_flag_item_free (RFlagItem *item);
-R_API void r_flag_item_set_comment(RFlagItem *item, const char *comment);
-R_API void r_flag_item_set_realname(RFlagItem *item, const char *realname);
-R_API const char *r_flag_item_set_color(RFlagItem *item, const char *color);
+
+R_API void r_flag_item_free(RFlagItem *item);
 R_API RFlagItem *r_flag_item_clone(RFlagItem *item);
+
+R_API const char *r_flag_item_set_type(RFlag *f, RFlagItem *fi, const char * R_NULLABLE type);
+R_API const char *r_flag_item_set_alias(RFlag *f, RFlagItem *item, const char * R_NULLABLE alias);
+R_API const char *r_flag_item_set_comment(RFlag *f, RFlagItem *fi, const char * R_NULLABLE comment);
+R_API const char *r_flag_item_set_realname(RFlag *f, RFlagItem *fi, const char * R_NULLABLE realname);
+R_API const char *r_flag_item_set_rawname(RFlag *f, RFlagItem *fi, const char * R_NULLABLE rawname);
+R_API const char *r_flag_item_set_color(RFlag *f, RFlagItem *item, const char * R_NULLABLE color);
+
 R_API int r_flag_unset_glob(RFlag *f, const char *name);
-R_API int r_flag_rename(RFlag *f, RFlagItem *item, const char *name);
-R_API int r_flag_relocate(RFlag *f, ut64 off, ut64 off_mask, ut64 to);
-R_API bool r_flag_move (RFlag *f, ut64 at, ut64 to);
+R_API bool r_flag_rename(RFlag *f, RFlagItem *item, const char *name);
+R_API int r_flag_relocate(RFlag *f, ut64 addr, ut64 addr_mask, ut64 to);
+R_API bool r_flag_move(RFlag *f, ut64 at, ut64 to);
 R_API int r_flag_count(RFlag *f, const char *glob);
 R_API void r_flag_foreach(RFlag *f, RFlagItemCb cb, void *user);
 R_API void r_flag_foreach_prefix(RFlag *f, const char *pfx, int pfx_len, RFlagItemCb cb, void *user);
@@ -136,36 +187,58 @@ R_API void r_flag_foreach_space(RFlag *f, const RSpace *space, RFlagItemCb cb, v
 R_API void r_flag_foreach_space_glob(RFlag *f, const char *glob, const RSpace *space, RFlagItemCb cb, void *user);
 
 /* spaces */
+
 static inline RSpace *r_flag_space_get(RFlag *f, const char *name) {
 	return r_spaces_get (&f->spaces, name);
 }
 
 static inline RSpace *r_flag_space_cur(RFlag *f) {
-	return r_spaces_current (&f->spaces);
+	R_CRITICAL_ENTER (f);
+	RSpace *sp = r_spaces_current (&f->spaces);
+	R_CRITICAL_LEAVE (f);
+	return sp;
 }
 
 static inline const char *r_flag_space_cur_name(RFlag *f) {
-	return r_spaces_current_name (&f->spaces);
+	R_CRITICAL_ENTER (f);
+	const char *s = r_spaces_current_name (&f->spaces);
+	R_CRITICAL_LEAVE (f);
+	return s; // XXX should strdup
 }
 
 static inline RSpace *r_flag_space_set(RFlag *f, const char *name) {
-	return r_spaces_set (&f->spaces, name);
+	R_CRITICAL_ENTER (f);
+	RSpace *s = r_spaces_set (&f->spaces, name);
+	R_CRITICAL_LEAVE(f);
+	return s;
 }
 
 static inline bool r_flag_space_unset(RFlag *f, const char *name) {
-	return r_spaces_unset (&f->spaces, name);
+	R_CRITICAL_ENTER (f);
+	bool res = r_spaces_unset (&f->spaces, name);
+	R_CRITICAL_LEAVE(f);
+	return res;
 }
 
 static inline bool r_flag_space_rename(RFlag *f, const char *oname, const char *nname) {
-	return r_spaces_rename (&f->spaces, oname, nname);
+	R_CRITICAL_ENTER (f);
+	const bool res = r_spaces_rename (&f->spaces, oname, nname);
+	R_CRITICAL_LEAVE (f);
+	return res;
 }
 
 static inline bool r_flag_space_push(RFlag *f, const char *name) {
-	return r_spaces_push (&f->spaces, name);
+	R_CRITICAL_ENTER (f);
+	const bool res = r_spaces_push (&f->spaces, name);
+	R_CRITICAL_LEAVE (f);
+	return res;
 }
 
 static inline bool r_flag_space_pop(RFlag *f) {
-	return r_spaces_pop (&f->spaces);
+	R_CRITICAL_ENTER (f);
+	bool res = r_spaces_pop (&f->spaces);
+	R_CRITICAL_LEAVE (f);
+	return res;
 }
 
 static inline int r_flag_space_count(RFlag *f, const char *name) {
@@ -189,8 +262,9 @@ R_API RList *r_flag_tags_get(RFlag *f, const char *name);
 R_API void r_flag_zone_item_free(void *a);
 R_API bool r_flag_zone_add(RFlag *fz, const char *name, ut64 addr);
 R_API bool r_flag_zone_del(RFlag *fz, const char *name);
+R_API RFlagZoneItem *r_flag_zone_get(RFlag *fz, const char *name);
 R_API bool r_flag_zone_around(RFlag *fz, ut64 addr, const char **prev, const char **next);
-R_API bool r_flag_zone_list(RFlag *fz, int mode);
+R_API char *r_flag_zone_list(RFlag *fz, int mode);
 R_API bool r_flag_zone_reset(RFlag *f);
 R_API RList *r_flag_zone_barlist(RFlag *f, ut64 from, ut64 bsize, int rows);
 

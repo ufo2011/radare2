@@ -1,0 +1,64 @@
+# merged: Pebble: page perms
+NAME=Pebble: Open/iI
+FILE=bins/pebble/pebble-app.bin
+CMDS=<<EOF
+iI~os,subsys
+?e --
+aaa
+aflc
+EOF
+EXPECT=<<EOF
+os       pebble
+subsys   pebble
+--
+65
+EOF
+RUN
+
+NAME=Pebble: negative region bug
+FILE=bins/pebble/pebble-app2.bin
+CMDS=<<EOF
+om
+EOF
+EXPECT=<<EOF
+* 2 fd: 3 +0x00000000 0x00000000 - 0x000000d7 r-x rwx fmap.relocs
+- 1 fd: 3 +0x00000000 0x00000000 - 0x0000007b r-- r-- fmap.header
+EOF
+RUN
+
+NAME=Pebble: resolve libpebble stubs
+FILE=bins/pebble/hello-stub.bin
+ARGS=-e bin.relocs.apply=true -e scr.color=0 -e asm.lines=false -e asm.bytes=false -e asm.flags=false
+CMDS=<<EOF
+. ../scripts/pebble.r2.js
+pd 3 @ sym.pebble.window_create~Pebble API stub
+pd 3 @ sym.pebble.app_log~Pebble API stub
+pd 3 @ sym.pebble.text_layer_set_text~Pebble API stub
+EOF
+EXPECT=<<EOF
+0x00000420      push {r0, r1, r2, r3}                                  ; Pebble API stub window_create index=271 offset=0x43c
+0x0000039c      push {r0, r1, r2, r3}                                  ; Pebble API stub app_log index=34 offset=0x88
+0x000004d4      push {r0, r1, r2, r3}                                  ; Pebble API stub text_layer_set_text index=471 offset=0x75c
+Pebble stubs: named=32 unknown=0 total=32
+Pebble trampoline hits: 1
+Pebble stub resolver complete: 32 named stubs
+EOF
+RUN
+
+NAME=Pebble: company name with newlines stays on one config line
+FILE=malloc://512
+CMDS=<<EOF
+wx 50424c4150500000080105000100000180000000000000006d7961707000000000000000000000000000000000000000000000000000000041434d450a3f652050574e45440a @ 0
+obf
+i*~file.type
+e file.type
+e log.quiet=true
+.i*
+?e SAFE
+EOF
+EXPECT=<<EOF
+'e file.type=ACME_?e PWNED_
+ACME_?e PWNED_
+SAFE
+EOF
+RUN

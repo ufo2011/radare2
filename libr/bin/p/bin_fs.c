@@ -1,17 +1,17 @@
-/* radare - LGPL - Copyright 2011-2019 - pancake */
+/* radare - LGPL - Copyright 2011-2023 - pancake */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
 #include <r_bin.h>
-#include "../../fs/types.h"
+#include <r_fs.h>
 
 static char *fsname(RBuffer *b) {
 	ut8 buf[1024];
 	int i, j;
 
-	for (i = 0; fstypes[i].name; i++) {
-		RFSType *f = &fstypes[i];
+	for (i = 0; ; i++) {
+		const RFSType *f = r_fs_type_index (i);
+		if (!f || !f->name) {
+			break;
+		}
 
 		if (r_buf_read_at (b, f->bufoff, buf, sizeof (buf)) != sizeof (buf)) {
 			break;
@@ -39,39 +39,30 @@ static char *fsname(RBuffer *b) {
 	return NULL;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
-	r_return_val_if_fail (b, false);
+static bool check(RBinFile *bf, RBuffer *b) {
+	R_RETURN_VAL_IF_FAIL (b, false);
 	char *p = fsname (b);
-	bool hasFs = p != NULL;
+	bool hasFs = p;
 	free (p);
 	return hasFs;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	return check_buffer (bf, buf);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	return check (bf, buf);
 }
 
 static void destroy(RBinFile *bf) {
-	//r_bin_fs_free ((struct r_bin_fs_obj_t*)bf->o->bin_obj);
-}
-
-static ut64 baddr(RBinFile *bf) {
-	return 0;
+	//r_bin_fs_free ((struct r_bin_fs_obj_t*)bf->bo->bin_obj);
 }
 
 /* accelerate binary load */
-static RList *strings(RBinFile *bf) {
+static RVecRBinString *strings(RBinFile *bf) {
 	return NULL;
 }
 
 static RBinInfo* info(RBinFile *bf) {
-	RBinInfo *ret = NULL;
-	if (!bf) {
-		return NULL;
-	}
-	if (!(ret = R_NEW0 (RBinInfo))) {
-		return NULL;
-	}
+	R_RETURN_VAL_IF_FAIL (bf, NULL);
+	RBinInfo *ret = R_NEW0 (RBinInfo);
 	ret->file = bf->file? strdup (bf->file): NULL;
 	ret->type = strdup ("fs");
 	ret->bclass = fsname (bf->buf);
@@ -88,15 +79,16 @@ static RBinInfo* info(RBinFile *bf) {
 }
 
 RBinPlugin r_bin_plugin_fs = {
-	.name = "fs",
-	.desc = "filesystem bin plugin",
-	.author = "pancake",
-	.version = "1.0",
-	.license = "LGPL3",
-	.load_buffer = &load_buffer,
+	.meta = {
+		.name = "fs",
+		.desc = "Autodetect and mount RFS supported filesystems",
+		.author = "pancake",
+		.version = "1.0",
+		.license = "LGPL-3.0-only",
+	},
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
-	.baddr = &baddr,
+	.check = &check,
 	.strings = &strings,
 	.info = &info,
 };

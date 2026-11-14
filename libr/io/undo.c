@@ -1,19 +1,17 @@
-/* radare - LGPL - Copyright 2007-2018 - pancake */
+/* radare - LGPL - Copyright 2007-2026 - pancake */
 
 #include <r_io.h>
 
-#if 0
-* TODO:
-* - make path of indirections shortr (io->undo.foo is slow) */
-* - Plugin changes in write and seeks
-* - Per-fd history log
+#if IDEAS_FOR_UNDO
+- make path of indirections shortr (io->undo.foo is slow)
+- Plugin changes in write and seeks
+- Per-fd history log
 #endif
 
 R_API int r_io_undo_init(RIO *io) {
 	/* seek undo */
 	r_io_sundo_reset (io);
 
-	/* write undo */
 	io->undo.w_init = 0;
 	io->undo.w_enable = 0;
 	io->undo.w_enable = 0;
@@ -26,8 +24,6 @@ R_API void r_io_undo_enable(RIO *io, int s, int w) {
 	io->undo.s_enable = s;
 	io->undo.w_enable = w;
 }
-
-/* undo seekz */
 
 R_API RIOUndos *r_io_sundo(RIO *io, ut64 offset) {
 	if (!io->undo.s_enable || !io->undo.undos) {
@@ -47,19 +43,11 @@ R_API RIOUndos *r_io_sundo(RIO *io, ut64 offset) {
 	io->undo.redos++;
 
 	undo = &io->undo.seek[io->undo.idx];
-	RIOMap *map = r_io_map_get_at (io, undo->off);
-	if (!map || (map->delta == r_io_map_begin (map))) {
-		io->off = undo->off;
-	} else {
-		io->off = undo->off - (r_io_map_begin (map) + map->delta);
-	}
+	r_io_seek (io, undo->off, R_IO_SEEK_SET);
 	return undo;
 }
 
 R_API RIOUndos *r_io_sundo_redo(RIO *io) {
-	RIOUndos *undo;
-	RIOMap *map;
-
 	if (!io->undo.s_enable || !io->undo.redos) {
 		return NULL;
 	}
@@ -68,17 +56,13 @@ R_API RIOUndos *r_io_sundo_redo(RIO *io) {
 	io->undo.undos++;
 	io->undo.redos--;
 
-	undo = &io->undo.seek[io->undo.idx];
-	map = r_io_map_get_at (io, undo->off);
-	if (!map || (map->delta == r_io_map_begin (map))) {
-		io->off = undo->off;
-	} else {
-		io->off = undo->off - r_io_map_begin (map) + map->delta;
-	}
+	RIOUndos *undo = &io->undo.seek[io->undo.idx];
+	r_io_seek (io, undo->off, R_IO_SEEK_SET);
 	return undo;
 }
 
 R_API void r_io_sundo_push(RIO *io, ut64 off, int cursor) {
+	R_RETURN_IF_FAIL (io);
 	RIOUndos *undo;
 	if (!io->undo.s_enable) {
 		return;
@@ -87,6 +71,7 @@ R_API void r_io_sundo_push(RIO *io, ut64 off, int cursor) {
 	if (io->undo.undos > 0) {
 		undo = &io->undo.seek[(io->undo.idx - 1 + R_IO_UNDOS) % R_IO_UNDOS];
 		if (undo->off == off && undo->cursor == cursor) {
+			io->undo.redos = 0;
 			return;
 		}
 	}
@@ -107,70 +92,109 @@ R_API void r_io_sundo_push(RIO *io, ut64 off, int cursor) {
 }
 
 R_API void r_io_sundo_reset(RIO *io) {
+	R_RETURN_IF_FAIL (io);
 	io->undo.idx = 0;
 	io->undo.undos = 0;
 	io->undo.redos = 0;
 }
 
-R_API RList *r_io_sundo_list(RIO *io, int mode) {
-	int idx, undos, redos, i, j, start, end;
-	RList* list = NULL;
-
-	if (mode == '!') {
-		mode = 0;
-	}
+R_API char *r_io_sundo_list(RIO *io, int mode) {
+	R_RETURN_VAL_IF_FAIL (io, NULL);
 	if (!io->undo.s_enable) {
 		return NULL;
 	}
-	undos = io->undo.undos;
-	redos = io->undo.redos;
-
-	idx = io->undo.idx;
-	start = (idx - undos + R_IO_UNDOS) % R_IO_UNDOS;
-	end = (idx + redos + 1 - 1) % R_IO_UNDOS; // +1 slot for current position, -1 due to inclusive end
-
-	j = 0;
-	switch (mode) {
-	case 'j':
-		io->cb_printf ("[");
-		break;
-	case 0:
-		list = r_list_newf (free);
-		break;
+	PJ *pj = NULL;
+	if (mode == 'j') {
+		pj = io->coreb.pjWithEncoding? io->coreb.pjWithEncoding (io->coreb.core): pj_new ();
 	}
+	RStrBuf *buf = mode == 'j'? NULL: r_strbuf_new ("");
+	if (!pj && !buf) {
+		return NULL;
+	}
+	int undos = io->undo.undos;
+	int redos = io->undo.redos;
+	int idx = io->undo.idx;
+	int start = (idx - undos + R_IO_UNDOS) % R_IO_UNDOS;
+	int end = (idx + redos) % R_IO_UNDOS;
+
+	if (pj) {
+		pj_a (pj);
+	}
+
+	int i, j = 0;
 	for (i = start;/* condition at the end of loop */; i = (i + 1) % R_IO_UNDOS) {
-		int idx = (j < undos)? undos - j - 1: j - undos - 1;
-		RIOUndos *undo = &io->undo.seek[i];
-		ut64 addr = undo->off;
-		bool notLast = (j + 1 < undos);
+		int u_idx = (j < undos)? undos - j - 1: j - undos - 1;
+		ut64 addr = (j == undos && !redos)? io->off: io->undo.seek[i].off;
 		switch (mode) {
+		case 'j':
+			{
+				char *name = io->coreb.getNameDelta? io->coreb.getNameDelta (io->coreb.core, addr): NULL;
+				if (name) {
+					name = r_str_replace (name, " + ", "+", 0);
+				}
+				pj_o (pj);
+				pj_kn (pj, "offset", addr);
+				if (R_STR_ISNOTEMPTY (name)) {
+					pj_ks (pj, "name", name);
+				}
+				if (j == undos) {
+					pj_kb (pj, "current", true);
+				}
+				pj_end (pj);
+				free (name);
+			}
+			break;
 		case '=':
 			if (j < undos) {
-				io->cb_printf ("0x%"PFMT64x"%s", addr, notLast? " > ": "");
+				r_strbuf_appendf (buf, "0x%"PFMT64x"%s", addr, j + 1 < undos? " > ": "");
+			}
+			break;
+		case 'r':
+			{
+				char *cmt = io->coreb.cmdStrF? io->coreb.cmdStrF (io->coreb.core, "fd 0x%08"PFMT64x, addr): NULL;
+				if (cmt) {
+					r_str_trim (cmt);
+				}
+				if (j < undos) {
+					r_strbuf_appendf (buf, "0x%08"PFMT64x" ; %ds- # %s\n", addr, u_idx + 1, r_str_get (cmt));
+				} else if (j == undos && j != 0 && redos != 0) {
+					r_strbuf_appendf (buf, "0x%08"PFMT64x" ; # CUR %s\n", addr, r_str_get (cmt));
+				} else if (j != undos) {
+					r_strbuf_appendf (buf, "0x%08"PFMT64x" ; %ds+ # %s\n", addr, u_idx + 1, r_str_get (cmt));
+				} else if (addr != 0) {
+					r_strbuf_appendf (buf, "0x%08"PFMT64x" ; # CUR %s\n", addr, r_str_get (cmt));
+				}
+				free (cmt);
 			}
 			break;
 		case '*':
 			if (j < undos) {
-				io->cb_printf ("f undo_%d @ 0x%"PFMT64x"\n", idx, addr);
+				r_strbuf_appendf (buf, "f undo_%d = 0x%"PFMT64x"\n", u_idx, addr);
 			} else if (j == undos && j != 0 && redos != 0) {
-				io->cb_printf ("# Current undo/redo position.\n");
+				r_strbuf_append (buf, "# Current undo/redo position.\n");
 			} else if (j != undos) {
-				io->cb_printf ("f redo_%d @ 0x%"PFMT64x"\n", idx, addr);
+				r_strbuf_appendf (buf, "f redo_%d = 0x%"PFMT64x"\n", u_idx, addr);
+			}
+			break;
+		case '!':
+			{
+				char *name = io->coreb.getNameDelta? io->coreb.getNameDelta (io->coreb.core, addr): NULL;
+				r_strbuf_appendf (buf, "0x%"PFMT64x" %s\n", addr, r_str_get (name));
+				free (name);
 			}
 			break;
 		case 0:
-			if (list) {
-				RIOUndos  *u = R_NEW0 (RIOUndos);
-				if (u) {
-					if (!(j == undos && redos == 0)) {
-						// Current position gets pushed before seek, so there
-						// is no valid offset when we are at the end of list.
-						memcpy (u, undo, sizeof (RIOUndos));
-					} else {
-						u->off = io->off;
-					}
-					r_list_append (list, u);
+			{
+				char *name = io->coreb.getNameDelta? io->coreb.getNameDelta (io->coreb.core, addr): NULL;
+				if (R_STR_ISNOTEMPTY (name)) {
+					r_strbuf_append (buf, name);
+				} else {
+					r_strbuf_appendf (buf, "0x%"PFMT64x, addr);
 				}
+				if (i != end) {
+					r_strbuf_append (buf, " > ");
+				}
+				free (name);
 			}
 			break;
 		}
@@ -179,111 +203,78 @@ R_API RList *r_io_sundo_list(RIO *io, int mode) {
 			break;
 		}
 	}
-	switch (mode) {
-	case '=':
-		io->cb_printf ("\n");
-		break;
+	if (mode == '=' || mode == 0) {
+		r_strbuf_append (buf, "\n");
 	}
-	return list;
+	if (pj) {
+		pj_end (pj);
+		return pj_drain (pj);
+	}
+	return r_strbuf_drain (buf);
 }
 
 /* undo writez */
 
 R_API void r_io_wundo_new(RIO *io, ut64 off, const ut8 *data, int len) {
-	RIOUndoWrite *uw;
+	R_RETURN_IF_FAIL (io);
 	if (!io->undo.w_enable) {
 		return;
 	}
-	/* undo write changes */
-	uw = R_NEW0 (RIOUndoWrite);
-	if (!uw) {
+	ut8 *a = (ut8*) malloc (len);
+	ut8 *b = (ut8*) malloc (len);
+	if (!a || !b) {
+		free (a);
+		free (b);
 		return;
 	}
+	/* undo write changes */
+	RIOUndoWrite *uw = R_NEW0 (RIOUndoWrite);
 	uw->set = true;
 	uw->off = off;
 	uw->len = len;
-	uw->n = (ut8*) malloc (len);
-	if (!uw->n) {
-		free (uw);
-		return;
-	}
+	uw->n = a;
 	memcpy (uw->n, data, len);
-	uw->o = (ut8*) malloc (len);
-	if (!uw->o) {
-		R_FREE (uw);
-		return;
-	}
-	memset (uw->o, 0xff, len);
+	uw->o = b;
+	memset (uw->o, io->Oxff, len);
 	r_io_read_at (io, off, uw->o, len);
 	r_list_append (io->undo.w_list, uw);
 }
 
 R_API void r_io_wundo_clear(RIO *io) {
+	R_RETURN_IF_FAIL (io);
 	// XXX memory leak
 	io->undo.w_list = r_list_new ();
 }
 
 // rename to r_io_undo_length ?
 R_API int r_io_wundo_size(RIO *io) {
+	R_RETURN_VAL_IF_FAIL (io, 0);
 	return r_list_length (io->undo.w_list);
 }
 
-// TODO: Deprecate or so? iterators must be language-wide, but helpers are useful
-R_API void r_io_wundo_list(RIO *io) {
-#define BW 8 /* byte wrap */
-	RListIter *iter;
-	RIOUndoWrite *u;
-	int i = 0, j, len;
-
-	if (io->undo.w_init) {
-		r_list_foreach (io->undo.w_list, iter, u) {
-			io->cb_printf ("%02d %c %zu %08" PFMT64x ": ", i, u->set ? '+' : '-', u->len, u->off);
-			len = (u->len > BW) ? BW : u->len;
-			for (j = 0; j < len; j++) {
-				io->cb_printf ("%02x ", u->o[j]);
-			}
-			if (len == BW) {
-				io->cb_printf (".. ");
-			}
-			io->cb_printf ("=> ");
-			for (j = 0; j < len; j++) {
-				io->cb_printf ("%02x ", u->n[j]);
-			}
-			if (len == BW) {
-				io->cb_printf (".. ");
-			}
-			io->cb_printf ("\n");
-			i++;
-		}
-	}
-}
-
-R_API int r_io_wundo_apply(RIO *io, RIOUndoWrite *u, int set) {
-	int orig = io->undo.w_enable;
-	io->undo.w_enable = 0;
-	if (set) {
-		r_io_write_at (io, u->off, u->n, u->len);
-		u->set = true;
-	} else {
-		r_io_write_at (io, u->off, u->o, u->len);
-		u->set = false;
-	}
+R_API bool r_io_wundo_apply(RIO *io, RIOUndoWrite *u, bool set) {
+	bool orig = io->undo.w_enable;
+	io->undo.w_enable = false;
+	u->set = set;
+	const ut8 *src = set? u->n: u->o;
+	const bool good = r_io_write_at (io, u->off, src, u->len);
 	io->undo.w_enable = orig;
-	return 0;
+	return good;
 }
 
-R_API void r_io_wundo_apply_all(RIO *io, int set) {
+R_API bool r_io_wundo_apply_all(RIO *io, bool set) {
 	RListIter *iter;
 	RIOUndoWrite *u;
-
+	bool allfine = true;
 	r_list_foreach_prev (io->undo.w_list, iter, u) {
-		r_io_wundo_apply (io, u, set); //UNDO_WRITE_UNSET);
-		eprintf ("%s 0x%08"PFMT64x"\n", set?"redo":"undo", u->off);
+		allfine &= r_io_wundo_apply (io, u, set);
+		R_LOG_INFO ("%s 0x%08"PFMT64x, set? "redo": "undo", u->off);
 	}
+	return allfine;
 }
 
 /* sets or unsets the writes done */
-/* if ( set == 0 ) unset(n) */
+/* if (set == 0) unset(n) */
 R_API int r_io_wundo_set(RIO *io, int n, int set) {
 	RListIter *iter;
 	RIOUndoWrite *u = NULL;
@@ -298,9 +289,9 @@ R_API int r_io_wundo_set(RIO *io, int n, int set) {
 			r_io_wundo_apply (io, u, set);
 			return true;
 		}
-		eprintf ("invalid undo-write index\n");
+		R_LOG_ERROR ("invalid undo-write index");
 	} else {
-		eprintf ("no writes done\n");
+		R_LOG_INFO ("no writes done");
 	}
 	return false;
 }

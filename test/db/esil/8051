@@ -736,7 +736,7 @@ ar pc; ar psw; ar a
 EOF
 EXPECT=<<EOF
 0x00000002
-0x00000080
+0x00000084
 0x00000000
 EOF
 RUN
@@ -837,7 +837,7 @@ ar pc; ar psw; ar a
 EOF
 EXPECT=<<EOF
 0x00000002
-0x00000081
+0x00000085
 0x00000001
 EOF
 RUN
@@ -1058,7 +1058,7 @@ ar pc; ar psw; ar a
 EOF
 EXPECT=<<EOF
 0x00000005
-0x000000c1
+0x000000c5
 0x00000098
 EOF
 RUN
@@ -1093,6 +1093,7 @@ aes
 ar pc; ar psw; ar a; ar b
 aes
 ar pc; ar ov;
+ae*
 EOF
 EXPECT=<<EOF
 0x00000001
@@ -1105,6 +1106,8 @@ EXPECT=<<EOF
 0x00000000
 0x00000003
 0x00000001
+trap: 0
+trap-code: 0
 EOF
 RUN
 
@@ -1982,7 +1985,7 @@ FILE=malloc://0x10000
 CMDS=<<EOF
 e asm.arch=8051;e asm.bits=8; aei
 wx 83
-wx 10 @0xf0
+wx 10 @0xf1
 ar a=0xf0
 aes
 ar pc; ar psw; ar a

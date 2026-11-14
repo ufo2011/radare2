@@ -1,0 +1,28 @@
+NAME=dbg.oo 10
+FILE=bins/elf/ls-focal
+ARGS=-d
+BROKEN=1
+CMDS=<<EOF
+10oo
+e file.path
+dk 9
+EOF
+EXPECT=<<EOF
+dbg:///bin/ls
+EOF
+RUN
+
+NAME=dbg.ood 10
+FILE=bins/elf/ls-focal
+ARGS=-d
+BROKEN=1
+CMDS=<<EOF
+10ood
+e file.path
+dk 9
+EOF
+EXPECT=<<EOF
+dbg:///bin/ls
+EOF
+RUN
+

@@ -1,17 +1,15 @@
 name: Coverity Scan
 on:
-  schedule:
-    - cron: '0 18 * * 1,4' # Bi-weekly at 18:00 UTC on Monday and Thursday
+  workflow_dispatch:
 
 jobs:
   latest:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-24.04
+    continue-on-error: true
     steps:
       - name: Determine current repository
-        id: "determine-repo"
-        run: "echo \"::set-output name=repo::${GITHUB_REPOSITORY}\""
-
-      - uses: actions/checkout@v2
+        run: echo "{repo}={${GITHUB_REPOSITORY}}" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download Coverity Build Tool
         run: |
           wget -q https://scan.coverity.com/download/cxx/linux64 --post-data "token=$TOKEN&project=radare2" -O cov-analysis-linux64.tar.gz
@@ -19,23 +17,19 @@ jobs:
           tar xzf cov-analysis-linux64.tar.gz --strip 1 -C cov-analysis-linux64
         env:
           TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
-        if: steps.determine-repo.outputs.repo == 'radareorg/radare2'
 
       - name: Fixed world writable dirs
         run: |
           chmod go-w $HOME
           sudo chmod -R go-w /usr/share
-        if: steps.determine-repo.outputs.repo == 'radareorg/radare2'
 
       - name: Configure
         run: ./configure
-        if: steps.determine-repo.outputs.repo == 'radareorg/radare2'
 
       - name: Build with cov-build
         run: |
           export PATH=`pwd`/cov-analysis-linux64/bin:$PATH
           cov-build --dir cov-int make
-        if: steps.determine-repo.outputs.repo == 'radareorg/radare2'
 
       # TODO: Make it GitHub Action instead
       - name: Submit the result to Coverity Scan
@@ -51,4 +45,3 @@ jobs:
             https://scan.coverity.com/builds?project=radare2
         env:
           TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
-        if: steps.determine-repo.outputs.repo == 'radareorg/radare2'

@@ -53,13 +53,11 @@ static inline RBIter bound_iter(RBNode *x, void *data, RBComparator cmp, bool up
 	it.len = 0;
 	memset (it.path, 0, sizeof (RBNode *) * R_RBTREE_MAX_HEIGHT);
 	while (x) {
-		int d = cmp (data, x, user);
-
+		const int d = cmp (data, x, user);
 		if (d == 0) {
 			it.path[it.len++] = x;
 			return it;
 		}
-
 		if (d < 0) {
 			if (!upper) {
 				it.path[it.len++] = x;
@@ -75,28 +73,6 @@ static inline RBIter bound_iter(RBNode *x, void *data, RBComparator cmp, bool up
 
 	return it;
 }
-
-/*
-static void _check1(RBNode *x, int depth, int black, bool leftmost) {
-	static int black_;
-	if (x) {
-		black += !x->red;
-		if (x->red && ((x->child[0] && x->child[0]->red) || (x->child[1] && x->child[1]->red))) {
-			printf ("error: red violation\n");
-		}
-		_check1 (x->child[0], depth + 1, black, leftmost);
-		_check1 (x->child[1], depth + 1, black, false);
-	} else if (leftmost) {
-		black_ = black;
-	} else if (black_ != black) {
-		printf ("error: different black height\n");
-	}
-}
-
-static void _check(RBNode *x) {
-	_check1 (x, 0, 0, true);
-}
-*/
 
 // Returns true if a node with an equal key is deleted
 R_API bool r_rbtree_aug_delete(RBNode **root, void *data, RBComparator cmp, void *cmp_user, RBNodeFree freefn, void *free_user, RBNodeSum sum) {
@@ -178,7 +154,7 @@ R_API bool r_rbtree_aug_delete(RBNode **root, void *data, RBComparator cmp, void
 			}
 		}
 	}
-	if (del_link) {
+	if (del_link && *del_link) {
 		del = *del_link;
 		if (q->child[q->child[0] == NULL]) {
 			q->child[q->child[0] == NULL]->parent = p;
@@ -302,12 +278,11 @@ R_API bool r_rbtree_aug_update_sum(RBNode *root, void *data, RBNode *node, RBCom
 		if (cur == node) {
 			break;
 		}
-		int direction = cmp (data, cur, cmp_user);
+		const int direction = cmp (data, cur, cmp_user);
 		cur = cur->child[(direction < 0)? 0: 1];
 	}
-
-	for (; depth > 0; depth--) {
-		sum (path[depth - 1]);
+	while (depth > 0) {
+		sum (path[--depth]);
 	}
 	return true;
 }
@@ -317,8 +292,9 @@ R_API bool r_rbtree_delete(RBNode **root, void *data, RBComparator cmp, void *cm
 }
 
 R_API RBNode *r_rbtree_find(RBNode *x, void *data, RBComparator cmp, void *user) {
+	// R_RETURN_VAL_IF_FAIL (x && data, NULL);
 	while (x) {
-		int direction = cmp (data, x, user);
+		const int direction = cmp (data, x, user);
 		if (direction < 0) {
 			x = x->child[0];
 		} else if (direction > 0) {

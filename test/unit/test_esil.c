@@ -1,0 +1,415 @@
+#include <r_anal.h>
+#include <string.h>
+#include "minunit.h"
+
+static bool test_is_reg(void *reg, const char *name) {
+	return reg && name && !strcmp (name, "pc");
+}
+
+static bool test_reg_read(void *reg, const char *name, ut64 *val) {
+	if (!test_is_reg (reg, name)) {
+		return false;
+	}
+	*val = 0x1234;
+	return true;
+}
+
+static bool test_reg_write(void *reg, const char *name, ut64 val) {
+	return test_is_reg (reg, name) && val == 0x1234;
+}
+
+static bool test_reg_alias(void *reg, int alias, const char *name) {
+	return test_is_reg (reg, name) && alias == R_REG_ALIAS_PC;
+}
+
+static ut32 test_reg_size(void *reg, const char *name) {
+	return test_is_reg (reg, name)? 32: 0;
+}
+
+static bool test_mem_read(void *mem, ut64 addr, ut8 *buf, int len) {
+	if (!mem || !buf || len < 1 || addr != 0x1234) {
+		return false;
+	}
+	buf[0] = 0xcc;
+	return true;
+}
+
+static bool test_mem_write(void *mem, ut64 addr, const ut8 *buf, int len) {
+	return mem && buf && len == 1 && addr == 0x1234 && buf[0] == 0xcc;
+}
+
+typedef struct {
+	RReg *reg;
+	int alias;
+	char name[16];
+	char old_name[16];
+} TestRegAliasVoyeur;
+
+static void test_reg_alias_voyeur(void *user, int alias, const char *name) {
+	TestRegAliasVoyeur *test = user;
+	const char *old_name = r_reg_alias_getname (test->reg, alias);
+	test->alias = alias;
+	r_str_ncpy (test->name, name, sizeof (test->name));
+	r_str_ncpy (test->old_name, r_str_get (old_name), sizeof (test->old_name));
+}
+
+bool test_setup_keeps_custom_interfaces(void) {
+	int reg_user = 1;
+	int mem_user = 2;
+	REsilRegInterface reg_if = {
+		.user = &reg_user,
+		.is_reg = test_is_reg,
+		.reg_read = test_reg_read,
+		.reg_write = test_reg_write,
+		.reg_alias = test_reg_alias,
+		.reg_size = test_reg_size,
+	};
+	REsilMemInterface mem_if = {
+		.user = &mem_user,
+		.mem_read = test_mem_read,
+		.mem_write = test_mem_write,
+	};
+	REsilOptions opt = r_esil_options (NULL, NULL);
+	opt.stacksize = 32;
+	opt.addrsize = 32;
+	opt.ifaces.reg = reg_if;
+	opt.ifaces.mem = mem_if;
+	REsil *esil = r_esil_new (&opt);
+	mu_assert_notnull (esil, "r_esil_new failed");
+	RAnal *anal = r_anal_new ();
+	mu_assert_notnull (anal, "r_anal_new failed");
+
+	bool setup = r_esil_setup (esil, anal, false, false, false);
+	mu_assert_true (setup, "r_esil_setup failed");
+	mu_assert_ptreq (esil->reg_if.user, &reg_user, "reg user was replaced");
+	mu_assert ("is_reg was replaced", esil->reg_if.is_reg == test_is_reg);
+	mu_assert ("reg_read was replaced", esil->reg_if.reg_read == test_reg_read);
+	mu_assert ("reg_write was replaced", esil->reg_if.reg_write == test_reg_write);
+	mu_assert ("reg_alias was replaced", esil->reg_if.reg_alias == test_reg_alias);
+	mu_assert ("reg_size was replaced", esil->reg_if.reg_size == test_reg_size);
+	mu_assert_ptreq (esil->mem_if.user, &mem_user, "mem user was replaced");
+	mu_assert ("mem_read was replaced", esil->mem_if.mem_read == test_mem_read);
+	mu_assert ("mem_write was replaced", esil->mem_if.mem_write == test_mem_write);
+
+	r_esil_free (esil);
+	r_anal_free (anal);
+	mu_end;
+}
+
+bool test_setup_installs_default_interfaces(void) {
+	REsilOptions opt = r_esil_options (NULL, NULL);
+	opt.stacksize = 32;
+	opt.addrsize = 32;
+	REsil *esil = r_esil_new (&opt);
+	mu_assert_notnull (esil, "r_esil_new failed");
+	RAnal *anal = r_anal_new ();
+	mu_assert_notnull (anal, "r_anal_new failed");
+
+	bool setup = r_esil_setup (esil, anal, false, false, false);
+	mu_assert_true (setup, "r_esil_setup failed");
+	mu_assert_ptreq (esil->reg_if.user, esil, "default reg user was not installed");
+	mu_assert_notnull (esil->reg_if.is_reg, "default is_reg was not installed");
+	mu_assert_notnull (esil->reg_if.reg_read, "default reg_read was not installed");
+	mu_assert_notnull (esil->reg_if.reg_write, "default reg_write was not installed");
+	mu_assert_notnull (esil->reg_if.reg_alias, "default reg_alias was not installed");
+	mu_assert_notnull (esil->reg_if.reg_size, "default reg_size was not installed");
+	mu_assert_ptreq (esil->mem_if.user, esil, "default mem user was not installed");
+	mu_assert_notnull (esil->mem_if.mem_read, "default mem_read was not installed");
+	mu_assert_notnull (esil->mem_if.mem_write, "default mem_write was not installed");
+
+	r_esil_free (esil);
+	r_anal_free (anal);
+	mu_end;
+}
+
+bool test_reg_alias_op(void) {
+	RAnal *anal = r_anal_new ();
+	mu_assert_notnull (anal, "r_anal_new failed");
+	bool profile = r_reg_set_profile_string (anal->reg,
+		"=PC r0\n"
+		"=A0 r0\n"
+		"gpr r0 .16 0 0\n"
+		"gpr r1 .16 16 0");
+	mu_assert_true (profile, "failed to set reg profile");
+
+	TestRegAliasVoyeur voyeur = {
+		.reg = anal->reg,
+		.alias = -1,
+	};
+	ut32 vid = r_esil_add_voyeur (anal->esil, &voyeur,
+		test_reg_alias_voyeur, R_ESIL_VOYEUR_REG_ALIAS);
+	mu_assert_neq (vid, R_ESIL_VOYEUR_ERR, "failed to add reg alias voyeur");
+
+	bool parsed = r_esil_parse (anal->esil, "r1,PC,r=");
+	mu_assert_true (parsed, "failed to parse reg alias op");
+	mu_assert_streq (r_reg_alias_getname (anal->reg, R_REG_ALIAS_PC), "r1", "PC alias was not updated");
+	mu_assert_eq (voyeur.alias, R_REG_ALIAS_PC, "PC alias voyeur was not called");
+	mu_assert_streq (voyeur.old_name, "r0", "PC alias voyeur did not see old register");
+	mu_assert_streq (voyeur.name, "r1", "PC alias voyeur had wrong register");
+
+	r_anal_free (anal);
+	mu_end;
+}
+
+bool test_define_op(void) {
+	RAnal *anal = r_anal_new ();
+	mu_assert_notnull (anal, "r_anal_new failed");
+	bool profile = r_reg_set_profile_string (anal->reg,
+		"=PC r0\n"
+		"=A0 r0\n"
+		"gpr r0 .16 0 0\n"
+		"gpr r1 .16 16 0");
+	mu_assert_true (profile, "failed to set reg profile");
+
+	bool defined = r_esil_define (anal->esil, "TRIPLE", "DUP,DUP,+,+", 1, 1, R_ESIL_OP_TYPE_MATH);
+	mu_assert_true (defined, "failed to define op");
+	bool parsed = r_esil_parse (anal->esil, "5,TRIPLE,r1,=");
+	mu_assert_true (parsed, "failed to parse defined op");
+	mu_assert_eq (r_reg_getv (anal->reg, "r1"), 15, "defined op computed wrong value");
+
+	// redefining replaces the expansion in place
+	defined = r_esil_define (anal->esil, "TRIPLE", "1,+", 1, 1, R_ESIL_OP_TYPE_MATH);
+	mu_assert_true (defined, "failed to redefine op");
+	parsed = r_esil_parse (anal->esil, "5,TRIPLE,r1,=");
+	mu_assert_true (parsed, "failed to parse redefined op");
+	mu_assert_eq (r_reg_getv (anal->reg, "r1"), 6, "redefined op computed wrong value");
+
+	r_anal_free (anal);
+	mu_end;
+}
+
+bool test_define_recursion(void) {
+	RAnal *anal = r_anal_new ();
+	mu_assert_notnull (anal, "r_anal_new failed");
+	// a self-referencing definition must trap instead of overflowing the C stack
+	bool defined = r_esil_define (anal->esil, "LOOP", "1,LOOP", 1, 0, R_ESIL_OP_TYPE_MATH);
+	mu_assert_true (defined, "failed to define recursive op");
+	bool parsed = r_esil_parse (anal->esil, "LOOP");
+	mu_assert_false (parsed, "recursive definition did not stop");
+	mu_assert_eq (anal->esil->trap, 1, "recursive definition did not trap");
+	r_anal_free (anal);
+	mu_end;
+}
+
+static bool lookup_test_op(REsil *esil) {
+	return esil != NULL;
+}
+
+bool test_op_lookup_growth(void) {
+	REsil *esil = r_esil_new (NULL);
+	mu_assert_notnull (esil, "new esil");
+	REsilOp *dup = r_esil_get_op (esil, R_STRS_LIT ("DUP"));
+	mu_assert_notnull (dup, "builtin op");
+	const char slice[] = "DUP,remaining";
+	mu_assert_ptreq (r_esil_get_op (esil, r_strs_from_len (slice, 3)), dup, "bounded op lookup");
+	mu_assert_null (r_esil_get_op (esil, r_strs_from (slice)), "long missing op");
+	mu_assert_null (r_esil_get_op (esil, r_strs_from (NULL)), "empty op");
+	char names[256][32];
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (names); i++) {
+		snprintf (names[i], sizeof (names[i]), "CUSTOM_%03u_LONG", (unsigned int)i);
+		mu_assert_true (r_esil_set_op (esil, names[i], lookup_test_op, 0, 0, R_ESIL_OP_TYPE_CUSTOM, NULL), "add custom op");
+	}
+	for (i = 0; i < R_ARRAY_SIZE (names); i++) {
+		REsilOp *op = r_esil_get_op (esil, r_strs_from (names[i]));
+		mu_assert_notnull (op, "custom op after table growth");
+		mu_assert_true (op->code == lookup_test_op, "custom callback");
+	}
+	r_esil_del_op (esil, names[128]);
+	mu_assert_null (r_esil_get_op (esil, r_strs_from (names[128])), "deleted op");
+	mu_assert_ptreq (r_esil_get_op (esil, R_STRS_LIT ("DUP")), dup, "builtin survives growth");
+	r_esil_free (esil);
+	mu_end;
+}
+
+static bool write_only_read(void *mem, ut64 addr, ut8 *buf, int len) {
+	return false;
+}
+
+static bool write_only_write(void *mem, ut64 addr, const ut8 *buf, int len) {
+	return false;
+}
+
+static bool write_only_hook(REsil *esil, ut64 addr, const ut8 *buf, int len) {
+	return addr == 0x1000 && len == 1 && buf[0] == 0x41;
+}
+
+bool test_poke_write_only_hook(void) {
+	REsil *esil = r_esil_new (NULL);
+	mu_assert_notnull (esil, "new esil");
+	esil->mem_if.mem_read = write_only_read;
+	esil->mem_if.mem_write = write_only_write;
+	esil->cb.hook_mem_write = write_only_hook;
+	esil->iotrap = true;
+	mu_assert_true (r_esil_parse (esil, "0x41,0x1000,=[1]"), "write-only hook store");
+	mu_assert_eq (esil->trap, R_ANAL_TRAP_NONE, "internal pre-read must not trap a handled store");
+	mu_assert_false (esil->trap_addr_valid, "internal pre-read does not leak an address");
+	esil->cb.hook_mem_write = NULL;
+	mu_assert_false (r_esil_parse (esil, "0x41,0x1000,=[1]"), "unhandled failed store");
+	mu_assert_eq (esil->trap, R_ANAL_TRAP_WRITE_ERR, "actual store failure must trap");
+	mu_assert_true (esil->trap_addr_valid, "failed store address is valid");
+	mu_assert_eq (esil->trap_addr, 0x1000, "failed store address survives pre-read");
+	r_esil_free (esil);
+	mu_end;
+}
+
+static bool fault_read_hook(REsil *esil, ut64 addr, ut8 *buf, int len) {
+	r_esil_set_fault (esil, R_ANAL_TRAP_READ_ERR, addr);
+	memset (buf, 0, len);
+	return true;
+}
+
+bool test_fault_record(void) {
+	REsil *esil = r_esil_new (NULL);
+	REsil *other = r_esil_new (NULL);
+	const ut64 addresses[] = { 0, 2, 5, 7, 0x100000005ULL, 0xfffffffd00290000ULL, UT64_MAX };
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (addresses); i++) {
+		r_esil_set_fault (esil, R_ANAL_TRAP_READ_ERR, addresses[i]);
+		const REsilTrap trap = r_esil_get_trap (esil);
+		mu_assert_eq (trap.type, R_ANAL_TRAP_READ_ERR, "fault type independent of address");
+		mu_assert_eq (trap.code, 0, "fault address is not a trap code");
+		mu_assert_true (trap.addr_valid, "all addresses are representable");
+		mu_assert_eq (trap.addr, addresses[i], "full-width fault address");
+		r_esil_set_trap (esil, R_ANAL_TRAP_BREAKPOINT, 42);
+		mu_assert_false (esil->trap_addr_valid, "non-memory trap clears address");
+		mu_assert_eq (esil->trap_code, 42, "trap code preserved");
+		r_esil_restore_trap (other, &trap);
+		mu_assert_eq (other->trap_addr, addresses[i], "snapshot can be restored to another VM");
+		mu_assert_true (other->trap_addr_valid, "restored address validity");
+		r_esil_set_trap (esil, R_ANAL_TRAP_NONE, 0);
+		mu_assert_false (esil->trap_addr_valid, "clear invalidates address");
+		mu_assert_true (other->trap_addr_valid, "VMs have independent fault state");
+	}
+	r_esil_reset (other);
+	mu_assert_false (other->trap_addr_valid, "reset clears fault address");
+	mu_assert_eq (other->trap, R_ANAL_TRAP_NONE, "reset clears trap");
+	r_esil_set_fault (esil, R_ANAL_TRAP_READ_ERR, UT64_MAX);
+	mu_assert_true (r_esil_parse (esil, "1,1,+"), "successful expression after fault");
+	mu_assert_false (esil->trap_addr_valid, "parse clears stale fault address");
+	mu_assert_eq (esil->trap_code, 0, "parse clears stale code");
+	r_esil_free (other);
+	r_esil_free (esil);
+	mu_end;
+}
+
+bool test_memory_fault_addresses(void) {
+	const int widths[] = { 32, 64 };
+	const ut64 addresses[] = { 0, 0x100000005ULL, 0xfffffffd00290000ULL, UT64_MAX };
+	size_t i, j;
+	int len;
+	for (i = 0; i < R_ARRAY_SIZE (widths); i++) {
+		REsilOptions opt = r_esil_options (NULL, NULL);
+		opt.addrsize = widths[i];
+		opt.iotrap = true;
+		opt.ifaces.mem.mem_read = write_only_read;
+		opt.ifaces.mem.mem_write = write_only_write;
+		REsil *esil = r_esil_new (&opt);
+		for (j = 0; j < R_ARRAY_SIZE (addresses); j++) {
+			const ut64 addr = addresses[j] & esil->addrmask;
+			for (len = 1; len <= 8; len *= 2) {
+				ut8 buf[8] = { 0 };
+				mu_assert_false (r_esil_mem_read (esil, addresses[j], buf, len), "failed memory read");
+				mu_assert_eq (esil->trap, R_ANAL_TRAP_READ_ERR, "read fault type");
+				mu_assert_true (esil->trap_addr_valid, "read fault has address");
+				mu_assert_eq (esil->trap_addr, addr, "read fault uses effective address width");
+				mu_assert_false (r_esil_mem_write (esil, addresses[j], buf, len), "failed memory write");
+				mu_assert_eq (esil->trap, R_ANAL_TRAP_WRITE_ERR, "write fault type");
+				mu_assert_eq (esil->trap_addr, addr, "write fault uses effective address width");
+			}
+		}
+		esil->cb.hook_mem_read = fault_read_hook;
+		mu_assert_true (r_esil_parse (esil, "0x100000005,[1]"), "hook handles read and reports fault separately");
+		mu_assert_eq (esil->trap, R_ANAL_TRAP_READ_ERR, "hook fault retained even when handled");
+		mu_assert_eq (esil->trap_addr, 0x100000005ULL & esil->addrmask, "hook full fault address");
+		r_esil_free (esil);
+	}
+	mu_end;
+}
+
+typedef struct {
+	ut64 value, observed_old, observed_new;
+	int reads, writes, notifications, sizes;
+	bool fail;
+} TestRegWrite;
+
+static bool counted_reg_read(void *user, const char *name, ut64 *value) {
+	TestRegWrite *test = user;
+	test->reads++;
+	*value = test->value;
+	return true;
+}
+
+static bool counted_reg_write(void *user, const char *name, ut64 value) {
+	TestRegWrite *test = user;
+	test->writes++;
+	if (test->fail) {
+		return false;
+	}
+	test->value = value;
+	return true;
+}
+
+static ut32 counted_reg_size(void *user, const char *name) {
+	TestRegWrite *test = user;
+	test->sizes++;
+	return 32;
+}
+
+static void counted_reg_voyeur(void *user, const char *name, ut64 old, ut64 value) {
+	TestRegWrite *test = user;
+	test->notifications++;
+	test->observed_old = old;
+	test->observed_new = value;
+}
+
+bool test_reg_write_observation(void) {
+	TestRegWrite test = { .value = 7 };
+	REsilOptions opt = r_esil_options (NULL, NULL);
+	opt.ifaces.reg.user = &test;
+	opt.ifaces.reg.reg_read = counted_reg_read;
+	opt.ifaces.reg.reg_write = counted_reg_write;
+	opt.ifaces.reg.reg_size = counted_reg_size;
+	REsil *esil = r_esil_new (&opt);
+	mu_assert_notnull (esil, "create ESIL");
+	mu_assert_true (r_esil_reg_write (esil, "pc", 9), "unobserved write");
+	mu_assert_eq (test.reads, 0, "unobserved write does not fetch discarded old value");
+	mu_assert_eq (test.value, 9, "register updated");
+	ut32 id = r_esil_add_voyeur (esil, &test, counted_reg_voyeur, R_ESIL_VOYEUR_REG_WRITE);
+	mu_assert_neq (id, R_ESIL_VOYEUR_ERR, "add write observer");
+	mu_assert_true (r_esil_reg_write (esil, "pc", 11), "observed write");
+	mu_assert_eq (test.reads, 1, "observer requires old value");
+	mu_assert_eq (test.notifications, 1, "observer notified");
+	mu_assert_eq (test.observed_old, 9, "previous value retained");
+	mu_assert_eq (test.observed_new, 11, "new value retained");
+	test.fail = true;
+	mu_assert_false (r_esil_reg_write (esil, "pc", 12), "failed write propagates");
+	mu_assert_eq (test.notifications, 1, "failed write does not notify");
+	test.fail = false;
+	mu_assert_true (r_esil_parse (esil, "13,pc,="), "ESIL assignment");
+	mu_assert_eq (test.value, 13, "assignment result");
+	mu_assert_eq (test.sizes, 1, "assignment resolves register size once");
+	mu_assert_eq (test.reads, 3, "observed assignment reads old value once");
+	mu_assert_eq (test.notifications, 2, "observed assignment notifies");
+	mu_assert_eq (test.observed_old, 11, "assignment observer gets previous value");
+	mu_assert_eq (test.observed_new, 13, "assignment observer gets new value");
+	mu_assert_eq (esil->old, 11, "assignment retains previous flag input");
+	mu_assert_eq (esil->cur, 13, "assignment retains current flag input");
+	mu_assert_eq (esil->lastsz, 32, "assignment retains register width");
+	r_esil_free (esil);
+	mu_end;
+}
+
+int main(int argc, char **argv) {
+	mu_run_test (test_reg_write_observation);
+	mu_run_test (test_fault_record);
+	mu_run_test (test_memory_fault_addresses);
+	mu_run_test (test_setup_keeps_custom_interfaces);
+	mu_run_test (test_setup_installs_default_interfaces);
+	mu_run_test (test_reg_alias_op);
+	mu_run_test (test_define_op);
+	mu_run_test (test_define_recursion);
+	mu_run_test (test_op_lookup_growth);
+	mu_run_test (test_poke_write_only_hook);
+	return tests_passed != tests_run;
+}

@@ -1,50 +1,81 @@
-Radare2 Regression Test Suite
-=============================
+# Radare2 Regression Test Suite
 
 A set of regression tests for Radare2 (http://radare.org).
 
 Originally based on work by and now in collaboration with pancake.
 
-Directory Hierarchy
--------------------
+## Directory Hierarchy
 
  * db/:          The tests sources
  * unit/:        Unit tests (written in C, using minunit).
  * fuzz/:        Fuzzing helper scripts
  * bins/:        Sample binaries (fetched from the [external repository](https://github.com/radareorg/radare2-testbins))
 
-Requirements
-------------
+## Requirements
 
  * Radare2 installed (and in `$PATH` or set the R2 environment).
  * r2pipe tests require Python and r2pipe (in CI uses python3 and r2pipe from git, but users may be good with latests releases)
  * Valgrind (optional).
 
-Usage
------
+The V850 integer and exception matrix can run without binary fixtures:
+
+```sh
+R2=/path/to/matching/r2 python3 test/scripts/test-v850-esil.py
+```
+
+It checks native ESIL over flat memory, including operand aliases, CPU address
+widths, arithmetic flags and nested exception contexts. For uninstalled builds,
+configure the library search path as described in `DEVELOPERS.md` too.
+
+On 64-bit Linux, `make -C test r2k` runs the r2k command regressions with a
+mock ioctl driver after building and installing radare2. It requires a C
+compiler and does not load a kernel module or access kernel memory.
+
+# Usage
 
  * To run *all* tests, use `make -k all`.
- * To execute only the unit tests use `make -k unit_tests`.
+ * To execute only the unit tests use `make -k unit-tests`.
+ * To check HTTP sandbox enforcement on a local server, use `make http-sandbox`
+   after building and installing this checkout. This requires Python 3 and
+   permission to open localhost sockets.
+ * To check 9P directory listing limits and recovery after a failed listing,
+   run `python3 test/scripts/test-p9-directory.py` from the repository root
+   after building. This requires Python 3 and localhost sockets. Set `R2`
+   to select another radare2 executable.
+ * To check the QuickJS HTTP binding with native socket and curl transports,
+   run `python3 test/scripts/test-quickjs-http.py` from the repository root
+   after building. This requires QuickJS, networking, Python 3 and localhost
+   sockets; the curl transport is tested when curl is installed. Set `R2`
+   to select another radare2 executable.
+ * To check the JSLinux guest HTTP transport, run
+   `python3 test/scripts/test-jslinux-guest-http.py` after building. It uses
+   QuickJS and a local filesystem mock of TinyEMU's XHR protocol; it needs
+   neither an AI provider nor a running emulator. The PHP relay is tested
+   separately with `python3 test/scripts/test-jslinux-http.py` (PHP cURL and
+   localhost sockets required).
 
-Failure Levels
---------------
+## Failure Levels
 
 A test can have one of the following results:
 * success: The test passed, and that was expected.
-* fixed: The test passed, but failure was expeced.
+* fixed: The test passed, but failure was expected.
 * broken: Failure was expected, and happened.
 * failed: The test failed unexpectedly. This is a regression.
 
-Reporting Radare2 Bugs
-----------------------
+# Reporting a Bug
 
 Please do not post Radare2 bugs on the r2-regressions github tracker. Instead
 use the official r2 tracker:
 
 https://github.com/radareorg/radare2/issues?state=open
 
-Writing Assembly tests
-----------------------
+# Test Types
+
+There are different types of tests, `asm`, `json` and `cmd`. Those files are located under the `db/` directory.
+
+## Assembly tests
+
+The `asm` are used to verify that the assembler and disassembler for an instruction + arch works properly.
 
 Example tests for `db/asm/*`:
 
@@ -76,6 +107,10 @@ Example tests for `db/asm/*`:
 	aB "nop" 90
 	dB "nop" 90
 
+        REQUIRE=cs5 or REQUIRE=cs6 restricts subsequent assembly tests to that
+        Capstone major version. REQUIRE= resets the requirement for subsequent
+        tests. Use separate expectations for instructions whose output differs.
+
         The filename is very important. It is used to tell radare which architecture to use.
 
         Format:
@@ -86,27 +121,27 @@ Example tests for `db/asm/*`:
         arm_v7_64 means what it means
 
 
-Writing JSON tests
-----------
+## JSON tests
 
 The JSON tests `db/json` are executed on 3 standard files (1 ELF, 1 MachO, 1 PE). The tests need to be working on the 3 files to pass.
 
-# Commands tests
-----------------
+## Commands tests
 
 Example commands tests for the other `db/` folders:
 
 	NAME=test_db
 	FILE=bins/elf/ls
-	CMDS=<<EXPECT
+	CMDS=<<EOF
 	pd 4
-	EXPECT=<<RUN
+	EOF
+	EXPECT=<<EOF
             ;-- main:
             ;-- entry0:
             ;-- func.100001174:
             0x100001174      55             Push rbp
             0x100001175      4889e5         Mov  rbp, rsp
             0x100001178      4157           Push r15
+	EOF
 	RUN
 
 * **NAME** is the name of the test, it must be unique
@@ -116,17 +151,16 @@ Example commands tests for the other `db/` folders:
 * **EXPECT** is the expected output of the test
 * **BROKEN** (optional) is 1 if the tests is expected to be fail, 0 otherwise
 * **TIMEOUT** (optional) is the number of seconds to wait before considering the test timeout
+* **REQUIRE** (optional) lists requirements separated by whitespace, commas or semicolons; all must be satisfied. `cs5` and `cs6` select the Capstone major version reported by the tested radare2 executable. Use `cs5+` for Capstone 5 or later. For version-dependent output, pair a `REQUIRE=cs5` test with a `REQUIRE=cs6` test.
 
 You must end the test by adding RUN keyword
 
-Advices
--------
+# Advices
 
 * For portability reasons Do not use shell pipes, use `~`
 * dont use `pd` if not necessary, use `pi`
 * All tests use the UTC timezone for consistency.
 
-License
--------
+# License
 
 The test files are licensed under GPL 3 (or later).

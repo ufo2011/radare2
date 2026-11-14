@@ -1,25 +1,25 @@
 NAME=PE: corkami delayimports.exe - open
 FILE=bins/pe/delayimports.exe
+ARGS=-e bin.cache=true
 CMDS=q!
 EXPECT=<<EOF
 EOF
-RUN
-
-NAME=PE: corkami delayimports.exe - entrypoint
-FILE=bins/pe/delayimports.exe
-CMDS=s
-EXPECT=<<EOF
-0x401000
+EXPECT_ERR=<<EOF
 EOF
 RUN
 
-NAME=PE: corkami delayimports.exe - pi 1
+# merged: PE: corkami delayimports.exe - pi 1
+NAME=PE: corkami delayimports.exe - entrypoint
 FILE=bins/pe/delayimports.exe
 CMDS=<<EOF
+s
+?e --
 e asm.sub.names=false
 pi 1
 EOF
 EXPECT=<<EOF
+0x401000
+--
 push 0x401018
 EOF
 RUN
@@ -31,7 +31,6 @@ ii
 is
 EOF
 EXPECT=<<EOF
-[Imports]
 nth vaddr      bind type lib                               name
 ---------------------------------------------------------------
 1   0x00403054 NONE FUNC VCRUNTIME140.dll                  __current_exception_context
@@ -89,11 +88,8 @@ nth vaddr      bind type lib                               name
 2   0x00404034 NONE FUNC wlanapi.dll                       WFDCancelOpenSession
 3   0x00404038 NONE FUNC wlanapi.dll                       WFDCloseSession
 1   0x00404028 NONE FUNC winbio.dll                        WinBioAcquireFocus
-
-[Symbols]
-
-nth paddr      vaddr      bind type size lib                               name
--------------------------------------------------------------------------------
+nth paddr      vaddr      bind type size lib                               name                                           demangled
+-----------------------------------------------------------------------------------------------------------------------------------
 1   0x00001854 0x00403054 NONE FUNC 0    VCRUNTIME140.dll                  imp.__current_exception_context
 2   0x00001858 0x00403058 NONE FUNC 0    VCRUNTIME140.dll                  imp.__current_exception
 3   0x0000185c 0x0040305c NONE FUNC 0    VCRUNTIME140.dll                  imp.memset
@@ -159,7 +155,6 @@ ii
 is
 EOF
 EXPECT=<<EOF
-[Imports]
 nth vaddr       bind type lib                               name
 ----------------------------------------------------------------
 1   0x1400030c0 NONE FUNC VCRUNTIME140.dll                  __current_exception
@@ -219,11 +214,8 @@ nth vaddr       bind type lib                               name
 2   0x140005078 NONE FUNC wlanapi.dll                       WFDCancelOpenSession
 3   0x140005080 NONE FUNC wlanapi.dll                       WFDCloseSession
 1   0x140005060 NONE FUNC winbio.dll                        WinBioAcquireFocus
-
-[Symbols]
-
-nth paddr      vaddr       bind type size lib                               name
---------------------------------------------------------------------------------
+nth paddr      vaddr       bind type size lib                               name                                           demangled
+------------------------------------------------------------------------------------------------------------------------------------
 1   0x00001ac0 0x1400030c0 NONE FUNC 0    VCRUNTIME140.dll                  imp.__current_exception
 2   0x00001ac8 0x1400030c8 NONE FUNC 0    VCRUNTIME140.dll                  imp.__current_exception_context
 3   0x00001ad0 0x1400030d0 NONE FUNC 0    VCRUNTIME140.dll                  imp.memset

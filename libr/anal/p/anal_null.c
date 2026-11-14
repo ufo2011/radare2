@@ -1,32 +1,32 @@
-/* radare - LGPL - Copyright 2014 - jn, maijin */
+/* radare - LGPL - Copyright 2023-2025 - pancake */
 
 #include <r_anal.h>
-#include <r_types.h>
-#include <r_lib.h>
+#include <r_core.h>
 
-static int null_anal(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
-	/* This should better follow the disassembler */
-	return op->size = 1;
-}
-
-static bool null_set_reg_profile(RAnal* anal){
-	return r_reg_set_profile_string(anal->reg, "");
+static char *nullcmd(RAnal *anal, const char *cmd) {
+	if (r_str_startswith (cmd, "null")) {
+		if (cmd[4] == '?') {
+			return strdup ("| a:null    do nothing");
+		}
+		return strdup ("");
+	}
+	return NULL;
 }
 
 RAnalPlugin r_anal_plugin_null = {
-	.name = "null",
-	.desc = "Fallback/Null analysis plugin",
-	.arch = "none",
-	.license = "LGPL3",
-	.bits = 8|16|32|64,	/* is this used? */
-	.op = &null_anal,
-	.set_reg_profile = &null_set_reg_profile,
+	.meta = {
+		.name = "null",
+		.desc = "Fallback/Null analysis plugin",
+		.license = "LGPL-3.0-only",
+	},
+	.cmd = nullcmd
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_null,
-	.version = R2_VERSION
+	.version = R2_VERSION,
+	.abiversion = R2_ABIVERSION
 };
 #endif

@@ -1,31 +1,30 @@
-/* radare - LGPL - Copyright 2020 - thestr4ng3r */
+/* radare - LGPL - Copyright 2020-2025 - pancake, thestr4ng3r */
 
 #ifndef RADARE2_R2R_H
 #define RADARE2_R2R_H
 
 #include <r_util.h>
+#include <r_vec.h>
 
-#if defined (__FreeBSD__) || defined (__FreeBSD_kernel__)
-#define R2R_OS "freebsd"
-#elif defined(__linux__)
-#define R2R_OS "linux"
-#elif defined(__APPLE__)
-#define R2R_OS "darwin"
-#elif __WINDOWS__
-#define R2R_OS "windows"
-#else
-#define R2R_OS "unknown"
-#endif
+typedef struct r2r_cmd_test_t R2RCmdTest;
+typedef struct r2r_asm_test_t R2RAsmTest;
+typedef struct r2r_json_test_t R2RJsonTest;
+typedef struct r2r_fuzz_test_t R2RFuzzTest;
+typedef struct r2r_test_t R2RTest;
+typedef struct r2r_asm_test_output_t R2RAsmTestOutput;
+typedef struct r2r_test_result_info_t R2RTestResultInfo;
+typedef struct r2r_subprocess_t R2RSubprocess;
+typedef struct r2r_state_t R2RState;
 
-#if __i386__
-#define R2R_ARCH "x86"
-#elif __x86_64__
-#define R2R_ARCH "x64"
-#else
-#define R2R_ARCH "unknown"
-#endif
-
-#define R2R_ARCH_OS R2R_OS"-"R2R_ARCH
+R_VEC_TYPE(RVecR2RCmdTestPtr, R2RCmdTest *);
+R_VEC_TYPE(RVecR2RAsmTestPtr, R2RAsmTest *);
+R_VEC_TYPE(RVecR2RJsonTestPtr, R2RJsonTest *);
+R_VEC_TYPE(RVecR2RFuzzTestPtr, R2RFuzzTest *);
+R_VEC_TYPE(RVecR2RTestPtr, R2RTest *);
+R_VEC_TYPE(RVecR2RTestResultInfoPtr, R2RTestResultInfo *);
+R_VEC_TYPE(RVecR2RSubprocessPtr, R2RSubprocess *);
+R_VEC_TYPE(RVecRThreadPtr, RThread *);
+R_VEC_TYPE(RVecConstCharPtr, const char *);
 
 typedef struct r2r_cmd_test_string_record {
 	char *value;
@@ -49,13 +48,17 @@ typedef struct r2r_cmd_test_t {
 	R2RCmdTestStringRecord name;
 	R2RCmdTestStringRecord file;
 	R2RCmdTestStringRecord args;
+	R2RCmdTestStringRecord require;
 	R2RCmdTestStringRecord source;
 	R2RCmdTestStringRecord cmds;
+	R2RCmdTestNumRecord repeat;
 	R2RCmdTestStringRecord expect;
 	R2RCmdTestStringRecord expect_err;
 	R2RCmdTestStringRecord regexp_out;
 	R2RCmdTestStringRecord regexp_err;
+	R2RCmdTestStringRecord env;
 	R2RCmdTestBoolRecord broken;
+	R2RCmdTestBoolRecord skiponasan;
 	R2RCmdTestNumRecord timeout;
 	ut64 run_line;
 	bool load_plugins;
@@ -66,6 +69,8 @@ typedef struct r2r_cmd_test_t {
 	macro_str ("NAME", name) \
 	macro_str ("FILE", file) \
 	macro_str ("ARGS", args) \
+	macro_str ("REQUIRE", require) \
+	macro_int ("REPEAT", repeat) \
 	macro_int ("TIMEOUT", timeout) \
 	macro_str ("SOURCE", source) \
 	macro_str ("CMDS", cmds) \
@@ -73,7 +78,9 @@ typedef struct r2r_cmd_test_t {
 	macro_str ("EXPECT_ERR", expect_err) \
 	macro_str ("REGEXP_OUT", regexp_out) \
 	macro_str ("REGEXP_ERR", regexp_err) \
-	macro_bool ("BROKEN", broken)
+	macro_str ("ENV", env) \
+	macro_bool ("BROKEN", broken) \
+	macro_bool ("SKIPONASAN", skiponasan) \
 
 typedef enum r2r_asm_test_mode_t {
 	R2R_ASM_TEST_MODE_ASSEMBLE = 1,
@@ -86,6 +93,7 @@ typedef struct r2r_asm_test_t {
 	ut64 line;
 	const char *arch;
 	const char *cpu;
+	const char *require;
 	int bits;
 	int mode;
 	ut64 offset;
@@ -109,8 +117,15 @@ typedef enum r2r_test_type_t {
 	R2R_TEST_TYPE_CMD,
 	R2R_TEST_TYPE_ASM,
 	R2R_TEST_TYPE_JSON,
-	R2R_TEST_TYPE_FUZZ
+	R2R_TEST_TYPE_FUZZ,
+	R2R_TEST_TYPE_LEAK
 } R2RTestType;
+
+typedef struct r2r_test_from_t {
+	R2RTestType type;
+	bool load_plugins;
+	bool archos;
+} R2RTestFrom;
 
 typedef struct r2r_test_t {
 	const char *path;
@@ -124,15 +139,23 @@ typedef struct r2r_test_t {
 } R2RTest;
 
 typedef struct r2r_test_database_t {
-	RPVector tests;
+	RVecR2RTestPtr tests;
 	RStrConstPool strpool;
 } R2RTestDatabase;
 
 typedef struct r2r_run_config_t {
-	const char *r2_cmd;
-	const char *rasm2_cmd;
+	char *r2_cmd;
+	char *rasm2_cmd;
+	char *rasm2_archs;
 	const char *json_test_file;
 	ut64 timeout_ms;
+	int shallow;
+	int capstone_version;
+	bool skip_cmd;
+	bool skip_fuzz;
+	bool skip_asm;
+	bool skip_json;
+	bool skip_leak;
 } R2RRunConfig;
 
 typedef struct r2r_process_output_t {
@@ -146,15 +169,17 @@ typedef struct r2r_asm_test_output_t {
 	char *disasm;
 	ut8 *bytes;
 	size_t bytes_size;
-	bool as_timeout;
-	bool disas_timeout;
+	char *as_cmd;
+	char *disas_cmd;
+	R2RProcessOutput *as;
+	R2RProcessOutput *disas;
 } R2RAsmTestOutput;
 
 typedef enum r2r_test_result_t {
-	R2R_TEST_RESULT_OK,
-	R2R_TEST_RESULT_FAILED,
-	R2R_TEST_RESULT_BROKEN,
-	R2R_TEST_RESULT_FIXED
+	R2R_TEST_RESULT_OK = 0,
+	R2R_TEST_RESULT_FAILED = 1,
+	R2R_TEST_RESULT_BROKEN = 2,
+	R2R_TEST_RESULT_FIXED = 3
 } R2RTestResult;
 
 typedef struct r2r_test_result_info_t {
@@ -162,6 +187,7 @@ typedef struct r2r_test_result_info_t {
 	R2RTestResult result;
 	bool timeout;
 	bool run_failed; // something went seriously wrong (e.g. r2 not found)
+	bool run_skipped; // run was skipped due to e.g. R2R_SHALLOW
 	ut64 time_elapsed;
 	union {
 		R2RProcessOutput *proc_out; // for test->type == R2R_TEST_TYPE_CMD, R2R_TEST_TYPE_JSON or R2R_TEST_TYPE_FUZZ
@@ -169,21 +195,34 @@ typedef struct r2r_test_result_info_t {
 	};
 } R2RTestResultInfo;
 
+static inline const char *shortpath(const char *testpath) {
+	const char *shorter = strstr (testpath, "/db/");
+	if (shorter) {
+		return shorter + 1;
+	}
+	shorter = strstr (testpath, "/bins/fuzzed");
+	if (shorter) {
+		return shorter + 6;
+	}
+	return testpath;
+}
+
+
 R_API R2RCmdTest *r2r_cmd_test_new(void);
 R_API void r2r_cmd_test_free(R2RCmdTest *test);
-R_API RPVector *r2r_load_cmd_test_file(const char *file);
+R_API RVecR2RCmdTestPtr *r2r_load_cmd_test_file(const char *file);
 
 R_API R2RAsmTest *r2r_asm_test_new(void);
 R_API void r2r_asm_test_free(R2RAsmTest *test);
-R_API RPVector *r2r_load_asm_test_file(RStrConstPool *strpool, const char *file);
+R_API RVecR2RAsmTestPtr *r2r_load_asm_test_file(RStrConstPool *strpool, const char *file);
 
 R_API R2RJsonTest *r2r_json_test_new(void);
 R_API void r2r_json_test_free(R2RJsonTest *test);
-R_API RPVector *r2r_load_json_test_file(const char *file);
+R_API RVecR2RJsonTestPtr *r2r_load_json_test_file(const char *file);
 
 R_API R2RTestDatabase *r2r_test_database_new(void);
 R_API void r2r_test_database_free(R2RTestDatabase *db);
-R_API bool r2r_test_database_load(R2RTestDatabase *db, const char *path);
+R_API bool r2r_test_database_load(R2RTestDatabase *db, const char *path, bool skip_json_tests, bool skip_leak_tests);
 R_API bool r2r_test_database_load_fuzz(R2RTestDatabase *db, const char *path);
 
 typedef struct r2r_subprocess_t R2RSubprocess;
@@ -203,13 +242,17 @@ R_API void r2r_process_output_free(R2RProcessOutput *out);
 R_API R2RProcessOutput *r2r_run_cmd_test(R2RRunConfig *config, R2RCmdTest *test, R2RCmdRunner runner, void *user);
 R_API bool r2r_check_cmd_test(R2RProcessOutput *out, R2RCmdTest *test);
 R_API bool r2r_check_jq_available(void);
+R_API bool r2r_check_valgrind_available(void);
+R_API void r2r_archs(R2RRunConfig *config);
 R_API R2RProcessOutput *r2r_run_json_test(R2RRunConfig *config, R2RJsonTest *test, R2RCmdRunner runner, void *user);
 R_API bool r2r_check_json_test(R2RProcessOutput *out, R2RJsonTest *test);
 R_API R2RAsmTestOutput *r2r_run_asm_test(R2RRunConfig *config, R2RAsmTest *test);
 R_API bool r2r_check_asm_test(R2RAsmTestOutput *out, R2RAsmTest *test);
 R_API void r2r_asm_test_output_free(R2RAsmTestOutput *out);
-R_API R2RProcessOutput *r2r_run_fuzz_test(R2RRunConfig *config, R2RFuzzTest *test, R2RCmdRunner runner, void *user);
+R_API R2RProcessOutput *r2r_run_fuzz_test(R2RRunConfig *config, const char *file, R2RCmdRunner runner, void *user);
 R_API bool r2r_check_fuzz_test(R2RProcessOutput *out);
+R_API R2RProcessOutput *r2r_run_leak_test(R2RRunConfig *config, R2RCmdTest *test, R2RCmdRunner runner, void *user);
+R_API bool r2r_check_leak_test(R2RProcessOutput *out, R2RCmdTest *test);
 
 R_API void r2r_test_free(R2RTest *test);
 R_API char *r2r_test_name(R2RTest *test);

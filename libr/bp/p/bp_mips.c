@@ -1,9 +1,9 @@
-/* radare2 - LGPL - Copyright 2010-2015 - pancake */
+/* radare2 - LGPL - Copyright 2010-2023 - pancake */
 
 #include <r_bp.h>
 #include <r_lib.h>
 
-static struct r_bp_arch_t r_bp_plugin_mips_bps[] = {
+static RBreakpointArch r_bp_plugin_mips_bps[] = {
 	{ 32, 4, 0, (const ut8*)"\x0d\x00\x00\x00" },
 	{ 32, 4, 1, (const ut8*)"\x00\x00\x00\x0d" },
 	{ 64, 4, 0, (const ut8*)"\x0d\x00\x00\x00" },
@@ -11,10 +11,15 @@ static struct r_bp_arch_t r_bp_plugin_mips_bps[] = {
 	{ 0, 0, 0, NULL }
 };
 
-struct r_bp_plugin_t r_bp_plugin_mips = {
-	.name = "mips",
+RBreakpointPlugin r_bp_plugin_mips = {
+	.meta = {
+		.name = "mips",
+		.desc = "",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.arch = "mips",
-	.nbps = 10,
+	.nbps = 4,
 	.bps = r_bp_plugin_mips_bps,
 };
 

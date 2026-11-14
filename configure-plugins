@@ -2,12 +2,42 @@
 #
 # Script to configure "staticability" of plugins
 # author: pancake // nopcode
-# update: 2010-01-14
+# update: 2026-01-15
 #
 
 LANG=C
 LC_ALL=C
 LOADLIBS=1
+TARGET_OSTYPE="${USEROSTYPE}"
+
+ostype_ext() {
+	case "$1" in
+	windows|mingw32)
+		echo dll
+		;;
+	darwin)
+		echo dylib
+		;;
+	*)
+		echo so
+		;;
+	esac
+}
+
+update_ext() {
+	if [ -n "$EXT_SO" ]; then
+		EXT="${EXT_SO}"
+		return
+	fi
+	if [ -n "$TARGET_OSTYPE" ]; then
+		EXT=$(ostype_ext "$TARGET_OSTYPE")
+		return
+	fi
+	EXT=so
+	[ "`uname`" = Darwin ] && EXT=dylib
+}
+
+update_ext
 
 export LANG
 export LC_ALL
@@ -32,25 +62,35 @@ help () {
 
 cfg=./plugins.cfg
 
-if [ ! -f "$cfg" ]; then
-  cp -f dist/plugins-cfg/plugins.def.cfg plugins.cfg
-fi
+want_zydis() {
+  if [ -n "${WANT_ZYDIS:-}" ]; then
+    echo "$WANT_ZYDIS"
+    return
+  fi
+  if [ -f ./config-user.mk ]; then
+    v=$(sed -n 's/^WANT_ZYDIS=//p' ./config-user.mk | tail -n 1)
+    [ -n "$v" ] && echo "$v" && return
+  fi
+  echo 1
+}
 
 load () {
-  if [ -e $cfg ]; then 
-    echo "configure-plugins: Loading $cfg .."
-    . $cfg
-  else
-    echo "configure-plugins: Loading $1 .."
-    . "$1"
+  if [ ! -f "$cfg" ]; then
+    echo "configure-plugins: Copying $1"
+    cp -f "$1" "$cfg"
   fi
+  echo "configure-plugins: Loading $cfg .."
+  . "$cfg"
 }
 
-save () {
-  cp $cfg plugins.cfg
- # echo "STATIC=\"$STATIC\"" > $cfg
- # echo "SHARED=\"$SHARED\"" >>$cfg
-}
+
+if [ -f libr/xps/static.cfg ]; then
+  EXTERNAL_STATIC=$(cat libr/xps/static.cfg)
+  echo "[INFO] Statically linking third-party plugins: `echo ${EXTERNAL_STATIC}`"
+else
+  EXTERNAL_STATIC=""
+  echo "[INFO] No third-party static plugins"
+fi
 
 generate_configh () {
   plugins=""
@@ -61,30 +101,30 @@ generate_configh () {
     if [ ! "$oldlib" = "$lib" ]; then
       [ -n "$oldlib" ] && echo "     0"
       oldlib=$lib
-      if type perl > /dev/null 2>&1 ; then
-        uclib=$(echo $lib | perl -pe 'tr/[a-z]/[A-Z]/')
-      else
-        uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
-      fi
+      uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
       echo
       echo "#define R_${uclib}_STATIC_PLUGINS \\"
       plugins="${plugins} __${uclib}"
+      # the third party static plugins goes here
+      for b in ${EXTERNAL_STATIC} ; do
+        extlib=$(echo $b | cut -d . -f 1) # library
+        if [ "$lib" = "$extlib" ]; then
+          extplg=$(echo $b | cut -d . -f 2) # plugin name
+          echo "     &r_${extlib}_plugin_${extplg}, \\"
+        fi
+      done
     fi
     echo "     &r_${lib}_plugin_${plg}, \\"
   done
   [ -n "$oldlib" ] && echo "     0"
 
-  # FILL EMPTY PLUGIN ARRAYS WITH LOVE
+  # CAREFULLY FILL EMPTY PLUGIN ARRAYS
   for a in ${SHARED} ; do
     lib=$(echo $a | cut -d . -f 1) # library
     plg=$(echo $a | cut -d . -f 2) # plugin name
     if [ ! "$oldlib" = "$lib" ]; then
       oldlib=$lib
-      if type perl > /dev/null 2>&1; then
-        uclib=$(echo $lib | perl -pe 'tr/[a-z]/[A-Z]/')
-      else
-        uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
-      fi
+      uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
       if [ -z "`echo ${plugins} | grep __${uclib}`" ]; then
         plugins="${plugins} __${uclib}"
         echo
@@ -105,40 +145,50 @@ generate_asmdinc() {
 }
 
 generate_configmk () {
+  splugins=""
   plugins=""
   oldlib=""
-  for a in ${STATIC} ; do
+  for a in `echo "${STATIC} ${SHARED}" | tr " " "\n" | sort` ; do
     lib=$(echo $a | cut -d . -f 1) # library
     plg=$(echo $a | cut -d . -f 2) # plugin name
     if [ ! "$oldlib" = "$lib" ]; then
       [ -n "$oldlib" ] && printf "\n"
       oldlib=$lib
-      if type perl > /dev/null 2>&1 ; then
-        uclib=$(echo $lib | perl -pe 'tr/[a-z]/[A-Z]/')
-      else
-        uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
-      fi
-      printf "STATIC_${uclib}_PLUGINS= "
+      uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
+      printf "STATIC_${uclib}_PLUGINS="
       plugins="${plugins} __${uclib}"
+      for b in ${EXTERNAL_STATIC} ; do
+        extlib=$(echo $b | cut -d . -f 1)
+        if [ "$lib" = "$extlib" ]; then
+          extplg=$(echo $b | cut -d . -f 2) # plugin name
+          printf " ../xps/p/${extplg}/r2plugin/${lib}/deps.mk"
+        fi
+      done
     fi
-    printf "p/${plg}.mk "
+    if [ "$lib" = "bin_demangle" ]; then
+      printf " p/${plg}_demangle.mk"
+    else
+      printf " p/${plg}.mk"
+    fi
   done
 
   echo
 
-  # fill the holes with love
   for a in ${SHARED} ; do
     lib=$(echo $a | cut -d . -f 1) # library
-    if type perl > /dev/null 2>&1 ; then
-      uclib=$(echo $lib | perl -pe 'tr/[a-z]/[A-Z]/')
-    else
-      uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
+    plg=$(echo $a | cut -d . -f 2) # plugin name
+    uclib=$(echo $lib | tr '[a-z]' '[A-Z]')
+    if [ -z "`echo ${splugins} | grep __${uclib}`" ]; then
+      splugins="${splugins} __${uclib}"
+      printf "SHARED_${uclib}_TARGETS="
     fi
-    if [ -z "`echo ${plugins} | grep __${uclib}`" ]; then
-      plugins="${plugins} __${uclib}"
-      echo "STATIC_${uclib}_PLUGINS="
+    if [ "$lib" = "bin_demangle" ]; then
+      printf " p/bin_demangle_${plg}.${EXT}"
+    else
+      printf " p/io_${plg}.${EXT}"
     fi
   done
+  echo
 }
 
 generate () {
@@ -153,7 +203,10 @@ generate () {
   generate_asmdinc >> libr/asm/d/config.inc
 
   echo "configure-plugins: Generating libr/config.mk"
-  cat libr/config.mk.head > libr/config.mk
+  echo "# This file has been automatically generated by ./configure-plugins" > libr/config.mk
+  echo "# The script ./configure-plugins takes the plugins.cfg configuration" >> libr/config.mk
+  echo "# When plugins.cfg does not exist it will pick dist/plugins-cfg/plugins.def.cfg" >> libr/config.mk
+  cat libr/config.mk.head >> libr/config.mk
   generate_configmk >> libr/config.mk
   cat libr/config.mk.tail >> libr/config.mk
   return
@@ -166,7 +219,6 @@ add () {
 sub () {
   n="" ; for a in $1 ; do [ $a = $2 ] && continue ; n="$n $a" ; done ; echo $n
 }
-
 
 echo | sort -t. > /dev/null 2>&1
 if [ $? = 0 ]; then
@@ -197,10 +249,22 @@ make_shared () {
 
 make_ () { : ; }
 
-
 MODE=""
 DONOTHING=0
 DEFCFG=dist/plugins-cfg/plugins.def.cfg
+
+check_conflicts () {
+  CONFLICT=0
+  for a in $STATIC ; do
+    for b in $SHARED ; do
+      if [ "$a" = "$b" ]; then
+        echo "\x1b[1mError\x1b[0m: Conflict \x1b[44m$a\x1b[0m is defined as STATIC and SHARED"
+        CONFLICT=1
+      fi
+    done
+  done
+  return $CONFLICT
+}
 
 rmstatic() {
   C=0
@@ -214,7 +278,7 @@ rmstatic() {
       f="$b.$ext"
       if [ -f "$f" ]; then
         C=$(($C+1))
-	printf "  $C found\r"
+        printf "  $C found\r"
         #echo "rm -f $f"
         rm -f "$f"
       fi
@@ -227,12 +291,26 @@ RMSTATIC=-
 
 while : ; do
   [ -z "$1" ] && break
-  case "$1" in
-  "--static") MODE=static ; ;;
-  "--shared") MODE=shared ; ;;
-  "--without-gpl") DEFCFG=./plugins.nogpl.cfg ;;
-  "--disable-loadlibs") LOADLIBS=0 ;;
-  "--rm-static") RMSTATIC="$2" ; ;;
+	case "$1" in
+	"--static") MODE=static ; ;;
+	"--shared") MODE=shared ; ;;
+	"--with-ostype")
+		shift
+		TARGET_OSTYPE="$1"
+		update_ext
+		;;
+	"--with-ostype="*)
+		TARGET_OSTYPE="${1#*=}"
+		update_ext
+		;;
+	"--without-zydis") WANT_ZYDIS=0 ;;
+	"--with-syszydis") WANT_ZYDIS=1 ;;
+	"--without-gpl")
+		DEFCFG=dist/plugins-cfg/plugins.nogpl.cfg
+		cmp -s "$cfg" "$DEFCFG" || rm -f "$cfg"
+		;;
+	"--disable-loadlibs") LOADLIBS=0 ;;
+	"--rm-static") RMSTATIC="$2" ; ;;
   "--list") sort_vars ; list ; ;;
   "-n") DONOTHING=1 ; ;;
   "-h"|"--help") help ; ;;
@@ -242,6 +320,10 @@ while : ; do
 done
 
 load ${DEFCFG}
+if [ "$(want_zydis)" = 0 ]; then
+  STATIC=$(sub "$STATIC" arch.x86_zydis)
+  SHARED=$(sub "$SHARED" arch.x86_zydis)
+fi
 sort_vars
 
 if [ - != "${RMSTATIC}" ]; then
@@ -255,11 +337,11 @@ if [ - != "${RMSTATIC}" ]; then
   exit 0
 fi
 
+check_conflicts || exit 1
+
 [ ${DONOTHING} = 0 ] && generate
 
 echo SHARED: ${SHARED}
 echo STATIC: ${STATIC}
-
-save
 
 exit 0

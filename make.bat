@@ -1,23 +1,31 @@
 :: Build (and eventually install) r2 for windows
 @echo off
-ninja --version > NUL 2> NUL
-if %ERRORLEVEL% == 0 (
+if "%*" == "clean" (
+  rmdir /s /q b 2> NUL
+  rmdir /s /q vs 2> NUL
+  exit /b 0
+)
+
+call ninja.exe --version > NUL 2> NUL && (
   if EXIST b (
-    ninja -C b
-    if %ERRORLEVEL% == 0 (
+    REM meson compile -C b
+    call ninja.exe -C b -j 2 && (
       echo Installing r2 in %CD%\prefix
       set DESTDIR=%CD%\prefix
-      ninja -C b install > NUL
-      copy /y %DESTDIR%\bin\radare2.exe %DESTDIR%\bin\r2.exe
+      rmdir /q /s prefix 2> NUL
+      REM meson install -C b
+      call ninja -C b install > NUL
       copy /y C:\WINDOWS\System32\vcruntime140.dll %DESTDIR%\bin\vcruntime140.dll
-    ) else (
+      exit /b 0
+    ) || (
+      echo Ninja compilation has failed
       exit /b 1
     )
   ) else (
     echo Please run configure before make
     exit /b 1
   )
-) else (
-  echo Please run preconfigure
+) || (
+  echo Cannot find the ninja. Please run preconfigure
   exit /b 1
 )

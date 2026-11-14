@@ -10,7 +10,7 @@ int looper(struct r_th_t *th) {
 		(*ctr)++;
 		printf ("%d loop %d\r", i, *ctr);
 		fflush (stdout);
-#if __UNIX__
+#if R2__UNIX__
 		sleep (1);
 #endif
 	}
@@ -28,7 +28,7 @@ int test1() {
 #if __i386__ || __x86_64__
 	asm ("int3");
 #endif
-	//r_th_start (th, true);
+	//r_th_start (th);
 	while (r_th_wait_async (th)) {
 		printf ("\nwaiting...\n");
 		fflush (stdout);
@@ -37,7 +37,7 @@ int test1() {
 	}
 	printf ("\nfinished\n");
 #if 0
-	r_th_start(th, true);
+	r_th_start(th);
 	sleep(1);
 #endif
 	/* wait and free */

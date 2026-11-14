@@ -1,54 +1,35 @@
-/* radare - LGPL - 2014-2019 - condret@runas-racer.com */
+/* radare - LGPL - 2014-2023 - condret@runas-racer.com */
 
-#include <r_types.h>
 #include <r_util.h>
 #include <r_lib.h>
 #include <r_bin.h>
 #include <string.h>
 #include "../format/nin/gba.h"
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 lict[156];
-	r_return_val_if_fail (b, false);
 	r_buf_read_at (b, 4, (ut8*)lict, sizeof (lict));
 	return !memcmp (lict, lic_gba, 156);
 }
 
-static bool load_buffer(RBinFile * bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	return check_buffer (bf, buf);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	return check (bf, buf);
 }
 
 static RList *entries(RBinFile *bf) {
 	RList *ret = r_list_newf (free);
-	RBinAddr *ptr = NULL;
-
-	if (bf && bf->buf) {
-		if (!ret) {
-			return NULL;
-		}
-		if (!(ptr = R_NEW0 (RBinAddr))) {
-			return ret;
-		}
-		ptr->paddr = ptr->vaddr = 0x8000000;
-		r_list_append (ret, ptr);
+	if (!ret) {
+		return NULL;
 	}
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
+	ptr->paddr = ptr->vaddr = 0x8000000;
+	r_list_append (ret, ptr);
 	return ret;
 }
 
 static RBinInfo *info(RBinFile *bf) {
 	ut8 rom_info[16];
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-
-	if (!ret) {
-		return NULL;
-	}
-
-	if (!bf || !bf->buf) {
-		free (ret);
-		return NULL;
-	}
-
-	ret->lang = NULL;
 	r_buf_read_at (bf->buf, 0xa0, rom_info, 16);
 	ret->file = r_str_ndup ((const char *) rom_info, 12);
 	ret->type = r_str_ndup ((char *) &rom_info[12], 4);
@@ -62,14 +43,10 @@ static RBinInfo *info(RBinFile *bf) {
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret = NULL;
-	RBinSection *s = R_NEW0 (RBinSection);
+static bool sections_vec(RBinFile *bf) {
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 	ut64 sz = r_buf_size (bf->buf);
-	if (!(ret = r_list_new ())) {
-		free (s);
-		return NULL;
-	}
+	RBinSection *s = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	s->name = strdup ("ROM");
 	s->paddr = 0;
 	s->vaddr = 0x8000000;
@@ -78,19 +55,21 @@ static RList *sections(RBinFile *bf) {
 	s->perm = R_PERM_RX;
 	s->add = true;
 
-	r_list_append (ret, s);
-	return ret;
+	return true;
 }
 
 RBinPlugin r_bin_plugin_ningba = {
-	.name = "ningba",
-	.desc = "Game Boy Advance format r_bin plugin",
-	.license = "LGPL3",
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.meta = {
+		.name = "ningba",
+		.author = "condret",
+		.desc = "Game Boy Advance ROM",
+		.license = "LGPL-3.0-only",
+	},
+	.load = &load,
+	.check = &check,
 	.entries = &entries,
 	.info = &info,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
 };
 
 #ifndef R2_PLUGIN_INCORE

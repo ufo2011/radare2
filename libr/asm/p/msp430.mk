@@ -1,13 +1,14 @@
-OBJ_MSP430=asm_msp430.o
-OBJ_MSP430+=$(LIBR)/asm/arch/msp430/msp430_disas.o
-CFLAGS+=-I$(LIBR)/asm/arch/msp430/
+OBJ_MSP430PSEUDO+=$(LIBR)/arch/p/msp430/pseudo.o
 
-STATIC_OBJ+=${OBJ_MSP430}
-TARGET_MSP430=asm_msp430.${EXT_SO}
+TARGET_MSP430PSEUDO=parse_msp430_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_MSP430PSEUDO}
+STATIC_OBJ+=${OBJ_MSP430PSEUDO}
 
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_MSP430}
-
-${TARGET_MSP430}: ${OBJ_MSP430}
-	${CC} ${LDFLAGS} ${CFLAGS} -o ${TARGET_MSP430} ${OBJ_MSP430}
+${TARGET_MSP430PSEUDO}: ${OBJ_MSP430PSEUDO}
+ifeq ($(CC),cccl)
+	${CC} $(call libname,parse_msp430_pseudo) -L../../util -llibr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_MSP430PSEUDO} ${OBJ_MSP430PSEUDO}
+else
+	${CC} $(call libname,parse_msp430_pseudo) -L../../util -lr_util \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_MSP430PSEUDO} ${OBJ_MSP430PSEUDO}
 endif

@@ -1,28 +1,23 @@
-/* radare2 - LGPL - Copyright 2017 - pancake, condret */
+/* radare2 - LGPL - Copyright 2017-2025 - pancake, condret */
 
-#include "r_io.h"
-#include "r_lib.h"
-#include <r_util.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
+#include <r_io.h>
 
 static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
-	if (!fd || !buf || count < 0 || !fd->data) {
-		return -1;
+	R_RETURN_VAL_IF_FAIL (io && fd && buf && fd->data, -1);
+	if (count >= 0 && fd->perm & R_PERM_W) {
+		RBuffer *b = fd->data;
+		return r_buf_write (b, buf, count);
 	}
-	RBuffer *b = fd->data;
-	return r_buf_write (b, buf, count);
+	return -1;
 }
 
 static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
+	R_RETURN_VAL_IF_FAIL (io && fd && buf, -1);
 	RBuffer *b = fd->data;
 	return r_buf_read (b, buf, count);
 }
 
 static bool __close(RIODesc *fd) {
-	RBuffer *b = fd->data;
-	r_buf_free (b);
 	return true;
 }
 
@@ -32,24 +27,30 @@ static ut64 __lseek(RIO* io, RIODesc *fd, ut64 offset, int whence) {
 }
 
 static bool __check(RIO *io, const char *pathname, bool many) {
-	return (!strncmp (pathname, "rbuf://", 7));
+	return r_str_startswith (pathname, "rbuf://");
 }
 
 static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
-	RIODesc *desc;
-	RBuffer *buf = r_buf_new ();
-	if (buf && (desc = r_io_desc_new (io, &r_io_plugin_rbuf, pathname, 7, 0, buf))) {
-		return desc;
+	R_RETURN_VAL_IF_FAIL (io && pathname, NULL);
+	if (r_sandbox_enable (false)) {
+		R_LOG_ERROR ("rbuf:// doesnt work with sandbox enabled");
+		return NULL;
 	}
-	r_buf_free (buf);
+	RBuffer *buf = (RBuffer *)(void *)(size_t)r_num_get (NULL, pathname + 7);
+	if (buf) {
+		return r_io_desc_new (io, &r_io_plugin_rbuf, pathname, rw, 0, buf);
+	}
 	return NULL;
 }
 
 RIOPlugin r_io_plugin_rbuf = {
-	.name = "rbuf",
-	.desc = "RBuffer IO plugin",
+	.meta = {
+		.name = "rbuf",
+		.desc = "Unsafe RBuffer IO plugin",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "rbuf://",
-	.license = "LGPL",
 	.open = __open,
 	.close = __close,
 	.read = __read,

@@ -11,6 +11,7 @@ extern "C" {
 /* Use GMP's data struct */
 #define RNumBig mpz_t
 #elif HAVE_LIB_SSL
+typedef struct bignum_st BIGNUM;
 #define RNumBig BIGNUM
 #else
 /* Use default impl */
@@ -21,7 +22,6 @@ extern "C" {
 #define R_BIG_DTYPE ut32
 #define R_BIG_DTYPE_TMP ut64
 #define R_BIG_SPRINTF_FORMAT_STR "%.08x"
-#define R_BIG_FORMAT_STR_LEN 9
 #define R_BIG_SSCANF_FORMAT_STR "%8x"
 #define R_BIG_MAX_VAL (R_BIG_DTYPE_TMP) UT32_MAX
 
@@ -46,7 +46,7 @@ R_API void r_big_assign(RNumBig *dst, RNumBig *src);
 /* Basic arithmetic operations */
 R_API void r_big_add(RNumBig *c, RNumBig *a, RNumBig *b); /* c = a + b */
 R_API void r_big_sub(RNumBig *c, RNumBig *a, RNumBig *b); /* c = a - b */
-R_API void r_big_mul(RNumBig *c, RNumBig *a, RNumBig *b); /* c = a * b */
+R_API void r_big_mul(RNumBig *c, RNumBig *a, RNumBig *b); /* c = a *b */
 R_API void r_big_div(RNumBig *c, RNumBig *a, RNumBig *b); /* c = a / b */
 R_API void r_big_mod(RNumBig *c, RNumBig *a, RNumBig *b); /* c = a % b */
 R_API void r_big_divmod(RNumBig *c, RNumBig *d, RNumBig *a, RNumBig *b); /* c = a/b, d = a%b */

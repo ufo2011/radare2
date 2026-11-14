@@ -1,13 +1,10 @@
-/* radare - LGPL - Copyright 2013-2019 - pancake */
+/* radare - LGPL - Copyright 2013-2026 - pancake */
 
-#include <r_types.h>
-#include <r_util.h>
-#include <r_lib.h>
 #include <r_bin.h>
 #include "../i/private.h"
 
-static bool check_buffer(RBinFile *bf, RBuffer *buf) {
-	r_return_val_if_fail (buf, false);
+static bool check(RBinFile *bf, RBuffer *buf) {
+	R_RETURN_VAL_IF_FAIL (buf, false);
 
 	ut64 sz = r_buf_size (buf);
 	if (sz <= 0xffff) {
@@ -22,7 +19,7 @@ static bool check_buffer(RBinFile *bf, RBuffer *buf) {
 	const ut32 ep = sz - 0x10000 + 0xfff0; /* F000:FFF0 address */
 	/* hacky check to avoid detecting multidex or MZ bins as bios */
 	/* need better fix for this */
-	ut8 tmp[3];
+	ut8 tmp[3] = {0};
 	int r = r_buf_read_at (buf, 0, tmp, sizeof (tmp));
 	if (r <= 0 || !memcmp (tmp, "dex", 3) || !memcmp (tmp, "MZ", 2)) {
 		return false;
@@ -33,16 +30,17 @@ static bool check_buffer(RBinFile *bf, RBuffer *buf) {
 	return bep == 0xea || bep == 0xe9;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	if (!check_buffer (bf, buf)) {
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	if (!check (bf, buf)) {
 		return false;
 	}
-	*bin_obj = r_buf_ref (buf);
+	bf->bo->bin_obj = r_ref (buf);
 	return true;
 }
 
 static void destroy(RBinFile *bf) {
-	r_buf_free (bf->o->bin_obj);
+	RBuffer *buf = bf->bo->bin_obj;
+	r_unref (buf);
 }
 
 static ut64 baddr(RBinFile *bf) {
@@ -50,16 +48,13 @@ static ut64 baddr(RBinFile *bf) {
 }
 
 /* accelerate binary load */
-static RList *strings(RBinFile *bf) {
+static RVecRBinString *strings(RBinFile *bf) {
 	return NULL;
 }
 
 static RBinInfo *info(RBinFile *bf) {
-	RBinInfo *ret = NULL;
-	if (!(ret = R_NEW0 (RBinInfo))) {
-		return NULL;
-	}
-	ret->lang = NULL;
+	R_RETURN_VAL_IF_FAIL (bf, NULL);
+	RBinInfo *ret = R_NEW0 (RBinInfo);
 	ret->file = bf->file? strdup (bf->file): NULL;
 	ret->type = strdup ("bios");
 	ret->bclass = strdup ("1.0");
@@ -71,55 +66,41 @@ static RBinInfo *info(RBinFile *bf) {
 	ret->has_va = 1;
 	ret->bits = 16;
 	ret->big_endian = 0;
-	ret->dbg_info = 0;
+	ret->dbg_info = false;
 	return ret;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret = NULL;
-	RBinSection *ptr = NULL;
-	RBuffer *obj = bf->o->bin_obj;
-
-	if (!(ret = r_list_newf ((RListFree) r_bin_section_free))) {
-		return NULL;
-	}
+static bool sections_vec(RBinFile *bf) {
+	RBuffer *obj = bf->bo->bin_obj;
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 	// program headers is another section
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("bootblk"); // Maps to 0xF000:0000 segment
 	ptr->vsize = ptr->size = 0x10000;
 	ptr->paddr = r_buf_size (bf->buf) - ptr->size;
 	ptr->vaddr = 0xf0000;
 	ptr->perm = R_PERM_RWX;
 	ptr->add = true;
-	r_list_append (ret, ptr);
 	// If image bigger than 128K - add one more section
 	if (bf->size >= 0x20000) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
+		ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ptr->name = strdup ("_e000"); // Maps to 0xE000:0000 segment
 		ptr->vsize = ptr->size = 0x10000;
 		ptr->paddr = r_buf_size (obj) - 2 * ptr->size;
 		ptr->vaddr = 0xe0000;
 		ptr->perm = R_PERM_RWX;
 		ptr->add = true;
-		r_list_append (ret, ptr);
 	}
-	return ret;
+	return true;
 }
 
 static RList *entries(RBinFile *bf) {
-	RList *ret;
-	RBinAddr *ptr = NULL;
-	if (!(ret = r_list_new ())) {
+	RList *ret = r_list_new ();
+	if (!ret) {
 		return NULL;
 	}
 	ret->free = free;
-	if (!(ptr = R_NEW0 (RBinAddr))) {
-		return ret;
-	}
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
 	ptr->paddr = 0; // 0x70000;
 	ptr->vaddr = 0xffff0;
 	r_list_append (ret, ptr);
@@ -127,15 +108,18 @@ static RList *entries(RBinFile *bf) {
 }
 
 RBinPlugin r_bin_plugin_bios = {
-	.name = "bios",
-	.desc = "BIOS bin plugin",
-	.license = "LGPL",
-	.load_buffer = &load_buffer,
+	.meta = {
+		.name = "bios",
+		.author = "pancake",
+		.desc = "Real mode Intel BIOS",
+		.license = "LGPL-3.0-only",
+	},
+	.load = &load,
 	.destroy = &destroy,
-	.check_buffer = &check_buffer,
+	.check = &check,
 	.baddr = &baddr,
 	.entries = entries,
-	.sections = sections,
+	.sections_vec = &sections_vec,
 	.strings = &strings,
 	.info = &info,
 };

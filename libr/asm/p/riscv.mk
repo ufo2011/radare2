@@ -1,14 +1,16 @@
-OBJ_RISCV=asm_riscv.o
-#implicitly included
-#OBJ_RISCV+=../arch/riscv/riscv.o
-#OBJ_RISCV+=../arch/riscv/riscv-opc.o
+OBJ_RISCVPSEUDO+=$(LIBR)/arch/p/riscv/pseudo.o
 
-STATIC_OBJ+=${OBJ_RISCV}
-TARGET_RISCV=asm_riscv.${EXT_SO}
+TARGET_RISCVPSEUDO=parse_riscv_pseudo.${EXT_SO}
+ALL_TARGETS+=${TARGET_RISCVPSEUDO}
+STATIC_OBJ+=${OBJ_RISCVPSEUDO}
 
-ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_RISCV}
+ifeq ($(CC),cccl)
+	RISCV_CFLAGS:=${CFLAGS}
+	else
+	RISCV_CFLAGS:=${CFLAGS} ${LINK}
+	endif
 
-${TARGET_RISCV}: ${OBJ_RISCV}
-	${CC} ${call libname,asm_RISCV} ${CFLAGS} -o ${TARGET_RISCV} ${OBJ_RISCV}
-endif
+${TARGET_RISCVPSEUDO}: ${OBJ_RISCVPSEUDO}
+	${CC} $(call libname,parse_riscv_pseudo) -L../../util -lr_util \
+		$(LDFLAGS_SHARED) ${RISCV_CFLAGS} -o ${TARGET_RISCVPSEUDO} ${OBJ_RISCVPSEUDO}
+

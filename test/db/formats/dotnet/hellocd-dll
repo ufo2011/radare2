@@ -1,0 +1,114 @@
+NAME=.NET hellocd.dll info
+FILE=bins/dotnet/hellocd.dll
+CMDS=<<EOF
+echo headers
+i
+echo versions
+iV
+echo libraries
+il
+EOF
+EXPECT=<<EOF
+headers
+fd       3
+file     bins/dotnet/hellocd.dll
+size     0x1200
+humansz  4.5K
+mode     r-x
+format   pe
+iorw     false
+block    0x100
+type     EXEC (Executable file)
+arch     cil
+baddr    0x400000
+binsz    4608
+bintype  pe
+bits     32
+canary   true
+injprot  false
+retguard false
+class    PE32
+cmp.csum 0x0000d487
+compiled Sat Jul 27 15:07:22 2097
+crypto   false
+dbg_file /Users/pancake/prg/dotnet/hellocd/obj/Release/net7.0/hellocd.pdb
+endian   little
+havecode true
+hdr.csum 0x00000000
+guid     75C14D5D8C5A454A9C32A5E0FAE6B1EC1
+laddr    0x0
+lang     cil
+linenum  false
+lsyms    false
+machine  i386
+nx       true
+os       windows
+overlay  false
+cc       cdecl
+pic      true
+relocs   false
+signed   false
+sanitize false
+static   false
+stripped false
+uncaps   false
+subsys   dotnet
+va       true
+versions
+=== VS_VERSIONINFO ===
+
+# VS_FIXEDFILEINFO
+
+  Signature: 0xfeef04bd
+  StrucVersion: 0x10000
+  FileVersion: 1.0.0.0
+  ProductVersion: 1.0.0.0
+  FileFlagsMask: 0x3f
+  FileFlags: 0x0
+  FileOS: 0x4
+  FileType: 0x1
+  FileSubType: 0x0
+
+# StringTable
+
+  CompanyName: hellocd
+  FileDescription: hellocd
+  FileVersion: 1.0.0.0
+  InternalName: hellocd.dll
+  LegalCopyright:  
+  OriginalFilename: hellocd.dll
+  ProductName: hellocd
+  ProductVersion: 1.0.0
+  Assembly Version: 1.0.0.0
+libraries
+mscoree.dll
+EOF
+RUN
+
+# merged: .NET hellocd dll classes
+NAME=.NET hellocd dll symbols
+FILE=bins/dotnet/hellocd.dll
+CMDS=<<EOF
+is~GLOBAL
+?e --
+ic~class
+ic~method
+ic~field
+EOF
+EXPECT=<<EOF
+0   0x00000251 0x00402051 GLOBAL FUNC 7                Microsoft.CodeAnalysis.EmbeddedAttribute..ctor(this;):void
+0   0x00000259 0x00402059 GLOBAL FUNC 14               System.Runtime.CompilerServices.RefSafetyRulesAttribute..ctor(this;int):void
+0   0x00000268 0x00402068 GLOBAL FUNC 11               Program.<Main>$(string[]:args):void
+0   0x00000274 0x00402074 GLOBAL FUNC 7                Program..ctor(this;):void
+--
+0x00000000 [0x00000000 - 0x00000000]      0 cil class 0 <Module>
+0x00000000 [0x00402051 - 0x00402058]      7 cil class 1 Microsoft.CodeAnalysis.EmbeddedAttribute :: System.Attribute
+0x00000000 [0x00402059 - 0x00402067]     14 cil class 2 System.Runtime.CompilerServices.RefSafetyRulesAttribute :: System.Attribute
+0x00000000 [0x00402068 - 0x0040207b]     19 cil class 3 Program :: System.Object
+0x00402051 cil   method   0 pC   .ctor
+0x00402059 cil   method   0 pC   .ctor
+0x00402068 cil   method   0 Ps   <Main>$
+0x00402074 cil   method   1 pC   .ctor
+0x00000000 cil    field   0 p    Version
+EOF
+RUN

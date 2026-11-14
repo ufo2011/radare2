@@ -1,0 +1,57 @@
+NAME=aavr async swift
+FILE=bins/mach0/SwiftAsynciOS
+CMDS=<<EOF
+s 0x100007504
+e anal.in=bin.sections.rw
+aavr
+axtq
+EOF
+EXPECT=<<EOF
+0x100011328
+EOF
+RUN
+
+NAME=aaa in swift implies avr on rw sections
+FILE=bins/mach0/SwiftAsynciOS
+CMDS=<<EOF
+s 0x100007504
+aaa
+axtq
+EOF
+EXPECT=<<EOF
+0x100011328
+EOF
+RUN
+
+NAME=aav reports every hit once when the ranges overlap
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+e anal.in=io.maps
+on malloc://64 0x10000
+on malloc://64 0x10000
+on malloc://64 0x10020
+wv8 0x10010 @ 0x10000
+aav*~?Cd
+w0 8 @ 0x10000
+wv4 8 @ 0x10004
+aavr*~?Cd
+EOF
+EXPECT=<<EOF
+1
+1
+EOF
+RUN
+
+NAME=aav keeps the targets that overlap a range at address zero
+FILE=bins/elf/arm1.bin
+CMDS=<<EOF
+e anal.in=bin.sections
+aav
+ax~?
+EOF
+EXPECT=<<EOF
+5341
+EOF
+RUN

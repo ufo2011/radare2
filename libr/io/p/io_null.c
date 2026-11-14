@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2017 - condret, pancake */
+/* radare - LGPL - Copyright 2017-2024 - condret, pancake */
 
 #include <r_io.h>
 #include <r_lib.h>
@@ -9,11 +9,10 @@ typedef struct {
 } RIONull;
 
 static int __write(RIO* io, RIODesc* fd, const ut8* buf, int count) {
-	RIONull* null;
 	if (!fd || !fd->data || !buf) {
 		return -1;
 	}
-	null = (RIONull*) fd->data;
+	RIONull* null = (RIONull*) fd->data;
 	if ((null->offset + count) > null->size) {
 		int ret = null->size - null->offset;
 		return ret;
@@ -27,11 +26,12 @@ static bool __resize(RIO* io, RIODesc* fd, ut64 count) {
 		RIONull* null = (RIONull*) fd->data;
 		null->size = count;
 		if (null->offset >= count) {
-			if (count) {
-				null->offset = count - 1;
-			} else {
-				null->offset = 0LL;
-			}
+			null->offset = (count != 0)? count - 1: 0LL;
+		}
+		char *uri = r_str_newf ("null://%"PFMT64u, count);
+		if (uri) {
+			free (fd->uri);
+			fd->uri = uri;
 		}
 		return true;
 	}
@@ -39,11 +39,10 @@ static bool __resize(RIO* io, RIODesc* fd, ut64 count) {
 }
 
 static int __read(RIO* io, RIODesc* fd, ut8* buf, int count) {
-	RIONull* null;
 	if (!fd || !fd->data || !buf) {
 		return -1;
 	}
-	null = (RIONull*) fd->data;
+	RIONull* null = (RIONull*) fd->data;
 	if ((null->offset + count) > null->size) {
 		int ret = null->size - null->offset;
 		memset (buf, 0x00, ret);
@@ -66,44 +65,50 @@ static ut64 __lseek(RIO* io, RIODesc* fd, ut64 offset, int whence) {
 		return offset;
 	}
 	null = (RIONull*) fd->data;
+	if (null->size == 0) {
+		null->offset = 0;
+		return 0;
+	}
 	switch (whence) {
-	case SEEK_SET:
+	case R_IO_SEEK_SET:
 		if (offset >= null->size) {
 			return null->offset = null->size - 1;
 		}
 		return null->offset = offset;
-	case SEEK_CUR:
+	case R_IO_SEEK_CUR:
 		if ((null->offset + offset) >= null->size) {
 			return null->offset = null->size - 1;
 		}
 		return null->offset += offset;
-	case SEEK_END:
+	case R_IO_SEEK_END:
 		return null->offset = null->size - 1;
 	}
 	return offset;
 }
 
 static bool __plugin_open(RIO* io, const char* pathname, bool many) {
-	return (!strncmp (pathname, "null://", 7));
+	return r_str_startswith (pathname, "null://");
 }
 
 static RIODesc* __open(RIO* io, const char* pathname, int rw, int mode) {
-	RIONull* null;
-	if (__plugin_open (io, pathname,0)) {
-		if (!strncmp (pathname, "null://", 7) && strlen (pathname + 7)) {
-			null = R_NEW0 (RIONull);
-			null->size = r_num_math (NULL, pathname + 7) + 1;         //???
+	if (__plugin_open (io, pathname, 0)) {
+		if (r_str_startswith (pathname, "null://")) {
+			RIONull *null = R_NEW0 (RIONull);
+			null->size = r_num_math (NULL, pathname + 7) + 1;
 			null->offset = 0LL;
-			return r_io_desc_new (io, &r_io_plugin_null, pathname, rw, mode, null);
+			return r_io_desc_new (io, &r_io_plugin_null, pathname, rw & R_PERM_RWX, mode, null);
 		}
 	}
 	return NULL;
 }
 
 RIOPlugin r_io_plugin_null = {
-	.name = "null",
-	.desc = "Null plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "null",
+		.desc = "Null plugin",
+		.author = "condret",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "null://",
 	.open = __open,
 	.close = __close,

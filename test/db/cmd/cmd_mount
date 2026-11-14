@@ -1,0 +1,1538 @@
+NAME=mc missing arguments and malformed commands
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+mc
+?v $?
+mcx /tmp/missing
+?v $?
+mc /tmp/missing
+?v $?
+EOF2
+EXPECT=<<EOF2
+0x1
+0x1
+0x1
+EOF2
+EXPECT_ERR=<<EOF2
+ERROR: Usage: mc [filename]
+ERROR: Invalid `x` subcommand, try `mc?`
+ERROR: Cannot open /tmp/missing
+EOF2
+RUN
+
+NAME=mc whitespace, empty files and return code reset
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+mw /tmp/data hello
+mw /tmp/empty
+?=1
+mc   /tmp/data
+?v $?
+?=1
+mc	/tmp/data
+?v $?
+?=1
+mc /tmp/empty
+?v $?
+EOF2
+EXPECT=<<EOF2
+hello
+0x0
+hello
+0x0
+0x0
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mc and mg help reset return code
+FILE=-
+CMDS=<<EOF2
+?=1
+mc?
+?v $?
+?=1
+mg?
+?v $?
+EOF2
+EXPECT=<<EOF2
+| mc [file]  cat: Show the contents of the given file
+0x0
+| mg /foo [offset [size]]  dump file to disk; size 0 reads to EOF (supports base64:)
+| mg /directory            recursively dump a directory into the current directory
+0x0
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mg multi-block ranges and overwrite
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+mw /tmp/r2r-mg-range 0123456789
+b 3
+mg /tmp/r2r-mg-range
+?v $?
+cat r2r-mg-range
+?e
+mg /tmp/r2r-mg-range 1+1 5
+?v $?
+cat r2r-mg-range
+?e
+mg /tmp/r2r-mg-range 8 100
+?v $?
+cat r2r-mg-range
+?e
+mg /tmp/r2r-mg-range 9 0
+?v $?
+cat r2r-mg-range
+?e
+mg /tmp/r2r-mg-range 10
+?v $?
+o r2r-mg-range
+?vi $s
+rm r2r-mg-range
+EOF2
+EXPECT=<<EOF2
+0x0
+0123456789
+0x0
+23456
+0x0
+89
+0x0
+9
+0x0
+0
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mg rejects invalid arguments and preserves destination
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m /tmp tmp
+mw /tmp/r2r-mg-invalid original
+mg /tmp/r2r-mg-invalid
+mg
+?v $?
+mgx /tmp/r2r-mg-invalid
+?v $?
+mg /tmp/r2r-mg-invalid 0 1 extra
+?v $?
+mg /tmp/r2r-mg-invalid invalid
+?v $?
+mg /tmp/r2r-mg-invalid 1/0
+?v $?
+mg /tmp/r2r-mg-invalid -1
+?v $?
+mg /tmp/r2r-mg-invalid 0 -1
+?v $?
+mg /tmp/r2r-mg-invalid 0x100000000
+?v $?
+mg /tmp/missing
+?v $?
+mg base64:
+?v $?
+cat r2r-mg-invalid
+?e
+rm r2r-mg-invalid
+EOF2
+EXPECT=<<EOF2
+0x1
+0x1
+0x1
+0x1
+0x1
+0x1
+0x1
+0x1
+0x1
+0x1
+original
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mg empty file and destination failure
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m /tmp tmp
+mw /tmp/r2r-mg-empty
+?=1
+mg /tmp/r2r-mg-empty
+?v $?
+o r2r-mg-empty
+?vi $s
+rm r2r-mg-empty
+mkdir r2r-mg-empty
+mg /tmp/r2r-mg-empty
+?v $?
+rm r2r-mg-empty
+EOF2
+EXPECT=<<EOF2
+0x0
+0
+0x1
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mg directory and base64 path
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+md+ /tmp/dir
+mw /tmp/dir/r2r-mg-dir hello
+mg /tmp/dir
+?v $?
+cat r2r-mg-dir
+?e
+rm r2r-mg-dir
+mg base64:L3RtcC9kaXIvcjJyLW1nLWRpcg==
+?v $?
+cat r2r-mg-dir
+?e
+rm r2r-mg-dir
+EOF2
+EXPECT=<<EOF2
+0x0
+hello
+0x0
+hello
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mg GRUB range contents across blocks
+FILE=bins/fs/fat.img
+CMDS=<<EOF2
+mkdir r2r-mg-fat
+cd r2r-mg-fat
+b 3
+mg /root/README.md 2 7
+?v $?
+cat README.md
+?e
+rm README.md
+cd ..
+rm r2r-mg-fat
+EOF2
+EXPECT=<<EOF2
+0x0
+is is a
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mg POSIX range contents across blocks
+FILE=-
+CMDS=<<EOF2
+mkdir r2r-mg-posix-dir
+echo 0123456789 > r2r-mg-posix-dir/r2r-mg-posix
+m /host posix
+b 3
+mg /host`pwd`/r2r-mg-posix-dir/r2r-mg-posix 2 5
+?v $?
+cat r2r-mg-posix
+?e
+rm r2r-mg-posix
+rm r2r-mg-posix-dir/r2r-mg-posix
+rm r2r-mg-posix-dir
+EOF2
+EXPECT=<<EOF2
+0x0
+23456
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mg cached r2 filesystem contents
+FILE=-
+CMDS=<<EOF2
+m /r2 r2
+s 0x1234
+b 2
+mg /r2/seek 2 4
+?v $?
+cat seek
+?e
+rm seek
+EOF2
+EXPECT=<<EOF2
+0x0
+1234
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount reads reject truncated FAT files without changing the clipboard
+FILE=bins/fs/fat.img
+TIMEOUT=10
+CMDS=<<EOF2
+e log.level=0
+e io.cache=true
+# Increase README.md's size beyond its allocated cluster chain.
+wx 00001000 @ 0x71c
+m /tmp tmp
+mw /tmp/original original
+my /tmp/original
+mkdir r2r-mg-truncated
+cd r2r-mg-truncated
+mc /root/README.md || echo read-failed
+mg /root/README.md || echo dump-failed
+my /root/README.md || echo yank-failed
+y8
+mo /root/README.md || echo open-failed
+rm README.md
+cd ..
+rm r2r-mg-truncated
+EOF2
+EXPECT=<<EOF2
+read-failed
+dump-failed
+yank-failed
+6f726967696e616c
+open-failed
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount directory listing stops on a looping FAT cluster chain
+FILE=bins/fs/fat.img
+TIMEOUT=10
+CMDS=<<EOF2
+e log.level=0
+e io.cache=true
+# Fill the rest of the ETC directory cluster with orphan long name entries
+# so that no free entry terminates the listing.
+b 0x780
+wX 01000000000000000000000f0000000000000000000000000000000000000000 @ 0x4e80
+# Point the FAT12 entry of the ETC cluster (3) back at itself.
+wx 3000 @ 0x204
+md /root/etc
+md /root/bin
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f services
+d .
+d ..
+f ls
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount reads use cached filesystem content
+FILE=-
+CMDS=<<EOF2
+m /r2 r2
+s 0x1234
+mc /r2/seek
+my /r2/seek && echo yank-ok
+y8
+mo /r2/seek && echo open-ok
+p8 7 @ 0
+EOF2
+EXPECT=<<EOF2
+0x1234
+
+yank-ok
+3078313233340a
+open-ok
+3078313233340a
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=r2 filesystem paths and data are not parsed as commands
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m /r2 r2
+$u=m- /r2
+'mc /r2/cfg/asm.bits;$u
+'mc /r2/flags/foo;$u
+'md /r2/cfg/asm;$u
+'md /r2/flags/foo;$u
+'mw /r2/cfg/asm/bits 32;$u
+'mw /r2/bsize 32;$u
+'mw /r2/seek 0;$u
+fss
+m
+EOF2
+EXPECT=<<EOF2
+0x0
+
+0  * (selected)
+r2	0x0	/r2
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount empty files do not read or replace the clipboard
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m /tmp tmp
+mw /tmp/original original
+mw /tmp/empty
+my /tmp/original
+mc /tmp/empty
+my /tmp/empty || echo yank-failed
+?v $?
+y8
+mo /tmp/empty || echo open-failed
+?v $?
+EOF2
+EXPECT=<<EOF2
+yank-failed
+0x1
+6f726967696e616c
+open-failed
+0x1
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount metadata handles large sizes without reading the whole file
+FILE=bins/fs/fat.img
+TIMEOUT=10
+CMDS=<<EOF2
+e log.level=0
+e io.cache=true
+wx ffffffff @ 0x71c
+mi /root/README.md
+mis /root/README.md
+s
+mc /root/README.md || echo read-failed
+my /root/README.md || echo yank-failed
+mo /root/README.md || echo open-failed
+EOF2
+EXPECT=<<EOF2
+'f file 4294967295 0x0002ae00
+'f file 4294967295 0x0002ae00
+0x2ae00
+read-failed
+yank-failed
+open-failed
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount context quoted paths, data and escaped spaces
+FILE=-
+CMDS=<<EOF2
+m "/tmp space" tmp
+md+ "/tmp space/dir name"
+mw "/tmp space/dir name/a b" "a  b"
+mc /tmp\ space/dir\ name/a\ b
+mw '/tmp space/empty file' ""
+mc "/tmp space/empty file"
+mdq "/tmp space"
+mdj "/tmp space/dir name"
+m- "/tmp space"
+m
+EOF2
+EXPECT=<<EOF2
+a  b
+dir name/
+empty file
+[{"type":"unknown","size":4,"name":"a b"}]
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount context quoted options and offset expression
+FILE=-
+CMDS=<<EOF2
+m tmp "/quoted mount" "1 + 2" "label=a  b"
+m
+m*
+m- /quoted\ mount
+m /opts tmp "label=c  d"
+m
+m-/opts
+m
+EOF2
+EXPECT=<<EOF2
+tmp	0x3	/quoted mount	label=a  b
+m /quoted\ mount tmp 0x3 label=a\ \ b
+tmp	0x0	/opts	label=c  d
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount context write requires quoting multiple words
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+mw /tmp/file original
+mw /tmp/file a b || echo rejected
+mc /tmp/file
+mw /tmp/file "a  b  cd"
+mc /tmp/file
+EOF2
+EXPECT=<<EOF2
+rejected
+original
+a  b  cd
+EOF2
+EXPECT_ERR=<<EOF2
+ERROR: Usage: mw [file] [data]
+EOF2
+RUN
+
+NAME=mount context mg quoted filename and range
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+mw "/tmp/r2r-mount space" 0123456789
+b 2
+mg "/tmp/r2r-mount space" "1 + 1" 5
+?v $?
+mwf "r2r-mount space" "/tmp/copied file"
+mc "/tmp/copied file"
+rm r2r-mount space
+EOF2
+EXPECT=<<EOF2
+0x0
+23456
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount context find captures quoted paths
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+mw "/tmp/a b" abc
+mfn /tmp "a b" > $found
+$found
+my "/tmp/a b"
+y8
+mi "/tmp/a b"
+EOF2
+EXPECT=<<EOF2
+/tmp/a b
+616263
+'f file 3 0x00000000
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount context binary escapes retain argument length
+FILE=-
+CMDS=<<EOF2
+m /tmp tmp
+'mw /tmp/binary "A\x00B"
+my /tmp/binary
+y8
+mw /tmp/lines "first\nsecond"
+mc /tmp/lines
+EOF2
+EXPECT=<<EOF2
+410042
+first
+second
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount and host commands return consistent status
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m /tmp tmp 0x1_0000 && echo mounted
+?v $?
+mi /tmp/missing || echo stat-failed
+?v $?
+md /tmp/missing || echo list-failed
+?v $?
+mw || echo write-usage
+?v $?
+m /bad tmp 1/0 || echo bad-offset
+?v $?
+m /bad tmp 0xinvalid || echo bad-offset
+m /bad tmp 0x1g || echo bad-offset
+m /bad tmp 0x1_000g || echo bad-offset
+m /bad tmp 1+missing || echo bad-offset
+m /bad tmp -1 || echo bad-offset
+m /bad tmp extra extra || echo bad-arity
+m:unknown-plugin || echo plugin-failed
+?v $?
+m-/tmp
+m
+mkdir r2r-mount-host-status && echo mkdir-ok
+?v $?
+echo data > r2r-mount-host-status/src
+mv r2r-mount-host-status/src r2r-mount-host-status/dst && echo move-ok
+?v $?
+mv r2r-mount-host-status/dst || echo move-usage
+?v $?
+mkdir r2r-mount-host-status/dst || echo mkdir-failed
+?v $?
+mkdir -p || echo mkdir-usage
+?v $?
+rm r2r-mount-host-status/dst
+rm r2r-mount-host-status
+EOF2
+EXPECT=<<EOF2
+mounted
+0x0
+stat-failed
+0x1
+list-failed
+0x1
+write-usage
+0x1
+bad-offset
+0x1
+bad-offset
+bad-offset
+bad-offset
+bad-offset
+bad-offset
+bad-arity
+plugin-failed
+0x1
+mkdir-ok
+0x0
+move-ok
+0x0
+move-usage
+0x1
+mkdir-failed
+0x1
+mkdir-usage
+0x1
+EOF2
+RUN
+
+NAME=mktemp preserves literal arguments and returns the created path
+FILE=-
+REQUIRE=unix
+CMDS=<<EOF2
+m /host posix
+mktemp "r2r-mount-d name" > $temp
+?v $?
+mi "/host`$temp`"
+rm "`$temp`"
+mktemp -d "r2r-mount dir" > $temp
+?v $?
+mkdir "`$temp`/child" && echo directory-created
+rm "`$temp`/child"
+rm "`$temp`"
+EOF2
+EXPECT=<<EOF2
+0x0
+'f file 0 0x00000000
+0x0
+directory-created
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mktemp errors update status and take the failure branch
+FILE=-
+REQUIRE=unix
+CMDS=<<EOF2
+e log.level=0
+mktemp -d || echo missing-prefix
+?v $?
+mktemp "" || echo empty-prefix
+?v $?
+mktemp r2r-mount-missing-parent/file || echo create-failed
+?v $?
+EOF2
+EXPECT=<<EOF2
+missing-prefix
+0x1
+empty-prefix
+0x1
+create-failed
+0x1
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount attached arguments share quoting and arity rules
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m "/quoted mount" tmp
+m-"/quoted mount" extra || echo rejected
+m-"/quoted mount" && echo unmounted
+m "/escaped mount" tmp
+m-/escaped\ mount && echo unmounted
+m /help tmp
+?=1
+m-?~umount
+?v $?
+m-/help
+m
+EOF2
+EXPECT=<<EOF2
+rejected
+unmounted
+unmounted
+| m- /  umount given path (also m-/)
+0x0
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount expressions and explicit plugin options are unambiguous
+FILE=-
+CMDS=<<EOF2
+f mount_offset=7
+m /named tmp mount_offset
+m /paren tmp '(mount_offset + 1)'
+m /digit tmp 0 123filename
+m /sign tmp 0 -filename
+m /opts tmp label=a=b
+m
+EOF2
+EXPECT=<<EOF2
+tmp	0x7	/named
+tmp	0x8	/paren
+tmp	0x0	/digit	123filename
+tmp	0x0	/sign	-filename
+tmp	0x0	/opts	label=a=b
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount numeric consumers reject invalid expressions
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m /tmp tmp
+mw /tmp/a hello
+mfo /tmp missing || echo bad-offset
+mix 1/0 || echo bad-offset
+mp msdos missing || echo bad-offset
+mg /tmp/a 0 missing || echo bad-size
+mg /tmp/a "" || echo empty-offset
+EOF2
+EXPECT=<<EOF2
+bad-offset
+bad-offset
+bad-offset
+bad-size
+empty-offset
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount base64 paths share validation for listing and dumping
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+m /tmp tmp
+md+ '/tmp/a b'
+mw '/tmp/a b/file' hello
+mdq base64:L3RtcC9hIGI=
+mdq base64: || echo rejected-empty
+mdq base64:L3RtcC9hIGIAYw== || echo rejected-nul
+mg base64:L3RtcC9hIGIAYw== || echo rejected-nul
+EOF2
+EXPECT=<<EOF2
+file
+rejected-empty
+rejected-nul
+rejected-nul
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mount plugin commands preserve their own grammar and reset status
+FILE=-
+CMDS=<<EOF2
+e log.level=0
+?=1
+m:~^tmp$
+?v $?
+?=1
+m:l~^tmp$
+?v $?
+m:9fs? && echo plugin-help
+m: 9fs? && echo plugin-help
+m:unknown? || echo plugin-error
+EOF2
+EXPECT=<<EOF2
+tmp
+0x0
+tmp
+0x0
+plugin-help
+plugin-help
+plugin-error
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mdt sorted directory tree and depth limit
+FILE=-
+CMDS=<<EOF2
+m /tree tmp
+md+ /tree/z
+md+ /tree/a/b
+mw /tree/a/b/file x
+mw /tree/top x
+mdt /tree
+mdt /tree 1
+EOF2
+EXPECT=<<EOF2
+/tree
+|-- a/
+|   `-- b/
+|       `-- file
+|-- top
+`-- z/
+/tree
+|-- a/
+|-- top
+`-- z/
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mdt root mounts and empty directory
+FILE=-
+CMDS=<<EOF2
+m /z tmp
+m /a tmp
+md+ /a/empty
+mw /z/file x
+mdt
+mdt /a/empty
+EOF2
+EXPECT=<<EOF2
+/
+|-- a/
+|   `-- empty/
+`-- z/
+    `-- file
+/a/empty
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mdt rejects missing paths and invalid depth
+FILE=-
+CMDS=<<EOF2
+mdt /missing
+?v $?
+mdt / 0
+?v $?
+mdt / 65
+?v $?
+mdt / -1
+?v $?
+EOF2
+EXPECT=<<EOF2
+0x1
+0x1
+0x1
+0x1
+EOF2
+EXPECT_ERR=<<EOF2
+ERROR: Invalid path
+ERROR: Tree depth must be between 1 and 64
+ERROR: Tree depth must be between 1 and 64
+ERROR: Tree depth must be between 1 and 64
+EOF2
+RUN
+
+NAME=mdt honors scr.utf8 and preserves UTF-8 names
+FILE=-
+CMDS=<<EOF2
+m /tree tmp
+md+ /tree/a
+mw /tree/a/é.c x
+mw /tree/z x
+e scr.utf8=true
+mdt /tree
+e scr.utf8=false
+mdt /tree
+EOF2
+EXPECT=<<EOF2
+/tree
+├── a/
+│   └── é.c
+└── z
+/tree
+|-- a/
+|   `-- é.c
+`-- z
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mc ext2 fast symlink with zero length
+FILE=malloc://0x20400
+CMDS=<<EOF2
+wx 01 @ 0x414
+wx 10 @ 0x428
+wx 53ef @ 0x438
+wx 01 @ 0x44c
+wx 80 @ 0x458
+wx 02 @ 0x460
+wx 03 @ 0x808
+wx ed41 @ 0xc80
+wx 04 @ 0xc85
+wx 05 @ 0xca8
+wx a48100000f @ 0x1180
+wx 06 @ 0x11a8
+wx ffa1 @ 0x1200
+wx 09 @ 0x1204
+wx 68656c6c6f2e747874 @ 0x1228
+wx 02 @ 0x1400
+wx 0c0001022e @ 0x1404
+wx 02 @ 0x140c
+wx 0c0002022e2e00000c @ 0x1410
+wx 1400090168656c6c6f2e747874 @ 0x141c
+wx 0d @ 0x142c
+wx d40304076c696e6b @ 0x1430
+w hello from ext2 @ 0x1800
+m /mnt ext2 0
+mc /mnt/link
+wx 00 @ 0x1204
+mc /mnt/link
+wx 414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141 @ 0x1228
+mc /mnt/link
+md /mnt
+mc /mnt/hello.txt
+EOF2
+EXPECT=<<EOF2
+hello from ext2
+d .
+d ..
+f hello.txt
+f link
+hello from ext2
+EOF2
+EXPECT_ERR=<<EOF2
+ERROR: Cannot open /mnt/link
+ERROR: Cannot open /mnt/link
+EOF2
+RUN
+
+NAME=mount minix directory whose size ends inside an entry
+FILE=malloc://0x3000
+TIMEOUT=10
+CMDS=<<EOF
+# superblock with the MINIX v1 magic 0x137f
+wx 20000c000100010008000000001c08107f13 @ 0x400
+# root inode: directory, size 1, zone numbers 10 and 0xffff
+wx ed410000010000000000000000010a00ffff @ 0x1000
+# zone 10: the entry "." and filler
+wx 01002e00 @ 0x2800
+wow 41 @ 0x2810!0x3f0
+m /mnt minix 0 || echo mount-failed
+# a root of size 16 holds one complete entry
+wx 10 @ 0x1004
+m /tmp minix 0
+md /tmp
+EOF
+EXPECT=<<EOF
+mount-failed
+d .
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=mount reiserfs recovers entries from a corrupt leaf
+FILE=bins/fs/reiserfs-corrupt.img
+CMDS=md /root
+EXPECT=<<EOF
+d .
+l link
+EOF
+RUN
+
+NAME=mount reiserfs symlink to the root directory
+FILE=bins/fs/reiserfs-link-root.img
+CMDS=<<EOF
+md /root
+mc /root/hello.txt
+mc /root/link
+EOF
+EXPECT=<<EOF
+d .
+f hello.txt
+l link
+hello from reiserfs
+
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot open /root/link
+EOF
+RUN
+
+NAME=mount xfs clamps corrupt symlink sizes
+FILE=bins/fs/xfs-symlink-size.img
+CMDS=<<EOF
+m /mnt xfs 0
+md /mnt
+mc /mnt/link
+e io.cache=true
+wx 01 @ 0x1205
+wx 0000000000000100 @ 0x1238
+wow 2e2f @ 0x1264!156
+mc /mnt/link
+EOF
+EXPECT=<<EOF
+d .
+d ..
+f file
+l link
+hello from xfs
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot open /mnt/link
+EOF
+RUN
+
+NAME=mount iso9660 joliet volume with rock ridge names
+FILE=bins/fs/iso-joliet-rockridge.iso
+CMDS=md /root
+EXPECT=<<EOF
+d .
+d ..
+f A
+EOF
+RUN
+
+NAME=m udf mounts and lists udf.img
+FILE=bins/fs/udf.img
+CMDS=<<EOF2
+m /u udf 0
+md /u
+md /u/bin
+mc /u/README.md
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f README.md
+d bin
+d etc
+d .
+d ..
+f ls
+This is an ISO9660 filesystem
+
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=mc twice on ubifs with unknown volume size
+FILE=bins/fs/ubifs-oversize.img
+CMDS=<<EOF2
+md /root
+mc /root/file
+mc /root/file
+?e alive
+EOF2
+EXPECT=<<EOF2
+r file
+hello world
+hello world
+alive
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=ubifs master node with a huge declared length
+FILE=bins/fs/ubifs-oversize.img
+CMDS=<<EOF
+e io.cache=true
+wx ffffff7f @ 0x2010
+m /mnt ubifs 0
+md /mnt
+EOF
+EXPECT=<<EOF
+r file
+EOF
+RUN
+
+NAME=mg ubifs file range in multiple chunks
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF2
+m /mnt ubifs 0
+b 8
+mg /mnt/etc/banner 250 30
+cat banner
+?e
+rm banner
+EOF2
+EXPECT=<<EOF2
+
+ ----------------------------
+EOF2
+RUN
+
+NAME=ubifs inode numbers above 29 bits
+FILE=bins/fs/ubifs-oversize.img
+CMDS=<<EOF2
+e io.cache=true
+wx 02000020 @ 0x40c8
+wx 02000020 @ 0x40f8
+wx 02000020 @ 0x4198
+m /mnt ubifs 0
+md /mnt
+EOF2
+EXPECT=<<EOF2
+r file
+EOF2
+RUN
+
+NAME=ubifs ignores a stale master node in LEB 1
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF2
+e io.cache=true
+wx ffffffff @ 0x3ffb0
+m /mnt ubifs 0
+md /mnt/etc~banner$
+EOF2
+EXPECT=<<EOF2
+r banner
+EOF2
+RUN
+
+NAME=ubifs follows the root of the newest master node
+FILE=bins/fs/ubifs.img
+ARGS=-n
+CMDS=<<EOF2
+e io.cache=true
+wx ffffffff @ 0x7ff30
+m /mnt ubifs 0
+EOF2
+EXPECT=
+EXPECT_ERR=<<EOF2
+ERROR: Invalid UBIFS index
+EOF2
+RUN
+
+NAME=md path with a trailing /..
+FILE=--
+CMDS=<<EOF
+m /t tmp
+mw /t/h hello
+md /t/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/..
+md /t/h/../
+EOF
+EXPECT=<<EOF
+r h
+r h
+EOF
+RUN
+
+NAME=mmc text view and preview with lines wider than 512 columns
+FILE=malloc://4096
+CMDS=<<EOF2
+e scr.cols=1200
+e scr.rows=40
+b 3000
+wow 41
+m /t tmp
+mw /t/f `pr`
+<jvtqItq
+mmc /t / @e:scr.interactive=true > /dev/null
+?e done
+EOF2
+EXPECT=<<EOF2
+done
+EOF2
+RUN
+
+NAME=xfs extent count bounded by the inode
+FILE=malloc://135168
+CMDS=<<EOF2
+wx 58465342000010 @ 0x0
+wx 10 @ 0x3f
+wx 21 @ 0x57
+wx 0c09080406 @ 0x78
+wx 494e41ed0202 @ 0x1000
+wx 10 @ 0x103e
+wx 01 @ 0x104f
+wx 400001 @ 0x1071
+wx 494e81a40202 @ 0x1100
+wx 06 @ 0x113f
+wx 01 @ 0x114f
+wx 600001 @ 0x1171
+wx 110466696c65 @ 0x2017
+wx 01 @ 0x2ffb
+wx 68656c6c6f0a @ 0x3000
+m /root xfs 0
+md /root
+mc /root/file
+wx 7fffffff @ 0x104c
+m /bad xfs 0
+?v $?
+EOF2
+EXPECT=<<EOF2
+f file
+hello
+
+0x1
+EOF2
+RUN
+
+NAME=xfs btree record count bounded by the inode and the block
+FILE=malloc://135168
+CMDS=<<EOF2
+wx 58465342000010 @ 0x0
+wx 10 @ 0x3f
+wx 21 @ 0x57
+wx 0c09080406 @ 0x78
+wx 494e41ed0203 @ 0x1000
+wx 10 @ 0x103e
+wx 01 @ 0x104f
+wx 010001 @ 0x1065
+wx 04 @ 0x1077
+wx 494e81a40202 @ 0x1100
+wx 06 @ 0x113f
+wx 01 @ 0x114f
+wx 600001 @ 0x1171
+wx 110466696c65 @ 0x2017
+wx 01 @ 0x2ffb
+wx 68656c6c6f0a @ 0x3000
+wx 424d4150 @ 0x4000
+wx 01 @ 0x4007
+wx 400001 @ 0x4025
+m /root xfs 0
+md /root
+mc /root/file
+wx ffff @ 0x4006
+m /leaf xfs 0
+?v $?
+wx 0001 @ 0x4006
+wx ffff @ 0x1066
+m /bad xfs 0
+?v $?
+EOF2
+EXPECT=<<EOF2
+f file
+hello
+
+0x1
+0x1
+EOF2
+RUN
+
+NAME=fb file list record past the end of the list
+FILE=malloc://2048
+CMDS=<<EOF2
+wx 46424152010601000100000000000000
+wx fe00020000000500000000000000612e74787400 @ 0x200
+wx fe00020000000500000000000000622e74787400 @ 0x300
+w hello @ 0x400
+m /mnt fb 0
+md /mnt
+mc /mnt/a.txt
+mc /mnt/b.txt
+EOF2
+EXPECT=<<EOF2
+f a.txt
+hello
+EOF2
+RUN
+
+NAME=mount udf embedded file data is bounded by its entry
+FILE=bins/fs/udf.img
+TIMEOUT=10
+CMDS=<<EOF2
+e log.level=0
+e io.cache=true
+m /mnt udf 0
+mc /mnt/README.md
+# Store README.md's 30 bytes inside its file entry (AD_IN_ICB, alloc_descs_length=30).
+wx 3302 @ 0x84822
+wx 1e000000 @ 0x848ac
+wx 5468697320697320616e2049534f393636302066696c6573797374656d0a @ 0x849ac
+mc /mnt/README.md
+# A file_size larger than the embedded data must not read past it.
+wx 0008000000000000 @ 0x84838
+mc /mnt/README.md || echo read-failed
+# An ext_attr_length that does not fit in the entry must be rejected.
+wx 00100000 @ 0x848a8
+mc /mnt/README.md || echo open-failed
+EOF2
+EXPECT=<<EOF2
+This is an ISO9660 filesystem
+
+This is an ISO9660 filesystem
+
+read-failed
+open-failed
+EOF2
+EXPECT_ERR=
+RUN
+
+NAME=jfs cyclic dtree leaf chain ends the directory
+FILE=malloc://65536
+CMDS=<<EOF2
+wx 4a46533101 @ 0x8000
+wx 1000000c @ 0x8011
+wx 010000000c @ 0xbc00
+wx 40 @ 0xc435
+wx 0100000000000000010000000e @ 0xc4f8
+wx 80 @ 0xc835
+wx 80 @ 0xd035
+wx 0200030012 @ 0xd0f0
+wx 01000000010000000b @ 0xd104
+wx 0e @ 0xe000
+wx 020200000001 @ 0xe010
+wx 0203 @ 0xe020
+wx 04000000ff0568006500 @ 0xe040
+wx 04000000ff0577006f00 @ 0xe060
+m /a jfs 0
+md /a
+# zero length entries in the cycle must not recurse
+wx 00 @ 0xe045
+wx 00 @ 0xe065
+m /b jfs 0
+md /b
+?e done
+EOF2
+EXPECT=<<EOF2
+f he
+f wo
+done
+EOF2
+RUN
+
+NAME=m bfs rejects a block shift that does not match the block size
+FILE=malloc://1024
+CMDS=<<EOF2
+wx 31534642454749420004000020000000 @ 0x220
+wx 00010000 @ 0x240
+wx 20000000 @ 0x24c
+wx 0000000000000100 @ 0x274
+wx 0000000000000100 @ 0x48
+m /mnt bfs 0
+m
+EOF2
+EXPECT=
+EXPECT_ERR=<<EOF2
+ERROR: Invalid BFS block shift: does not match the block size
+EOF2
+RUN
+
+NAME=mfn and mfo stop on a FAT directory that contains itself
+FILE=malloc://4096
+CMDS=<<EOF2
+wx 020101000100000000f8 @ 0xc
+wx 08000000010000000000000002 @ 0x20
+wx 4641543332202020 @ 0x52
+wx f8ffff0fffffff0fffffff0fffffff0fffffff0fffffff0f @ 0x200
+wx 444952202020202020202010 @ 0x400
+wx 03 @ 0x41a
+wx 4e4f54452020202054585420 @ 0x600
+wx 05000f000000494e4e455220202020202010 @ 0x61a
+wx 03 @ 0x63a
+wx 68656c6c6f2066726f6d206661740a @ 0xa00
+m /root fat 0
+mfn /root *.txt~?
+mfo /root 0xa00~?
+EOF2
+EXPECT=<<EOF2
+63
+63
+EOF2
+EXPECT_ERR=<<EOF2
+WARN: Search stopped: directory tree is too large or too deep
+WARN: Search stopped: directory tree is too large or too deep
+EOF2
+RUN
+
+NAME=mdt bounds the tree of a directory that contains itself twice
+FILE=malloc://4096
+CMDS=<<EOF2
+wx 00020101000100000000f8 @ 0xb
+wx 0800000001000000000000000200 @ 0x20
+w FAT32    @ 0x52
+wx f8ffff0fffffff0fffffff0fffffff0f @ 0x200
+wx 44495220202020202020201000000000000000000000000000000300 @ 0x400
+wx 41202020202020202020201000000000000000000000000000000300 @ 0x600
+wx 42202020202020202020201000000000000000000000000000000300 @ 0x620
+m /mnt fat 0
+mdt /mnt 2
+?v $?
+mdt /mnt~?
+EOF2
+EXPECT=<<EOF2
+/mnt
+`-- dir/
+    |-- a/
+    `-- b/
+0x0
+16385
+EOF2
+EXPECT_ERR=<<EOF2
+WARN: Tree truncated after 16384 entries, use a smaller depth or md to list subdirectories
+EOF2
+RUN
+
+NAME=iso9660 continuation area pointing back to itself
+FILE=malloc://0xb000
+CMDS=<<EOF2
+wx 01434430303101 @ 0x8000
+wx 220012000000000000120008000000000800000000000000000200000000000001 @ 0x809c
+wx ff434430303101 @ 0x8800
+wx 3b00120000000000001200080000000008000000000000000002000000000000010053500701beef00455212010a000001525249505f3139393141 @ 0x9000
+wx 22001200000000000012000800000000080000000000000000020000000000000101 @ 0x903b
+wx 480013000000000000130c0000000000000c00000000000000000000000000000b48454c4c4f2e5458543b31 @ 0x905d
+wx 43451c01140000000000001400000000000000004000000000000040 @ 0x9089
+wx 50582401a4810000000081a40100000000000001 @ 0xa000
+wx 43451c01150000000000001500000000000000004000000000000040 @ 0xa024
+wx 4e4d0e010068656c6c6f2e74787453540401 @ 0xa800
+m /chain iso9660 0
+md /chain
+wx 14 @ 0xa028
+m /loop iso9660 0
+md /loop
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f hello.txt
+d .
+d ..
+EOF2
+RUN
+
+NAME=iso9660 rock ridge NM entry length past the system use area
+FILE=malloc://0xa000
+CMDS=<<EOF2
+wx 01434430303101 @ 0x8000
+wx 220012 @ 0x809c
+wx 08 @ 0x80a7
+wx 0200000000000001 @ 0x80b5
+wx ff434430303101 @ 0x8800
+wx 320012 @ 0x9000
+wx 08 @ 0x900b
+wx 02000000000000010053500701beef00455208010000000100220012 @ 0x9019
+wx 08 @ 0x903d
+wx 0200000000000001013000130000000000000004 @ 0x904b
+wx 0446494c45004e4d8001004142434445 @ 0x9074
+wx 6865790a @ 0x9800
+m /mnt iso9660 0
+md /mnt
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f FILE
+EOF2
+RUN
+
+NAME=iso9660 rock ridge CE entry shorter than its body
+FILE=malloc://0xa000
+CMDS=<<EOF2
+wx 01434430303101 @ 0x8000
+wx 220012 @ 0x809c
+wx 08 @ 0x80a7
+wx 0200000000000001 @ 0x80b5
+wx ff434430303101 @ 0x8800
+wx 320012 @ 0x9000
+wx 08 @ 0x900b
+wx 02000000000000010053500701beef00455208010000000100220012 @ 0x9019
+wx 08 @ 0x903d
+wx 0200000000000001014200130000000000000004 @ 0x904b
+wx 0446494c450043450401130000000000001300010000000001000a0000000000000a @ 0x9074
+wx 4e4d0a0100424f475553 @ 0x9900
+m /mnt iso9660 0
+md /mnt
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f FILE
+EOF2
+RUN
+
+NAME=iso9660 rock ridge PX entry too short for the mode
+FILE=malloc://0xa000
+CMDS=<<EOF2
+wx 01434430303101 @ 0x8000
+wx 220012 @ 0x809c
+wx 08 @ 0x80a7
+wx 0200000000000001 @ 0x80b5
+wx ff434430303101 @ 0x8800
+wx 320012 @ 0x9000
+wx 08 @ 0x900b
+wx 02000000000000010053500701beef00455208010000000100220012 @ 0x9019
+wx 08 @ 0x903d
+wx 0200000000000001012e00130000000000000004 @ 0x904b
+wx 0446494c45005058040100400401 @ 0x9074
+m /mnt iso9660 0
+md /mnt
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f FILE
+EOF2
+RUN
+
+NAME=iso9660 rock ridge name split across NM entries
+FILE=malloc://0xa000
+CMDS=<<EOF2
+wx 01434430303101 @ 0x8000
+wx 220012 @ 0x809c
+wx 08 @ 0x80a7
+wx 0200000000000001 @ 0x80b5
+wx ff434430303101 @ 0x8800
+wx 320012 @ 0x9000
+wx 08 @ 0x900b
+wx 02000000000000010053500701beef00455208010000000100220012 @ 0x9019
+wx 08 @ 0x903d
+wx 0200000000000001013400130000000000000004 @ 0x904b
+wx 0446494c45004e4d07010141424e4d0701004344 @ 0x9074
+m /mnt iso9660 0
+md /mnt
+EOF2
+EXPECT=<<EOF2
+d .
+d ..
+f ABCD
+EOF2
+RUN
+
+NAME=iso9660 rock ridge SL component length past the entry
+FILE=malloc://0xa000
+CMDS=<<EOF2
+wx 01434430303101 @ 0x8000
+wx 220012 @ 0x809c
+wx 08 @ 0x80a7
+wx 0200000000000001 @ 0x80b5
+wx ff434430303101 @ 0x8800
+wx 320012 @ 0x9000
+wx 08 @ 0x900b
+wx 02000000000000010053500701beef00455208010000000100220012 @ 0x9019
+wx 08 @ 0x903d
+wx 0200000000000001013c00130000000000000004 @ 0x904b
+wx 014150580c01ffa100000000a1ff534c0e0100000446494c4500ff41 @ 0x9074
+wx 260013 @ 0x9090
+wx 04 @ 0x909a
+wx 0446494c45 @ 0x90b0
+wx 6865790a @ 0x9800
+m /mnt iso9660 0
+mc /mnt/A
+EOF2
+EXPECT=<<EOF2
+hey
+
+EOF2
+RUN

@@ -2,6 +2,67 @@ NAME=pvj JSON indent - crash
 FILE=-
 CMDS=pvj ~{
 EXPECT=<<EOF
-[{"value":0,"string":""}]
+[{"value":0,"string":"","address":0}]
+EOF
+RUN
+
+NAME=ptb consumes complete 64-bit words
+FILE=malloc://16
+CMDS=<<EOF
+wx 0000000000000000ffffffff
+ptb 12~?
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=pth counts seconds since 1904
+FILE=malloc://12
+CMDS=<<EOF
+e cfg.bigendian=true
+wx 00000000ffffffff7c25b080
+pth 12
+EOF
+EXPECT=<<EOF
+Fri Jan  1 00:00:00 1904
+Mon Feb  6 06:28:15 2040
+Thu Jan  1 00:00:00 1970
+EOF
+RUN
+
+NAME=pve step smaller than byteorder digits
+FILE=malloc://16
+CMDS=<<EOF
+wx 0102030405060708090a0b0c0d0e0f10
+pve1 4321 15~?
+pve2 21 4
+pve0 4321 4
+EOF
+EXPECT=<<EOF
+15
+0x00000000  513 (0x00000201)
+0x00000002  1027 (0x00000403)
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Invalid size
+EOF
+RUN
+
+NAME=prz stops at the block end after resize
+FILE=malloc://512
+CMDS=<<EOF
+b 512
+wow 41
+b 15
+prz
+?e
+b 31
+prz
+?e
+EOF
+EXPECT=<<EOF
+AAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 EOF
 RUN

@@ -1,23 +1,23 @@
-NAME=omp twice bug
+NAME=omr twice bug
 FILE=malloc://1024
 CMDS=<<EOF
-omf 1 rw
+omp 1 rw
 wx 9090
 p8 2
 on malloc://1024
 p8 2
 om
-omp 1
+omr 1
 om
 p8 2
 EOF
 EXPECT=<<EOF
 9090
 0000
-* 2 fd: 4 +0x00000000 0x00000000 - 0x000003ff rw- 
-- 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rw- 
-* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rw- 
-- 2 fd: 4 +0x00000000 0x00000000 - 0x000003ff rw- 
+* 2 fd: 4 +0x00000000 0x00000000 - 0x000003ff rw- rw-
+- 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rw- rw-
+* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rw- rw-
+- 2 fd: 4 +0x00000000 0x00000000 - 0x000003ff rw- rw-
 9090
 EOF
 RUN
@@ -82,21 +82,21 @@ e io.va=true
 x 32 @ 0x8ff0
 EOF
 EXPECT=<<EOF
-- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+- offset -  F0F1 F2F3 F4F5 F6F7 F8F9 FAFB FCFD FEFF  0123456789ABCDEF
 0x00008ff0  ffff ffff ffff ffff ffff ffff ffff ffff  ................
 0x00009000  0000 0000 0000 0000 0000 0000 0000 0000  ................
 EOF
 RUN
 
-NAME=omfg all rwx
+NAME=ompg all rwx
 FILE=-
 CMDS=<<EOF
 e scr.null=true
 o malloc://32 0x400
 e scr.null=false
-omfg-rwx
+ompg-rwx
 om~rwx
-omfg
+ompg
 om~rwx~?
 EOF
 EXPECT=<<EOF
@@ -119,16 +119,16 @@ true
 EOF
 RUN
 
-NAME=omf one mapping
+NAME=omp one mapping
 FILE=-
 CMDS=<<EOF
-omf 1 rwx
+omp 1 rwx
 om~rwx~?
-omf 1 r-x
+omp 1 r-x
 om~r-x~?
-omf 1 --x
+omp 1 --x
 om~--x~?
-omf 1 -w-
+omp 1 -w-
 om~-w-~?
 EOF
 EXPECT=<<EOF
@@ -158,7 +158,7 @@ EXPECT=<<EOF
   0x0804805b   unmapped
   0x0804805c   unmapped
 
-- offset -   0 1  2 3  4 5  6 7  8 9  A B  C D  E F  0123456789ABCDEF
+- offset -  5455 5657 5859 5A5B 5C5D 5E5F 6061 6263  456789ABCDEF0123
 0x08048054  b32a 31c0 40cd 80                        .*1.@..         
 EOF
 RUN
@@ -176,13 +176,82 @@ $initial_map |.
 om               # Output must be the same as initial om
 EOF
 EXPECT=<<EOF
-- 3 fd: 3 +0x00000000 0x08048000 - 0x08048a67 r-x fmap.LOAD0
-- 2 fd: 3 +0x00000ed4 0x08049ed4 - 0x0804a01f r-- fmap.LOAD1
-- 1 fd: 4 +0x00000000 0x0804a020 - 0x0804a023 rw- mmap.LOAD1
+* 3 fd: 3 +0x00000000 0x08048000 - 0x08048a67 r-x r-x fmap.LOAD0
+- 2 fd: 3 +0x00000ed4 0x08049ed4 - 0x0804a01f r-- rw- fmap.LOAD1
+- 1 fd: 4 +0x00000000 0x0804a020 - 0x0804a023 rw- rw- mmap.LOAD1
 ----
 ----
-- 3 fd: 3 +0x00000000 0x08048000 - 0x08048a67 r-x fmap.LOAD0
-- 2 fd: 3 +0x00000ed4 0x08049ed4 - 0x0804a01f r-- fmap.LOAD1
-- 1 fd: 4 +0x00000000 0x0804a020 - 0x0804a023 rw- mmap.LOAD1
+* 3 fd: 3 +0x00000000 0x08048000 - 0x08048a67 r-x r-x fmap.LOAD0
+- 2 fd: 3 +0x00000ed4 0x08049ed4 - 0x0804a01f r-- r-- fmap.LOAD1
+- 1 fd: 4 +0x00000000 0x0804a020 - 0x0804a023 rw- rw- mmap.LOAD1
+EOF
+RUN
+
+NAME=rejected wrap-around map leaves no stale mapref in the bank
+FILE=malloc://1024
+CMDS=<<EOF
+om 3 0xfffffffffffffe00 0x400 0
+om
+om-2
+om-3
+om 3 0xfffffffffffff000 0x2000 0xfffffffffffff000
+om
+EOF
+EXPECT=<<EOF
+- 3 fd: 3 +0x00000000 0xfffffffffffffe00 - 0xffffffffffffffff rwx rwx
+* 2 fd: 3 +0x00000200 0x00000000 - 0x000001ff rwx rwx
+- 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx rwx
+* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx rwx
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot add map
+EOF
+RUN
+
+NAME=omp and oma. with attribute strings
+FILE=malloc://1024
+CMDS=<<EOF
+omp 1 rwx heap+paged+private
+omp 1 rwx bogus
+oma. stack
+oma.
+om
+EOF
+EXPECT=<<EOF
+stack
+* 1 fd: 3 +0x00000000 0x00000000 - 0x000003ff rwx rwx
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Invalid meta type string
+EOF
+RUN
+
+NAME=omo lists overlay chunks from applied relocs
+FILE=bins/elf/analysis/pie
+ARGS=-e bin.relocs.apply=true
+CMDS=<<EOF
+omo~?
+omo*~?
+omoj~{[0].addr}
+omo?~?
+EOF
+EXPECT=<<EOF
+4
+4
+5948
+1
+EOF
+RUN
+
+NAME=map names cannot carry commands into om* and om**
+FILE=-
+CMDS=<<EOF
+'omn 0 a;s 1#`x`
+om*
+om**
+EOF
+EXPECT=<<EOF
+omu 3 0x00000000 0x00000200 0x00000000 rwx a_s 1__x_
+f iomap.a_s 1__x_=0x0
 EOF
 RUN

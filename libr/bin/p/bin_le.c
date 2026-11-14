@@ -1,14 +1,14 @@
-/* radare - LGPL - Copyright 2019 - GustavoLCR */
+/* radare - LGPL - Copyright 2019-2024 - GustavoLCR */
 
 #include <r_bin.h>
 #include "../format/le/le.h"
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut64 length = r_buf_size (b);
 	if (length < 2) {
 		return false;
 	}
-	ut16 idx = r_buf_read_le16_at (b, 0x3c);
+	ut32 idx = r_buf_read_le32_at (b, 0x3c);
 	if ((ut64)idx + 26 < length) {
 		ut8 buf[2];
 		r_buf_read_at (b, 0, buf, sizeof (buf));
@@ -25,30 +25,30 @@ static bool check_buffer(RBinFile *bf, RBuffer *b) {
 	return false;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
-	r_return_val_if_fail (bf && bin_obj && buf, false);
-	r_bin_le_obj_t *res = r_bin_le_new_buf (buf);
+static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
+	R_RETURN_VAL_IF_FAIL (bf && buf, false);
+	RBinLEObj *res = r_bin_le_new_buf (buf);
 	if (res) {
-		*bin_obj = res;
+		bf->bo->bin_obj = res;
 		return true;
 	}
 	return false;
 }
 
 static void destroy(RBinFile *bf) {
-	r_bin_le_free (bf->o->bin_obj);
+	r_bin_le_free (bf->bo->bin_obj);
 }
 
-static void header(RBinFile *bf) {
-	r_return_if_fail (bf && bf->rbin && bf->o && bf->o->bin_obj);
-	RBin *rbin = bf->rbin;
-	r_bin_le_obj_t *bin = bf->o->bin_obj;
+static char *header(RBinFile *bf, int mode) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->rbin && bf->bo && bf->bo->bin_obj, NULL);
+	RBinLEObj *bin = bf->bo->bin_obj;
 	LE_image_header *h = bin->header;
-	PrintfCallback p = rbin->cb_printf;
-	if (!h || !p) {
-		return;
+	if (!h) {
+		return NULL;
 	}
-	p ("Signature: %2s\n", h->magic);
+	RStrBuf *sb = r_strbuf_new ("");
+#define p(f,...) r_strbuf_appendf (sb, f, ##__VA_ARGS__)
+	p ("Signature: %.2s\n", h->magic);
 	p ("Byte Order: %s\n", h->border ? "Big" : "Little");
 	p ("Word Order: %s\n", h->worder ? "Big" : "Little");
 	p ("Format Level: %u\n", h->level);
@@ -99,66 +99,139 @@ static void header(RBinFile *bf) {
 	p ("Demand pages: %u\n", h->instdemand);
 	p ("Heap Size: 0x%04x\n", h->heapsize);
 	p ("Stack Size: 0x%04x\n", h->stacksize);
-}
-
-static RList *sections(RBinFile *bf) {
-	return r_bin_le_get_sections (bf->o->bin_obj);
+#undef p
+	return r_strbuf_drain (sb);
 }
 
 static RList *entries(RBinFile *bf) {
-	return r_bin_le_get_entrypoints (bf->o->bin_obj);
+	return r_bin_le_get_entrypoints (bf->bo->bin_obj);
 }
 
-static RList *symbols(RBinFile *bf) {
-	return r_bin_le_get_symbols (bf->o->bin_obj);
+static bool symbols_vec(RBinFile *bf) {
+	r_bin_le_load_symbols (bf->bo->bin_obj, &bf->bo->symbols_vec);
+	return true;
 }
 
-static RList *imports(RBinFile *bf) {
-	return r_bin_le_get_imports (bf->o->bin_obj);
+static bool imports_vec(RBinFile *bf) {
+	r_bin_le_load_imports (bf->bo->bin_obj, &bf->bo->imports_vec);
+	return true;
 }
 
 static RList *libs(RBinFile *bf) {
-	return r_bin_le_get_libs (bf->o->bin_obj);
+	return r_bin_le_get_libs (bf->bo->bin_obj);
 }
 
-static RList *relocs(RBinFile *bf) {
-	return r_bin_le_get_relocs (bf->o->bin_obj);
+static RVecRBinReloc *relocs(RBinFile *bf) {
+	return r_bin_le_get_relocs (bf->bo->bin_obj);
+}
+
+static RVecRBinReloc *patch_relocs(RBinFile *bf) {
+	RBin *b = bf->rbin;
+	RBinLEObj *bin = bf->bo->bin_obj;
+	LE_image_header *h = bin->header;
+
+	RVecRBinReloc *all_relocs = relocs (bf);
+	if (!all_relocs) {
+		return NULL;
+	}
+	RBinReloc *r;
+	R_VEC_FOREACH (all_relocs, r) {
+		// imports have nothing to patch, but must stay in the table
+		if (r->import || r->symbol) {
+			continue;
+		}
+		int size = 0, offset = 0;
+		ut8 buf[8] = {0};
+		switch (r->type) {
+			case R_BIN_RELOC_8:
+				size = 1;
+				buf[0] = r->addend & 0xff;
+				break;
+			case R_BIN_RELOC_16:
+				size = 2;
+				r_write_ble16 (buf, r->addend & 0xffff, h->worder);
+				break;
+			case R_BIN_RELOC_32:
+				size = 4;
+				r_write_ble32 (buf, r->addend, h->worder);
+				break;
+			case R_BIN_RELOC_48:
+				size = 5;
+				r_write_ble64 (buf, r->addend, h->worder);
+				if (h->worder) {
+					offset = 3;
+				}
+			default:
+				R_LOG_WARN ("Unsupported reloc type %d", r->type);
+				break;
+		}
+		if (size) {
+			if (!b->iob.overlay_write_at (b->iob.io, r->vaddr, buf + offset, size)) {
+				R_LOG_ERROR ("write error at 0x%"PFMT64x, r->vaddr);
+			}
+		}
+	}
+	return all_relocs;
 }
 
 static RBinInfo *info(RBinFile *bf) {
 	RBinInfo *info = R_NEW0 (RBinInfo);
-	if (info) {
-		r_bin_le_obj_t *bin = bf->o->bin_obj;
-		LE_image_header *h = bin->header;
-		info->bits = 32;
-		info->type = strdup (bin->type);
-		info->cpu = strdup (bin->cpu);
-		info->os = strdup (bin->os);
-		info->arch = strdup (bin->arch);
-		info->file = strdup (r_str_get (bin->filename));
-		info->big_endian = h->worder;
-		info->has_va = true;
-		info->baddr = 0;
-	}
+	RBinLEObj *bin = bf->bo->bin_obj;
+	LE_image_header *h = bin->header;
+	info->bits = 32;
+	info->type = strdup (bin->type);
+	info->cpu = strdup (bin->cpu);
+	info->os = strdup (bin->os);
+	info->arch = strdup (bin->arch);
+	info->file = strdup (r_str_get (bin->filename));
+	info->big_endian = h->worder;
+	info->has_va = true;
+	info->baddr = 0;
 	return info;
 }
 
+static bool sections_vec(RBinFile *bf) {
+	return r_bin_le_load_sections (bf->bo->bin_obj, &bf->bo->sections_vec);
+}
+
+static bool load_resources(RBinFile *bf) {
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo, false);
+	RBinLEObj *bin = bf->bo->bin_obj;
+	if (!bin || !r_bin_le_load_resources (bin, &bf->bo->resources_vec)) {
+		return false;
+	}
+	RBinResource *resource;
+	R_VEC_FOREACH (&bf->bo->resources_vec, resource) {
+		ut64 paddr;
+		if (r_add_overflow (resource->paddr, bf->bo->loadaddr, &paddr)) {
+			return false;
+		}
+		resource->paddr = paddr;
+	}
+	return true;
+}
+
 RBinPlugin r_bin_plugin_le = {
-	.name = "le",
-	.desc = "LE/LX format r2 plugin",
-	.author = "GustavoLCR",
-	.license = "LGPL3",
-	.check_buffer = &check_buffer,
-	.load_buffer = &load_buffer,
+	.meta = {
+		.name = "le",
+		.desc = "Linear Executables from OS/2, Windows VxD and DOS extenders",
+		.author = "GustavoLCR",
+		.license = "LGPL-3.0-only",
+	},
+	.weak_guess = true,
+	.check = &check,
+	.load = &load,
 	.destroy = &destroy,
 	.info = &info,
 	.header = &header,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
+	.load_resources = &load_resources,
 	.entries = &entries,
-	.symbols = &symbols,
-	.imports = &imports,
+	.symbols_vec = &symbols_vec,
+	.imports_vec = &imports_vec,
 	.libs = &libs,
 	.relocs = &relocs,
+	.patch_relocs = &patch_relocs,
 	.minstrlen = 4
 	// .regstate = &regstate
 };

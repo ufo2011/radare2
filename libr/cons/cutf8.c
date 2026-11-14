@@ -3,7 +3,7 @@
 // Copypasta from http://www.linuxquestions.org/questions/programming-9/get-cursor-position-in-c-947833/
 #include <r_cons.h>
 
-#if __UNIX__
+#if R2__UNIX__
 #include <stdio.h>
 #include <fcntl.h>
 #if HAVE_PTY
@@ -52,7 +52,7 @@ static inline int rd(const int fd) {
 /* Return a new file descriptor to the current TTY.
  */
 int current_tty(void) {
-#if __WINDOWS__
+#if R2__WINDOWS__
 	return 0;
 #elif __wasi__ || __EMSCRIPTEN__
 	return 0;
@@ -60,13 +60,7 @@ int current_tty(void) {
 	return 1;
 #else
 	int fd;
-	const char *dev = ttyname(STDERR_FILENO);
-#if 0
-	if (!dev)
-		dev = ttyname(STDIN_FILENO);
-	if (!dev)
-		dev = ttyname(STDERR_FILENO);
-#endif
+	const char *dev = ttyname (STDERR_FILENO);
 	if (!dev) {
 		errno = ENOTTY;
 		return -1;
@@ -88,7 +82,7 @@ int current_tty(void) {
  * Actual errno will be unchanged.
  */
 static int cursor_position(const int tty, int *const rowptr, int *const colptr) {
-	struct termios  saved, temporary;
+	struct termios saved, temporary;
 	int ret, res, rows, cols, saved_errno;
 
 	/* Bad tty? */
@@ -159,7 +153,7 @@ static int cursor_position(const int tty, int *const rowptr, int *const colptr) 
 		/* Parse rows. */
 		rows = 0;
 		res = rd (tty);
-		while (IS_DIGIT (res)) {
+		while (isdigit (res)) {
 			rows = 10 * rows + res - '0';
 			res = rd(tty);
 		}
@@ -174,7 +168,7 @@ static int cursor_position(const int tty, int *const rowptr, int *const colptr) 
 		if (res == -1) {
 			break;
 		}
-		while (IS_DIGIT(res)) {
+		while (isdigit(res)) {
 			cols = 10 * cols + res - '0';
 			res = rd(tty);
 		}
@@ -234,7 +228,7 @@ R_API bool r_cons_is_utf8(void) {
 #endif
 #if R_UTF8_DETECT_LOCALE
 	const char *ctype = setlocale (LC_CTYPE, NULL);
-	if ((ctype != NULL) && (ctype = strchr (ctype, '.')) && ctype++ &&
+	if ((ctype) && (ctype = strchr (ctype, '.')) && ctype++ &&
 		(!r_str_casecmp (ctype, "UTF-8") || !r_str_casecmp (ctype, "UTF8"))) {
 		return true;
 	}
@@ -263,7 +257,7 @@ R_API bool r_cons_is_utf8(void) {
 }
 #else
 R_API bool r_cons_is_utf8(void) {
-#if __WINDOWS__
+#if R2__WINDOWS__
 	return GetConsoleOutputCP () == CP_UTF8;
 #else
 	return true;

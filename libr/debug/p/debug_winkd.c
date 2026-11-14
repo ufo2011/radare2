@@ -15,53 +15,77 @@
 
 #include <r_asm.h>
 #include <r_debug.h>
+#include <r_core.h>
 #include <winkd.h>
 #include <kd.h>
 
-static WindCtx *wctx = NULL;
+typedef struct plugin_data_t {
+	WindCtx *wctx;
+} PluginData;
 
 static bool r_debug_winkd_step(RDebug *dbg) {
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return false;
+	}
+	return !!winkd_step (pd->wctx);
+}
+
+static bool r_debug_winkd_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return false;
+	}
+
+	int ret = winkd_read_reg (pd->wctx, buf, size);
+	if (!ret || size != ret) {
+		return false;
+	}
+
+	r_reg_read_regs (dbg->reg, buf, ret);
+	// Report as if no register has been written as we've already updated the arena here
 	return true;
 }
 
-static int r_debug_winkd_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
-	int ret = winkd_read_reg(wctx, buf, size);
-	if (!ret || size != ret) {
-		return -1;
-	}
-	r_reg_read_regs (dbg->reg, buf, ret);
-	// Report as if no register has been written as we've already updated the arena here
-	return 0;
-}
-
-static int r_debug_winkd_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
-	if (!dbg->reg) {
+static bool r_debug_winkd_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd || !dbg->reg) {
 		return false;
 	}
 	int arena_size;
 	ut8 *arena = r_reg_get_bytes (dbg->reg, R_REG_TYPE_ALL, &arena_size);
 	if (!arena) {
-		eprintf ("Could not retrieve the register arena!\n");
+		R_LOG_ERROR ("Could not retrieve the register arena");
 		return false;
 	}
-	int ret = winkd_write_reg (wctx, arena, arena_size);
+	bool res = winkd_write_reg (pd->wctx, arena, arena_size);
 	free (arena);
-	return ret;
+	return res;
 }
 
 static bool r_debug_winkd_continue(RDebug *dbg, int pid, int tid, int sig) {
-	return winkd_continue (wctx);
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return false;
+	}
+	return winkd_continue (pd->wctx);
 }
 
 static RDebugReasonType r_debug_winkd_wait(RDebug *dbg, int pid) {
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return 0;
+	}
+	RCore *core = dbg->coreb.core;
+
 	RDebugReasonType reason = R_DEBUG_REASON_UNKNOWN;
 	kd_packet_t *pkt = NULL;
 	kd_stc_64 *stc;
-	winkd_lock_enter (wctx);
+	winkd_lock_enter (pd->wctx);
 	for (;;) {
-		void *bed = r_cons_sleep_begin ();
-		int ret = winkd_wait_packet (wctx, KD_PACKET_TYPE_STATE_CHANGE64, &pkt);
-		r_cons_sleep_end (bed);
+		void *bed = r_cons_sleep_begin (core->cons);
+		int ret = winkd_wait_packet (pd->wctx, KD_PACKET_TYPE_STATE_CHANGE64, &pkt);
+		r_cons_sleep_end (core->cons, bed);
 		if (ret != KD_E_OK || !pkt) {
 			reason = R_DEBUG_REASON_ERROR;
 			break;
@@ -70,10 +94,30 @@ static RDebugReasonType r_debug_winkd_wait(RDebug *dbg, int pid) {
 		dbg->reason.addr = stc->pc;
 		dbg->reason.tid = stc->kthread;
 		dbg->reason.signum = stc->state;
-		winkd_set_cpu (wctx, stc->cpu);
+		winkd_set_cpu (pd->wctx, stc->cpu);
 		if (stc->state == DbgKdExceptionStateChange) {
-			dbg->reason.type = R_DEBUG_REASON_INT;
-			reason = R_DEBUG_REASON_INT;
+			// Map NTSTATUS exception codes to r2 reasons.
+			switch (stc->exception.code) {
+			case 0x80000003: // STATUS_BREAKPOINT
+				reason = R_DEBUG_REASON_BREAKPOINT;
+				break;
+			case 0x80000004: // STATUS_SINGLE_STEP
+				reason = R_DEBUG_REASON_STEP;
+				break;
+			case 0xc0000005: // STATUS_ACCESS_VIOLATION
+				reason = R_DEBUG_REASON_SEGFAULT;
+				break;
+			case 0xc000001d: // STATUS_ILLEGAL_INSTRUCTION
+				reason = R_DEBUG_REASON_ILLEGAL;
+				break;
+			case 0xc0000094: // STATUS_INTEGER_DIVIDE_BY_ZERO
+				reason = R_DEBUG_REASON_DIVBYZERO;
+				break;
+			default:
+				reason = R_DEBUG_REASON_INT;
+				break;
+			}
+			dbg->reason.type = reason;
 			break;
 		} else if (stc->state == DbgKdLoadSymbolsStateChange) {
 			dbg->reason.type = R_DEBUG_REASON_NEW_LIB;
@@ -82,7 +126,7 @@ static RDebugReasonType r_debug_winkd_wait(RDebug *dbg, int pid) {
 		}
 		R_FREE (pkt);
 	}
-	winkd_lock_leave (wctx);
+	winkd_lock_leave (pd->wctx);
 	free (pkt);
 	return reason;
 }
@@ -90,66 +134,81 @@ static RDebugReasonType r_debug_winkd_wait(RDebug *dbg, int pid) {
 static bool r_debug_winkd_attach(RDebug *dbg, int pid) {
 	RIODesc *desc = dbg->iob.io->desc;
 
-	if (!desc || !desc->plugin || !desc->plugin->name || !desc->data) {
+	if (!desc || !desc->plugin || !desc->plugin->meta.name || !desc->data) {
 		return false;
 	}
-	if (strncmp (desc->plugin->name, "winkd", 6)) {
+	if (!r_str_startswith (desc->plugin->meta.name, "winkd")) {
 		return false;
 	}
 	if (dbg->arch && strcmp (dbg->arch, "x86")) {
 		return false;
 	}
-	wctx = (WindCtx *)desc->data;
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return false;
+	}
+
+	pd->wctx = desc->data;
+	pd->wctx->mb = &dbg->mb;
 
 	// Handshake
-	if (!winkd_sync (wctx)) {
-		eprintf ("Could not connect to winkd\n");
+	if (!winkd_sync (pd->wctx)) {
+		R_LOG_ERROR ("Could not connect to winkd");
 		winkd_ctx_free ((WindCtx **)&desc->data);
 		return false;
 	}
-	if (!winkd_read_ver (wctx)) {
+	if (!winkd_read_ver (pd->wctx)) {
 		winkd_ctx_free ((WindCtx **)&desc->data);
 		return false;
 	}
-	dbg->bits = winkd_get_bits (wctx);
+	dbg->bits = winkd_get_bits (pd->wctx);
 	// Make r_debug_is_dead happy
 	dbg->pid = 0;
 	return true;
 }
 
 static bool r_debug_winkd_detach(RDebug *dbg, int pid) {
-	eprintf ("Detaching...\n");
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (pd && pd->wctx) {
+		// Resume the target before dropping the session.
+		winkd_continue (pd->wctx);
+	}
 	return true;
 }
 
 static char *r_debug_winkd_reg_profile(RDebug *dbg) {
-	r_return_val_if_fail (dbg, NULL);
+	R_RETURN_VAL_IF_FAIL (dbg, NULL);
 	if (dbg->arch && strcmp (dbg->arch, "x86")) {
 		return NULL;
 	}
-	r_debug_winkd_attach (dbg, 0);
-	if (dbg->bits == R_SYS_BITS_32) {
-#include "native/reg/windows-x86.h"
-	} else if (dbg->bits == R_SYS_BITS_64) {
+	// Only attach here if we haven't synced yet; reg_profile can be called many
+	// times by the core and must not re-do the handshake each time.
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd || !pd->wctx || !pd->wctx->syncd) {
+		r_debug_winkd_attach (dbg, 0);
+	}
+	if (R_SYS_BITS_CHECK (dbg->bits, 64)) {
 #include "native/reg/windows-x64.h"
+	} else if (R_SYS_BITS_CHECK (dbg->bits, 32)) {
+#include "native/reg/windows-x86.h"
 	}
 	return NULL;
 }
 
-static int r_debug_winkd_breakpoint(RBreakpoint *bp, RBreakpointItem *b, bool set) {
-	int *tag;
-	if (!b) {
+static bool r_debug_winkd_breakpoint(RBreakpoint *bp, RBreakpointItem *b, bool set) {
+	RDebug *dbg = bp->user;
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd || !b) {
 		return false;
 	}
-	// Use a 32 bit word here to keep this compatible with 32 bit hosts
+	// Use a 32 bit word here to keep this compatible with 32 bit hosts.
+	// For sw BPs this stores the kernel-side breakpoint handle; for hw BPs
+	// it stores slot+1 so we can clear the right DRn on remove.
 	if (!b->data) {
 		b->data = (char *)R_NEW0 (int);
-		if (!b->data) {
-			return 0;
-		}
 	}
-	tag = (int *)b->data;
-	return winkd_bkpt (wctx, b->addr, set, b->hw, tag);
+	int *tag = (int *) b->data;
+	return !!winkd_bkpt (pd->wctx, b->addr, set, b->hw, tag);
 }
 
 static bool r_debug_winkd_init(RDebug *dbg) {
@@ -160,21 +219,22 @@ static RList *r_debug_winkd_pids(RDebug *dbg, int pid) {
 	RListIter *it;
 	WindProc *p;
 
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return NULL;
+	}
+
 	RList *ret = r_list_newf (free);
 	if (!ret) {
 		return NULL;
 	}
 
-	RList *pids = winkd_list_process(wctx);
+	RList *pids = winkd_list_process(pd->wctx);
 	if (!pids) {
 		return ret;
 	}
 	r_list_foreach (pids, it, p) {
 		RDebugPid *newpid = R_NEW0 (RDebugPid);
-		if (!newpid) {
-			r_list_free (ret);
-			return NULL;
-		}
 		newpid->path = strdup (p->name);
 		newpid->pid = p->uniqueid;
 		newpid->status = 's';
@@ -186,14 +246,19 @@ static RList *r_debug_winkd_pids(RDebug *dbg, int pid) {
 }
 
 static bool r_debug_winkd_select(RDebug *dbg, int pid, int tid) {
-	ut32 old = winkd_get_target (wctx);
-	int ret = winkd_set_target (wctx, pid);
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return false;
+	}
+
+	ut32 old = winkd_get_target (pd->wctx);
+	int ret = winkd_set_target (pd->wctx, pid);
 	if (!ret) {
 		return false;
 	}
-	ut64 base = winkd_get_target_base (wctx);
+	ut64 base = winkd_get_target_base (pd->wctx);
 	if (!base) {
-		winkd_set_target (wctx, old);
+		winkd_set_target (pd->wctx, old);
 		return false;
 	}
 	eprintf ("Process base is 0x%"PFMT64x"\n", base);
@@ -201,6 +266,11 @@ static bool r_debug_winkd_select(RDebug *dbg, int pid, int tid) {
 }
 
 static RList *r_debug_winkd_threads(RDebug *dbg, int pid) {
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return NULL;
+	}
+
 	RListIter *it;
 	WindThread *t;
 
@@ -209,7 +279,7 @@ static RList *r_debug_winkd_threads(RDebug *dbg, int pid) {
 		return NULL;
 	}
 
-	RList *threads = winkd_list_threads (wctx);
+	RList *threads = winkd_list_threads (pd->wctx);
 	if (!threads) {
 		r_list_free (ret);
 		return NULL;
@@ -217,10 +287,6 @@ static RList *r_debug_winkd_threads(RDebug *dbg, int pid) {
 
 	r_list_foreach (threads, it, t) {
 		RDebugPid *newpid = R_NEW0 (RDebugPid);
-		if (!newpid) {
-			r_list_free (ret);
-			return NULL;
-		}
 		newpid->pid = t->uniqueid;
 		newpid->status = t->status;
 		newpid->runnable = t->runnable;
@@ -231,6 +297,11 @@ static RList *r_debug_winkd_threads(RDebug *dbg, int pid) {
 }
 
 static RList *r_debug_winkd_modules(RDebug *dbg) {
+	PluginData *pd = R_UNWRAP3 (dbg, current, plugin_data);
+	if (!pd) {
+		return NULL;
+	}
+
 	RListIter *it;
 	WindModule *m;
 
@@ -239,7 +310,7 @@ static RList *r_debug_winkd_modules(RDebug *dbg) {
 		return NULL;
 	}
 
-	RList *modules = winkd_list_modules (wctx);
+	RList *modules = winkd_list_modules (pd->wctx);
 	if (!modules) {
 		r_list_free (ret);
 		return NULL;
@@ -247,12 +318,7 @@ static RList *r_debug_winkd_modules(RDebug *dbg) {
 
 	r_list_foreach (modules, it, m) {
 		RDebugMap *mod = R_NEW0 (RDebugMap);
-		if (!mod) {
-			r_list_free (modules);
-			r_list_free (ret);
-			return NULL;
-		}
-		mod->file = m->name;
+		mod->file = strdup (m->name? m->name: "");
 		mod->size = m->size;
 		mod->addr = m->addr;
 		mod->addr_end = m->addr + m->size;
@@ -263,12 +329,35 @@ static RList *r_debug_winkd_modules(RDebug *dbg) {
 	return ret;
 }
 
+static bool init_plugin(RDebug *dbg, RDebugPluginSession *ds) {
+	R_RETURN_VAL_IF_FAIL (dbg && ds, false);
+	ds->plugin_data = R_NEW0 (PluginData);
+	return !!ds->plugin_data;
+}
+
+static bool fini_plugin(RDebug *dbg, RDebugPluginSession *ds) {
+	R_RETURN_VAL_IF_FAIL (dbg && ds, false);
+
+	if (!ds->plugin_data) {
+		return false;
+	}
+
+	R_FREE (ds->plugin_data);
+	return true;
+}
+
 RDebugPlugin r_debug_plugin_winkd = {
-	.name = "winkd",
-	.license = "LGPL3",
+	.meta = {
+		.name = "winkd",
+		.author = "The Lemon Man",
+		.desc = "winkd debug plugin",
+		.license = "LGPL-3.0-only",
+	},
 	.arch = "x86",
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
-	.init = &r_debug_winkd_init,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
+	.init_plugin = init_plugin,
+	.fini_plugin = fini_plugin,
+	.init_debugger = &r_debug_winkd_init,
 	.step = &r_debug_winkd_step,
 	.cont = &r_debug_winkd_continue,
 	.attach = &r_debug_winkd_attach,

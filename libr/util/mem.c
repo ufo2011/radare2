@@ -1,7 +1,11 @@
-/* radare - LGPL - Copyright 2007-2021 - pancake */
+/* radare - LGPL - Copyright 2007-2024 - pancake */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <r_util.h>
-#if __UNIX__
+#undef r_mem_mem
+#if R2__UNIX__
 #include <sys/mman.h>
 #endif
 
@@ -17,7 +21,8 @@ R_API int r_mem_count(const ut8 **addr) {
 	return i;
 }
 
-R_API int r_mem_eq(ut8 *a, ut8 *b, int len) {
+// R2580 return bool
+R_API bool r_mem_eq(ut8 *a, ut8 *b, int len) {
 	register int i;
 	for (i = 0; i < len; i++) {
 		if (a[i] != b[i]) {
@@ -58,22 +63,13 @@ R_API int r_mem_cmp_mask(const ut8 *dest, const ut8 *orig, const ut8 *mask, int 
 }
 
 R_API void r_mem_copybits(ut8 *dst, const ut8 *src, int bits) {
-	ut8 srcmask, dstmask;
-	int bytes = (int) (bits / 8);
-	bits = bits % 8;
+	const ut8 srcmask[8] = {0x00, 0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC, 0xFE};
+	const ut8 dstmask[8] = {0x00, 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01};
+	const int bytes = bits / 8;
+	const int modbits = bits % 8;
 	memcpy (dst, src, bytes);
-	if (bits) {
-		srcmask = dstmask = 0;
-		switch (bits) {
-		case 1: srcmask = 0x80; dstmask = 0x7f; break;
-		case 2: srcmask = 0xc0; dstmask = 0x3f; break;
-		case 3: srcmask = 0xe0; dstmask = 0x1f; break;
-		case 4: srcmask = 0xf0; dstmask = 0x0f; break;
-		case 5: srcmask = 0xf8; dstmask = 0x07; break;
-		case 6: srcmask = 0xfc; dstmask = 0x03; break;
-		case 7: srcmask = 0xfe; dstmask = 0x01; break;
-		}
-		dst[bytes] = ((dst[bytes] & dstmask) | (src[bytes] & srcmask));
+	if (modbits) {
+		dst[bytes] = (dst[bytes] & dstmask[modbits]) | (src[bytes] & srcmask[modbits]);
 	}
 }
 
@@ -84,7 +80,7 @@ static inline char readbit(const ut8 *src, int bitoffset) {
 	return (src[wholeBytes] & 1<< remainingBits);
 }
 
-static inline void writebit (ut8 *dst, int i, bool c) {
+static inline void writebit(ut8 *dst, int i, bool c) {
 	const int byte = i / 8;
 	const int bit = (i % 8);
 	// eprintf ("Write %d %d = %d\n", byte, bit, c);
@@ -109,6 +105,64 @@ R_API void r_mem_copybits_delta(ut8 *dst, int doff, const ut8 *src, int soff, in
 	}
 }
 
+// be streams start at the msb of the first byte, le streams at its lsb
+R_API ut64 r_mem_get_bits(const ut8 *buf, ut64 bitoff, int bits, bool be) {
+	R_RETURN_VAL_IF_FAIL (buf && bits > 0 && bits <= 64, 0);
+	ut64 value = 0;
+	int i;
+	for (i = 0; i < bits; i++) {
+		const ut64 pos = bitoff + i;
+		if (be) {
+			value = (value << 1) | ((buf[pos >> 3] >> (7 - (pos & 7))) & 1);
+		} else {
+			value |= (ut64)((buf[pos >> 3] >> (pos & 7)) & 1) << i;
+		}
+	}
+	return value;
+}
+
+R_API void r_mem_set_bits(ut8 *buf, ut64 bitoff, int bits, ut64 value, bool be) {
+	R_RETURN_IF_FAIL (buf && bits > 0 && bits <= 64);
+	int i;
+	for (i = 0; i < bits; i++) {
+		const ut64 pos = bitoff + i;
+		const ut8 mask = 1 << (be? 7 - (pos & 7): pos & 7);
+		if ((value >> (be? bits - 1 - i: i)) & 1) {
+			buf[pos >> 3] |= mask;
+		} else {
+			buf[pos >> 3] &= ~mask;
+		}
+	}
+}
+
+// expand count packed units into r_mem_bits_unit sized containers of the same endianness
+R_API void r_mem_unpack_bits(ut8 *dst, const ut8 *src, ut64 count, int bits, bool be) {
+	R_RETURN_IF_FAIL (dst && src && bits > 0 && bits <= 64);
+	const int unit = r_mem_bits_unit (bits);
+	ut64 i;
+	for (i = 0; i < count; i++) {
+		r_write_ble (dst + i * unit, r_mem_get_bits (src, i * bits, bits, be), be, unit * 8);
+	}
+}
+
+// returns false when a container holds a value wider than bits, which gets truncated
+R_API bool r_mem_pack_bits(ut8 *dst, const ut8 *src, ut64 count, int bits, bool be) {
+	R_RETURN_VAL_IF_FAIL (dst && src && bits > 0 && bits <= 64, false);
+	const int unit = r_mem_bits_unit (bits);
+	const ut64 mask = (bits == 64)? UT64_MAX: (1ULL << bits) - 1;
+	bool fits = true;
+	ut64 i;
+	memset (dst, 0, (count * bits + 7) / 8);
+	for (i = 0; i < count; i++) {
+		const ut64 value = r_read_ble (src + i * unit, be, unit * 8);
+		if (value & ~mask) {
+			fits = false;
+		}
+		r_mem_set_bits (dst, i * bits, bits, value, be);
+	}
+	return fits;
+}
+
 R_API ut64 r_mem_get_num(const ut8 *b, int size) {
 	// LITTLE ENDIAN is the default for streams
 	switch (size) {
@@ -125,7 +179,7 @@ R_API ut64 r_mem_get_num(const ut8 *b, int size) {
 }
 
 // TODO: SEE: R_API ut64 r_reg_get_value(RReg *reg, RRegItem *item) { .. dupped code?
-R_API int r_mem_set_num(ut8 *dest, int dest_size, ut64 num) {
+R_API bool r_mem_set_num(ut8 *dest, int dest_size, ut64 num) {
 	// LITTLE ENDIAN is the default for streams
 	switch (dest_size) {
 	case 1:
@@ -226,16 +280,21 @@ R_API void r_mem_swap(ut8 *buf, size_t buf_len) {
 // R_DOC r_mem_mem: Finds the needle of nlen size into the haystack of hlen size
 // R_UNIT printf("%s\n", r_mem_mem("food is pure lame", 20, "is", 2));
 R_API const ut8 *r_mem_mem(const ut8 *haystack, int hlen, const ut8 *needle, int nlen) {
-	int i, until = hlen - nlen + 1;
-	if (hlen < 1 || nlen < 1) {
+	if (hlen < 1 || nlen < 1 || nlen > hlen) {
 		return NULL;
 	}
+#if HAVE_MEMMEM
+	return memmem (haystack, hlen, needle, nlen);
+#else
+	const int until = hlen - nlen + 1;
+	int i;
 	for (i = 0; i < until; i++) {
-		if (!memcmp (haystack + i, needle, nlen)) {
+		if (haystack[i] == needle[0] && !memcmp (haystack + i, needle, nlen)) {
 			return haystack + i;
 		}
 	}
 	return NULL;
+#endif
 }
 
 // TODO: rename to r_mem_mem and refactor all calls to this function
@@ -261,7 +320,7 @@ R_API const ut8 *r_mem_mem_aligned(const ut8 *haystack, int hlen, const ut8 *nee
 R_API bool r_mem_protect(void *ptr, int size, const char *prot) {
 #if __wasi__
 	return false;
-#elif __UNIX__
+#elif R2__UNIX__
 	int p = 0;
 	if (strchr (prot, 'x')) {
 		p |= PROT_EXEC;
@@ -275,7 +334,7 @@ R_API bool r_mem_protect(void *ptr, int size, const char *prot) {
 	if (mprotect (ptr, size, p) == -1) {
 		return false;
 	}
-#elif __WINDOWS__
+#elif R2__WINDOWS__
 	int r, w, x;
 	DWORD p = PAGE_NOACCESS;
 	r = strchr (prot, 'r')? 1: 0;
@@ -301,14 +360,28 @@ R_API bool r_mem_protect(void *ptr, int size, const char *prot) {
 }
 
 R_API void *r_mem_dup(const void *s, int l) {
-	void *d = malloc (l);
-	if (d) {
-		memcpy (d, s, l);
+	R_RETURN_VAL_IF_FAIL (s, NULL);
+	void *d = NULL;
+	if (l > 0) {
+		d = malloc (l);
+		if (d != NULL) {
+			memcpy (d, s, l);
+		}
 	}
 	return d;
 }
 
+R_API void *r_mem_set(ut8 ch, int l) {
+	void *d = malloc (l);
+	if (d) {
+		memset (d, ch, l);
+	}
+	return d;
+}
+
+
 R_API void r_mem_reverse(ut8 *b, int l) {
+	R_RETURN_IF_FAIL (b);
 	ut8 tmp;
 	int i, end = l / 2;
 	for (i = 0; i < end; i++) {
@@ -346,7 +419,7 @@ R_API void r_mem_free(void *p) {
 	free (p);
 }
 
-R_API void r_mem_memzero(void *dst, size_t l) {
+R_API void r_mem_zero(void *dst, size_t l) {
 #ifdef _MSC_VER
 	RtlSecureZeroMemory (dst, l);
 #elif __MINGW32__
@@ -361,26 +434,56 @@ R_API void r_mem_memzero(void *dst, size_t l) {
 #endif
 }
 
-R_API void *r_mem_mmap_resize(RMmap *m, ut64 newsize) {
-#if __WINDOWS__
-	if (m->fm != INVALID_HANDLE_VALUE) {
-		CloseHandle (m->fm);
+R_API int r_mem_from_binstring(const char* str, ut8 *buf, size_t len) {
+	int i, j, k, ret;
+	str = r_str_trim_head_ro (str);
+
+	int str_len = strlen (str);
+	ut8 *b = buf;
+	ut8 *e = buf + len;
+	for (i = 0; i < str_len && b < e; i += 8) {
+		ret = 0;
+		str = r_str_trim_head_ro (str);
+		if (i + 7 >= str_len) {
+			b[0] = 0; // null terminate if possible
+			// missing bytes
+			return -1;
+		}
+		for (k = 0, j = i + 7; j >= i; j--, k++) {
+			if (str[j] == ' ') {
+				continue;
+			}
+			if (str[j] == '1') {
+				ret |= (1 << k);
+			} else if (str[j] != '0') {
+				b[0] = 0; // null terminate if possible
+				return -1;
+			}
+		}
+		*b++ = ret;
 	}
-	if (m->fh != INVALID_HANDLE_VALUE) {
-		CloseHandle (m->fh);
+	b[0] = 0;
+	return b - buf;
+}
+
+R_API char *r_mem_to_binstring(const ut8* str, int len) {
+	if (len < 0) {
+		len = strlen ((const char *)str);
 	}
-	if (m->buf) {
-		UnmapViewOfFile (m->buf);
+	RStrBuf *buf = r_strbuf_new (NULL);
+	int i = 0;
+
+	for (i = 0; i < len; i++) {
+		ut8 ch = str[i];
+		r_strbuf_appendf (buf, "%c", ch & 128? '1': '0');
+		r_strbuf_appendf (buf, "%c", ch & 64? '1': '0');
+		r_strbuf_appendf (buf, "%c", ch & 32? '1': '0');
+		r_strbuf_appendf (buf, "%c", ch & 16? '1': '0');
+		r_strbuf_appendf (buf, "%c", ch & 8? '1': '0');
+		r_strbuf_appendf (buf, "%c", ch & 4? '1': '0');
+		r_strbuf_appendf (buf, "%c", ch & 2? '1': '0');
+		r_strbuf_appendf (buf, "%c", ch & 1? '1': '0');
 	}
-#elif __UNIX__ && !__wasi__
-	if (munmap (m->buf, m->len) != 0) {
-		return NULL;
-	}
-#endif
-	if (!r_sys_truncate (m->filename, newsize)) {
-		return NULL;
-	}
-	m->len = newsize;
-	r_file_mmap_arch (m, m->filename, m->fd);
-	return m->buf;
+
+	return r_strbuf_drain (buf);
 }

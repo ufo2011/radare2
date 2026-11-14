@@ -5,81 +5,169 @@
 extern "C" {
 #endif
 
-// TODO: Use CLANG/GCC builtins if available: __builtin_mul_overflow
+#if defined(__has_builtin)
+#  if __has_builtin(__builtin_add_overflow) && \
+      __has_builtin(__builtin_sub_overflow) && \
+      __has_builtin(__builtin_mul_overflow)
+#    define R_HAVE_BUILTIN_OVERFLOW 1
+#  endif
+#endif
 
-// ADD
-// if ((x > 0) && (a > INT_MAX - x)) /* `a + x` would overflow */;
-// if ((x < 0) && (a < INT_MIN - x)) /* `a + x` would underflow */;
-#define SZT_ADD_OVFCHK(x,y) ((SIZE_MAX - (x)) < (y))
-#define SSZT_ADD_OVFCHK(a,x) ((((x) > 0) && ((a) > SSIZE_MAX - (x))) || (((x) < 0) && (a) < SSIZE_MIN - (x)))
-#define UT64_ADD_OVFCHK(x,y) ((UT64_MAX - (x)) < (y))
-#define ST64_ADD_OVFCHK(a,x) ((((x) > 0) && ((a) > ST64_MAX - (x))) || (((x) < 0) && (a) < ST64_MIN - (x)))
-#define UT32_ADD_OVFCHK(x,y) ((UT32_MAX - (x)) < (y))
-#define ST32_ADD_OVFCHK(a,x) ((((x) > 0) && ((a) > ST32_MAX - (x))) || (((x) < 0) && (a) < ST32_MIN - (x)))
-#define UT16_ADD_OVFCHK(x,y) ((UT16_MAX - (x)) < (y))
-#define ST16_ADD_OVFCHK(a,b) ((((b) > 0) && ((a) > ST16_MAX - (b))) || (((b) < 0) && ((a) < ST16_MIN - (b))))
-#define UT8_ADD_OVFCHK(x,y) ((UT8_MAX - (x)) < (y))
-#define ST8_ADD_OVFCHK(a,x) ((((x) > 0) && ((a) > ST8_MAX - (x))) || ((x) < 0 && (a) < ST8_MIN - (x)))
+#if defined(__GNUC__) && !defined(R_HAVE_BUILTIN_OVERFLOW)
+#  define R_HAVE_BUILTIN_OVERFLOW 1
+#endif
 
-// SUB
-// if ((x < 0) && (a > INT_MAX + x)) /* `a - x` would overflow */;
-// if ((x > 0) && (a < INT_MIN + x)) /* `a - x` would underflow */;
-#define SZT_SUB_OVFCHK(a,b) SZT_ADD_OVFCHK(a,-(b))
-#define SSZT_SUB_OVFCHK(a,b) SSZT_ADD_OVFCHK(a,-(b))
-#define UT64_SUB_OVFCHK(a,b) UT64_ADD_OVFCHK(a,-(b))
-#define ST64_SUB_OVFCHK(a,b) ST64_ADD_OVFCHK(a,-(b))
-#define UT32_SUB_OVFCHK(a,b) UT32_ADD_OVFCHK(a,-(b))
-#define ST32_SUB_OVFCHK(a,b) ST32_ADD_OVFCHK(a,-(b))
-#define UT16_SUB_OVFCHK(a,b) UT16_ADD_OVFCHK(a,-(b))
-#define ST16_SUB_OVFCHK(a,b) ST16_ADD_OVFCHK(a,-(b))
-#define UT8_SUB_OVFCHK(a,b) UT8_ADD_OVFCHK(a,-(b))
-#define ST8_SUB_OVFCHK(a,b) ST8_ADD_OVFCHK(a,-(b))
-
-// MUL
-#define UNSIGNED_MUL_OVERFLOW_CHECK(overflow_name, type_base, type_min, type_max) \
-static inline bool overflow_name(type_base a, type_base b) { \
-	return (a > 0 && b > 0 && a > type_max / b); \
-}
-
-#define SIGNED_MUL_OVERFLOW_CHECK(overflow_name, type_base, type_min, type_max) \
-static inline bool overflow_name(type_base a, type_base b) { \
-	if (a > 0) { \
-		if (b > 0) { return a > type_max / b; } \
-		return b < type_min / a; \
+#define R_DEFINE_UNSIGNED_OVERFLOW(T, TMAX) \
+static inline bool r_add_overflow_##T(T a, T b, T *res) { \
+	*res = a + b; \
+	return *res < a; \
+} \
+static inline bool r_sub_overflow_##T(T a, T b, T *res) { \
+	*res = a - b; \
+	return a < b; \
+} \
+static inline bool r_mul_overflow_##T(T a, T b, T *res) { \
+	if (a == 0 || b == 0) { \
+		*res = 0; \
+		return false; \
 	} \
-	if (b > 0) { return a < type_min / b; } \
-	return a && b < type_max / a; \
+	if (a > (TMAX) / b) { \
+		return true; \
+	} \
+	*res = a * b; \
+	return false; \
 }
 
-#define SIGNED_DIV_OVERFLOW_CHECK(overflow_name, type_base, type_mid, type_max) \
-static inline bool overflow_name(type_base a, type_base b) { \
-	return (!b || (a == type_mid && b == type_max)); \
-}
-#define UNSIGNED_DIV_OVERFLOW_CHECK(overflow_name, type_base, type_min, type_max) \
-static inline bool overflow_name(type_base a, type_base b) { \
-	(void)(a); \
-	return !b; \
+#define R_DEFINE_SIGNED_OVERFLOW(T, TMAX, TMIN) \
+static inline bool r_add_overflow_##T(T a, T b, T *res) { \
+	if ((b > 0 && a > (TMAX) - b) || \
+	    (b < 0 && a < (TMIN) - b)) { \
+		return true; \
+	} \
+	*res = a + b; \
+	return false; \
+} \
+static inline bool r_sub_overflow_##T(T a, T b, T *res) { \
+	if ((b < 0 && a > (TMAX) + b) || \
+	    (b > 0 && a < (TMIN) + b)) { \
+		return true; \
+	} \
+	*res = a - b; \
+	return false; \
+} \
+static inline bool r_mul_overflow_##T(T a, T b, T *res) { \
+	if (a == 0 || b == 0) { \
+		*res = 0; \
+		return false; \
+	} \
+	if (a == -1 && b == (TMIN)) { return true; } \
+	if (b == -1 && a == (TMIN)) { return true; } \
+	if (a > 0) { \
+		if (b > 0) { \
+			if (a > (TMAX) / b) { return true; } \
+		} else { \
+			if (b < (TMIN) / a) { return true; } \
+		} \
+	} else { \
+		if (b > 0) { \
+			if (a < (TMIN) / b) { return true; } \
+		} else { \
+			if (a != 0 && b < (TMAX) / a) { return true; } \
+		} \
+	} \
+	*res = a * b; \
+	return false; \
 }
 
-SIGNED_DIV_OVERFLOW_CHECK(ST8_DIV_OVFCHK,  ut8,  UT8_GT0,  UT8_MAX)
-SIGNED_DIV_OVERFLOW_CHECK(ST16_DIV_OVFCHK, ut16, UT16_GT0, UT16_MAX)
-SIGNED_DIV_OVERFLOW_CHECK(ST32_DIV_OVFCHK, ut32, UT32_GT0, UT32_MAX)
-SIGNED_DIV_OVERFLOW_CHECK(ST64_DIV_OVFCHK, ut64, UT64_GT0, UT64_MAX)
-UNSIGNED_DIV_OVERFLOW_CHECK(UT8_DIV_OVFCHK,  ut8,  UT8_MIN,  UT8_MAX)
-UNSIGNED_DIV_OVERFLOW_CHECK(UT16_DIV_OVFCHK, ut16, UT16_MIN, UT16_MAX)
-UNSIGNED_DIV_OVERFLOW_CHECK(UT32_DIV_OVFCHK, ut32, UT32_MIN, UT32_MAX)
-UNSIGNED_DIV_OVERFLOW_CHECK(UT64_DIV_OVFCHK, ut64, UT64_MIN, UT64_MAX)
-// TODO: Windows doesn't have ssize_t, and we don't need this check yet
-// SIGNED_MUL_OVERFLOW_CHECK(SSZT_MUL_OVFCHK, ssize_t, SSZT_MIN, SSZT_MAX)
-SIGNED_MUL_OVERFLOW_CHECK(ST8_MUL_OVFCHK, st8, ST8_MIN, ST8_MAX)
-SIGNED_MUL_OVERFLOW_CHECK(ST16_MUL_OVFCHK, st16, ST16_MIN, ST16_MAX)
-SIGNED_MUL_OVERFLOW_CHECK(ST32_MUL_OVFCHK, st32, ST32_MIN, ST32_MAX)
-SIGNED_MUL_OVERFLOW_CHECK(ST64_MUL_OVFCHK, st64, ST64_MIN, ST64_MAX)
-UNSIGNED_MUL_OVERFLOW_CHECK(SZT_MUL_OVFCHK, size_t, SZT_MIN, SZT_MAX)
-UNSIGNED_MUL_OVERFLOW_CHECK(UT8_MUL_OVFCHK, ut8, UT8_MIN, UT8_MAX)
-UNSIGNED_MUL_OVERFLOW_CHECK(UT16_MUL_OVFCHK, ut16, UT16_MIN, UT16_MAX)
-UNSIGNED_MUL_OVERFLOW_CHECK(UT32_MUL_OVFCHK, ut32, UT32_MIN, UT32_MAX)
-UNSIGNED_MUL_OVERFLOW_CHECK(UT64_MUL_OVFCHK, ut64, UT64_MIN, UT64_MAX)
+R_DEFINE_UNSIGNED_OVERFLOW(ut8,  UT8_MAX)
+R_DEFINE_UNSIGNED_OVERFLOW(ut16, UT16_MAX)
+R_DEFINE_UNSIGNED_OVERFLOW(ut32, UT32_MAX)
+R_DEFINE_UNSIGNED_OVERFLOW(ut64, UT64_MAX)
+R_DEFINE_UNSIGNED_OVERFLOW(size_t, SIZE_MAX)
+
+R_DEFINE_SIGNED_OVERFLOW(st8,  ST8_MAX,  ST8_MIN)
+R_DEFINE_SIGNED_OVERFLOW(st16, ST16_MAX, ST16_MIN)
+R_DEFINE_SIGNED_OVERFLOW(st32, ST32_MAX, ST32_MIN)
+R_DEFINE_SIGNED_OVERFLOW(st64, ST64_MAX, ST64_MIN)
+// ssize_t overflow not supported: use st32/st64 instead (MSVC lacks ssize_t)
+
+#if R_HAVE_BUILTIN_OVERFLOW
+
+#define r_add_overflow(a,b,res) __builtin_add_overflow((a),(b),(res))
+#define r_sub_overflow(a,b,res) __builtin_sub_overflow((a),(b),(res))
+#define r_mul_overflow(a,b,res) __builtin_mul_overflow((a),(b),(res))
+
+#elif defined(_MSC_VER) || !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
+
+#define r_add_overflow(a,b,res) \
+	(sizeof(*(res)) == 1 && sizeof(a) == 1 && sizeof(b) == 1 \
+		? (*(res) = (a) + (b), *(res) < (a)) \
+		: (sizeof(*(res)) == 2 ? r_add_overflow_ut16((ut16)(a), (ut16)(b), (ut16*)(res)) \
+		: (sizeof(*(res)) == 4 ? r_add_overflow_ut32((ut32)(a), (ut32)(b), (ut32*)(res)) \
+		: r_add_overflow_ut64((ut64)(a), (ut64)(b), (ut64*)(res)))))
+
+#define r_sub_overflow(a,b,res) \
+	(sizeof(*(res)) == 1 && sizeof(a) == 1 && sizeof(b) == 1 \
+		? (*(res) = (a) - (b), (a) < (b)) \
+		: (sizeof(*(res)) == 2 ? r_sub_overflow_ut16((ut16)(a), (ut16)(b), (ut16*)(res)) \
+		: (sizeof(*(res)) == 4 ? r_sub_overflow_ut32((ut32)(a), (ut32)(b), (ut32*)(res)) \
+		: r_sub_overflow_ut64((ut64)(a), (ut64)(b), (ut64*)(res)))))
+
+#define r_mul_overflow(a,b,res) \
+	(sizeof(*(res)) == 1 && sizeof(a) == 1 && sizeof(b) == 1 \
+		? r_mul_overflow_ut8((ut8)(a), (ut8)(b), (ut8*)(res)) \
+		: (sizeof(*(res)) == 2 ? r_mul_overflow_ut16((ut16)(a), (ut16)(b), (ut16*)(res)) \
+		: (sizeof(*(res)) == 4 ? r_mul_overflow_ut32((ut32)(a), (ut32)(b), (ut32*)(res)) \
+		: r_mul_overflow_ut64((ut64)(a), (ut64)(b), (ut64*)(res)))))
+
+#else
+
+#define r_add_overflow(a,b,res) _Generic(*(res), \
+	ut8:    r_add_overflow_ut8,  \
+	ut16:   r_add_overflow_ut16, \
+	ut32:   r_add_overflow_ut32, \
+	ut64:   r_add_overflow_ut64, \
+	size_t: r_add_overflow_size_t, \
+	st8:    r_add_overflow_st8,  \
+	st16:   r_add_overflow_st16, \
+	st32:   r_add_overflow_st32, \
+	st64:   r_add_overflow_st64 \
+)(a,b,res)
+
+#define r_sub_overflow(a,b,res) _Generic(*(res), \
+	ut8:    r_sub_overflow_ut8,  \
+	ut16:   r_sub_overflow_ut16, \
+	ut32:   r_sub_overflow_ut32, \
+	ut64:   r_sub_overflow_ut64, \
+	size_t: r_sub_overflow_size_t, \
+	st8:    r_sub_overflow_st8,  \
+	st16:   r_sub_overflow_st16, \
+	st32:   r_sub_overflow_st32, \
+	st64:   r_sub_overflow_st64 \
+)(a,b,res)
+
+#define r_mul_overflow(a,b,res) _Generic(*(res), \
+	ut8:    r_mul_overflow_ut8,  \
+	ut16:   r_mul_overflow_ut16, \
+	ut32:   r_mul_overflow_ut32, \
+	ut64:   r_mul_overflow_ut64, \
+	size_t: r_mul_overflow_size_t, \
+	st8:    r_mul_overflow_st8,  \
+	st16:   r_mul_overflow_st16, \
+	st32:   r_mul_overflow_st32, \
+	st64:   r_mul_overflow_st64 \
+)(a,b,res)
+
+#endif
+
+static inline bool r_div_overflow_st8(st8 a, st8 b) { return (!b || (a == ST8_MIN && b == -1)); }
+static inline bool r_div_overflow_st16(st16 a, st16 b) { return (!b || (a == ST16_MIN && b == -1)); }
+static inline bool r_div_overflow_st32(st32 a, st32 b) { return (!b || (a == ST32_MIN && b == -1)); }
+static inline bool r_div_overflow_st64(st64 a, st64 b) { return (!b || (a == ST64_MIN && b == -1)); }
+static inline bool r_div_overflow_ut8(ut8 a, ut8 b) { (void)(a); return !b; }
+static inline bool r_div_overflow_ut16(ut16 a, ut16 b) { (void)(a); return !b; }
+static inline bool r_div_overflow_ut32(ut32 a, ut32 b) { (void)(a); return !b; }
+static inline bool r_div_overflow_ut64(ut64 a, ut64 b) { (void)(a); return !b; }
 
 #ifdef __cplusplus
 }

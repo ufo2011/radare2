@@ -1,3 +1,68 @@
+NAME=rap.reverse defaults to enabled
+FILE=-
+CMDS=<<EOF
+e rap.reverse
+et rap.reverse
+EOF
+EXPECT=<<EOF
+true
+bool
+EOF
+RUN
+
+NAME=rap.reverse can be disabled with -e
+FILE=-
+ARGS=-e rap.reverse=false
+CMDS=e rap.reverse
+EXPECT=<<EOF
+false
+EOF
+RUN
+
+NAME=e,
+FILE=-
+CMDS=<<EOF
+e,key/cols/value,key/str/color
+EOF
+EXPECT=<<EOF
+key               value
+-----------------------
+asm.bytes.opcolor false
+asm.trace.color   true
+log.color         false
+scr.color         0
+scr.color.args    true
+scr.color.bytes   true
+scr.color.grep    false
+scr.color.ophex   false
+scr.color.ops     true
+scr.color.pipe    false
+scr.color.regs    false
+
+EOF
+RUN
+
+NAME=ed* honors R2_RCFILE
+FILE=-
+ENV=R2_RCFILE=scripts/no-nl-at-eof.r2;HOME=scripts/no-nl-at-eof.r2;USERPROFILE=scripts/no-nl-at-eof.r2
+CMDS=ed*
+EXPECT=<<EOF
+!!rahash2 -v~commit?
+EOF
+RUN
+
+NAME=deprecated cmd.onsyscall aliases cmd.syscall.enter
+FILE=-
+ARGS=-e log.level=0
+CMDS=<<EOF
+e cmd.onsyscall=echo deprecated
+e cmd.syscall.enter
+EOF
+EXPECT=<<EOF
+echo deprecated
+EOF
+RUN
+
 NAME=et
 FILE=-
 CMDS=<<EOF
@@ -34,6 +99,46 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=e anal.gp(ppc32 sda base)
+FILE=bins/elf/ppc_classes
+CMDS=e anal.gp
+EXPECT=<<EOF
+0x10028034
+EOF
+RUN
+
+NAME=e anal.gp(ppc32 no sdata, not seeded)
+FILE=bins/elf/hello.ppc
+CMDS=e anal.gp
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=e anal.gp(ppc32 shared object not seeded)
+FILE=bins/elf/dropbear_powerpc-linux-gnu_gcc_-O2
+CMDS=e anal.gp
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=e anal.gp(ppc32 _SDA_BASE_ agrees with .sdata+0x8000)
+FILE=bins/elf/ppc32-sda-agree
+CMDS=e anal.gp
+EXPECT=<<EOF
+0x1000801c
+EOF
+RUN
+
+NAME=e anal.gp(ppc32 _SDA_BASE_ disagrees with .sdata+0x8000, not seeded)
+FILE=bins/elf/ppc32-sda-disagree
+CMDS=e anal.gp
+EXPECT=<<EOF
+0
+EOF
+RUN
+
 NAME=e asm.os
 FILE=bins/elf/analysis/hello-linux-x86_64
 CMDS=e asm.os=?
@@ -50,6 +155,67 @@ s110
 EOF
 RUN
 
+NAME=e asm.bytes
+FILE=-
+CMDS=<<EOF
+e asm.bytes=?
+e asm.bytes
+EOF
+EXPECT=<<EOF
+display the bytes of each instruction
+true
+EOF
+RUN
+
+NAME=e hex.cols
+FILE=-
+CMDS=<<EOF
+e hex.cols=?
+e hex.cols
+EOF
+EXPECT=<<EOF
+number of columns in hexdump
+16
+EOF
+RUN
+
+NAME=e asm.addr.base
+FILE=malloc://256
+CMDS=<<EOF
+e asm.addr.base
+e asm.addr.base=?
+e asm.addr.base
+e asm.addr.base=8
+e asm.addr.base
+px 1 @ 35~00[0]
+e asm.addr.base=10
+e asm.addr.base
+px 1 @ 35~00[0]
+e asm.addr.base=36
+e asm.addr.base
+px 1 @ 35~00[0]
+e asm.addr.base=7
+e asm.addr.base
+px 1 @ 35~00[0]
+EOF
+EXPECT=<<EOF
+16
+8
+10
+16
+36
+16
+8
+043
+10
+35
+36
+0_z
+16
+0x00000023
+EOF
+RUN
+
 NAME=e asm.cpu
 FILE=bins/elf/analysis/hello-linux-x86_64
 CMDS=<<EOF
@@ -58,10 +224,66 @@ e asm.cpu=?
 EOF
 EXPECT=<<EOF
 mips32/64
+mips1
+mips2
+mips3
+mips4
+mips5
+mips32
+mips32r2
+mips64
+mips64r2
 micro
 r6
 v3
 v2
+EOF
+RUN
+
+NAME=e asm.cpu
+FILE=--
+CMDS=<<EOF
+-a v850
+-b 32
+e asm.cpu=?
+EOF
+EXPECT=<<EOF
+e0
+0
+e
+e1
+e2
+e2v3
+e3v5
+all
+EOF
+RUN
+
+NAME=e asm.cpu validation
+FILE=-
+ARGS=-a arm -b 16
+CMDS=<<EOF
+e asm.cpu=V8
+e asm.cpu
+e asm.cpu=tetris
+e asm.cpu
+e asm.arch=mips
+e asm.cpu=v
+e asm.cpu
+e asm.cpu=mips1
+e asm.cpu
+e asm.cpu=v3
+e asm.cpu
+e asm.arch=v850
+e asm.cpu
+EOF
+EXPECT=<<EOF
+v8
+v8
+
+mips1
+v3
+
 EOF
 RUN
 
@@ -102,5 +324,58 @@ EOF
 EXPECT=<<EOF
 scr.highlight = "e cmd.prompt =  "e scr.highlight = cmd.prompt ="e scr.rainbow = true """
 
+EOF
+RUN
+
+NAME=bin.resraw defaults to false and can be enabled
+FILE=-
+CMDS=<<EOF
+e bin.resraw
+e bin.resraw=true
+e bin.resraw
+EOF
+EXPECT=<<EOF
+false
+true
+EOF
+RUN
+
+NAME=bin.prefix auto takes the binfile basename and can be reset
+FILE=bins/elf/ls
+CMDS=<<EOF
+e bin.prefix=auto
+is*~_obstack_free
+e bin.prefix=pfx
+is*~_obstack_free
+e bin.prefix=
+is*~_obstack_free
+e bin.prefix=auto
+i~^file
+EOF
+EXPECT=<<EOF
+'f ls.sym._obstack_free 101 0x00015e00
+'f pfx.sym._obstack_free 101 0x00015e00
+'f sym._obstack_free 101 0x00015e00
+file     bins/elf/ls
+EOF
+RUN
+
+NAME=e bool node keeps true after int restore
+FILE=malloc://16
+ARGS=-a x86
+CMDS=<<EOF
+e io.pcache.write=true
+aaft
+e~pcache.write
+e io.pcache.write=false
+aaft
+e~pcache.write
+-b 16
+e asm.bits
+EOF
+EXPECT=<<EOF
+io.pcache.write = true
+io.pcache.write = false
+16
 EOF
 RUN

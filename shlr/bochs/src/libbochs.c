@@ -1,39 +1,37 @@
-/* libbochs - radare2 - LGPL - Copyright 2016 - SkUaTeR */
+/* libbochs - radare2 - LGPL - Copyright 2016-2023 - SkUaTeR, pancake */
 
 #include "libbochs.h"
 
-static char *lpTmpBuffer; //[0x2800u];
+static R_TH_LOCAL char *lpTmpBuffer = NULL;
 
 #define SIZE_BUF 0x5800 * 2
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 #ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
 #endif
-int RunRemoteThread_(libbochs_t* b, const ut8 *lpBuffer, ut32 dwSize, int a4, ut32 *lpExitCode) {
-	LPVOID pProcessMemory;
-	HANDLE hInjectThread = NULL;
+static int RunRemoteThread_(libbochs_t* b, const ut8 *lpBuffer, ut32 dwSize, int a4, ut32 *lpExitCode) {
 	int result = 0;
 	SIZE_T NumberOfBytesWritten;
 
-	pProcessMemory = VirtualAllocEx (b->processInfo.hProcess, 0, dwSize, 0x1000u, 0x40u);
+	LPVOID pProcessMemory = VirtualAllocEx (b->processInfo.hProcess, 0, dwSize, 0x1000u, 0x40u);
 	if (pProcessMemory) {
 		if (WriteProcessMemory (b->processInfo.hProcess, pProcessMemory, lpBuffer, dwSize, &NumberOfBytesWritten)) {
-			hInjectThread = CreateRemoteThread (b->processInfo.hProcess, 0, 0, pProcessMemory, 0, 0, 0);
+			HANDLE hInjectThread = CreateRemoteThread (b->processInfo.hProcess, 0, 0, pProcessMemory, 0, 0, 0);
 			if (hInjectThread) {
 				if (!WaitForSingleObject (hInjectThread, 0xFFFFFFFF)
 					&& (!a4 || ReadProcessMemory (b->processInfo.hProcess,
 					pProcessMemory, (PVOID)lpBuffer, dwSize, &NumberOfBytesWritten)))
 				{
-					if (lpExitCode)
+					if (lpExitCode) {
 						GetExitCodeThread (hInjectThread, (PDWORD)lpExitCode);
+					}
 					result = 1;
 				}
+				CloseHandle (hInjectThread);
 			}
 		}
 		VirtualFreeEx (b->processInfo.hProcess, pProcessMemory, 0, 0x8000u);
-		if (hInjectThread)
-			CloseHandle (hInjectThread);
 	}
 	return result;
 }
@@ -45,11 +43,10 @@ void bochs_reset_buffer(libbochs_t* b) {
 }
 
 bool bochs_cmd_stop(libbochs_t * b) {
-#if __WINDOWS__
+#if R2__WINDOWS__
 	HMODULE hKernel;
 	unsigned int ExitCode;
-	DWORD apiOffset = 0;
-	char buffer[] = {
+	ut8 buffer[] = {
 		0x68, 0x00, 0x00, 0x00, 0x00,	//push    0
 		0x68, 0x00, 0x00, 0x00, 0x00,	//push    0
 		0xE8, 0x00, 0x00, 0x00, 0x00,	//call    $
@@ -60,9 +57,14 @@ bool bochs_cmd_stop(libbochs_t * b) {
 		0xeb, 0xfe			//jmp $
 	};
 	hKernel = GetModuleHandle (TEXT ("kernel32"));
-	apiOffset = (DWORD)GetProcAddress (hKernel, "GenerateConsoleCtrlEvent");
-	*((DWORD *)&buffer[20]) = apiOffset;
-	ExitCode = RunRemoteThread_(b, (const ut8*)&buffer, 0x1Eu, 0, &ExitCode) && ExitCode;
+	FARPROC apiOffset = (FARPROC)GetProcAddress (hKernel, "GenerateConsoleCtrlEvent");
+#if _WIN64
+#pragma message("warning this bochs shellcode is 32bit only")
+	*((DWORD *)&buffer[20]) = 0;
+#else
+	*((DWORD *)&buffer[20]) = (DWORD)(size_t)apiOffset;
+#endif
+	ExitCode = RunRemoteThread_ (b, (const ut8*)&buffer, 0x1Eu, 0, &ExitCode) && ExitCode;
 	return ExitCode;
 #else
 	return 0;
@@ -70,19 +72,24 @@ bool bochs_cmd_stop(libbochs_t * b) {
 }
 
 bool bochs_wait(libbochs_t *b) {
-#if __WINDOWS__
+#if __wasi__
+	return false;
+#elif R2__WINDOWS__
 	int times = 100;
 	DWORD dwRead, aval, leftm;
-	bochs_reset_buffer(b);	
+	bochs_reset_buffer(b);
 	do {
 		while (PeekNamedPipe (b->hReadPipeIn, NULL, 0, NULL, &aval, &leftm)) {
-			if (aval < 0) break;
+			if (aval < 0) {
+				break;
+			}
 			if (!ReadFile (b->hReadPipeIn, &b->data[b->punteroBuffer], SIZE_BUF, &dwRead, 0)) {
-				lprintf("bochs_wait: ERROR reading from pipe.\n\n");
+				R_LOG_ERROR ("bochs_wait: ERROR reading from pipe");
 				return false;
 			}
-			if (dwRead)
+			if (dwRead) {
 				b->punteroBuffer +=dwRead;
+			}
 		}
 		if (strstr (b->data, "<bochs:")) {
 			break;
@@ -119,13 +126,13 @@ void bochs_send_cmd(libbochs_t* b, const char *cmd, bool bWait) {
 	char *cmdbuff = r_str_newf ("%s\n", cmd);
 	bochs_reset_buffer (b);
 	size_t cmdlen = strlen (cmdbuff);
-#if __WINDOWS__
+#if R2__WINDOWS__
 	DWORD dwWritten;
 	if (!WriteFile (b->hWritePipeOut, cmdbuff, cmdlen, &dwWritten, NULL)) {
 #else
 	if (write (b->hWritePipeOut, cmdbuff, cmdlen) != cmdlen) {
 #endif
-		eprintf ("boch_send_cmd failed\n");
+		R_LOG_ERROR ("boch_send_cmd failed");
 		goto beach;
 	}
 	if (bWait)
@@ -137,16 +144,16 @@ beach:
 int bochs_read(libbochs_t* b, ut64 addr, int count, ut8 * buf) {
 	char buff[128];
 	char * data;
-	int lenRec = 0,i = 0,ini = 0, fin = 0, pbuf = 0, totalread = 0;
+	int i = 0, ini = 0, fin = 0, pbuf = 0, totalread = 0;
 	totalread = (count >SIZE_BUF / 3)?  SIZE_BUF / 3: count;
 	snprintf (buff, sizeof (buff), "xp /%imb 0x%016"PFMT64x"", totalread, addr);
 	bochs_send_cmd (b, buff, true);
 	data = strstr (&b->data[0], "[bochs]:");
 	if (!data) {
-		eprintf ("bochs_read: Can't find bochs prompt\n");
+		R_LOG_ERROR ("bochs_read: Can't find bochs prompt");
 		return false;
 	}
-	lenRec = strlen (data);
+	size_t lenRec = strlen (data);
 	if (!strncmp (data, "[bochs]:", 8)) {
 		i += 10; // seek to next line
 		do {
@@ -165,10 +172,11 @@ int bochs_read(libbochs_t* b, ut64 addr, int count, ut8 * buf) {
 	}
 	return 0;
 }
-	
+
 void bochs_close(libbochs_t* b) {
 	b->isRunning = false;
-#if __WINDOWS__
+#if __wasi__
+#elif R2__WINDOWS__
 	CloseHandle (b->hReadPipeIn);
 	CloseHandle (b->hReadPipeOut);
 	CloseHandle (b->hWritePipeIn);
@@ -198,7 +206,7 @@ bool bochs_open(libbochs_t* b, const char * pathBochs, const char * pathConfig) 
 		R_FREE (b->data);
 		return false;
 	}
-#if __WINDOWS__
+#if R2__WINDOWS__
 	struct _SECURITY_ATTRIBUTES PipeAttributes;
 	char commandline[1024];
 	PipeAttributes.nLength = 12;
@@ -218,18 +226,18 @@ bool bochs_open(libbochs_t* b, const char * pathBochs, const char * pathConfig) 
 		b->info.hStdInput = b->hWritePipeIn;
 		b->info.dwFlags |=  STARTF_USESTDHANDLES;
 		snprintf (commandline, sizeof (commandline), "\"%s\" -f \"%s\" -q ", pathBochs, pathConfig);
-		lprintf ("*** Creating process: %s\n", commandline);
+		R_LOG_DEBUG ("*** Creating process: %s", commandline);
 		commandline_ = r_sys_conv_utf8_to_win (commandline);
 		if (CreateProcess (NULL, commandline_, NULL, NULL, TRUE, CREATE_NEW_CONSOLE,
 				NULL, NULL, &b->info, &b->processInfo)) {
-			lprintf ("Process created\n");
+			R_LOG_DEBUG ("Process created");
 			WaitForInputIdle (b->processInfo.hProcess, INFINITE);
-			lprintf ("Initialized input\n");
+			R_LOG_DEBUG ("Initialized input");
 			b->isRunning = true;
 			bochs_reset_buffer (b);
-			eprintf ("Waiting for bochs...\n");
+			R_LOG_INFO ("Waiting for bochs");
 			if (bochs_wait (b)) {
-				eprintf ("Ready.\n");
+				R_LOG_INFO ("Ready");
 				result = true;
 			} else {
 				bochs_close (b);
@@ -237,6 +245,9 @@ bool bochs_open(libbochs_t* b, const char * pathBochs, const char * pathConfig) 
 		}
 		free (commandline_);
 	}
+	return result;
+#elif __wasi__
+	// nothing
 #else
 	#define PIPE_READ 0
 	#define PIPE_WRITE 1
@@ -245,33 +256,37 @@ bool bochs_open(libbochs_t* b, const char * pathBochs, const char * pathConfig) 
 	int nChild;
 
 	if (pipe (aStdinPipe) < 0) {
-		eprintf ("Error: allocating pipe for child input redirect");
-		return false;
+		R_LOG_ERROR ("allocating pipe for child input redirect");
+		R_FREE (b->data);
+		R_FREE (lpTmpBuffer);
+		return result;
 	}
-	if (pipe(aStdoutPipe) < 0) {
+	if (pipe (aStdoutPipe) < 0) {
 		close (aStdinPipe[PIPE_READ]);
 		close (aStdinPipe[PIPE_WRITE]);
-		eprintf ("Error: allocating pipe for child output redirect");
-		return false;
+		R_LOG_ERROR ("allocating pipe for child output redirect");
+		R_FREE (b->data);
+		R_FREE (lpTmpBuffer);
+		return result;
 	}
 
 	nChild = fork ();
 	if (0 == nChild) {
 		// redirect stdin
 		if (dup2 (aStdinPipe[PIPE_READ], STDIN_FILENO) == -1) {
-			eprintf ("Error: redirecting stdin");
+			R_LOG_ERROR ("redirecting stdin");
 			return false;
 		}
 
 		// redirect stdout
 		if (dup2 (aStdoutPipe[PIPE_WRITE], STDOUT_FILENO) == -1) {
-			eprintf ("Error: redirecting stdout");
+			R_LOG_ERROR ("redirecting stdout");
 			return false;
 		}
 
 		// redirect stderr
 		if (dup2 (aStdoutPipe[PIPE_WRITE], STDERR_FILENO) == -1) {
-			eprintf ("Error: redirecting stderr");
+			R_LOG_ERROR ("redirecting stderr");
 			return false;
 		}
 
@@ -287,22 +302,23 @@ bool bochs_open(libbochs_t* b, const char * pathBochs, const char * pathConfig) 
 		close (aStdoutPipe[PIPE_WRITE]);
 
 		if (read (aStdoutPipe[PIPE_READ], lpTmpBuffer, 1) != 1) {
-			eprintf ("boch_open failed");
+			R_LOG_ERROR ("boch_open failed");
 			bochs_close (b);
 		} else {
 			b->hReadPipeIn  = aStdoutPipe[PIPE_READ];
 			b->hWritePipeOut = aStdinPipe[PIPE_WRITE];
 			b->isRunning = true;
 			bochs_reset_buffer (b);
-			eprintf ("Waiting for bochs...\n");
+			R_LOG_INFO ("Waiting for bochs");
 			if (bochs_wait (b)) {
-				eprintf ("Ready.\n");
+				R_LOG_INFO ("Ready");
 				b->pid = nChild;
 				result = true;
 			} else {
 				bochs_close (b);
 			}
 		}
+		return result;
 	} else {
 		perror ("pipe");
 		// failed to create child
@@ -312,5 +328,7 @@ bool bochs_open(libbochs_t* b, const char * pathBochs, const char * pathConfig) 
 		close (aStdoutPipe[PIPE_WRITE]);
 	}
 #endif
+	R_FREE (b->data);
+	R_FREE (lpTmpBuffer);
 	return result;
 }

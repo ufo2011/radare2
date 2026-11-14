@@ -1,32 +1,27 @@
+# merged: SuperH s af pif
 NAME=SuperH iI elf
 FILE=bins/sh/loop.elf
 CMDS=<<EOF
 iI~arch
 iI~endian
 iI~machine
-EOF
-EXPECT=<<EOF
-arch     sh
-endian   big
-machine  Hitachi SH
-EOF
-RUN
-
-NAME=SuperH s af pif
-FILE=bins/sh/loop.elf
-CMDS=<<EOF
+?e --
 s sym._called_in_loop
 af
 pif
 EOF
 EXPECT=<<EOF
+arch     sh
+endian   big
+machine  Hitachi SH
+--
 mov.l r14, @-r15
 mov r15, r14
-mov.l @(0x14,pc), r1
+invalid
 mov.l @r1, r1
 mov r1, r2
 add 0x01, r2
-mov.l @(0xc,pc), r1
+invalid
 mov.l r2, @r1
 nop
 mov r14, r15
@@ -44,5 +39,44 @@ af@0
 af fuck@0x6
 EOF
 EXPECT=<<EOF
+EOF
+RUN
+
+NAME=SuperH s af pdf
+FILE=bins/sh/loop.elf
+CMDS=<<EOF
+e asm.flags=false
+s sym._called_in_loop
+af
+pdf
+EOF
+EXPECT=<<EOF
+/ 26: entry0 ();
+|           0x00001000      2fe6           mov.l r14, @-r15            ; [01] -r-x section size 116 named .text
+|           0x00001002      6ef3           mov r15, r14
+|           0x00001004      d105           invalid
+|           0x00001006      6112           mov.l @r1, r1
+|           0x00001008      6213           mov r1, r2
+|           0x0000100a      7201           add 0x01, r2
+|           0x0000100c      d103           invalid
+|           0x0000100e      2122           mov.l r2, @r1
+|           0x00001010      0009           nop
+|           0x00001012      6fe3           mov r14, r15
+|           0x00001014      6ef6           mov.l @r15+, r14
+|           0x00001016      000b           rts
+\           0x00001018      0009           nop
+EOF
+RUN
+
+NAME=sh4 cc clobber and preserve register sets
+FILE=malloc://16
+ARGS=-e anal.arch=sh -e asm.bits=32
+CMDS=<<EOF
+k anal/cc/cc.sh4.clobber
+k anal/cc/cc.sh4.preserve
+EOF
+EXPECT=<<EOF
+r0,r1,r2,r3,r4,r5,r6,r7,pr,mach,macl,fr0,fr1,fr2,fr3,fr4,fr5,fr6,fr7,fr8,fr9,fr10,fr11
+r8,r9,r10,r11,r12,r13,r14,r15,fr12,fr13,fr14,fr15
 EOF
 RUN

@@ -1,7 +1,6 @@
 NAME=ands (opcode) triggers zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -18,7 +17,6 @@ RUN
 NAME=ands (opcode) triggers zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=5
@@ -35,7 +33,6 @@ RUN
 NAME=ands triggers zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -52,7 +49,6 @@ RUN
 NAME=ands triggers zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=5
@@ -69,7 +65,6 @@ RUN
 NAME=and (no s flag) does not trigger zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -86,7 +81,6 @@ RUN
 NAME=and (no s flag) does not trigger zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=5
@@ -103,7 +97,6 @@ RUN
 NAME=orrs triggers zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -120,7 +113,6 @@ RUN
 NAME=orrs triggers zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=5
@@ -137,7 +129,6 @@ RUN
 NAME=orrs (opcode) triggers zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -154,7 +145,6 @@ RUN
 NAME=orrs (opcode) triggers zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=5
@@ -171,7 +161,6 @@ RUN
 NAME=orr (no s flag) does not trigger zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -188,7 +177,6 @@ RUN
 NAME=orr (no s flag) does not trigger zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=5
@@ -205,7 +193,6 @@ RUN
 NAME=adds triggers zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -222,7 +209,6 @@ RUN
 NAME=adds triggers zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=2
@@ -240,7 +226,6 @@ RUN
 NAME=add (no s flag) does not trigger zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=0
@@ -257,7 +242,6 @@ RUN
 NAME=add (no s flag) does not trigger zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=2
@@ -275,7 +259,6 @@ RUN
 NAME=eors (opcode) triggers zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=1
@@ -292,7 +275,6 @@ RUN
 NAME=eors (opcode) triggers zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=2
@@ -310,7 +292,6 @@ RUN
 NAME=eors triggers zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=1
@@ -327,7 +308,6 @@ RUN
 NAME=eors triggers zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=2
@@ -345,7 +325,6 @@ RUN
 NAME=eor (no s flag) does not trigger zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=1
@@ -362,7 +341,6 @@ RUN
 NAME=eor (no s flag) does not trigger zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=2
@@ -380,7 +358,6 @@ RUN
 NAME=subs triggers zf and cf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=1
@@ -397,7 +374,6 @@ RUN
 NAME=subs triggers cf and zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=2
@@ -414,7 +390,6 @@ RUN
 NAME=sub (no s flag) does not trigger zf
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=1
@@ -431,7 +406,6 @@ RUN
 NAME=sub (no s flag) does not trigger zf off
 FILE=-
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aer r2=2
@@ -448,7 +422,6 @@ RUN
 NAME=cmp neq unchanged zf
 FILE=malloc://0x200
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aei
@@ -467,7 +440,6 @@ RUN
 NAME=cmp neq changed zf
 FILE=malloc://0x200
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aei
@@ -487,7 +459,6 @@ RUN
 NAME=cmp eq unchanged zf
 FILE=malloc://0x200
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aei
@@ -508,7 +479,6 @@ RUN
 NAME=cmp eq changed zf
 FILE=malloc://0x200
 CMDS=<<EOF
-e esil.debug=true
 e asm.arch=arm
 e asm.bits=32
 aei
@@ -892,6 +862,40 @@ EOF
 EXPECT=<<EOF
 0xaabbccdd
 0xdeadbeef
+EOF
+RUN
+
+NAME=ldr r1, [pc, r1]
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=32
+ar r1=4
+# load the word at pc + r1, pc reading 8 ahead
+wx 01109fe7 # ldr r1, [pc, r1]
+wx ddccbbaa @ 12
+aes
+ar r1
+EOF
+EXPECT=<<EOF
+0xaabbccdd
+EOF
+RUN
+
+NAME=ldr r1, [pc, -r1]
+FILE=malloc://0x200
+CMDS=<<EOF
+e asm.arch=arm
+e asm.bits=32
+ar r1=4
+# load the word at pc - r1, pc reading 8 ahead
+wx 01101fe7 # ldr r1, [pc, -r1]
+wx ddccbbaa @ 4
+aes
+ar r1
+EOF
+EXPECT=<<EOF
+0xaabbccdd
 EOF
 RUN
 
@@ -3091,5 +3095,1368 @@ aer r3
 EOF
 EXPECT=<<EOF
 0x00000002
+EOF
+RUN
+
+NAME=arm cmn sets nzcv from rn+op2 (reg, overflow, immediate)
+FILE=malloc://64
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 010070e1
+ar r0=1
+ar r1=0xffffffff
+ar pc=0
+s 0
+aes
+ar zf
+ar cf
+ar nf
+ar vf
+ar r0=0x40000000
+ar r1=0x40000000
+ar pc=0
+aes
+ar nf
+ar vf
+ar cf
+ar zf
+wx 050070e3
+ar r0=0xfffffffb
+ar pc=0
+aes
+ar zf
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000000
+0x00000000
+0x00000001
+0x00000001
+0x00000000
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=arm movt replaces top16 preserving low16
+FILE=malloc://64
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 340241e3
+ar r0=0xffffffff
+ar pc=0
+s 0
+aes
+ar r0
+wx cd0b4ae3
+ar r0=0x0000ffff
+ar pc=0
+aes
+ar r0
+EOF
+EXPECT=<<EOF
+0x1234ffff
+0xabcdffff
+EOF
+RUN
+
+NAME=rev family reverses a register into itself
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 300fbfe6
+aer r0=0x12345680
+aes
+aer r0
+wx b00fbfe6
+aer r0=0x12345680
+aer PC=0
+aes
+aer r0
+wx b00fffe6
+aer r0=0x12345680
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x80563412
+0x34128056
+0xffff8056
+EOF
+RUN
+
+NAME=clz counts the zeros of a register that is also its destination
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 100f6fe1
+aer r0=0x1234f680
+aes
+aer r0
+aer r0=0x00001234
+aer PC=0
+aes
+aer r0
+aer r0=0
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x00000003
+0x00000013
+0x00000020
+EOF
+RUN
+
+NAME=a conditional rev keeps its condition
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 300fbf16
+aer cpsr=0
+aer r0=0x12345680
+aes
+aer r0
+aer cpsr=0x40000000
+aer r0=0x12345680
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x80563412
+0x12345680
+EOF
+RUN
+
+NAME=a conditional clz keeps its condition
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 100f6f11
+aer cpsr=0
+aer r0=0x00001234
+aes
+aer r0
+aer cpsr=0x40000000
+aer r0=0x00001234
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x00000013
+0x00001234
+EOF
+RUN
+
+NAME=adc sbc and rsc assign their result instead of accumulating it
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 0200a1e0
+aer cpsr=0x20000000
+aer r0=0x1000
+aer r1=9
+aer r2=3
+aer PC=0
+aes
+aer r0
+wx 0200c1e0
+aer cpsr=0x20000000
+aer r0=0x1000
+aer r1=9
+aer r2=3
+aer PC=0
+aes
+aer r0
+wx 0200e1e0
+aer cpsr=0x20000000
+aer r0=0x1000
+aer r1=9
+aer r2=3
+aer PC=0
+aes
+aer r0
+wx 010da1e2
+aer cpsr=0x20000000
+aer r0=0x1000
+aer r1=9
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x0000000d
+0x00000006
+0xfffffffa
+0x0000004a
+EOF
+RUN
+
+NAME=sbc and rsc borrow the complement of the carry flag
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 0200c1e0
+aer cpsr=0
+aer r0=0x1000
+aer r1=9
+aer r2=3
+aer PC=0
+aes
+aer r0
+wx 0200e1e0
+aer cpsr=0
+aer r0=0x1000
+aer r1=9
+aer r2=3
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x00000005
+0xfffffff9
+EOF
+RUN
+
+NAME=the unprivileged loads write back their post-index offset
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 11223344 @ 0x40
+wx 0100f3e4 @ 0
+aei
+aeim
+aer r3=0x40
+aer PC=0
+aes
+aer r0
+aer r3
+wx 0400b3e4 @ 0
+aer r3=0x40
+aer PC=0
+aes
+aer r0
+aer r3
+wx 0100b3e6 @ 0
+aer r3=0x40
+aer r1=4
+aer PC=0
+aes
+aer r0
+aer r3
+wx 040013e4 @ 0
+aer r3=0x40
+aer PC=0
+aes
+aer r0
+aer r3
+EOF
+EXPECT=<<EOF
+0x00000011
+0x00000041
+0x44332211
+0x00000044
+0x44332211
+0x00000044
+0x44332211
+0x0000003c
+EOF
+RUN
+
+NAME=a register shift count is taken from the low byte of the register
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 1102a0e1 @ 0
+aer r1=0x80000005
+aer r2=255
+aer PC=0
+aes
+aer r0
+aer r2=256
+aer PC=0
+aes
+aer r0
+wx 3102a0e1 @ 0
+aer r2=256
+aer PC=0
+aes
+aer r0
+wx 5102a0e1 @ 0
+aer r2=40
+aer PC=0
+aes
+aer r0
+wx 7102a0e1 @ 0
+aer r2=256
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x00000000
+0x80000005
+0x80000005
+0xffffffff
+0x80000005
+EOF
+RUN
+NAME=the shift carry follows the count that was actually applied
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 1102b0e1 @ 0
+aer r1=0x80000005
+aer r2=31
+aer cf=1
+aer PC=0
+aes
+aer cf
+wx 5102b0e1 @ 0
+aer r2=40
+aer cf=0
+aer PC=0
+aes
+aer cf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+EOF
+RUN
+NAME=asr by 32 fills the register with the sign bit
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 4100a0e1 @ 0
+aer r1=0x80000000
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0xffffffff
+EOF
+RUN
+NAME=rrx rotates the carry in and rrxs takes the carry from the source
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 6100a0e1 @ 0
+aer r1=0x80000000
+aer cf=1
+aer PC=0
+aes
+aer r0
+aer cf
+wx 6100b0e1 @ 0
+aer r1=0x80000000
+aer cf=1
+aer PC=0
+aes
+aer r0
+aer cf
+EOF
+EXPECT=<<EOF
+0xc0000000
+0x00000001
+0xc0000000
+0x00000000
+EOF
+RUN
+
+NAME=the signed byte and halfword loads sign-extend
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 90 @ 0x3f
+wx 80ff @ 0x44
+aei
+aeim
+wx d400d3e1 @ 0
+aer r3=0x40
+aer PC=0
+aes
+aer r0
+wx f400d3e1 @ 0
+aer r3=0x40
+aer PC=0
+aes
+aer r0
+wx d10053e1 @ 0
+aer r3=0x40
+aer PC=0
+aes
+aer r0
+wx d400f3e1 @ 0
+aer r3=0x40
+aer PC=0
+aes
+aer r0
+aer r3
+EOF
+EXPECT=<<EOF
+0xffffff80
+0xffffff80
+0xffffff90
+0xffffff80
+0x00000044
+EOF
+RUN
+NAME=sxtb and sxth extend the low bits and honour the rotation
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 7100bfe6 @ 0
+aer r1=0x1234
+aer PC=0
+aes
+aer r0
+aer r1=0xf234
+aer PC=0
+aes
+aer r0
+wx 7104afe6 @ 0
+aer r1=0xf200
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x00001234
+0xfffff234
+0xfffffff2
+EOF
+RUN
+NAME=uadd8 adds each byte on its own and leaves the flags alone
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 920f51e6 @ 0
+aer r1=0x80ff0102
+aer r2=0x80010102
+aer zf=1
+aer PC=0
+aes
+aer r0
+aer zf
+EOF
+EXPECT=<<EOF
+0x00000204
+0x00000001
+EOF
+RUN
+NAME=asr by the register width or more is the sign fill and asrs keeps the carry
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+aer r1=0x80000005
+ae 32,r1,ASR
+ae 40,r1,ASR
+wx 5102b0e1 @ 0
+aer r2=255
+aer cf=0
+aer PC=0
+aes
+aer cf
+aer r0
+aer r2=64
+aer cf=0
+aer PC=0
+aes
+aer cf
+aer r1=0x7fffffff
+aer r2=255
+aer cf=1
+aer PC=0
+aes
+aer cf
+aer r0
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff
+0xffffffffffffffff
+0x00000001
+0xffffffff
+0x00000001
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=register shifted operand uses only the low byte of the shift register
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+aer r1=1
+aer r2=0x80000005
+aer r3=0x100
+wx 520381e0 @ 0
+aer PC=0
+aes
+aer r0
+wx 120381e0 @ 0
+aer PC=0
+aes
+aer r0
+wx 320381e0 @ 0
+aer PC=0
+aes
+aer r0
+aer r3=0x105
+wx 520381e0 @ 0
+aer PC=0
+aes
+aer r0
+aer r3=0x20
+wx 520381e0 @ 0
+aer PC=0
+aes
+aer r0
+wx 120381e0 @ 0
+aer PC=0
+aes
+aer r0
+wx 320381e0 @ 0
+aer PC=0
+aes
+aer r0
+EOF
+EXPECT=<<EOF
+0x80000006
+0x80000006
+0x80000006
+0xfc000001
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=immediate shifts with the s suffix take the carry from the source register
+FILE=malloc://0x200
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+aer r1=0x20000004
+wx a101b0e1 @ 0
+aer PC=0
+aes
+aer r0
+aer cf
+wx c101b0e1 @ 0
+aer PC=0
+aes
+aer r0
+aer cf
+wx 8101b0e1 @ 0
+aer PC=0
+aes
+aer r0
+aer cf
+wx e101b0e1 @ 0
+aer PC=0
+aes
+aer r0
+aer cf
+aer r1=0x80000008
+wx c101b0e1 @ 0
+aer PC=0
+aes
+aer r0
+aer cf
+wx a101b0e1 @ 0
+aer cf=1
+aer PC=0
+aes
+aer r0
+aer cf
+EOF
+EXPECT=<<EOF
+0x04000000
+0x00000001
+0x04000000
+0x00000001
+0x00000020
+0x00000001
+0x84000000
+0x00000001
+0xf0000001
+0x00000000
+0x10000001
+0x00000000
+EOF
+RUN
+
+NAME=big endian cpsr flags alias the same bits
+FILE=malloc://16
+ARGS=-a arm -b 32 -e cfg.bigendian=true
+CMDS=<<EOF
+ar cpsr=0x20000000
+ar cf
+ar cf=0
+ar zf=1
+ar cpsr
+EOF
+EXPECT=<<EOF
+0x00000001
+0x40000000
+EOF
+RUN
+
+NAME=little endian cpsr flags alias the same bits
+FILE=malloc://16
+ARGS=-a arm -b 32 -e cfg.bigendian=false
+CMDS=<<EOF
+ar cpsr=0x20000000
+ar cf
+ar cf=0
+ar zf=1
+ar cpsr
+EOF
+EXPECT=<<EOF
+0x00000001
+0x40000000
+EOF
+RUN
+
+NAME=arm32 svceq esil is conditional
+FILE=malloc://16
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 0000000f000000ef
+aoe 1
+aoe 1 @ 4
+EOF
+EXPECT=<<EOF
+0x00000000 zf,?{,0,$,}
+0x00000004 0,$
+EOF
+RUN
+
+NAME=arm32 bfc bfi conditional esil
+FILE=malloc://16
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 1f00c7071f00cfe71100c707
+aoe 1
+aoe 1 @ 4
+aoe 1 @ 8
+EOF
+EXPECT=<<EOF
+0x00000000 zf,?{,18446744073709551360,r0,&,0xffffffff,&,r0,=,}
+0x00000004 18446744073709486080,r0,&,0xffffffff,&,r0,=
+0x00000008 zf,?{,18446744073709551360,r0,&,0,255,r1,&,<<,|,0xffffffff,&,r0,=,}
+EOF
+RUN
+
+NAME=arm32 conditional vldm/vstm/nop keep the condition prefix
+FILE=malloc://32
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 020b901c041b801c041b201d080b301d00f02013
+aoe 5
+EOF
+EXPECT=<<EOF
+0x00000000 zf,!,?{,0,r0,+,[8],d0,=,,}
+0x00000004 zf,!,?{,d1,0,r0,+,=[8],d2,8,r0,+,=[8],,}
+0x00000008 zf,!,?{,d2,8,r0,-,=[8],d1,16,r0,-,=[8],16,r0,-=,,}
+0x0000000c zf,!,?{,8,r0,-,[8],d3,=,16,r0,-,[8],d2,=,24,r0,-,[8],d1,=,32,r0,-,[8],d0,=,32,r0,-=,,}
+0x00000010 zf,!,?{,,}
+EOF
+RUN
+
+NAME=arm32 unconditional vldmia and bkpt stay unguarded
+FILE=malloc://16
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 020b90ec700020e1
+aoe 2
+EOF
+EXPECT=<<EOF
+0x00000000 0,r0,+,[8],d0,=,
+0x00000004 0,0,TRAP
+EOF
+RUN
+
+NAME=arm32 sdiv and udiv esil
+FILE=malloc://16
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 11f210e711f230e7
+aei
+ar r1=-100
+ar r2=7
+aes
+ar r0
+ar r1=-100
+aes
+ar r0
+ar pc=0
+ar r0=9
+ar r2=0
+aes
+ar r0
+ar r0=9
+ar r1=100
+aes
+ar r0
+ar pc=0
+ar r2=-7
+aes
+ar r0
+ar pc=0
+ar r1=0x80000000
+ar r2=-1
+aes
+ar r0
+EOF
+EXPECT=<<EOF
+0xfffffff2
+0x24924916
+0x00000000
+0x00000000
+0xfffffff2
+0x80000000
+EOF
+RUN
+
+NAME=arm32 sdiveq and udiveq honour the condition
+FILE=malloc://16
+ARGS=-a arm -b 32
+CMDS=<<EOF
+wx 11f2100711f23007
+aei
+ar zf=0
+ar r0=9
+ar r1=100
+ar r2=7
+aes
+ar r0
+aes
+ar r0
+s 0
+ar pc=0
+ar zf=1
+aes
+ar r0
+ar r0=9
+aes
+ar r0
+EOF
+EXPECT=<<EOF
+0x00000009
+0x00000009
+0x0000000e
+0x0000000e
+EOF
+RUN
+
+NAME=arm32 rrx shifted register operand
+FILE=malloc://0x100
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 620081e0
+ar r1=0
+ar r2=3
+ar cpsr=0x20000000
+aes
+ar r0
+s 0
+wx 620021e0
+ar pc=0
+ar r1=0
+ar r2=0
+ar cpsr=0x20000000
+aes
+ar r0
+EOF
+EXPECT=<<EOF
+0x80000001
+0x80000000
+EOF
+RUN
+
+NAME=arm32 rbit, sbfx, pkhbt and pkhtb
+FILE=malloc://0x100
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 310fffe6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 310fffe6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx d101a4e7
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx d101a4e7
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 5100bfe7
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 5100bfe7
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx d10fa0e7
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx d10fa0e7
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 120081e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 120081e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 120481e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 120481e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 520481e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 520481e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx d20f81e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx d20f81e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+EOF
+EXPECT=<<EOF
+0x80feff01
+0x1e6a2c48
+0x00000000
+0x0000000f
+0x80ff7f01
+0x12345678
+0xffffffff
+0x00000000
+0x7ffe7f01
+0xfedc5678
+0xfe807f01
+0xdcba5678
+0x80fffe80
+0x1234dcba
+0x80ff0000
+0x1234ffff
+EOF
+RUN
+
+NAME=arm32 smull, umlal, smlal and umaal use the 64-bit result, umulls sets z from all of it
+FILE=malloc://0x100
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+s 0
+wx 9203c1e0
+ar pc=0
+ar r0=0x0
+ar r1=0x0
+ar r2=0xffffffff
+ar r3=0x2
+aes
+ar r0
+ar r1
+s 0
+wx 920391e0
+ar pc=0
+ar r0=0x0
+ar r1=0x0
+ar r2=0x2
+ar r3=0x3
+ar cpsr=0x0
+aes
+ar r0
+ar r1
+ar cpsr
+s 0
+wx 9203a1e0
+ar pc=0
+ar r0=0xffffffff
+ar r1=0x0
+ar r2=0x1
+ar r3=0x1
+aes
+ar r0
+ar r1
+s 0
+wx 9203e1e0
+ar pc=0
+ar r0=0x0
+ar r1=0x0
+ar r2=0xffffffff
+ar r3=0x1
+aes
+ar r0
+ar r1
+s 0
+wx 920341e0
+ar pc=0
+ar r0=0xffffffff
+ar r1=0xffffffff
+ar r2=0xffffffff
+ar r3=0xffffffff
+aes
+ar r0
+ar r1
+s 0
+wx 9203f1e0
+ar pc=0
+ar r0=0x0
+ar r1=0x0
+ar r2=0xffffffff
+ar r3=0x1
+ar cpsr=0x0
+aes
+ar r0
+ar r1
+ar cpsr
+s 0
+wx 9203b1e0
+ar pc=0
+ar r0=0x0
+ar r1=0x0
+ar r2=0x0
+ar r3=0x5
+ar cpsr=0x0
+aes
+ar r0
+ar r1
+ar cpsr
+EOF
+EXPECT=<<EOF
+0xfffffffe
+0xffffffff
+0x00000006
+0x00000000
+0x00000000
+0x00000000
+0x00000001
+0xffffffff
+0xffffffff
+0xffffffff
+0xffffffff
+0xffffffff
+0xffffffff
+0x80000000
+0x00000000
+0x00000000
+0x40000000
+EOF
+RUN
+
+NAME=arm32 uxth, uxtb16, sxtb16 and the extend and add instructions
+FILE=malloc://0x100
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 7100ffe6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7100ffe6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 7104ffe6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7104ffe6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 7100cfe6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7100cfe6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 71048fe6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 71048fe6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 7200e1e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7200e1e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 7208f1e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7208f1e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 7200a1e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7200a1e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 7204b1e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7204b1e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 7200c1e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 7200c1e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+wx 720881e6
+ar pc=0
+ar r1=0x80ff7f01
+ar r2=0x7ffe8081
+aes
+ar r0
+wx 720881e6
+ar pc=0
+ar r1=0x12345678
+ar r2=0xfedcba98
+aes
+ar r0
+EOF
+EXPECT=<<EOF
+0x00007f01
+0x00005678
+0x0000ff7f
+0x00003456
+0x00ff0001
+0x00340078
+0xff80007f
+0x00120056
+0x80ff7f82
+0x12345710
+0x80fffeff
+0x12355554
+0x80ff7e82
+0x12345610
+0x80ff7d81
+0x12343332
+0x81fd7f82
+0x13105710
+0x80807eff
+0x11cc5654
+EOF
+RUN
+
+NAME=arm32 teq sets n and z from the exclusive or and keeps c and v
+FILE=malloc://0x100
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 020031e1
+ar r1=0x80000000
+ar r2=0
+ar cpsr=0x30000000
+aes
+ar cpsr
+s 0
+ar pc=0
+ar r1=5
+ar r2=5
+ar cpsr=0x30000000
+aes
+ar cpsr
+ao~^type:
+EOF
+EXPECT=<<EOF
+0xb0000000
+0x70000000
+type: cmp
+EOF
+RUN
+
+NAME=arm32 adds, subs, rsbs, adcs and sbcs set nzcv from the operands, adc keeps them
+FILE=malloc://0x100
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+s 0
+wx 020091e0
+ar pc=0
+ar r0=0xdeadbeef
+ar r1=0
+ar r2=0
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 020091e0
+ar pc=0
+ar r1=0xffffffff
+ar r2=1
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 020091e0
+ar pc=0
+ar r1=0x7fffffff
+ar r2=1
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 020051e0
+ar pc=0
+ar r0=0xdeadbeef
+ar r1=0
+ar r2=0x80000000
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 010050e2
+ar pc=0
+ar r0=0
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 000071e2
+ar pc=0
+ar r1=1
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 000071e2
+ar pc=0
+ar r0=0xdeadbeef
+ar r1=0
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 0200b1e0
+ar pc=0
+ar r1=0xffffffff
+ar r2=0
+ar cpsr=0x20000000
+aes
+ar r0
+ar cpsr
+s 0
+wx 0200d1e0
+ar pc=0
+ar r1=0
+ar r2=0
+ar cpsr=0
+aes
+ar r0
+ar cpsr
+s 0
+wx 0100a1e2
+ar pc=0
+ar r1=5
+ar cpsr=0x20000000
+aes
+ar r0
+ar cpsr
+EOF
+EXPECT=<<EOF
+0x00000000
+0x40000000
+0x00000000
+0x60000000
+0x80000000
+0x90000000
+0x80000000
+0x90000000
+0xffffffff
+0x80000000
+0xffffffff
+0x80000000
+0x00000000
+0x60000000
+0x00000000
+0x60000000
+0xffffffff
+0x80000000
+0x00000007
+0x20000000
+EOF
+RUN
+
+NAME=arm32 cmp sets v on a signed overflow, cmn sets c
+FILE=malloc://0x100
+ARGS=-a arm -b 32
+CMDS=<<EOF
+aei
+aeim
+wx 020051e1
+ar r1=0
+ar r2=0x80000000
+ar cpsr=0
+aes
+ar cpsr
+s 0
+wx 020071e1
+ar pc=0
+ar r1=0xffffffff
+ar r2=1
+ar cpsr=0
+aes
+ar cpsr
+EOF
+EXPECT=<<EOF
+0x90000000
+0x60000000
 EOF
 RUN

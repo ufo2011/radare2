@@ -1,175 +1,61 @@
-sdb_files = [
-  'aclui',
-  'activeds',
-  'atl',
-  'borlndmm',
-  'browseui',
-  'cabinet',
-  'comctl32',
-  'csmfpapi',
-  'csmtpapi',
-  'csncdapi',
-  'dsound',
-  'gsprop32',
-  'iertutil',
-  'kernel32',
-  'mfc120',
-  'mfc30',
-  'mfc40',
-  'mfc42',
-  'mfc42u',
-  'mfc71',
-  'mfc71u',
-  'mfc90u',
-  'msi',
-  'mstlsapi',
-  'msvbvm50',
-  'msvbvm60',
-  'odbc32',
-  'oleaut32',
-  'olecli32',
-  'oledlg',
-  'olepro32',
-  'olesvr32',
-  'shdocvw',
-  'shell32',
-  'shlwapi',
-  'spr32d70',
-  'urlmon',
-  'uxtheme',
-  'vb40032',
-  'vssapi',
-  'winmm',
-  'wldap32',
-  'ws2_32',
-  'wsnmp32',
-  'wsock32',
-  'AVICAP',
-  'AVIFILE',
-  'AWDEVL16',
-  'CARDS',
-  'CMC',
-  'COMM',
-  'COMMCTRL',
-  'COMMDLG',
-  'COMPOBJ',
-  'CSPMAN',
-  'DCIMAN',
-  'DDEML',
-  'DESKCP16',
-  'DIBENG',
-  'DISPDIB',
-  'DISPLAY',
-  'DSKMAINT',
-  'ENABLE3',
-  'FAXCODEC',
-  'GDI',
-  'INET16',
-  'IOSCLASS',
-  'KERNEL',
-  'KEYBOARD',
-  'LZEXPAND',
-  'MAINCP16',
-  'MAPI',
-  'MAPIU',
-  'MAPIX',
-  'MCIAVI',
-  'MCICDA',
-  'MCIMIDI',
-  'MCIOLE',
-  'MCIWAVE',
-  'MIDIMAP',
-  'ML3XEC16',
-  'MMCI',
-  'MMSYSTEM',
-  'MODEM',
-  'MODEMUI',
-  'MOUSE',
-  'MSACM',
-  'MSACMMAP',
-  'MSDOS',
-  'MSDOSD',
-  'MSJSTICK',
-  'MSMIXMGR',
-  'MSPCIC',
-  'MSPRINT',
-  'MSTCP',
-  'MSVIDEO',
-  'NETAPI',
-  'NETCPL',
-  'NETDI',
-  'NETOS',
-  'NETWARE',
-  'NW16',
-  'OLE2',
-  'OLE2CONV',
-  'OLE2DISP',
-  'OLE2NLS',
-  'OLECLI',
-  'OLESVR',
-  'PIFMGR',
-  'PKPD',
-  'PMSPL',
-  'POWER',
-  'RASAPI16',
-  'RNASETUP',
-  'RSRC16',
-  'SB16SND',
-  'SBFM',
-  'SETUP4',
-  'SETUPX',
-  'SHELL',
-  'SOUND',
-  'SPOOLER',
-  'STORAGE',
-  'SYSCLASS',
-  'SYSDETMG',
-  'SYSDM',
-  'SYSEDIT',
-  'SYSTEM',
-  'SYSTHUNK',
-  'TAPI',
-  'TAPIADDR',
-  'TOOLHELP',
-  'TYPELIB',
-  'UMDM16',
-  'USER',
-  'VER',
-  'WHLP16T',
-  'WIN32S16',
-  'WIN87EM',
-  'WINASPI',
-  'WINNET16',
-  'WINOLDAP',
-  'WINSOCK',
-  'WINSPL16',
-  'WPSAPD',
-  'WPSUNI',
-  'WPSUNIRE',
-  'WSASRV'
-]
+subdir('dll')
 
+r_bin_d_sources = []
+if get_option('sdb_cgen')
+  r_bin_d_sources += r_bin_d_dll_sources
+endif
+
+# Build format SDB files
+sdb_files = [ 'symclass' ]
+
+# Build all format SDB files at once using 'sdb -r .'
+format_sdb_files = []
 foreach file : sdb_files
-  outfile = '@0@.sdb'.format(file)
-  custom_target(outfile,
-    input: 'dll/@0@.sdb.txt'.format(file),
-    output: outfile,
-    command: sdb_gen_cmd,
+  format_sdb_files += '@0@.sdb'.format(file)
+  if get_option('sdb_cgen')
+    format_sdb_files += '@0@.c'.format(file)
+  endif
+endforeach
+
+# Create environment with output directory set
+format_sdb_env = environment()
+format_sdb_env.set('SDB_OUTPUT_DIR', meson.current_build_dir())
+
+if host_machine.system() != 'uefi'
+  r_bin_d_format_sources = custom_target('format-sdb',
+    input: [],
+    output: format_sdb_files,
+    command: [sdb_exe, '-r', meson.current_source_dir()],
+    env: format_sdb_env,
     depends: sdb_exe,
     build_by_default: true,
     install: true,
-    install_dir: join_paths(r2_sdb, 'format/dll')
+    install_dir: join_paths(r2_sdb, join_paths('format'))
   )
-endforeach
+else
+  r_bin_d_format_sources = []
+endif
+
+if get_option('sdb_cgen')
+  r_bin_d_sources += r_bin_d_format_sources
+endif
 
 format_files = [
-  'elf32',
-  'elf64',
-  'elf_enums',
-  'pe32',
-  'trx',
-  'mz',
-  'zip'
+  'cdex.h',
+  'dex.h',
+  'jni.h',
+  'bios.r2',
+  'dex.r2',
+  'elf32.r2',
+  'elf64.r2',
+  'elf_enums.r2',
+  'fatmacho.r2',
+  'macho.r2',
+  'mz.r2',
+  'ntfs.r2',
+  'pe32.r2',
+  'trx.r2',
+  'zip.r2',
 ]
 
 install_data(format_files,

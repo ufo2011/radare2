@@ -1,4 +1,6 @@
 #include <r_util.h>
+#include <r_util/r_ref.h>
+#include <r_core.h>
 #include "minunit.h"
 
 static Sdb *setup_sdb(void) {
@@ -104,6 +106,10 @@ bool test_autonames(void) {
 	mu_assert_null (s, "initial _ should not confuse the api");
 	free (s);
 
+	s = r_type_func_guess (TDB, "sub.___strchr_123");
+	mu_assert_null (s, "a third _ should not confuse the api");
+	free (s);
+
 	s = r_type_func_guess (TDB, "sym.imp.strchr");
 	mu_assert_notnull (s, "sym.imp. should be ignored");
 	mu_assert_streq (s, "strchr", "strchr should be identified");
@@ -115,7 +121,7 @@ bool test_autonames(void) {
 
 bool test_file_slurp(void) {
 
-#ifdef __WINDOWS__
+#ifdef R2__WINDOWS__
 #define S_IRWXU _S_IREAD | _S_IWRITE
 #endif
 
@@ -134,7 +140,9 @@ bool test_file_slurp(void) {
 
 	f = open (test_file, O_WRONLY, S_IRWXU);
 	mu_assert_neq (f, -1, "cannot reopen empty file");
-	write (f, some_words, strlen (some_words));
+	size_t len = strlen (some_words);
+	size_t res = write (f, some_words, len);
+	mu_assert_eq (res, len, "size and length must be the same");
 	close (f);
 
 	content = r_file_slurp (test_file, &s);
@@ -148,11 +156,34 @@ bool test_file_slurp(void) {
 	mu_end;
 }
 
+R_ALIGNED(4) static const char msg[] = "Hello World"; // const strings can have the lowerbit set
+R_TAGGED void *tagged(bool owned) {
+	if (owned) {
+		void *res = strdup ("hello world");
+		return R_TAG_NOP (res);
+	}
+	return R_TAG (msg);
+}
+
+bool test_tagged_pointers(void) {
+	void *a = tagged (false);
+	void *b = tagged (true);
+	// eprintf ("%p %p\n", a, b);
+	// eprintf ("%d %d\n", (size_t)a&1, (size_t)b&1);
+	mu_assert_eq (R_IS_TAGGED (a), 1, "tagged");
+	char *msg = R_UNTAG (a);
+	mu_assert_streq (msg, "Hello World", "faileq");
+	mu_assert_eq (R_IS_TAGGED (b), 0, "not tagged");
+	char *msg2 = R_UNTAG (b);
+	mu_assert_streq (msg2, "hello world", "faileq");
+	R_TAG_FREE (a);
+	R_TAG_FREE (b);
+	mu_end;
+}
+
 bool test_initial_underscore(void) {
 	Sdb *TDB = setup_sdb ();
-	char *s;
-
-	s = r_type_func_guess (TDB, "sym._strchr");
+	char *s = r_type_func_guess (TDB, "sym._strchr");
 	mu_assert_notnull (s, "sym._ should be ignored");
 	mu_assert_streq (s, "strchr", "strchr should be identified");
 	free (s);
@@ -167,37 +198,642 @@ typedef struct {
 	R_REF_TYPE;
 } TypeTest;
 
+static void r_type_test_free(TypeTest *tt) {
+	tt->name = "";
+	free (tt);
+}
+
 static TypeTest *r_type_test_new(const char *name) {
 	TypeTest *tt = R_NEW0 (TypeTest);
-	if (tt) {
-		r_ref_init (tt);
-		tt->name = name;
-	}
+	r_ref_init (tt, r_type_test_free);
+	tt->name = name;
 	return tt;
 }
 
-static void r_type_test_free(TypeTest *tt) {
-	tt->name = "";
-}
-
-R_REF_FUNCTIONS(TypeTest, r_type_test);
+// DEPRECATE R_REF_FUNCTIONS
+// R_REF_FUNCTIONS(TypeTest, r_type_test);
 
 bool test_references(void) {
 	TypeTest *tt = r_type_test_new ("foo");
-	mu_assert_eq (tt->refcount, 1, "reference count issue");
-	r_type_test_ref (tt);
-	mu_assert_eq (tt->refcount, 2, "reference count issue");
-	r_type_test_unref (tt);
+	mu_assert_eq (r_ref_count (tt), 1, "reference count issue");
+	tt = r_ref (tt);
+	mu_assert_eq (r_ref_count (tt), 2, "reference count issue");
+	r_unref (tt);
 	mu_assert_streq (tt->name, "foo", "typetest name should be foo");
-	mu_assert_eq (tt->refcount, 1, "reference count issue");
-	r_type_test_unref (tt); // tt becomes invalid
-	mu_assert_eq (tt->refcount, 0, "reference count issue");
-	mu_assert_streq (tt->name, "", "typetest name should be foo");
-	free (tt);
+	mu_assert_eq (r_ref_count (tt), 1, "reference count issue");
+	r_unref (tt); // tt becomes invalid
+	if (tt) {
+		mu_assert_eq (0, 1, "reference count invalidation is failing");
+		// mu_assert_eq (r_ref_count (tt), 0, "reference count issue");
+		// mu_assert_streq (tt->name, "", "typetest name should be foo");
+		free (tt);
+	}
 	mu_end;
 }
 
-int all_tests() {
+bool test_log(void) {
+	// Stand up a semi-realistic log environment with an RCore
+	RCore *core = r_core_new ();
+	r_log_set_quiet (true);
+
+	// https://github.com/radareorg/radare2/issues/22468
+	R_LOG_INFO ("%s", "");
+
+	r_core_free (core);
+	mu_end;
+}
+
+bool test_endian_tostring(void) {
+	// Test basic endian values
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_NONE), "none", "NONE should return 'none'");
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_LITTLE), "little", "LITTLE should return 'little'");
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_BIG), "big", "BIG should return 'big'");
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_MIDDLE), "middle", "MIDDLE should return 'middle'");
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_BI), "bi", "BI should return 'bi'");
+
+	// Test aliases
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_4321), "little", "4321 should return 'little'");
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_1234), "big", "1234 should return 'big'");
+	mu_assert_streq (r_sys_endian_tostring (R_SYS_ENDIAN_2134), "middle", "2134 should return 'middle'");
+
+	// Test unknown value
+	mu_assert_streq (r_sys_endian_tostring (999), "unknown", "unknown value should return 'unknown'");
+
+	// Test bitmask combinations
+	int bi_endian = R_SYS_ENDIAN_LITTLE | R_SYS_ENDIAN_BIG;
+	mu_assert_streq (r_sys_endian_tostring (bi_endian), "bi", "bitmask LITTLE|BIG should return 'bi'");
+
+	mu_end;
+}
+
+bool test_endian_fromstring(void) {
+	// Test basic endian strings
+	mu_assert_eq (r_sys_endian_fromstring ("none"), R_SYS_ENDIAN_NONE, "'none' should return NONE");
+	mu_assert_eq (r_sys_endian_fromstring ("little"), R_SYS_ENDIAN_LITTLE, "'little' should return LITTLE");
+	mu_assert_eq (r_sys_endian_fromstring ("big"), R_SYS_ENDIAN_BIG, "'big' should return BIG");
+	mu_assert_eq (r_sys_endian_fromstring ("middle"), R_SYS_ENDIAN_MIDDLE, "'middle' should return MIDDLE");
+	mu_assert_eq (r_sys_endian_fromstring ("bi"), R_SYS_ENDIAN_BI, "'bi' should return BI");
+
+	// Test numeric aliases
+	mu_assert_eq (r_sys_endian_fromstring ("4321"), R_SYS_ENDIAN_LITTLE, "'4321' should return LITTLE");
+	mu_assert_eq (r_sys_endian_fromstring ("1234"), R_SYS_ENDIAN_BIG, "'1234' should return BIG");
+	mu_assert_eq (r_sys_endian_fromstring ("2134"), R_SYS_ENDIAN_MIDDLE, "'2134' should return MIDDLE");
+
+	// Test case sensitivity (should be case sensitive)
+	mu_assert_eq (r_sys_endian_fromstring ("Little"), R_SYS_ENDIAN_NONE, "Case sensitive test - 'Little' should fail");
+	mu_assert_eq (r_sys_endian_fromstring ("BIG"), R_SYS_ENDIAN_NONE, "Case sensitive test - 'BIG' should fail");
+
+	// Test invalid strings
+	mu_assert_eq (r_sys_endian_fromstring ("invalid"), R_SYS_ENDIAN_NONE, "invalid string should return NONE");
+	mu_assert_eq (r_sys_endian_fromstring (""), R_SYS_ENDIAN_NONE, "empty string should return NONE");
+
+	mu_end;
+}
+
+bool test_endian_is(void) {
+	// Test basic endian checking
+	mu_assert_true (r_sys_endian_is (R_SYS_ENDIAN_LITTLE, R_SYS_ENDIAN_LITTLE), "LITTLE should match LITTLE");
+	mu_assert_true (r_sys_endian_is (R_SYS_ENDIAN_BIG, R_SYS_ENDIAN_BIG), "BIG should match BIG");
+	mu_assert_true (r_sys_endian_is (R_SYS_ENDIAN_MIDDLE, R_SYS_ENDIAN_MIDDLE), "MIDDLE should match MIDDLE");
+	mu_assert_false (r_sys_endian_is (R_SYS_ENDIAN_LITTLE, R_SYS_ENDIAN_BIG), "LITTLE should not match BIG");
+
+	// Test BI endian (bitmask)
+	int bi_endian = R_SYS_ENDIAN_LITTLE | R_SYS_ENDIAN_BIG;
+	mu_assert_true (r_sys_endian_is (bi_endian, R_SYS_ENDIAN_LITTLE), "BI should match LITTLE");
+	mu_assert_true (r_sys_endian_is (bi_endian, R_SYS_ENDIAN_BIG), "BI should match BIG");
+	mu_assert_false (r_sys_endian_is (bi_endian, R_SYS_ENDIAN_MIDDLE), "BI should not match MIDDLE");
+
+	// Test with aliases
+	mu_assert_true (r_sys_endian_is (R_SYS_ENDIAN_4321, R_SYS_ENDIAN_LITTLE), "4321 should match LITTLE");
+	mu_assert_true (r_sys_endian_is (R_SYS_ENDIAN_1234, R_SYS_ENDIAN_BIG), "1234 should match BIG");
+	mu_assert_true (r_sys_endian_is (R_SYS_ENDIAN_2134, R_SYS_ENDIAN_MIDDLE), "2134 should match MIDDLE");
+
+	// Test exact match vs partial match
+	int complex_endian = R_SYS_ENDIAN_LITTLE | R_SYS_ENDIAN_MIDDLE;
+	mu_assert_true (r_sys_endian_is (complex_endian, R_SYS_ENDIAN_LITTLE), "complex should match LITTLE");
+	mu_assert_true (r_sys_endian_is (complex_endian, R_SYS_ENDIAN_MIDDLE), "complex should match MIDDLE");
+	mu_assert_false (r_sys_endian_is (complex_endian, R_SYS_ENDIAN_BIG), "complex should not match BIG");
+
+	mu_end;
+}
+
+bool test_endian_roundtrip(void) {
+	// Test that tostring/fromstring are consistent for all valid values
+	const char *test_strings[] = {"none", "little", "big", "middle", "bi", "4321", "1234", "2134"};
+	int expected_values[] = {
+		R_SYS_ENDIAN_NONE,
+		R_SYS_ENDIAN_LITTLE,
+		R_SYS_ENDIAN_BIG,
+		R_SYS_ENDIAN_MIDDLE,
+		R_SYS_ENDIAN_BI,
+		R_SYS_ENDIAN_LITTLE,
+		R_SYS_ENDIAN_BIG,
+		R_SYS_ENDIAN_MIDDLE
+	};
+
+	for (int i = 0; i < sizeof (test_strings) / sizeof (test_strings[0]); i++) {
+		int from_string = r_sys_endian_fromstring (test_strings[i]);
+		const char *to_string = r_sys_endian_tostring (from_string);
+		
+		// For BI, we need special handling since tostring might return "bi" for both "bi" and bitmask combinations
+		if (from_string == R_SYS_ENDIAN_BI) {
+			mu_assert_streq (to_string, "bi", "BI should roundtrip correctly");
+		} else {
+			mu_assert_eq (from_string, expected_values[i], "fromstring should return expected value");
+			// For non-BI values, tostring should return the canonical name
+			if (from_string == R_SYS_ENDIAN_LITTLE) {
+				mu_assert_streq (to_string, "little", "LITTLE should tostring to 'little'");
+			} else if (from_string == R_SYS_ENDIAN_BIG) {
+				mu_assert_streq (to_string, "big", "BIG should tostring to 'big'");
+			} else if (from_string == R_SYS_ENDIAN_MIDDLE) {
+				mu_assert_streq (to_string, "middle", "MIDDLE should tostring to 'middle'");
+			} else if (from_string == R_SYS_ENDIAN_NONE) {
+				mu_assert_streq (to_string, "none", "NONE should tostring to 'none'");
+			}
+		}
+	}
+
+	mu_end;
+}
+
+bool test_sandbox_grain_parse(void) {
+	const struct {
+		const char *expression;
+		int mask;
+	} cases[] = {
+		{ "all", R_SANDBOX_GRAIN_ALL },
+		{ "none", R_SANDBOX_GRAIN_NONE },
+		{ "disk", R_SANDBOX_GRAIN_DISK },
+		{ "file", R_SANDBOX_GRAIN_FILES },
+		{ "files", R_SANDBOX_GRAIN_FILES },
+		{ "exec", R_SANDBOX_GRAIN_EXEC },
+		{ "socket", R_SANDBOX_GRAIN_SOCKET },
+		{ "network", R_SANDBOX_GRAIN_NETWORK },
+		{ "environ", R_SANDBOX_GRAIN_ENVIRON },
+		{ "hidden", R_SANDBOX_GRAIN_HIDDEN },
+		{ "disk,exec", R_SANDBOX_GRAIN_DISK | R_SANDBOX_GRAIN_EXEC },
+		{ "disk,disk", R_SANDBOX_GRAIN_DISK },
+		{ " \t\r\n\v\f files \t\r\n\v\f ", R_SANDBOX_GRAIN_FILES },
+		{ "!disk,!exec", R_SANDBOX_GRAIN_ALL & ~(R_SANDBOX_GRAIN_DISK | R_SANDBOX_GRAIN_EXEC) },
+		{ " ! disk , !\t exec ", R_SANDBOX_GRAIN_ALL & ~(R_SANDBOX_GRAIN_DISK | R_SANDBOX_GRAIN_EXEC) },
+		{ "all,!exec", R_SANDBOX_GRAIN_ALL & ~R_SANDBOX_GRAIN_EXEC },
+		{ "disk,files,!disk", R_SANDBOX_GRAIN_FILES },
+		{ "files,!file", R_SANDBOX_GRAIN_NONE },
+		{ "file,!files", R_SANDBOX_GRAIN_NONE },
+		{ "!exec,exec", R_SANDBOX_GRAIN_ALL },
+		{ "exec,!exec", R_SANDBOX_GRAIN_NONE },
+		{ "exec,!disk", R_SANDBOX_GRAIN_EXEC },
+		{ "!disk,!disk", R_SANDBOX_GRAIN_ALL & ~R_SANDBOX_GRAIN_DISK },
+		{ "none,exec", R_SANDBOX_GRAIN_EXEC },
+		{ "exec,none", R_SANDBOX_GRAIN_NONE },
+		{ "all,none", R_SANDBOX_GRAIN_NONE },
+		{ "none,all", R_SANDBOX_GRAIN_ALL },
+		{ "!exec,all", R_SANDBOX_GRAIN_ALL },
+		{ "all,!exec,none,files", R_SANDBOX_GRAIN_FILES },
+		{ "none,!disk", R_SANDBOX_GRAIN_NONE },
+		{ "!all", R_SANDBOX_GRAIN_NONE },
+		{ "!none", R_SANDBOX_GRAIN_ALL },
+		{ "exec,!none", R_SANDBOX_GRAIN_EXEC },
+		{ "exec,!all,files", R_SANDBOX_GRAIN_FILES }
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (cases); i++) {
+		int mask = 0x12345678;
+		mu_assert_true (r_sandbox_grain_parse (cases[i].expression, &mask), cases[i].expression);
+		mu_assert_eq (mask, cases[i].mask, cases[i].expression);
+	}
+	mu_end;
+}
+
+bool test_sandbox_grain_parse_invalid(void) {
+	const char *cases[] = {
+		"", " \t\r\n\v\f ", ",", ",disk", "disk,", "disk,,exec", "disk, ,exec", "!disk,",
+		"!", "! \t", "!!disk", "! !disk", "disk!", "disk,!", "disk,! ,exec", "disk,! !exec",
+		"bogus", "!exec,!bogus", "allexec", "allx", "non", "filesx", "xfile", "disk garbage",
+		"disk exec", "fi les", "ALL", "disk;exec", "disk|exec", "disk\xff", "?"
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (cases); i++) {
+		int mask = 0x12345678;
+		mu_assert_false (r_sandbox_grain_parse (cases[i], &mask), cases[i]);
+		mu_assert_eq (mask, 0x12345678, "invalid expression preserves output mask");
+	}
+	mu_end;
+}
+
+bool test_sandbox_localhost(void) {
+	static const char *ok_inputs[] = {
+		"localhost",
+		// "localhost.localdomain",
+		"127.0.0.1",
+		"127.0.0.1:9090",
+		"127.255.255.255",
+		"0.0.0.0",
+		"::1",
+		"[::1]",
+		"[::1]:9090",
+		"http://localhost:9090/cmd/",
+		"http://127.0.0.1:9090/cmd/",
+		"http://user:pass@localhost:9090/cmd/",
+		"r2web://[::1]:9090/cmd/"
+	};
+	static const char *bad_inputs[] = {
+		"",
+		"localhostevil.com",
+		"127.evil.com",
+		"127.0.0.1.evil.com",
+		"127.0.0.1evil.com",
+		"127.0.0.256",
+		"127.0.0",
+		"http://127.evil.com:80/",
+		"http://user:pass@127.evil.com:80/",
+		"http://localhost:80:evil.com/",
+		"http://evil.com?@localhost/",
+		"http://evil.com#@localhost/",
+		"[::1]evil.com",
+		"http://[::1]evil.com:80/",
+		"http://example.com:80/",
+		"http://user:pass@example.com:80/",
+		"http://:9090",
+		"[::1"
+	};
+	int i;
+
+	for (i = 0; i < R_ARRAY_SIZE (ok_inputs); i++) {
+		mu_assert_true (r_sandbox_check_localhost (ok_inputs[i]), ok_inputs[i]);
+	}
+	for (i = 0; i < R_ARRAY_SIZE (bad_inputs); i++) {
+		mu_assert_false (r_sandbox_check_localhost (bad_inputs[i]), bad_inputs[i]);
+	}
+	mu_end;
+}
+
+bool test_file_temp_trailing_slash(void) {
+#if R2__UNIX__ && !__wasi__
+	char *cwd = r_sys_getdir ();
+	mu_assert_notnull (cwd, "get temporary test directory");
+	char *with_slash = r_str_newf ("%s/", cwd);
+	char *expected = r_str_newf ("%s/r2-temp-path.", cwd);
+	mu_assert_notnull (with_slash, "add trailing directory separator");
+	mu_assert_notnull (expected, "create expected temporary path prefix");
+	const char *directories[] = { cwd, with_slash };
+	const char *variables[] = { "TMPDIR", "XDG_RUNTIME_DIR" };
+	char *old_tmp = r_sys_getenv ("TMPDIR");
+	char *old_xdg = r_sys_getenv ("XDG_RUNTIME_DIR");
+	size_t variable, directory;
+	for (variable = 0; variable < R_ARRAY_SIZE (variables); variable++) {
+		for (directory = 0; directory < R_ARRAY_SIZE (directories); directory++) {
+			r_sys_setenv ("TMPDIR", NULL);
+			r_sys_setenv ("XDG_RUNTIME_DIR", NULL);
+			r_sys_setenv (variables[variable], directories[directory]);
+			char *path = r_file_temp ("r2-temp-path");
+			char *extended = r_file_temp_ex ("r2-temp-path", ".txt");
+			char *created = NULL;
+			int fd = r_file_mkstemp ("r2-temp-path", &created);
+			r_sys_setenv ("TMPDIR", old_tmp);
+			r_sys_setenv ("XDG_RUNTIME_DIR", old_xdg);
+			if (fd >= 0) {
+				close (fd);
+				r_file_rm (created);
+			}
+			mu_assert_notnull (path, "create temporary path");
+			mu_assert_true (r_str_startswith (path, expected), "temporary path has one directory separator");
+			mu_assert_notnull (extended, "create temporary path with extension");
+			mu_assert_true (r_str_startswith (extended, expected), "extended temporary path has one directory separator");
+			mu_assert_true (r_str_endswith (extended, ".txt"), "preserve temporary file extension");
+			mu_assert_true (fd >= 0, "create temporary file");
+			mu_assert_notnull (created, "return temporary file path");
+			mu_assert_true (r_str_startswith (created, expected), "created temporary file has one directory separator");
+			free (path);
+			free (extended);
+			free (created);
+		}
+	}
+	free (old_tmp);
+	free (old_xdg);
+	free (expected);
+	free (with_slash);
+	free (cwd);
+#endif
+	mu_end;
+}
+
+bool test_file_home(void) {
+	const char *homes[] = { NULL, "", R_SYS_DIR "home" R_SYS_DIR "r2" };
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (homes); i++) {
+		char *old_home = r_sys_getenv (R_SYS_HOME);
+		r_sys_setenv (R_SYS_HOME, homes[i]);
+		char *home = r_file_home (NULL);
+		char *path = r_file_home ("plugins");
+		r_sys_setenv (R_SYS_HOME, old_home);
+		free (old_home);
+		if (R_STR_ISNOTEMPTY (homes[i])) {
+			mu_assert_streq (home, homes[i], "preserve the configured home");
+			mu_assert_streq (path, R_SYS_DIR "home" R_SYS_DIR "r2" R_SYS_DIR "plugins", "append the home-relative path");
+		} else {
+			mu_assert_null (home, "missing or empty home must not fall back to a temporary directory");
+			mu_assert_null (path, "missing or empty home must not produce a home-relative path");
+		}
+		free (home);
+		free (path);
+	}
+	mu_end;
+}
+
+bool test_xdg_plugins_home(void) {
+	const char *homes[] = { NULL, "", R_SYS_DIR "home" R_SYS_DIR "r2" };
+	const char *datahomes[] = { NULL, "", R_SYS_DIR "data" };
+	size_t i, j;
+	for (i = 0; i < R_ARRAY_SIZE (homes); i++) {
+		for (j = 0; j < R_ARRAY_SIZE (datahomes); j++) {
+			char *old_home = r_sys_getenv (R_SYS_HOME);
+			char *old_datahome = r_sys_getenv ("XDG_DATA_HOME");
+			r_sys_setenv (R_SYS_HOME, homes[i]);
+			r_sys_setenv ("XDG_DATA_HOME", datahomes[j]);
+			char *plugins = r_xdg_datadir ("plugins");
+			r_sys_setenv (R_SYS_HOME, old_home);
+			r_sys_setenv ("XDG_DATA_HOME", old_datahome);
+			free (old_home);
+			free (old_datahome);
+			if (R_STR_ISNOTEMPTY (datahomes[j])) {
+				mu_assert_streq (plugins, R_SYS_DIR "data" R_SYS_DIR "radare2" R_SYS_DIR "plugins", "explicit XDG data home takes precedence");
+			} else if (R_STR_ISNOTEMPTY (homes[i])) {
+				mu_assert_streq (plugins, R_SYS_DIR "home" R_SYS_DIR "r2" R_SYS_DIR ".local" R_SYS_DIR "share" R_SYS_DIR "radare2" R_SYS_DIR "plugins", "default plugins are relative to the configured home");
+			} else {
+				mu_assert_null (plugins, "do not search for user plugins without a home");
+			}
+			free (plugins);
+		}
+	}
+	mu_end;
+}
+
+bool test_file_is_abspath(void) {
+	const char *absolute[] = {
+		"/", "/bin/ls", "C:/", "z:\\", "C:/Windows/notepad.exe",
+		"z:\\Program Files\\tool.exe", "\\\\server\\share\\tool.exe",
+		"//server/share/tool.exe", "\\\\?\\C:\\tool.exe", "\\\\.\\C:\\tool.exe"
+	};
+	const char *relative[] = {
+		"", "a", ".", "./tool", "../tool", "C", "C:", "C:tool.exe",
+		"z:dir\\tool.exe", "1:/tool.exe", ":/tool.exe", "\\tool.exe", "\xff:/tool.exe"
+	};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (absolute); i++) {
+		mu_assert_true (r_file_is_abspath (absolute[i]), absolute[i]);
+	}
+	for (i = 0; i < R_ARRAY_SIZE (relative); i++) {
+		mu_assert_false (r_file_is_abspath (relative[i]), relative[i]);
+	}
+	mu_end;
+}
+
+bool test_sys_executable_path(void) {
+	char *path = r_sys_exepath ();
+	char *pidpath = r_sys_pidpath (r_sys_getpid ());
+#if R2__WINDOWS__ || __APPLE__ || __linux__ || __FreeBSD__ || __DragonFly__ || __NetBSD__ || __HAIKU__ || __sun
+	mu_assert_notnull (path, "current executable path should be available");
+	mu_assert_true (r_file_is_abspath (path), "current executable path should be absolute");
+	mu_assert_true (r_file_exists (path), "current executable path should exist");
+	mu_assert_notnull (pidpath, "current PID path should be available");
+	mu_assert_true (r_file_is_abspath (pidpath), "current PID path should be absolute");
+	mu_assert_true (r_file_exists (pidpath), "current PID path should exist");
+#endif
+	free (path);
+	free (pidpath);
+	mu_end;
+}
+
+bool test_sandbox_hidden_path(void) {
+	bool was_enabled = r_sandbox_enable (false);
+	int old_grain = r_sandbox_grain (R_SANDBOX_GRAIN_FILES);
+	r_sandbox_enable (true);
+
+	mu_assert_false (r_sandbox_check_path (".gitignore"), "hidden file should require hidden grain");
+	mu_assert_false (r_sandbox_check_path ("dir/.gitignore"), "hidden path component should require hidden grain");
+#if R2__WINDOWS__
+	mu_assert_false (r_sandbox_check_path ("dir\\.gitignore"), "hidden windows path component should require hidden grain");
+#endif
+	mu_assert_true (r_sandbox_check_path ("dir/gitignore"), "non-hidden path should be allowed");
+
+	r_sandbox_grain (R_SANDBOX_GRAIN_FILES | R_SANDBOX_GRAIN_HIDDEN);
+	mu_assert_true (r_sandbox_check_path (".gitignore"), "hidden grain should allow hidden file");
+	mu_assert_true (r_sandbox_check_path ("dir/.gitignore"), "hidden grain should allow hidden path component");
+#if R2__WINDOWS__
+	mu_assert_true (r_sandbox_check_path ("dir\\.gitignore"), "hidden grain should allow hidden windows path component");
+#endif
+	mu_assert_false (r_sandbox_check_path ("./gitignore"), "hidden grain should not allow ./ paths");
+	mu_assert_false (r_sandbox_check_path ("../gitignore"), "hidden grain should not allow ../ paths");
+
+	r_sandbox_grain (old_grain);
+	if (!was_enabled) {
+		r_sandbox_disable (true);
+	}
+	mu_end;
+}
+
+bool test_sandbox_symlink_path(void) {
+#if R2__UNIX__
+	mu_assert_eq (mkdir ("sbx_real", 0755), 0, "cannot create test directory");
+	int fd = open ("sbx_real/file", O_CREAT | O_WRONLY, 0644);
+	mu_assert_neq (fd, -1, "cannot create test file");
+	close (fd);
+	mu_assert_eq (symlink ("/", "sbx_link"), 0, "cannot create directory symlink");
+	mu_assert_eq (symlink ("/etc", "sbx_real/inner"), 0, "cannot create nested symlink");
+
+	bool was_enabled = r_sandbox_enable (false);
+	int old_grain = r_sandbox_grain (R_SANDBOX_GRAIN_FILES);
+	r_sandbox_enable (true);
+	const bool real_dir = r_sandbox_check_path ("sbx_real");
+	const bool real_file = r_sandbox_check_path ("sbx_real/file");
+	const bool real_trailing = r_sandbox_check_path ("sbx_real/");
+	const bool link_final = r_sandbox_check_path ("sbx_link");
+	const bool link_dir = r_sandbox_check_path ("sbx_link/etc/passwd");
+	const bool link_trailing = r_sandbox_check_path ("sbx_link/");
+	const bool link_nested = r_sandbox_check_path ("sbx_real/inner/passwd");
+	r_sandbox_grain (old_grain);
+	if (!was_enabled) {
+		r_sandbox_disable (true);
+	}
+	unlink ("sbx_real/inner");
+	unlink ("sbx_real/file");
+	rmdir ("sbx_real");
+	unlink ("sbx_link");
+
+	mu_assert_true (real_dir, "regular directory should be allowed");
+	mu_assert_true (real_file, "file in regular directory should be allowed");
+	mu_assert_true (real_trailing, "regular directory with trailing slash should be allowed");
+	mu_assert_false (link_final, "final symlink component should be rejected");
+	mu_assert_false (link_dir, "intermediate directory symlink should be rejected");
+	mu_assert_false (link_trailing, "directory symlink with trailing slash should be rejected");
+	mu_assert_false (link_nested, "nested intermediate symlink should be rejected");
+#endif
+	mu_end;
+}
+
+bool test_file_rm_rf_symlink(void) {
+#if R2__UNIX__
+	mu_assert_eq (mkdir ("rmrf_outside", 0755), 0, "cannot create outside directory");
+	int fd = open ("rmrf_outside/keep", O_CREAT | O_WRONLY, 0644);
+	mu_assert_neq (fd, -1, "cannot create outside file");
+	close (fd);
+	mu_assert_eq (mkdir ("rmrf_tree", 0755), 0, "cannot create tree");
+	mu_assert_eq (mkdir ("rmrf_tree/sub", 0755), 0, "cannot create subdirectory");
+	mu_assert_eq (symlink ("../../rmrf_outside", "rmrf_tree/sub/link"), 0, "cannot create nested symlink");
+	mu_assert_eq (symlink ("rmrf_outside", "rmrf_toplink"), 0, "cannot create top symlink");
+
+	RList *files = r_file_lsrf ("rmrf_tree");
+	const bool listed_outside = files && r_list_find (files, "rmrf_tree/sub/link/keep", (RListComparator)strcmp);
+	r_list_free (files);
+	const bool rm_tree = r_file_rm_rf ("rmrf_tree");
+	const bool tree_gone = !r_file_is_directory ("rmrf_tree");
+	const bool rm_top = r_file_rm_rf ("rmrf_toplink");
+	struct stat st;
+	const bool toplink_gone = lstat ("rmrf_toplink", &st) != 0;
+	const bool kept = r_file_exists ("rmrf_outside/keep");
+
+	unlink ("rmrf_toplink");
+	unlink ("rmrf_tree/sub/link");
+	rmdir ("rmrf_tree/sub");
+	rmdir ("rmrf_tree");
+	unlink ("rmrf_outside/keep");
+	rmdir ("rmrf_outside");
+
+	mu_assert_false (listed_outside, "lsrf should not descend into directory symlinks");
+	mu_assert_true (rm_tree && tree_gone, "rm_rf should remove the tree including the symlink");
+	mu_assert_true (rm_top && toplink_gone, "rm_rf on a directory symlink should remove only the link");
+	mu_assert_true (kept, "files behind directory symlinks must survive rm_rf");
+#endif
+	mu_end;
+}
+
+bool test_session_pidfile_symlink(void) {
+#if R2__UNIX__
+	char *cwd = r_sys_getdir ();
+	char *old_xdg = r_sys_getenv ("XDG_RUNTIME_DIR");
+	char *old_tmp = r_sys_getenv ("TMPDIR");
+	char *tmp = r_str_newf ("%s/pidtmp", cwd);
+	mu_assert_eq (mkdir (tmp, 0755), 0, "cannot create tmp directory");
+	r_sys_setenv ("XDG_RUNTIME_DIR", tmp);
+	r_sys_setenv ("TMPDIR", tmp);
+	char *dir = r_str_newf ("%s/r2", tmp);
+	mu_assert_eq (mkdir (dir, 0755), 0, "cannot create session directory");
+	char *victim = r_str_newf ("%s/victim", tmp);
+	r_file_dump (victim, (const ut8 *)"ORIGINAL", 8, false);
+	char *expected = r_str_newf ("%s/%d.pid", dir, r_sys_getpid ());
+	mu_assert_eq (symlink (victim, expected), 0, "cannot plant pidfile symlink");
+
+	char *fn = r_core_session_pidfile_write ("r2web://127.0.0.1:1/cmd");
+	char *victim_data = r_file_slurp (victim, NULL);
+	struct stat st;
+	const bool regular = fn && !lstat (fn, &st) && S_ISREG (st.st_mode);
+	char *pid_data = fn? r_file_slurp (fn, NULL): NULL;
+	if (fn) {
+		unlink (fn);
+	}
+	rmdir (dir);
+	mu_assert_eq (symlink (tmp, dir), 0, "cannot plant session directory symlink");
+	char *fn_linkdir = r_core_session_pidfile_write ("data");
+	unlink (dir);
+
+	unlink (victim);
+	rmdir (tmp);
+	r_sys_setenv ("XDG_RUNTIME_DIR", old_xdg);
+	r_sys_setenv ("TMPDIR", old_tmp);
+
+	mu_assert_streq (victim_data, "ORIGINAL", "symlink target must not be modified");
+	mu_assert_streq (fn, expected, "pidfile should be created at the pid path");
+	mu_assert_true (regular, "pidfile should replace the symlink with a regular file");
+	mu_assert_streq (pid_data, "r2web://127.0.0.1:1/cmd", "pidfile content");
+	mu_assert_null (fn_linkdir, "symlinked session directory should be refused");
+	free (fn_linkdir);
+	free (pid_data);
+	free (victim_data);
+	free (fn);
+	free (expected);
+	free (victim);
+	free (dir);
+	free (tmp);
+	free (old_tmp);
+	free (old_xdg);
+	free (cwd);
+#endif
+	mu_end;
+}
+
+bool test_file_copy(void) {
+#if R2__UNIX__ && !__wasi__
+	const char *src = "copy_src!$`\"\\";
+	const char *dst = "copy_dst!";
+	unlink (dst);
+	mu_assert_true (r_file_dump (src, (const ut8 *)"hello", 5, false), "cannot create source file");
+	const bool copied = r_file_copy (src, dst);
+	char *data = r_file_slurp (dst, NULL);
+	unlink (src);
+	unlink (dst);
+	mu_assert_true (copied, "copy a file whose name has shell metacharacters");
+	mu_assert_streq (data, "hello", "copied contents");
+	free (data);
+#endif
+	mu_end;
+}
+
+bool test_sys_cmdf_long(void) {
+#if R2__UNIX__ && !__wasi__
+	// a command line longer than 4096 bytes
+	char *arg = malloc (5001);
+	mu_assert_notnull (arg, "cannot allocate the argument");
+	memset (arg, 'A', 5000);
+	arg[5000] = 0;
+	const char *out = "cmdf_out";
+	unlink (out);
+	r_sys_cmdf ("printf %%s %s > %s", arg, out);
+	char *data = r_file_slurp (out, NULL);
+	char *str = r_sys_cmd_strf ("printf %%s %s", arg);
+	unlink (out);
+	free (arg);
+	mu_assert_notnull (data, "r_sys_cmdf keeps the redirection after a long argument");
+	mu_assert_eq (strlen (data), 5000, "r_sys_cmdf passes the whole argument");
+	mu_assert_notnull (str, "r_sys_cmd_strf returns the output");
+	mu_assert_eq (strlen (str), 5000, "r_sys_cmd_strf passes the whole argument");
+	free (data);
+	free (str);
+#endif
+	mu_end;
+}
+
+bool test_mem_bits(void) {
+	const ut8 words_le[] = { 0xbc, 0x0a, 0xef, 0x0d };
+	const ut8 words_be[] = { 0x0a, 0xbc, 0x0d, 0xef };
+	const ut8 wide[] = { 0xbc, 0x1a };
+	ut8 packed[3];
+	ut8 words[4];
+	mu_assert_eq (r_mem_bits_unit (9), 2, "9 bit units use 2 bytes");
+	mu_assert_eq (r_mem_bits_unit (25), 4, "25 bit units use 4 bytes");
+	mu_assert_true (r_mem_pack_bits (packed, words_le, 2, 12, false), "le pack");
+	mu_assert_memeq (packed, (const ut8 *)"\xbc\xfa\xde", 3, "le 12 bit stream");
+	r_mem_unpack_bits (words, packed, 2, 12, false);
+	mu_assert_memeq (words, words_le, 4, "le unpack");
+	mu_assert_true (r_mem_pack_bits (packed, words_be, 2, 12, true), "be pack");
+	mu_assert_memeq (packed, (const ut8 *)"\xab\xcd\xef", 3, "be 12 bit stream");
+	r_mem_unpack_bits (words, packed, 2, 12, true);
+	mu_assert_memeq (words, words_be, 4, "be unpack");
+	mu_assert_false (r_mem_pack_bits (packed, wide, 1, 12, false), "values wider than 12 bits");
+	mu_assert_eq (r_mem_get_bits ((const ut8 *)"abc", 9, 9, false), 0x1b1, "le 9 bit unit");
+	mu_assert_eq (r_mem_get_bits ((const ut8 *)"abc", 9, 9, true), 0x189, "be 9 bit unit");
+	ut8 stream[4] = { 0 };
+	r_mem_set_bits (stream, 3, 25, 0x1abcdef, true);
+	mu_assert_eq (r_mem_get_bits (stream, 3, 25, true), 0x1abcdef, "be 25 bit roundtrip");
+	r_mem_set_bits (stream, 3, 25, 0x0fedcba, false);
+	mu_assert_eq (r_mem_get_bits (stream, 3, 25, false), 0x0fedcba, "le 25 bit roundtrip");
+	ut8 ones[3] = { 0xff, 0xff, 0xff };
+	r_mem_set_bits (ones, 4, 12, 0, false);
+	mu_assert_memeq (ones, (const ut8 *)"\x0f\x00\xff", 3, "bits outside the unit are preserved");
+	mu_end;
+}
+
+int all_tests(void) {
 	mu_run_test (test_ignore_prefixes);
 	mu_run_test (test_remove_r2_prefixes);
 	mu_run_test (test_dll_names);
@@ -205,6 +841,27 @@ int all_tests() {
 	mu_run_test (test_autonames);
 	mu_run_test (test_file_slurp);
 	mu_run_test (test_initial_underscore);
+	mu_run_test (test_tagged_pointers);
+	mu_run_test (test_log);
+	mu_run_test (test_endian_tostring);
+	mu_run_test (test_endian_fromstring);
+	mu_run_test (test_endian_is);
+	mu_run_test (test_endian_roundtrip);
+	mu_run_test (test_mem_bits);
+	mu_run_test (test_file_temp_trailing_slash);
+	mu_run_test (test_file_home);
+	mu_run_test (test_xdg_plugins_home);
+	mu_run_test (test_file_is_abspath);
+	mu_run_test (test_sys_executable_path);
+	mu_run_test (test_sandbox_grain_parse);
+	mu_run_test (test_sandbox_grain_parse_invalid);
+	mu_run_test (test_sandbox_localhost);
+	mu_run_test (test_sandbox_hidden_path);
+	mu_run_test (test_sandbox_symlink_path);
+	mu_run_test (test_file_rm_rf_symlink);
+	mu_run_test (test_session_pidfile_symlink);
+	mu_run_test (test_file_copy);
+	mu_run_test (test_sys_cmdf_long);
 	return tests_passed != tests_run;
 }
 

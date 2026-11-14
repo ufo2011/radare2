@@ -1,4 +1,4 @@
-/* radare - LGPL - 2019 - deepakchethan */ 
+/* radare - LGPL - 2019 - deepakchethan */
 
 #ifndef _QNX_H
 #define _QNX_H
@@ -70,19 +70,25 @@ typedef struct lmf_resource {
 	ut16 spare[3];
 }) lmf_resource;
 
+typedef struct qnx_resource_entry {
+	ut16 type;
+	ut64 paddr;
+	ut64 size;
+} QnxResourceEntry;
+
 R_PACKED (
 typedef struct lmf_rw_end {
 	ut16     verify;
 	ut32     signature;
 }) lmf_rw_end;
 
-R_PACKED (
 typedef struct {
 	Sdb *kv;
 	lmf_header lmfh;
-	RList* fixups;
-	RList* sections;
+	RVecRBinReloc fixups;
+	RVecRBinSection sections;
+	RList *resources;
 	lmf_rw_end rwend;
-}) QnxObj;
+} QnxObj;
 
 #endif

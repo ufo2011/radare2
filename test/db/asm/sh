@@ -1,16 +1,36 @@
-dE "bt 0x00000004"	0x8900
-dE "bt 0x00000000"	0x89fe
-dE "bra 0x00000004"	0xa000
-dE "bra 0x00000006"	0xa001
-dE "bsr 0x00000004"	0xb000
-dE "bsr 0x00000002"	0xbfff
+dE "bt 0x00000004"	8900
+dE "bt 0x00000000"	89fe
+dE "bra 0x00000004"	a000
+dE "bra 0x00000006"	a001
+dE "bsr 0x00000004"	b000
+dE "bsr 0x00000002"	bfff
 dE "bsr 0x0000000e"	0xbffd 0x10
-dE "tst 0xFF, r0"	0xc8ff
-dE "mov.w @(0x0,pc), r0"	0x9000
-dE "mov.w @(0x1fe,pc), r0"	0x90ff
-dE "mov.l @(0x0,pc), r0"	0xd000
-dE "mov.l @(0x3fc,pc), r0"	0xd0ff
-dE "mov.w @(0x0,gbr), r0"	0xc500
-dE "mov.w @(0x1fe,gbr), r0"	0xc5ff
-dE "mov.l @(0x0,gbr), r0"	0xc600
-dE "mov.l @(0x3fc,gbr), r0"	0xc6ff
+dE "tst 0xFF, r0"	c8ff
+dE "mov.w @(0x0,pc), r0"	9000
+dEB "mov.w @(0x1fe,pc), r0"	90ff
+dE "mov.l @(0x0,pc), r0"	d000
+dE "mov.w @(0x0,gbr), r0"	c500
+dE "mov.w @(0x1fe,gbr), r0"	c5ff
+dE "mov.l @(0x0,gbr), r0"	c600
+dEB "mov.l @(0x3fc,pc), r0"	d0ff
+dE "mov.l @(0x3fc,gbr), r0"	c6ff
+dE "fsca fpul, dr0"	f0fd
+dE "fsca fpul, dr2"	f2fd
+dE "fsrra fr0"	f07d
+dE "ftrv xmtrx, fv0"	f1fd
+dE "ftrv xmtrx, fv4"	f5fd
+dE "ftrv xmtrx, fv12"	fdfd
+dE "fsca fpul, dr14"	fefd
+d "fsca fpul, dr2"	fdf2
+dE "fsrra fr15"	ff7d
+dE "fschg"	f3fd
+dE "frchg"	fbfd
+dE "fcnvds dr0, fpul"	f0bd
+dE "fcnvds dr14, fpul"	febd
+dE ".word 0x0f010b0d"	f1bd
+d ".word 0x0f010b0d"	bdf1
+dE "fcnvsd fpul, dr2"	f2ad
+dE "fcnvsd fpul, dr14"	fead
+d "fcnvsd fpul, dr2"	adf2
+dE ".word 0x0f0f0a0d"	ffad
+d ".word 0x0f0f0a0d"	adff

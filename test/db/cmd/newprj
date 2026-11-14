@@ -1,0 +1,1470 @@
+NAME=newprj flagspace round-trip
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-spc.prj
+fs+alpha
+f sym.one=0x100
+fs+beta
+f sym.two=0x200
+prj save .tmp/newprj-spc.prj > /dev/null
+f-*
+fs-*
+prj load .tmp/newprj-spc.prj > /dev/null
+fs alpha
+f~sym.one
+fs beta
+f~sym.two
+rm .tmp/newprj-spc.prj
+EOF
+EXPECT=<<EOF
+0x00000100 1 sym.one
+0x00000200 1 sym.two
+EOF
+RUN
+
+NAME=newprj global arrays retain custom types links formats and bounds after open
+FILE=malloc://0x1000
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+"td struct Pair { int x; int y; };"
+avg uint16_t[2][3] global.grid @ 0x100
+avg Pair[2] global.pairs @ 0x200
+avg int *[3] global.pointers @ 0x300
+prj save .tmp/newprj-globals.prj > /dev/null
+k anal/global.inferred.0x900=uint8_t
+prj open .tmp/newprj-globals.prj > /dev/null
+k anal/global.inferred.0x900
+prj load .tmp/newprj-globals.prj > /dev/null
+avgj
+tsc Pair
+tss Pair[2]
+tl
+Cf. @ 0x100
+Cf. @ 0x200~[0]
+Cf. @ 0x300
+Cf*~0x00000100[1]
+avg- @ 0x100
+tls 0x100
+Cf. @ 0x100
+avg uint32_t[4] global.pairs @ 0x200
+avgj
+Cf. @ 0x200
+rm .tmp/newprj-globals.prj
+EOF
+EXPECT=<<EOF
+[{"name":"global.grid","addr":256,"size":12,"type":"uint16_t[2][3]"},{"name":"global.pairs","addr":512,"size":16,"type":"Pair[2]"},{"name":"global.pointers","addr":768,"size":24,"type":"int *[3]"}]
+struct Pair {
+  int x;
+  int y;
+};
+16
+0x00000100 = uint16_t[2][3]
+0x00000200 = Pair[2]
+0x00000300 = int *[3]
+6w
+2dd
+3p
+12
+[{"name":"global.pairs","addr":512,"size":16,"type":"uint32_t[4]"},{"name":"global.pointers","addr":768,"size":24,"type":"int *[3]"}]
+4d
+EOF
+RUN
+
+NAME=newprj global inference remains refinable after loading
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+o malloc://128 0x2000 rw
+wx 0fb6042500200000c3 @ 0
+aar 9 @ 0
+prj save .tmp/newprj-global-inferred.prj > /dev/null
+avg int8_t global.0x2000 @ 0x2000
+prj load .tmp/newprj-global-inferred.prj > /dev/null
+avgj
+k anal/global.inferred.0x2000
+wx 488b042500200000c3 @ 0
+aar 9 @ 0
+avgj
+Cf. @ 0x2000
+rm .tmp/newprj-global-inferred.prj
+EOF
+EXPECT=<<EOF
+[{"name":"global.0x2000","addr":8192,"size":1,"type":"uint8_t"}]
+uint8_t
+[{"name":"global.0x2000","addr":8192,"size":8,"type":"uint64_t"}]
+q
+EOF
+RUN
+
+NAME=newprj rebases global type links formats and inference metadata
+FILE=malloc://0x400
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+avg uint32_t[4] global.array @ 0x100
+k anal/global.inferred.0x100=uint32_t[4]
+k anal/global.semantic.0x100=conflict
+k anal/global.layout.0x100=ArrayLayout
+k anal/global.field.conflict.0x100.0x4=true
+prj save .tmp/newprj-global-rebase.prj > /dev/null
+"k anal/~global.*"
+o--
+o malloc://0x400 0x1000 rw
+prj load .tmp/newprj-global-rebase.prj > /dev/null
+avgj
+tl
+Cf. @ 0x1100
+k anal/global.inferred.0x1100
+k anal/global.semantic.0x1100
+k anal/global.layout.0x1100
+k anal/global.field.conflict.0x1100.0x4
+tk link.00000100
+k anal/global.inferred.0x100
+rm .tmp/newprj-global-rebase.prj
+EOF
+EXPECT=<<EOF
+[{"name":"global.array","addr":4352,"size":16,"type":"uint32_t[4]"}]
+0x00001100 = uint32_t[4]
+4d
+uint32_t[4]
+conflict
+ArrayLayout
+true
+EOF
+RUN
+
+NAME=newprj manual globals replace inferred globals and remain protected from analysis
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+o malloc://128 0x2000 rw
+avg int8_t global.0x2000 @ 0x2000
+prj save .tmp/newprj-global-manual.prj > /dev/null
+avg- @ 0x2000
+wx 488b042500200000c3 @ 0
+aar 9 @ 0
+prj load .tmp/newprj-global-manual.prj > /dev/null
+aar 9 @ 0
+avgj
+rm .tmp/newprj-global-manual.prj
+EOF
+EXPECT=<<EOF
+[{"name":"global.0x2000","addr":8192,"size":1,"type":"int8_t"}]
+EOF
+RUN
+
+NAME=newprj rejects invalid and truncated type metadata without consuming the next entry
+FILE=hex://5250524a060000003900000007000000616674657200696e745b335d006c696e6b2e303030303031303000676c6f62616c2e696e6665727265642e3078313030001100000010000000ffffffff06000000001d000000110000000d000000ffffffffffffffff0001000000000000001d000000130000001b0000000600000000000000000100000000000000210000001200000006000000fffffffff0ffffffffffffff20000000000000000021000000020000000100000000000000ffffffff80000000000000000100000000
+ARGS=-n
+CMDS=<<EOF
+mkdir .tmp
+wtf .tmp/newprj-types-invalid.prj 206 2>/dev/null
+prj load .tmp/newprj-types-invalid.prj > /dev/null
+f~after
+rm .tmp/newprj-types-invalid.prj
+EOF
+EXPECT=<<EOF
+0x00000080 1 after
+EOF
+EXPECT_ERR=<<EOF
+WARN: Invalid type string index
+WARN: Truncated type record
+WARN: Invalid type address record
+WARN: Truncated type address record
+WARN: Invalid type address record
+WARN: Truncated type address record
+WARN: Invalid format record
+WARN: Truncated format record
+EOF
+RUN
+
+NAME=newprj quoted project filename
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+"rm .tmp/newprj quoted.prj"
+f quoted.project=0x420
+prj   save ".tmp/newprj quoted.prj" > /dev/null
+f-*
+prj "load" ".tmp/newprj quoted.prj" > /dev/null
+fd 0x420
+"rm .tmp/newprj quoted.prj"
+EOF
+EXPECT=<<EOF
+quoted.project
+EOF
+RUN
+
+NAME=newprj action help
+FILE=malloc://1
+CMDS=<<EOF
+e scr.color=0
+prj save?
+EOF
+EXPECT=<<EOF
+| prj save [file]  save current state into a project file
+EOF
+RUN
+
+NAME=newprj list projects
+FILE=malloc://1
+CMDS=<<EOF
+e dir.projects=bins/other/projects
+prj list~test
+EOF
+EXPECT=<<EOF
+test
+EOF
+RUN
+
+NAME=newprj flag with no space
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-ns.prj
+fs *
+f nospaceflag=0x300
+prj save .tmp/newprj-ns.prj > /dev/null
+f-*
+fs-*
+prj load .tmp/newprj-ns.prj > /dev/null
+fd 0x300
+rm .tmp/newprj-ns.prj
+EOF
+EXPECT=<<EOF
+nospaceflag
+EOF
+RUN
+
+NAME=newprj flag comment round-trip
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-cmt.prj
+fs+alpha
+f sym.cool=0x100
+fC sym.cool "round tripped comment"
+prj save .tmp/newprj-cmt.prj > /dev/null
+f-*
+fs-*
+prj load .tmp/newprj-cmt.prj > /dev/null
+fC sym.cool
+rm .tmp/newprj-cmt.prj
+EOF
+EXPECT=<<EOF
+"round tripped comment"
+EOF
+RUN
+
+NAME=newprj flag color round-trip
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-col.prj
+fs+alpha
+f sym.cool=0x100
+fc sym.cool=red
+prj save .tmp/newprj-col.prj > /dev/null
+f-*
+fs-*
+prj load .tmp/newprj-col.prj > /dev/null
+fc*
+rm .tmp/newprj-col.prj
+EOF
+EXPECT=<<EOF
+red
+'fc sym.cool=red
+EOF
+RUN
+
+NAME=newprj realname + rawname round-trip
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-rn.prj
+fs+alpha
+f sym.cool=0x100
+s 0x100
+fu= 1 sym.cool cmF3X25hbWU= cmVhbF9uYW1l
+prj save .tmp/newprj-rn.prj > /dev/null
+f-*
+fs-*
+prj load .tmp/newprj-rn.prj > /dev/null
+s 0x100
+fu
+rm .tmp/newprj-rn.prj
+EOF
+EXPECT=<<EOF
+addr 0x00000100
+name sym.cool
+rawn raw_name
+disp real_name
+EOF
+RUN
+
+NAME=newprj multiple flags and spaces
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-multi.prj
+fs+alpha
+f a.one=0x100
+f a.two=0x110
+fs+beta
+f b.one=0x200
+fs *
+f loose=0x300
+prj save .tmp/newprj-multi.prj > /dev/null
+f-*
+fs-*
+prj load .tmp/newprj-multi.prj > /dev/null
+fs alpha
+f~a.
+fs beta
+f~b.
+fs *
+fd 0x300
+rm .tmp/newprj-multi.prj
+EOF
+EXPECT=<<EOF
+0x00000100 1 a.one
+0x00000110 1 a.two
+0x00000200 1 b.one
+loose
+EOF
+RUN
+
+NAME=newprj eval round-trip
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-eval.prj
+e asm.bits=16
+e asm.syntax=att
+e anal.depth=42
+e cfg.bigendian=true
+prj save .tmp/newprj-eval.prj > /dev/null
+e asm.bits=64
+e asm.syntax=intel
+e anal.depth=128
+e cfg.bigendian=false
+prj load .tmp/newprj-eval.prj > /dev/null
+e asm.bits
+e asm.syntax
+e anal.depth
+e cfg.bigendian
+rm .tmp/newprj-eval.prj
+EOF
+EXPECT=<<EOF
+16
+att
+42
+true
+EOF
+RUN
+
+NAME=newprj eval skipped prefixes are not replayed
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-evskip.prj
+e scr.color=3
+prj save .tmp/newprj-evskip.prj > /dev/null
+e scr.color=0
+prj load .tmp/newprj-evskip.prj > /dev/null
+e scr.color
+rm .tmp/newprj-evskip.prj
+EOF
+EXPECT=<<EOF
+0
+EOF
+RUN
+
+NAME=newprj xrefs round-trip
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-xrefs.prj
+axd 0x200 0x100
+axC 0x300 0x120
+prj save .tmp/newprj-xrefs.prj > /dev/null
+ax-*
+prj load .tmp/newprj-xrefs.prj > /dev/null
+axq
+rm .tmp/newprj-xrefs.prj
+EOF
+EXPECT=<<EOF
+0x00000100 -> 0x00000200  DATA:r--
+0x00000120 -> 0x00000300  CALL:--x
+EOF
+RUN
+
+NAME=newprj rebase flags comments and xrefs
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-rebase.prj
+f src.flag=0x10
+CC src comment @ 0x10
+axd 0x20 0x10
+prj save .tmp/newprj-rebase.prj > /dev/null
+f-*
+CC-*
+ax-*
+o--
+o malloc://0x100 0x1000
+prj load .tmp/newprj-rebase.prj > /dev/null
+fd 0x1010
+CC. @ 0x1010
+axq
+rm .tmp/newprj-rebase.prj
+EOF
+EXPECT=<<EOF
+src.flag
+src comment
+0x00001010 -> 0x00001020  DATA:r--
+EOF
+RUN
+
+NAME=newprj rebase flag at module end
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-endbyte.prj
+!printf AAAAAAAAAAAAAAAA > .tmp/newprj-end.bin
+o .tmp/newprj-end.bin 0x1000
+f end.byte=0x100f
+prj save .tmp/newprj-endbyte.prj > /dev/null
+f-*
+o--
+o .tmp/newprj-end.bin 0x8000
+prj load .tmp/newprj-endbyte.prj > /dev/null
+fd 0x800f
+rm .tmp/newprj-endbyte.prj
+rm .tmp/newprj-end.bin
+EOF
+EXPECT=<<EOF
+end.byte
+EOF
+RUN
+
+NAME=newprj rebase multiple file-backed modules
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-files.prj
+!printf AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > .tmp/newprj-a.bin
+!printf BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB > .tmp/newprj-b.bin
+o .tmp/newprj-a.bin 0x1000
+o .tmp/newprj-b.bin 0x4000
+f first=0x1010
+f second=0x4010
+axd 0x4010 0x1010
+prj save .tmp/newprj-files.prj > /dev/null
+f-*
+ax-*
+o--
+o .tmp/newprj-a.bin 0x8000
+o .tmp/newprj-b.bin 0xc000
+prj load .tmp/newprj-files.prj > /dev/null
+fd 0x8010
+fd 0xc010
+axq
+rm .tmp/newprj-files.prj
+rm .tmp/newprj-a.bin
+rm .tmp/newprj-b.bin
+EOF
+EXPECT=<<EOF
+first
+second
+0x00008010 -> 0x0000c010  DATA:r--
+EOF
+RUN
+
+NAME=newprj xref types round-trip
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-xreftypes.prj
+axc 0x80 0x10
+axd 0x90 0x20
+axC 0xa0 0x30
+prj save .tmp/newprj-xreftypes.prj > /dev/null
+ax-*
+prj load .tmp/newprj-xreftypes.prj > /dev/null
+axq
+rm .tmp/newprj-xreftypes.prj
+EOF
+EXPECT=<<EOF
+0x00000010 -> 0x00000080  CODE:--x
+0x00000020 -> 0x00000090  DATA:r--
+0x00000030 -> 0x000000a0  CALL:--x
+EOF
+RUN
+
+NAME=newprj rebased xrefs keep source and target modules
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-xrefmods.prj
+!printf AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > .tmp/newprj-xma.bin
+!printf BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB > .tmp/newprj-xmb.bin
+o .tmp/newprj-xma.bin 0x1000
+o .tmp/newprj-xmb.bin 0x4000
+axc 0x4010 0x1010
+axd 0x1020 0x4020
+prj save .tmp/newprj-xrefmods.prj > /dev/null
+ax-*
+o--
+o .tmp/newprj-xma.bin 0x8000
+o .tmp/newprj-xmb.bin 0xc000
+prj load .tmp/newprj-xrefmods.prj > /dev/null
+axq
+rm .tmp/newprj-xrefmods.prj
+rm .tmp/newprj-xma.bin
+rm .tmp/newprj-xmb.bin
+EOF
+EXPECT=<<EOF
+0x00008010 -> 0x0000c010  CODE:--x
+0x0000c020 -> 0x00008020  DATA:r--
+EOF
+RUN
+
+NAME=newprj duplicate identical maps rebase one to one
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-dupmap.prj
+!printf AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > .tmp/newprj-dupmap.bin
+o--
+o .tmp/newprj-dupmap.bin 0x1000
+o .tmp/newprj-dupmap.bin 0x4000
+f first.dup=0x1010
+f second.dup=0x4010
+axd 0x4010 0x1010
+prj save .tmp/newprj-dupmap.prj > /dev/null
+f-*
+ax-*
+o--
+o .tmp/newprj-dupmap.bin 0x8000
+o .tmp/newprj-dupmap.bin 0xc000
+prj load .tmp/newprj-dupmap.prj > /dev/null
+fd 0x8010
+fd 0xc010
+axq
+rm .tmp/newprj-dupmap.prj
+rm .tmp/newprj-dupmap.bin
+EOF
+EXPECT=<<EOF
+first.dup
+second.dup
+0x00008010 -> 0x0000c010  DATA:r--
+EOF
+RUN
+
+NAME=newprj ambiguous same-content maps keep sorted identity
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-ambmap.prj
+!printf ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ > .tmp/newprj-amb-a.bin
+!printf AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > .tmp/newprj-amb-b.bin
+!printf ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ > .tmp/newprj-amb-c.bin
+o--
+o .tmp/newprj-amb-a.bin 0x1000
+o .tmp/newprj-amb-b.bin 0x2000
+o .tmp/newprj-amb-c.bin 0x3000
+f first.same=0x1010
+f middle.unique=0x2010
+f second.same=0x3010
+prj save .tmp/newprj-ambmap.prj > /dev/null
+f-*
+o--
+o .tmp/newprj-amb-a.bin 0x8000
+o .tmp/newprj-amb-b.bin 0x9000
+o .tmp/newprj-amb-c.bin 0xa000
+prj load .tmp/newprj-ambmap.prj > /dev/null
+fd 0x8010
+fd 0x9010
+fd 0xa010
+rm .tmp/newprj-ambmap.prj
+rm .tmp/newprj-amb-a.bin
+rm .tmp/newprj-amb-b.bin
+rm .tmp/newprj-amb-c.bin
+EOF
+EXPECT=<<EOF
+first.same
+middle.unique
+second.same
+EOF
+RUN
+
+NAME=newprj function name updates existing function
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-fcnname.prj
+af+ 0x10 fcn.saved
+prj save .tmp/newprj-fcnname.prj > /dev/null
+afn fcn.old 0x10
+prj load .tmp/newprj-fcnname.prj > /dev/null
+afl
+rm .tmp/newprj-fcnname.prj
+EOF
+EXPECT=<<EOF
+0x00000010    0      0 fcn.saved
+EOF
+RUN
+
+NAME=newprj rebased functions blocks colors and xrefs
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-fcnmods.prj
+!printf AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > .tmp/newprj-fma.bin
+!printf BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB > .tmp/newprj-fmb.bin
+o .tmp/newprj-fma.bin 0x1000
+o .tmp/newprj-fmb.bin 0x4000
+e asm.arch=arm
+af+ 0x1010 fcn.mod
+afb+ 0x1010 0x1010 8 0x1018 0xffffffffffffffff
+afb+ 0x1010 0x1018 4 0xffffffffffffffff 0xffffffffffffffff
+afbc rgb:ff0000 @ 0x1010
+afbc rgb:0000ff @ 0x1018
+axC 0x4010 0x1010
+prj save .tmp/newprj-fcnmods.prj > /dev/null
+af-*
+ax-*
+o--
+o .tmp/newprj-fma.bin 0x8000
+o .tmp/newprj-fmb.bin 0xc000
+prj load .tmp/newprj-fcnmods.prj > /dev/null
+afl
+afb @ 0x8010
+afbc @ 0x8010~red
+afbc @ 0x8018~blue
+axq
+rm .tmp/newprj-fcnmods.prj
+rm .tmp/newprj-fma.bin
+rm .tmp/newprj-fmb.bin
+EOF
+EXPECT=<<EOF
+0x00008010    2     12 fcn.mod
+0x00008010 0x00008018 00:0000 8 j 0x00008018
+0x00008018 0x0000801c 00:0000 4
+red
+blue
+0x00008010 -> 0x0000c010  CALL:--x
+EOF
+RUN
+
+NAME=newprj function metadata round-trip
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-fcnmeta.prj
+e asm.arch=arm
+e asm.bits=64
+af+ 0x10 fcn.meta
+afb+ 0x10 0x10 8
+s 0x10
+afc arm64
+afS 32
+tn 0x10
+prj save .tmp/newprj-fcnmeta.prj > /dev/null
+af-*
+prj load .tmp/newprj-fcnmeta.prj > /dev/null
+s 0x10
+afi~stackframe,callconv,noreturn
+rm .tmp/newprj-fcnmeta.prj
+EOF
+EXPECT=<<EOF
+stackframe: 32
+callconv: arm64
+noreturn: true
+EOF
+RUN
+
+NAME=newprj function vars and args round-trip
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-fcnvars.prj
+e asm.arch=arm
+e asm.bits=64
+af+ 0x10 fcn.vars
+afb+ 0x10 0x10 8
+s 0x10
+afc arm64
+afvr x0 reg_arg int
+afvb -4 local_name char
+afvs 8 sp_arg long
+prj save .tmp/newprj-fcnvars.prj > /dev/null
+af-*
+prj load .tmp/newprj-fcnvars.prj > /dev/null
+s 0x10
+afv
+rm .tmp/newprj-fcnvars.prj
+EOF
+EXPECT=<<EOF
+arg int reg_arg @ x0
+arg long sp_arg @ sp+0x8
+var char local_name @ x29-0x4
+EOF
+RUN
+
+NAME=newprj script register variables
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-regscript.prj
+e asm.arch=arm
+e asm.bits=64
+af+ 0x10 fcn.regscript
+afb+ 0x10 0x10 8
+s 0x10
+afc arm64
+afvr x0 reg_arg int
+prj save .tmp/newprj-regscript.prj > /dev/null
+prj r2 .tmp/newprj-regscript.prj~afvr
+rm .tmp/newprj-regscript.prj
+EOF
+EXPECT=<<EOF
+'0x00000010'afvr x0 reg_arg int
+EOF
+RUN
+
+NAME=newprj rebased function metadata and vars
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-rfcnmeta.prj
+!printf AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > .tmp/newprj-rfma.bin
+o .tmp/newprj-rfma.bin 0x1000
+e asm.arch=arm
+e asm.bits=64
+af+ 0x1010 fcn.rebase_meta
+afb+ 0x1010 0x1010 8
+s 0x1010
+afc arm64
+afS 16
+afvb -8 local_r int
+prj save .tmp/newprj-rfcnmeta.prj > /dev/null
+af-*
+o--
+o .tmp/newprj-rfma.bin 0x8000
+prj load .tmp/newprj-rfcnmeta.prj > /dev/null
+s 0x8010
+afl
+afi~stackframe,callconv
+afv
+rm .tmp/newprj-rfcnmeta.prj
+rm .tmp/newprj-rfma.bin
+EOF
+EXPECT=<<EOF
+0x00008010    1      8 fcn.rebase_meta
+stackframe: 16
+callconv: arm64
+var int local_r @ x29-0x8
+EOF
+RUN
+
+NAME=newprj shared function attrs round-trip
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-fcnshared.prj
+e asm.arch=arm
+e asm.bits=64
+af+ 0x10 fcn.a
+afb+ 0x10 0x10 4
+s 0x10
+afc arm64
+afS 24
+afvb -4 local_a int
+af+ 0x30 fcn.b
+afb+ 0x30 0x30 4
+s 0x30
+afc arm64
+afS 24
+afvb -8 local_b char
+prj save .tmp/newprj-fcnshared.prj > /dev/null
+af-*
+prj load .tmp/newprj-fcnshared.prj > /dev/null
+s 0x10
+afi~stackframe,callconv
+afv
+s 0x30
+afi~stackframe,callconv
+afv
+rm .tmp/newprj-fcnshared.prj
+EOF
+EXPECT=<<EOF
+stackframe: 24
+callconv: arm64
+var int local_a @ x29-0x4
+stackframe: 24
+callconv: arm64
+var char local_b @ x29-0x8
+EOF
+RUN
+
+NAME=newprj diff covers non-function project data
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-diffall.prj
+e asm.syntax=att
+f saved.flag=0x10
+CC saved @ 0x20
+ahi 10 @ 0x20
+axd 0x30 0x20
+prj save .tmp/newprj-diffall.prj > /dev/null
+e asm.syntax=intel
+f- saved.flag
+f live.flag=0x11
+CC- @ 0x20
+CC live @ 0x20
+ahi 16 @ 0x20
+ax-*
+axc 0x31 0x20
+prj diff .tmp/newprj-diffall.prj~asm.syntax,saved.flag,live.flag,CCu,ahi,ax-,axc
+rm .tmp/newprj-diffall.prj
+EOF
+EXPECT=<<EOF
+'e asm.syntax=intel
+'f- saved.flag
+'f live.flag 1 0x00000011
+'@0x00000020'CCu base64:bGl2ZQ==
+'0x00000020'ahi 16
+'ax- 0x00000030 0x00000020
+'axc 0x00000031 0x00000020
+EOF
+RUN
+
+NAME=newprj Ct metadata round-trip
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-ctmeta.prj
+Ct= base64:c3RkOjp2ZWN0b3I8aW50PiAqZm9vLT5iYXIgQCBzbG90OyAicXVvdGVkIiBcXHBhdGg= @ 0x10
+prj save .tmp/newprj-ctmeta.prj > /dev/null
+Ct= changed @ 0x10
+prj r2 .tmp/newprj-ctmeta.prj~Ct=
+prj load .tmp/newprj-ctmeta.prj > /dev/null
+Ct. @ 0x10
+Ct= live @ 0x10
+prj diff .tmp/newprj-ctmeta.prj~Ct=
+rm .tmp/newprj-ctmeta.prj
+EOF
+EXPECT=<<EOF
+'@0x00000010'Ct= base64:c3RkOjp2ZWN0b3I8aW50PiAqZm9vLT5iYXIgQCBzbG90OyAicXVvdGVkIiBcXHBhdGg=
+std::vector<int> *foo->bar @ slot; "quoted" \\path
+'@0x00000010'Ct= base64:bGl2ZQ==
+EOF
+RUN
+
+NAME=newprj diff covers function blocks colors and vars
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-difffcn.prj
+e asm.arch=arm
+af+ 0x40 saved.fcn
+afb+ 0x40 0x40 4
+afbc rgb:ff0000 @ 0x40
+s 0x40
+afvb -4 saved_var int
+prj save .tmp/newprj-difffcn.prj > /dev/null
+afn live.fcn 0x40
+afb+ 0x40 0x44 4
+afbc rgb:0000ff @ 0x40
+s 0x40
+afvn live_var saved_var
+prj diff .tmp/newprj-difffcn.prj~afn,afb+,afbc,afvb
+rm .tmp/newprj-difffcn.prj
+EOF
+EXPECT=<<EOF
+'afn live.fcn 0x00000040
+'afbc rgb:0000ff 0x00000040
+'afb+ 0x00000040 0x00000044 4 0xffffffffffffffff 0xffffffffffffffff
+'0x00000040'afvb -4 live_var int
+EOF
+RUN
+
+NAME=newprj breakpoints and watchpoints round-trip
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-bps.prj
+db 0x10
+s 0x10
+dbn saved.bp
+dbc 0x10 ?e hit
+dbC 0x10 dr PC
+dbte 0x10
+dbd 0x10 3
+dbx saved.expr
+dbH 0x20
+dbw 0x30 w
+prj save .tmp/newprj-bps.prj > /dev/null
+db-*
+prj load .tmp/newprj-bps.prj > /dev/null
+prj load .tmp/newprj-bps.prj > /dev/null
+dbj
+dbx~saved.expr
+prj diff .tmp/newprj-bps.prj~db
+rm .tmp/newprj-bps.prj
+EOF
+EXPECT=<<EOF
+[{"addr":16,"size":1,"perm":"--x","hw":false,"trace":true,"enabled":false,"valid":true,"data":"?e hit","cond":"dr PC","name":"saved.bp"},{"addr":32,"size":1,"perm":"--x","hw":true,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x20"},{"addr":48,"size":1,"perm":"-w-","hw":true,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x30"}]
+0x00000010 saved.expr
+EOF
+RUN
+
+NAME=newprj open restores file maps
+FILE=malloc://0x10
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-open.prj
+!printf AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > .tmp/newprj-open.bin
+o--
+o .tmp/newprj-open.bin 0x1000
+f open.flag=0x1010
+prj save .tmp/newprj-open.prj > /dev/null
+o--
+prj open .tmp/newprj-open.prj > /dev/null
+fd 0x1010
+p8 1 @ 0x1010
+rm .tmp/newprj-open.prj
+rm .tmp/newprj-open.bin
+EOF
+EXPECT=<<EOF
+open.flag
+41
+EOF
+RUN
+
+NAME=newprj stack vars round-trip across a session with a different frame size
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-spv.prj
+e anal.cc=ms
+wx 488b4424288b08c3
+af
+afvs 0x30 zzz int
+prj save .tmp/newprj-spv.prj > /dev/null
+af-*
+e anal.cc=amd64
+af
+prj load .tmp/newprj-spv.prj > /dev/null
+afvs
+rm .tmp/newprj-spv.prj
+EOF
+EXPECT=<<EOF
+arg int64_t arg_28h @ rsp+0x28
+arg int zzz @ rsp+0x30
+EOF
+RUN
+
+NAME=newprj bp vars keep their raw delta in the diff and r2 scripts
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-bpvframe.prj
+wx 554889e54883ec20897dfc90c9c3
+af
+prj save .tmp/newprj-bpvframe.prj > /dev/null
+afvb -4 renamed int
+prj diff .tmp/newprj-bpvframe.prj~afvb
+prj r2 .tmp/newprj-bpvframe.prj~afvb
+rm .tmp/newprj-bpvframe.prj
+EOF
+EXPECT=<<EOF
+'0x00000000'afvb -12 renamed int
+'0x00000000'afvb -12 var_4h int32_t
+EOF
+RUN
+
+NAME=newprj script applies hints at the recorded address
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-hintat.prj
+rm .tmp/newprj-hintat.r2
+ahi 10 @ 0x20
+prj save .tmp/newprj-hintat.prj > /dev/null
+prj r2 .tmp/newprj-hintat.prj~ahi > .tmp/newprj-hintat.r2
+ah-*
+s 0x40
+. .tmp/newprj-hintat.r2
+ah*
+rm .tmp/newprj-hintat.prj
+rm .tmp/newprj-hintat.r2
+EOF
+EXPECT=<<EOF
+'@0x20'ahi 10
+EOF
+RUN
+
+NAME=newprj diff removes only the hint at the recorded address
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-ahdel.prj
+rm .tmp/newprj-ahdel.r2
+ahi 2 @ 0x10
+ahi 10 @ 0x20
+ahi 16 @ 0x40
+prj save .tmp/newprj-ahdel.prj > /dev/null
+ah- 0x40
+prj diff .tmp/newprj-ahdel.prj~ah- > .tmp/newprj-ahdel.r2
+. .tmp/newprj-ahdel.r2
+ah*
+rm .tmp/newprj-ahdel.prj
+rm .tmp/newprj-ahdel.r2
+EOF
+EXPECT=<<EOF
+'@0x10'ahi 2
+'@0x20'ahi 10
+EOF
+RUN
+
+NAME=newprj keeps a custom calling convention whose definition is gone
+FILE=malloc://0x1000
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-cc.prj
+e asm.arch=x86
+e asm.bits=64
+tcc void reviewcc (rdi)
+af+ 0 reviewf
+afb+ 0 0 10
+afc reviewcc
+afc
+prj save .tmp/newprj-cc.prj > /dev/null
+tcc- reviewcc
+af-*
+prj load .tmp/newprj-cc.prj > /dev/null
+afc
+rm .tmp/newprj-cc.prj
+EOF
+EXPECT=<<EOF
+reviewcc
+reviewcc
+EOF
+RUN
+
+NAME=newprj direct opening restores maps and analysis without a prj extension
+FILE=hex://b801000000c3
+ARGS=-a x86 -b 64 -m 0x1000
+CMDS=<<END
+mkdir .tmp
+f saved.flag=0x1005
+af+ 0x1000 main
+afb+ 0x1000 0x1000 6
+CC saved.comment @ 0x1000
+e asm.bits=16
+prj save ".tmp/newprj direct.bin"
+!r2 -Nq -c 'fd 0x1005;p8 6 @ 0x1000;e asm.bits;afl;CC. @ 0x1000' '.tmp/newprj direct.bin'
+!r2 -Nnq -c 'p8 4' '.tmp/newprj direct.bin'
+!r2 -Ntq -c aflc ".tmp/newprj direct.bin" 2>/dev/null
+rm ".tmp/newprj direct.bin"
+END
+EXPECT=<<END
+saved.flag
+b801000000c3
+16
+0x00001000    1      6 main
+saved.comment
+5250524a
+1
+END
+RUN
+
+NAME=newprj direct opening skips embedded commands when not interactive
+FILE=malloc://256
+CMDS=<<END
+mkdir .tmp
+wx 5250524a05000000090000000700000000220000000400000016000000662073617665642e636f6d6d616e643d307831323334
+wtf .tmp/newprj-script.prj 51 2>/dev/null
+!r2 -Nq -e scr.color=0 -c 'fd 0x1234~saved;?e done' .tmp/newprj-script.prj 2>&1
+rm .tmp/newprj-script.prj
+END
+EXPECT=<<END
+WARN: Skipping 1 commands embedded in the project, load it with scr.interactive=true to review them
+done
+END
+RUN
+
+NAME=newprj direct opening rejects unsupported versions
+FILE=malloc://8
+CMDS=<<END
+mkdir .tmp
+wx 5250524aff000000
+wtf .tmp/newprj-version.prj 8 2>/dev/null
+!r2 -Nq -c '?e invalid' .tmp/newprj-version.prj
+rm .tmp/newprj-version.prj
+END
+EXPECT_ERR=<<END
+ERROR: Unsupported project version 255 (this build understands version 6)
+END
+RUN
+
+NAME=newprj rebased breakpoints keep modules
+FILE=malloc://0x20
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-bpmods.prj
+omv 1 0x1000
+db 0x1010
+dbw 0x1018 rw
+prj save .tmp/newprj-bpmods.prj > /dev/null
+db-*
+omv 1 0x8000
+prj load .tmp/newprj-bpmods.prj > /dev/null
+db
+rm .tmp/newprj-bpmods.prj
+EOF
+EXPECT=<<EOF
+0x00008010 - 0x00008011 1 --x sw break enabled valid name="_x1010" module="malloc:__0x20"
+0x00008018 - 0x00008019 1 rw- hw break enabled valid name="_x1018" module="malloc:__0x20"
+EOF
+RUN
+
+NAME=newprj load replaces breakpoint types and open discards extra breakpoints
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-bpmerge.prj
+db 0x10
+prj save .tmp/newprj-bpmerge.prj > /dev/null
+db-*
+dbH 0x10
+dbH 0x20
+prj load .tmp/newprj-bpmerge.prj > /dev/null
+prj load .tmp/newprj-bpmerge.prj > /dev/null
+dbj
+prj open .tmp/newprj-bpmerge.prj > /dev/null
+dbj
+rm .tmp/newprj-bpmerge.prj
+EOF
+EXPECT=<<EOF
+[{"addr":32,"size":1,"perm":"--x","hw":true,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x20"},{"addr":16,"size":1,"perm":"--x","hw":false,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x10"}]
+[{"addr":16,"size":1,"perm":"--x","hw":false,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x10"}]
+EOF
+RUN
+
+NAME=newprj load does not apply breakpoint delta twice
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-bpdelta.prj
+dbb 8
+db 0x10
+prj save .tmp/newprj-bpdelta.prj > /dev/null
+db-*
+prj load .tmp/newprj-bpdelta.prj > /dev/null
+dbj
+dbb
+rm .tmp/newprj-bpdelta.prj
+EOF
+EXPECT=<<EOF
+[{"addr":24,"size":1,"perm":"--x","hw":false,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x10"}]
+8
+EOF
+RUN
+
+NAME=newprj breakpoint script replays strings and breakpoint types
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-bpscript.prj
+db 0x10
+'@0x10'dbn literal; @ 'name'
+'dbc 0x10 ?e hit; ?e other
+'dbC 0x10 dr PC; ?v $$
+'@0x10'dbx sym.main+4
+dbd 0x10 3
+dbte 0x10
+dbH 0x20
+dbw 0x30 r
+e dbg.hwbp=true
+dbb 8
+prj save .tmp/newprj-bpscript.prj > /dev/null
+prj r2 .tmp/newprj-bpscript.prj~db > .tmp/newprj-bpscript.r2
+db-*
+. .tmp/newprj-bpscript.r2
+dbj
+dbx~sym.main
+prj diff .tmp/newprj-bpscript.prj~db
+e dbg.hwbp
+dbb
+rm .tmp/newprj-bpscript.r2
+rm .tmp/newprj-bpscript.prj
+EOF
+EXPECT=<<EOF
+[{"addr":16,"size":1,"perm":"--x","hw":false,"trace":true,"enabled":false,"valid":true,"data":"?e hit; ?e other","cond":"dr PC; ?v $$","name":"literal; @ 'name'"},{"addr":32,"size":1,"perm":"--x","hw":true,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x20"},{"addr":48,"size":1,"perm":"r--","hw":true,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x30"}]
+0x00000010 sym.main+4
+true
+8
+EOF
+RUN
+
+NAME=newprj breakpoint diff replays additions deletions and changed metadata
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-bpdiff.prj
+db 0x10
+dbc 0x10 ?e saved
+dbte 0x10
+dbH 0x20
+prj save .tmp/newprj-bpdiff.prj > /dev/null
+'@0x10'dbn live.bp
+dbc 0x10 ?e live
+dbd 0x10 4
+dbtd 0x10
+db- 0x20
+dbw 0x30 w
+prj diff .tmp/newprj-bpdiff.prj~db > .tmp/newprj-bpdiff.r2
+db-*
+prj load .tmp/newprj-bpdiff.prj > /dev/null
+. .tmp/newprj-bpdiff.r2
+dbj
+rm .tmp/newprj-bpdiff.r2
+rm .tmp/newprj-bpdiff.prj
+EOF
+EXPECT=<<EOF
+[{"addr":16,"size":1,"perm":"--x","hw":false,"trace":false,"enabled":false,"valid":true,"data":"?e live","cond":"","name":"live.bp"},{"addr":48,"size":1,"perm":"-w-","hw":true,"trace":false,"enabled":true,"valid":true,"data":"","cond":"","name":"0x30"}]
+EOF
+RUN
+
+NAME=newprj signals round-trip and explicit default settings
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-signals.prj
+dko 11 skip
+dko 2 cont
+dko 15
+prj save .tmp/newprj-signals.prj > /dev/null
+dko 11
+dko 2
+dko 15 cont
+prj load .tmp/newprj-signals.prj > /dev/null
+prj load .tmp/newprj-signals.prj > /dev/null
+dk~SIGSEGV
+dk~SIGINT
+dk~SIGTERM
+prj diff .tmp/newprj-signals.prj~dko
+rm .tmp/newprj-signals.prj
+EOF
+EXPECT=<<EOF
+11 SIGSEGV skip
+2 SIGINT cont
+15 SIGTERM
+EOF
+RUN
+
+NAME=newprj signal diff replays changed added and reset settings
+FILE=malloc://0x100
+CMDS=<<EOF
+mkdir .tmp
+rm .tmp/newprj-sigdiff.prj
+dko 11 skip
+dko 2 cont
+prj save .tmp/newprj-sigdiff.prj > /dev/null
+dko 11 cont
+dko 2
+dko 15 skip
+prj diff .tmp/newprj-sigdiff.prj~dko > .tmp/newprj-sigdiff.r2
+prj open .tmp/newprj-sigdiff.prj > /dev/null
+dk~SIGTERM
+. .tmp/newprj-sigdiff.r2
+dk~SIGSEGV
+dk~SIGINT
+dk~SIGTERM
+rm .tmp/newprj-sigdiff.r2
+rm .tmp/newprj-sigdiff.prj
+EOF
+EXPECT=<<EOF
+15 SIGTERM
+11 SIGSEGV cont
+2 SIGINT
+15 SIGTERM skip
+EOF
+RUN
+
+NAME=newprj accepts version 5 projects
+FILE=hex://5250524a050000000f000000070000006c65676163790021000000020000000100000000000000ffffffff80000000000000000100000000
+ARGS=-n
+CMDS=<<EOF
+mkdir .tmp
+wtf .tmp/newprj-v5.prj 56 2>/dev/null
+prj load .tmp/newprj-v5.prj > /dev/null
+f~legacy
+rm .tmp/newprj-v5.prj
+EOF
+EXPECT=<<EOF
+0x00000080 1 legacy
+EOF
+EXPECT_ERR=<<EOF
+EOF
+RUN
+
+NAME=newprj rejects invalid breakpoint records without consuming the next entry
+FILE=hex://5250524a060000000e00000007000000616674657200710000000e000000ffffffff1000000000000000ffffffffffffffffffffffffffffffffffffff7f0100000001000000020000000000000000000000ffffffff1000000000000000feffffffffffffffffffffffffffffff0100000001000000010000000200000000000000000000000021000000020000000100000000000000ffffffff80000000000000000100000000
+ARGS=-n
+CMDS=<<EOF
+mkdir .tmp
+wtf .tmp/newprj-bp-invalid.prj 168 2>/dev/null
+prj load .tmp/newprj-bp-invalid.prj > /dev/null
+dbj
+f~after
+rm .tmp/newprj-bp-invalid.prj
+EOF
+EXPECT=<<EOF
+[]
+0x00000080 1 after
+EOF
+EXPECT_ERR=<<EOF
+WARN: Invalid breakpoint record at 0x0000001e
+WARN: Invalid breakpoint strings at 0x00000052
+WARN: Truncated breakpoint record at 0x00000086
+EOF
+RUN
+
+NAME=newprj rejects invalid signal records without consuming the next entry
+FILE=hex://5250524a06000000090000000700000000190000000f000000ffffffff010000000b0000000400000000100000000f0000000200000001000000
+ARGS=-n
+CMDS=<<EOF
+mkdir .tmp
+wtf .tmp/newprj-sig-invalid.prj 58 2>/dev/null
+prj load .tmp/newprj-sig-invalid.prj > /dev/null
+dko~SIGINT
+rm .tmp/newprj-sig-invalid.prj
+EOF
+EXPECT=<<EOF
+2 SIGINT cont
+EOF
+EXPECT_ERR=<<EOF
+WARN: Invalid signal record at 0x00000019
+WARN: Invalid signal record at 0x00000021
+WARN: Truncated signal record at 0x00000029
+EOF
+RUN
+
+NAME=newprj skips command hook evals when not interactive
+FILE=malloc://256
+CMDS=<<END
+mkdir .tmp
+wx 5250524a060000002f0000000700000000636d642e65786974003f6520455849542d484f4f4b0061736d2e62797465730066616c7365001c0000000a00000002000000010000000a0000001700000021000000
+wtf .tmp/newprj-hook.prj 83 2>/dev/null
+e scr.color=0
+e asm.bytes=true
+prj load .tmp/newprj-hook.prj
+e asm.bytes
+e cmd.exit
+rm .tmp/newprj-hook.prj
+END
+EXPECT=<<END
+false
+
+END
+EXPECT_ERR=<<END
+WARN: Skipping 1 commands embedded in the project, load it with scr.interactive=true to review them
+END
+RUN
+
+NAME=newprj binary flags and script preserve inline independently of seek
+FILE=malloc://256
+ARGS=-a arm -b 64
+CMDS=<<EOF
+mkdir .tmp
+af+ 0x10 fcn.one
+afb+ 0x10 0x10 4
+af+ 0x20 fcn.two
+afb+ 0x20 0x20 4
+afia+ inline @ 0x10
+prj save .tmp/newprj-inline.prj > /dev/null
+afia- inline @ 0x10
+afia+ inline @ 0x20
+prj load .tmp/newprj-inline.prj > /dev/null
+afia @ 0x10~inline
+afia @ 0x20~inline
+prj diff .tmp/newprj-inline.prj~afia
+prj r2 .tmp/newprj-inline.prj~afia > .tmp/newprj-inline.r2
+afia- inline @ 0x10
+s 0x20
+. .tmp/newprj-inline.r2
+afia @ 0x10~inline
+afia @ 0x20~inline
+rm .tmp/newprj-inline.prj
+rm .tmp/newprj-inline.r2
+EOF
+EXPECT=<<EOF
+  inline    true
+  inline    false
+  inline    true
+  inline    false
+EOF
+RUN
+
+NAME=newprj inline diff replays both signs and newly added functions
+FILE=malloc://256
+ARGS=-a arm -b 64
+CMDS=<<EOF
+mkdir .tmp
+af+ 0x10 fcn.one
+afb+ 0x10 0x10 4
+af+ 0x20 fcn.two
+afb+ 0x20 0x20 4
+prj save .tmp/newprj-inline-diff.prj > /dev/null
+afia+ inline @ 0x10
+prj diff .tmp/newprj-inline-diff.prj > .tmp/newprj-inline-diff.r2
+afia- inline @ 0x10
+s 0x20
+. .tmp/newprj-inline-diff.r2
+afia @ 0x10~inline
+afia @ 0x20~inline
+prj save .tmp/newprj-inline-diff.prj > /dev/null
+afia- inline @ 0x10
+prj diff .tmp/newprj-inline-diff.prj > .tmp/newprj-inline-diff.r2
+afia+ inline @ 0x10
+. .tmp/newprj-inline-diff.r2
+afia @ 0x10~inline
+afia @ 0x20~inline
+af+ 0x30 fcn.new
+afb+ 0x30 0x30 4
+afia+ inline @ 0x30
+prj diff .tmp/newprj-inline-diff.prj > .tmp/newprj-inline-diff.r2
+af- 0x30
+. .tmp/newprj-inline-diff.r2
+afia @ 0x30~inline
+afia @ 0x20~inline
+rm .tmp/newprj-inline-diff.prj
+rm .tmp/newprj-inline-diff.r2
+EOF
+EXPECT=<<EOF
+  inline    true
+  inline    false
+  inline    false
+  inline    false
+  inline    true
+  inline    false
+EOF
+RUN

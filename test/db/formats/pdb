@@ -1,7 +1,7 @@
 NAME=PDB downloader check
+REQUIRE=network
 FILE=bins/pdb/user32.dll
 CMDS=<<EOF
-%R2_CURL=1
 !!rabin2 -PP ${R2_FILE} ~PDB
 EOF
 EXPECT=<<EOF
@@ -10,24 +10,24 @@ EOF
 RUN
 
 NAME=PDB downloader json
+REQUIRE=network
 FILE=-
 CMDS=<<EOF
-%R2_CURL=1
 !!rabin2 -PPj bins/pdb/user32.dll
 EOF
 EXPECT=<<EOF
-{"pdb":{"file":"user32.pdb","download":true},"pdb":false}
+{"pdb":{"file":"user32.pdb","download":true}}
 EOF
 RUN
 
 NAME=idpdj
+REQUIRE=network
 FILE=bins/pdb/user32.dll
 CMDS=<<EOF
-%R2_CURL=1
 idpdj
 EOF
 EXPECT=<<EOF
-{"pdb":{"file":"user32.pdb","download":true}}
+{"file":"user32.pdb","download":true}
 EOF
 RUN
 
@@ -38,10 +38,76 @@ idp 404.pdb
 EOF
 EXPECT=
 EXPECT_ERR=<<EOF
-Cannot open file
+ERROR: Cannot open file
 EOF
 RUN
 
+NAME=idp warns when the PDB belongs to another binary
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<EOF
+idp bins/pdb/Project1.pdb
+idp bins/pdb/SimplePDB.pdb
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+WARN: bins/pdb/Project1.pdb does not belong to this binary (PDB GUID+age C6B50FBD7002442F906FEF957AF8D7811, binary 1516D2A3E6864C06BD82C50FBE6152363)
+EOF
+RUN
+
+NAME=idp accepts a PDB without a global symbol stream
+FILE=-
+CMDS=<<EOF
+idpi bins/pdb/issue_12924.pdb~not-present
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+WARN: Cannot find base address, flags will probably be misplaced
+EOF
+RUN
+
+NAME=idp creates the functions of the PDB public symbols
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<EOF
+idp bins/pdb/SimplePDB.pdb
+afl~SomeCool,_main
+EOF
+EXPECT=<<EOF
+0x00401010    1      8 pdb._main
+0x00401000    1     13 pdb.void___cdecl_SomeCoolFunction_void_
+0x00401290    1     10 pdb._mainCRTStartup
+EOF
+RUN
+
+NAME=idp applies thiscall from a demangled PDB public symbol
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<EOF
+e io.cache=true
+wx 8bc1c3 @ 0x401000
+idpi* bins/pdb/SimplePDB-thiscall.pdb~afc
+idp bins/pdb/SimplePDB-thiscall.pdb
+afc @ 0x401000
+afvr @ 0x401000
+EOF
+EXPECT=<<EOF
+'@0x401000'afc thiscall
+thiscall
+arg int32_t arg1 @ ecx
+EOF
+RUN
+NAME=idp adds the static functions of the module symbols
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<EOF
+idp bins/pdb/SimplePDB.pdb
+afl~pre_c,tmainCRT
+f~pre_cpp_init
+EOF
+EXPECT=<<EOF
+0x0040112b   24    330 pdb.__tmainCRTStartup
+0x00401027   11    185 pdb.pre_c_init
+0x004010e0    3     75 pdb.pre_cpp_init
+0x004010e0 75 pdb.pre_cpp_init
+EOF
+RUN
 NAME=idp and baddr
 FILE=-
 CMDS=<<EOF
@@ -53,14 +119,14 @@ idp bins/pdb/Project1.pdb
 f~pdb:1
 EOF
 EXPECT=<<EOF
-0x00011000 0 pdb.__enc_textbss_end
-0x00811000 0 pdb.__enc_textbss_end
+0x00011000 1 pdb.__enc_textbss_end
+0x00811000 1 pdb.__enc_textbss_end
 EOF
 RUN
 
 NAME=find structure R2_TEST_STRUCT
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep -ao R2_TEST_STRUCT
+CMDS=!!rabin2 -P ${R2_FILE} | grep -ao R2_TEST_STRUCT
 EXPECT=<<EOF
 R2_TEST_STRUCT
 EOF
@@ -68,7 +134,7 @@ RUN
 
 NAME=find union R2_TEST_UNION
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep -ao R2_TEST_UNION
+CMDS=!!rabin2 -P ${R2_FILE} | grep -ao R2_TEST_UNION
 EXPECT=<<EOF
 R2_TEST_UNION
 EOF
@@ -76,7 +142,7 @@ RUN
 
 NAME=find enum R2_TEST_ENUM
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep -ao R2_TEST_ENUM
+CMDS=!!rabin2 -P ${R2_FILE} | grep -ao R2_TEST_ENUM
 EXPECT=<<EOF
 R2_TEST_ENUM
 EOF
@@ -84,7 +150,7 @@ RUN
 
 NAME=member1 offset of structure R2_TEST_STRUCT
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep r2_struct_var_1 | grep -ao 0x0
+CMDS=!!rabin2 -P ${R2_FILE} | grep r2_struct_var_1 | grep -ao 0x0
 EXPECT=<<EOF
 0x0
 EOF
@@ -93,7 +159,7 @@ RUN
 NAME=member2 offset of structure R2_TEST_STRUCT
 
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep r2_struct_var_2 | grep -ao 0x4
+CMDS=!!rabin2 -P ${R2_FILE} | grep r2_struct_var_2 | grep -ao 0x4
 EXPECT=<<EOF
 0x4
 EOF
@@ -101,7 +167,7 @@ RUN
 
 NAME=member1 name of structure R2_TEST_STRUCT
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep -ao r2_struct_var_1
+CMDS=!!rabin2 -P ${R2_FILE} | grep -ao r2_struct_var_1
 EXPECT=<<EOF
 r2_struct_var_1
 EOF
@@ -109,7 +175,7 @@ RUN
 
 NAME=member2 name of structure R2_TEST_STRUCT
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep -ao r2_struct_var_2
+CMDS=!!rabin2 -P ${R2_FILE} | grep -ao r2_struct_var_2
 EXPECT=<<EOF
 r2_struct_var_2
 EOF
@@ -117,7 +183,7 @@ RUN
 
 NAME=member1 type of structure R2_TEST_STRUCT
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep r2_struct_var_1 | grep -ao int32_t
+CMDS=!!rabin2 -P ${R2_FILE} | grep r2_struct_var_1 | grep -ao int32_t
 EXPECT=<<EOF
 int32_t
 EOF
@@ -125,15 +191,15 @@ RUN
 
 NAME=member2 type of structure R2_TEST_STRUCT
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep r2_struct_var_2 | grep -ao uint16_t
+CMDS=!!rabin2 -P ${R2_FILE} | grep r2_struct_var_2 | grep -aow int16_t
 EXPECT=<<EOF
-uint16_t
+int16_t
 EOF
 RUN
 
 NAME=check size of structure R2_TEST_STRUCT
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao 0x8
+CMDS=!!rabin2 -P ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao 0x8
 EXPECT=<<EOF
 0x8
 EOF
@@ -141,7 +207,7 @@ RUN
 
 NAME=member1 name of union R2_TEST_UNION
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep -ao r2_union_var_1
+CMDS=!!rabin2 -P ${R2_FILE} | grep -ao r2_union_var_1
 EXPECT=<<EOF
 r2_union_var_1
 EOF
@@ -149,7 +215,7 @@ RUN
 
 NAME=member2 name of union R2_TEST_UNION
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep -ao r2_union_var_2
+CMDS=!!rabin2 -P ${R2_FILE} | grep -ao r2_union_var_2
 EXPECT=<<EOF
 r2_union_var_2
 EOF
@@ -157,7 +223,7 @@ RUN
 
 NAME=member1 type of union R2_TEST_UNION
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep r2_union_var_1 | grep -ao int32_t
+CMDS=!!rabin2 -P ${R2_FILE} | grep r2_union_var_1 | grep -ao int32_t
 EXPECT=<<EOF
 int32_t
 EOF
@@ -165,7 +231,7 @@ RUN
 
 NAME=member2 type of union R2_TEST_UNION
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep r2_union_var_2 | grep -ao double
+CMDS=!!rabin2 -P ${R2_FILE} | grep r2_union_var_2 | grep -ao double
 EXPECT=<<EOF
 double
 EOF
@@ -173,7 +239,7 @@ RUN
 
 NAME=check size of union R2_TEST_UNION
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -P ${R2_FILE} | grep R2_TEST_UNION | grep -ao 0x8
+CMDS=!!rabin2 -P ${R2_FILE} | grep R2_TEST_UNION | grep -ao 0x8
 EXPECT=<<EOF
 0x8
 EOF
@@ -181,7 +247,7 @@ RUN
 
 NAME=redirection test
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -Pr ${R2_FILE} | grep -ao _unnamed_tag_ | head -n1
+CMDS=!!rabin2 -Pr ${R2_FILE} | grep -ao _unnamed_tag_ | head -n1
 EXPECT=<<EOF
 _unnamed_tag_
 EOF
@@ -189,7 +255,7 @@ RUN
 
 NAME=struct export test
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -Pr ${R2_FILE} | grep -ao R2_TEST_STRUCT
+CMDS=!!rabin2 -Pr ${R2_FILE} | grep -ao R2_TEST_STRUCT
 EXPECT=<<EOF
 R2_TEST_STRUCT
 EOF
@@ -197,7 +263,7 @@ RUN
 
 NAME=struct export command
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao pf
+CMDS=!!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao pf
 EXPECT=<<EOF
 pf
 EOF
@@ -205,7 +271,7 @@ RUN
 
 NAME=struct export types
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao n4n2
+CMDS=!!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao n4n2
 EXPECT=<<EOF
 n4n2
 EOF
@@ -213,7 +279,7 @@ RUN
 
 NAME=struct export name1
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao r2_struct_var_1
+CMDS=!!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao r2_struct_var_1
 EXPECT=<<EOF
 r2_struct_var_1
 EOF
@@ -221,7 +287,7 @@ RUN
 
 NAME=struct export name2
 FILE=bins/pdb/Project1.pdb
-CMDS=!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao r2_struct_var_2
+CMDS=!!rabin2 -Pr ${R2_FILE} | grep R2_TEST_STRUCT | grep -ao r2_struct_var_2
 EXPECT=<<EOF
 r2_struct_var_2
 EOF
@@ -229,7 +295,7 @@ RUN
 
 NAME=GUID CHECK
 FILE=bins/pdb/user32.dll
-CMDS=!rabin2 -I ${R2_FILE} | grep -ao 15F778B3671D4EFDBDCDE79905308B792
+CMDS=!!rabin2 -I ${R2_FILE} | grep -ao 15F778B3671D4EFDBDCDE79905308B792
 EXPECT=<<EOF
 15F778B3671D4EFDBDCDE79905308B792
 EOF
@@ -244,4 +310,335 @@ EOF
 EXPECT=<<EOF
 __enc$textbss$end
 EOF
+RUN
+
+NAME=PDB flag realname keeps the demangled name
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<EOF
+idp bins/pdb/SimplePDB.pdb
+s pdb.void___cdecl_SomeCoolFunction_void_
+fN
+e asm.flags.real=true
+pd 1~SomeCool
+EOF
+EXPECT=<<EOF
+void __cdecl SomeCoolFunction(void)
+/ 13: void __cdecl SomeCoolFunction(void) ();
+EOF
+RUN
+
+NAME=idp union members reach sdb via union member vec
+FILE=-
+CMDS=<<EOF
+idp bins/pdb/Project1.pdb
+tk union.R2_TEST_UNION
+tk union.R2_TEST_UNION.r2_union_var_1
+tk union.R2_TEST_UNION.r2_union_var_2
+tuc R2_TEST_UNION
+tk struct.R2_TEST_STRUCT.r2_struct_var_1
+tsc R2_TEST_STRUCT
+EOF
+EXPECT=<<EOF
+r2_union_var_1,r2_union_var_2
+int32_t,0,0
+double,0,0
+union R2_TEST_UNION {
+  int32_t r2_union_var_1;
+  double r2_union_var_2;
+};
+int32_t,0,0
+struct R2_TEST_STRUCT {
+  int32_t r2_struct_var_1;
+  int16_t r2_struct_var_2;
+};
+EOF
+RUN
+NAME=PDB rejects a zero page size before counting pages
+FILE=hex://4d6963726f736f667420432f432b2b204d534620372e30300d0a1a44530000000000000000000000010000004000000000000000
+CMDS=<<EOF
+i~^bintype
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Invalid root size or page size
+EOF
+RUN
+
+NAME=Issue #12924 - Enum with modified underlying type in PDB
+FILE=-
+CMDS=<<EOF
+idp bins/pdb/issue_12924.pdb
+te~tagCOINITBASE
+EOF
+EXPECT=<<EOF
+tagCOINITBASE
+EOF
+RUN
+
+NAME=PDB truncated type records
+FILE=bins/pdb/truncated-type-records.pdb
+TIMEOUT=10
+CMDS=<<EOF
+i~^bintype
+idpi bins/pdb/truncated-type-records.pdb
+idpij bins/pdb/truncated-type-records.pdb
+o--
+?e closed
+EOF
+EXPECT=<<EOF
+bintype  pdb
+struct S { // size 0x4
+  int32_t a; // offset +0x0
+};
+{"types":[{"type":"structure","name":"S","size":4,"members":[{"member_type":"int32_t","member_name":"a","offset":0}]}]}
+closed
+EOF
+RUN
+
+NAME=pdb S_PUB32_ST names use their length byte
+FILE=--
+CMDS=<<EOF
+idpi bins/pdb/pub32st-name-length.pdb~.text
+idpi bins/pdb/pub32st-unterminated.pdb~.text
+EOF
+EXPECT=<<EOF
+0x00001010  2  .text  foo
+0x00001010  2  .text  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+EOF
+RUN
+
+NAME=pdb S_PUB32 records with missing or unterminated names are skipped
+FILE=--
+CMDS=<<EOF
+idpi bins/pdb/pub32-missing-names.pdb~.text
+EOF
+EXPECT=<<EOF
+0x00001010  2  .text  valid
+0x00001000  2  .text  function
+0x00001018  2  .text  main
+0x00001056  2  .text  mainCRTStartup
+EOF
+RUN
+
+NAME=idpi script skips empty and whitespace-only public names
+FILE=bins/pdb/SimplePDB.exe
+CMDS=<<EOF
+idpi* bins/pdb/SimplePDB-empty-names.pdb~f pdb.void___cdecl_SomeCoolFunction_void_,f pdb.__imp__printf,f pdb._main
+EOF
+EXPECT=<<EOF
+'@0x401010'f pdb._main
+'@0x401290'f pdb._mainCRTStartup
+EOF
+RUN
+
+NAME=pdb structs sharing a long field list are parsed in linear time
+FILE=bins/pdb/shared-field-list-400x1000.pdb
+ARGS=-e log.level=0
+TIMEOUT=120
+CMDS=<<EOF
+idpi bins/pdb/shared-field-list-400x1000.pdb~?struct
+EOF
+EXPECT=<<EOF
+400
+EOF
+RUN
+
+NAME=idpi handles a missing file without a loaded binary
+FILE=--
+CMDS=<<EOF
+idpi bins/pdb/does-not-exist.pdb
+?e done
+EOF
+EXPECT=<<EOF
+done
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cannot open file
+EOF
+RUN
+
+NAME=pdb type printer stops on a self-referencing pointer
+FILE=--
+ARGS=-e log.level=0
+CMDS=<<EOF2
+idpi bins/pdb/tpi-self-ref.pdb
+EOF2
+EXPECT=<<EOF2
+struct node { // size 0x8
+  **************************************************************** next; // offset +0x0
+};
+EOF2
+RUN
+
+NAME=pdb arrays of structs print their size
+FILE=bins/pdb/SimplePDB.pdb
+ARGS=-e log.level=0
+CMDS=<<EOF2
+idpi bins/pdb/SimplePDB.pdb~DataDirectory
+EOF2
+EXPECT=<<EOF2
+  struct _IMAGE_DATA_DIRECTORY[128] DataDirectory; // offset +0x60
+EOF2
+RUN
+
+NAME=pdb DBI module_size larger than the stream is rejected before allocating it
+FILE=-
+CMDS=<<EOF
+idpi bins/pdb/dbi-module-size.pdb
+?e done
+EOF
+EXPECT=<<EOF
+done
+EOF
+EXPECT_ERR=<<EOF
+WARN: Cannot find base address, flags will probably be misplaced
+WARN: Invalid module info size in the PDB DBI stream
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+EOF
+RUN
+
+NAME=pdb DBI rejects negative, overflowing and wrapped section sizes
+FILE=-
+ARGS=-e log.level=1
+CMDS=<<EOF
+idpi bins/pdb/dbi-section-negative.pdb
+idpi bins/pdb/dbi-section-overflow.pdb
+idpi bins/pdb/dbi-section-wrap.pdb
+?e done
+EOF
+EXPECT=<<EOF
+done
+EOF
+EXPECT_ERR=<<EOF
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+EOF
+RUN
+
+NAME=pdb DBI rejects incomplete module records, names and padding
+FILE=-
+ARGS=-e log.level=1
+CMDS=<<EOF
+idpi bins/pdb/dbi-module-truncated.pdb
+idpi bins/pdb/dbi-module-name-missing.pdb
+idpi bins/pdb/dbi-object-name-missing.pdb
+idpi bins/pdb/dbi-module-padding-truncated.pdb
+?e done
+EOF
+EXPECT=<<EOF
+done
+EOF
+EXPECT_ERR=<<EOF
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+ERROR: PDB root was not initialized
+ERROR: pdb was not parsed
+EOF
+RUN
+
+NAME=pdb stream directory and streams cannot use more pages than the file has
+FILE=-
+CMDS=<<EOF
+idpi bins/pdb/aliased-directory.pdb
+idpi bins/pdb/aliased-streams.pdb
+?e done
+EOF
+EXPECT=<<EOF
+done
+EOF
+EXPECT_ERR=<<EOF
+WARN: Cannot find base address, flags will probably be misplaced
+ERROR: Invalid page count
+ERROR: pdb was not parsed
+WARN: Cannot find base address, flags will probably be misplaced
+WARN: PDB streams use more pages than the file has
+ERROR: Could not initialize root stream
+ERROR: pdb was not parsed
+EOF
+RUN
+
+NAME=pdb omap lookups do not walk the entry list per symbol
+FILE=-
+TIMEOUT=10
+CMDS=<<EOF
+idpi bins/pdb/omap-last-entry.pdb~?
+idpi bins/pdb/omap-last-entry.pdb~:0
+EOF
+EXPECT=<<EOF
+65536
+0x00006000  2  .text  s
+EOF
+EXPECT_ERR=<<EOF
+WARN: Cannot find base address, flags will probably be misplaced
+WARN: Cannot find base address, flags will probably be misplaced
+EOF
+RUN
+
+NAME=idpi script analyzes each aliased PDB address once
+FILE=--
+TIMEOUT=10
+CMDS=<<END
+e bin.baddr=0x400000
+idpi* bins/pdb/omap-last-entry.pdb~af$
+END
+EXPECT=<<END
+'@0x406000'af
+END
+RUN
+
+NAME=PDB public and module addresses skip invalid OMAP results and preserve aliases
+FILE=--
+CMDS=<<END
+e bin.baddr=0x400000
+idpi* bins/pdb/omap-symbol-addresses.pdb~f pdb.
+idpi* bins/pdb/omap-symbol-addresses.pdb~af$
+e bin.baddr=0xfffffffffffff000
+idpi bins/pdb/omap-symbol-addresses.pdb~?
+END
+EXPECT=<<END
+'@0x402000'f pdb.valid
+'@0x402000'f pdb.alias
+'@0x80400000'f pdb.high
+'@0x403000'f pdb.module_valid 6
+'@0x80401000'f pdb.module_high 6
+'@0x402000'af
+'@0x80400000'af
+'@0x403000'af
+'@0x80401000'af
+0
+END
+RUN
+
+NAME=PDB module stream parsers are indexed by stream number
+FILE=--
+TIMEOUT=10
+CMDS=<<END
+e bin.baddr=0
+idpi bins/pdb/many-module-streams.pdb~?
+idpi bins/pdb/many-module-streams.pdb~:16383
+END
+EXPECT=<<END
+16384
+0x00040ff0  2  .text  module_16383
+END
+RUN
+
+NAME=PDB parser indices keep the first duplicate and skip out of range streams
+FILE=--
+CMDS=<<END
+e bin.baddr=0
+idpi bins/pdb/module-parser-indices.pdb
+END
+EXPECT=<<END
+0x00001000  2  .text  public
+0x00001010  2  .text  first
+END
 RUN

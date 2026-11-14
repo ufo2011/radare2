@@ -1,4 +1,4 @@
-/* radare - LGPL3 - Copyright 2016-2021 - Matthieu (c0riolis) Tardy - l0stb1t*/
+/* radare - LGPL3 - Copyright 2016-2026 - Matthieu (c0riolis) Tardy - l0stb1t */
 
 #include <r_io.h>
 #include <r_bin.h>
@@ -6,18 +6,12 @@
 #include "pyc_magic.h"
 
 // avoiding using r2 internals asserts
-#define if_true_return(cond,ret) if(cond){return(ret);}
+#define if_true_return(cond,ret) if (cond) { return (ret); }
+#define PYC_MAX_DEPTH 512
 
-static ut32 magic_int;
-static ut32 symbols_ordinal = 0;
+// All mutable parse state is carried in PycUnmarshalCtx (see marshal.h).
 
-static RList *refs = NULL; // If you don't have a good reason, do not change this. And also checkout !refs in get_code_object()
-
-/* interned_table is used to handle TYPE_INTERNED object */
-extern RList *interned_table;
-
-static pyc_object *get_object(RBuffer *buffer);
-static pyc_object *copy_object(pyc_object *object);
+static pyc_object *get_object(PycUnmarshalCtx *ctx, RBuffer *buffer, int wtype);
 static void free_object(pyc_object *object);
 
 static ut8 get_ut8(RBuffer *buffer, bool *error) {
@@ -30,57 +24,66 @@ static ut8 get_ut8(RBuffer *buffer, bool *error) {
 }
 
 static ut16 get_ut16(RBuffer *buffer, bool *error) {
-	ut16 ret = 0;
-
-	int size = r_buf_read (buffer, (ut8 *)&ret, sizeof (ret));
-	if (size != sizeof (ret)) {
+	ut8 data[2] = {0};
+	*error = false;
+	int size = r_buf_read (buffer, (ut8 *)&data, sizeof (data));
+	if (size != sizeof (data)) {
 		*error = true;
 	}
-	return ret;
+	return r_read_le16 (data);
 }
 
 static ut32 get_ut32(RBuffer *buffer, bool *error) {
-	ut32 ret = 0;
-	int size = r_buf_read (buffer, (ut8 *)&ret, sizeof (ret));
-	if (size != sizeof (ret)) {
+	ut8 data[4] = {0};
+	*error = false;
+	int size = r_buf_read (buffer, (ut8 *)&data, sizeof (data));
+	if (size != sizeof (data)) {
 		*error = true;
 	}
-	return ret;
+	return r_read_le32 (data);
 }
 
 static st32 get_st32(RBuffer *buffer, bool *error) {
-	st32 ret = 0;
-	int size = r_buf_read (buffer, (ut8 *)&ret, sizeof (ret));
-	if (size < sizeof (ret)) {
-		*error = true;
-	}
-	return ret;
+	return (st32)get_ut32 (buffer, error);
 }
 
 static st64 get_st64(RBuffer *buffer, bool *error) {
-	st64 ret = 0;
-	int size = r_buf_read (buffer, (ut8 *)&ret, sizeof (ret));
-	if (size < sizeof (ret)) {
+	ut8 data[8];
+	*error = false;
+	int size = r_buf_read (buffer, (ut8 *)&data, sizeof (data));
+	if (size != sizeof (data)) {
 		*error = true;
 	}
-	return ret;
+	return (st64)r_read_le64 (data);
 }
 
+typedef union {
+	double d;
+	ut64 n;
+	ut8 b[8];
+} du64;
+
+/// XXX this is probably wrong as native double representation depends on the cpu, not the target file format
 static double get_float64(RBuffer *buffer, bool *error) {
-	double ret = 0;
-	int size = r_buf_read (buffer, (ut8 *)&ret, sizeof (ret));
-	if (size < sizeof (ret)) {
+	du64 doubledata = {0};
+	*error = false;
+	int size = r_buf_read (buffer, doubledata.b, sizeof (doubledata));
+	if (size != sizeof (doubledata)) {
 		*error = true;
 	}
-	return ret;
+	doubledata.n = r_read_le64 (doubledata.b);
+	return doubledata.d;
 }
 
 static ut8 *get_bytes(RBuffer *buffer, ut32 size) {
-	ut8 *ret = R_NEWS0 (ut8, size + 1);
-	if (!ret) {
+	// a short read pads the whole allocation, so the size must fit in what is left
+	const ut64 pos = r_buf_tell (buffer);
+	const ut64 end = r_buf_size (buffer);
+	if (size >= ST32_MAX || pos > end || size > end - pos) {
 		return NULL;
 	}
-	if (r_buf_read (buffer, ret, size) < size) {
+	ut8 *ret = R_NEWS0 (ut8, size + 1);
+	if (ret && r_buf_read (buffer, ret, size) < size) {
 		free (ret);
 		return NULL;
 	}
@@ -89,9 +92,6 @@ static ut8 *get_bytes(RBuffer *buffer, ut32 size) {
 
 static pyc_object *get_none_object(void) {
 	pyc_object *ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
 	ret->type = TYPE_NONE;
 	ret->data = strdup ("None");
 	if (!ret->data) {
@@ -102,9 +102,6 @@ static pyc_object *get_none_object(void) {
 
 static pyc_object *get_false_object(void) {
 	pyc_object *ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
 	ret->type = TYPE_FALSE;
 	ret->data = strdup ("False");
 	if (!ret->data) {
@@ -115,9 +112,6 @@ static pyc_object *get_false_object(void) {
 
 static pyc_object *get_true_object(void) {
 	pyc_object *ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
 	ret->type = TYPE_TRUE;
 	ret->data = strdup ("True");
 	if (!ret->data) {
@@ -128,16 +122,12 @@ static pyc_object *get_true_object(void) {
 
 static pyc_object *get_int_object(RBuffer *buffer) {
 	bool error = false;
-	pyc_object *ret = NULL;
 
 	st32 i = get_st32 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->type = TYPE_INT;
 	ret->data = r_str_newf ("%d", i);
 	if (!ret->data) {
@@ -147,47 +137,31 @@ static pyc_object *get_int_object(RBuffer *buffer) {
 }
 
 static pyc_object *get_int64_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
 	bool error = false;
-	st64 i;
-
-	i = get_st64 (buffer, &error);
-
+	st64 i = get_st64 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->type = TYPE_INT64;
-	ret->data = r_str_newf ("%lld", i);
-	if (!ret->data) {
-		R_FREE (ret);
-	}
+	ret->data = r_str_newf ("%"PFMT64d, (st64)i);
 	return ret;
 }
 
 /* long is used when the number is > MAX_INT64 */
 static pyc_object *get_long_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
 	bool error = false;
 	bool neg = false;
 	ut32 tmp = 0;
-	size_t size;
-	size_t i, j = 0, left = 0;
+	size_t i, left = 0;
 	ut16 n;
-	char *hexstr;
 	char digist2hex[] = "0123456789abcdef";
 
 	st32 ndigits = get_st32 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->type = TYPE_LONG;
 	if (ndigits < 0) {
 		ndigits = -ndigits;
@@ -195,83 +169,83 @@ static pyc_object *get_long_object(RBuffer *buffer) {
 	}
 	if (ndigits == 0) {
 		ret->data = strdup ("0x0");
-	} else {
-		size = ndigits * 15;
-		size = (size - 1) / 4 + 1;
-		size += 3 + (neg? 1: 0);
-		hexstr = calloc (size, sizeof (char));
-		if (!hexstr) {
-			free (ret);
-			return NULL;
-		}
-		j = size - 1;
-
-		for (i = 0; i < ndigits; i++) {
-			n = get_ut16 (buffer, &error);
-			tmp |= n << left;
-			left += 15;
-
-			while (left >= 4) {
-				hexstr[--j] = digist2hex[tmp & 0xf];
-				tmp >>= 4;
-				left -= 4;
-			}
-		}
-
-		if (tmp) {
-			hexstr[--j] = digist2hex[tmp & 0xf];
-		}
-
-		hexstr[--j] = 'x';
-		hexstr[--j] = '0';
-		if (neg) {
-			hexstr[--j] = '-';
-		}
-
-		ret->data = &hexstr[j];
+		return ret;
 	}
+	if (ndigits < 1 || ndigits > 10) {
+		free (ret);
+		return NULL;
+	}
+	size_t size = ndigits * 15;
+	size = (size - 1) / 4 + 1;
+	size += 3 + (neg? 1: 0);
+
+	size_t j = size - 1;
+	char *hexstr = calloc (size, sizeof (char));
+	if (!hexstr) {
+		free (ret);
+		return NULL;
+	}
+
+	for (i = 0; i < ndigits; i++) {
+		n = get_ut16 (buffer, &error);
+		tmp |= n << left;
+		left += 15;
+
+		while (left >= 4 && j > 0) {
+			hexstr[--j] = digist2hex[tmp & 0xf];
+			tmp >>= 4;
+			left -= 4;
+		}
+	}
+
+	if (tmp && j > 0) {
+		hexstr[--j] = digist2hex[tmp & 0xf];
+	}
+
+	if (j > 0) {
+		hexstr[--j] = 'x';
+	}
+	if (j > 0) {
+		hexstr[--j] = '0';
+	}
+	if (neg && j > 0) {
+		hexstr[--j] = '-';
+	}
+
+	memmove (hexstr, hexstr + j, size - j);
+	ret->data = hexstr;
 	return ret;
 }
 
-static pyc_object *get_stringref_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
+static pyc_object *get_stringref_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut32 n = 0;
-
-	n = get_st32 (buffer, &error);
-	if (n >= r_list_length (interned_table)) {
-		eprintf ("bad marshal data (string ref out of range)");
+	ut32 n = get_st32 (buffer, &error);
+	if (n >= r_list_length (ctx->interned_table)) {
+		R_LOG_DEBUG ("bad marshal data (string ref out of range)");
 		return NULL;
 	}
 	if (error) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
+	void *item = r_list_get_n (ctx->interned_table, n);
+	if (!item) {
 		return NULL;
 	}
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->type = TYPE_STRINGREF;
-	ret->data = r_list_get_n (interned_table, n);
-	if (!ret->data) {
-		R_FREE (ret);
-	}
+	ret->data = item;
 	return ret;
 }
 
 static pyc_object *get_float_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
 	bool error = false;
 	ut32 size = 0;
-	ut8 n = 0;
 
-	n = get_ut8 (buffer, &error);
+	ut8 n = get_ut8 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ut8 *s = malloc (n + 1);
 	if (!s) {
 		free (ret);
@@ -291,18 +265,12 @@ static pyc_object *get_float_object(RBuffer *buffer) {
 }
 
 static pyc_object *get_binary_float_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
 	bool error = false;
-	double f;
-
-	f = get_float64 (buffer, &error);
+	double f = get_float64 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->type = TYPE_FLOAT;
 	ret->data = r_str_newf ("%.15g", f);
 	if (!ret->data) {
@@ -312,61 +280,44 @@ static pyc_object *get_binary_float_object(RBuffer *buffer) {
 	return ret;
 }
 
-static pyc_object *get_complex_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
+static pyc_object *get_complex_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut32 size = 0;
-	ut32 n1 = 0;
-	ut32 n2 = 0;
+	st32 n1 = 0;
+	st32 n2 = 0;
 
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
-
-	if ((magic_int & 0xffff) <= 62061) {
+	pyc_object *ret = R_NEW0 (pyc_object);
+	if ((ctx->magic & 0xffff) <= 62061) {
 		n1 = get_ut8 (buffer, &error);
 	} else {
 		n1 = get_st32 (buffer, &error);
 	}
-	if (error) {
+	if (error || n1 < 1 || n1 >= ST32_MAX) {
 		free (ret);
 		return NULL;
 	}
-	ut8 *s1 = malloc (n1 + 1);
+	/* object contain string representation of the number */
+	ut8 *s1 = get_bytes (buffer, n1);
 	if (!s1) {
 		free (ret);
 		return NULL;
 	}
-	/* object contain string representation of the number */
-	size = r_buf_read (buffer, s1, n1);
-	if (size != n1) {
-		R_FREE (s1);
-		R_FREE (ret);
-		return NULL;
-	}
-	s1[n1] = '\0';
 
-	if ((magic_int & 0xffff) <= 62061) {
+	if ((ctx->magic & 0xffff) <= 62061) {
 		n2 = get_ut8 (buffer, &error);
-	} else
+	} else {
 		n2 = get_st32 (buffer, &error);
-	if (error) {
-		return NULL;
 	}
-	ut8 *s2 = malloc (n2 + 1);
-	if (!s2) {
-		return NULL;
-	}
-	/* object contain string representation of the number */
-	size = r_buf_read (buffer, s2, n2);
-	if (size != n2) {
+	if (error || n2 < 1 || n2 >= ST32_MAX) {
 		R_FREE (s1);
-		R_FREE (s2);
 		R_FREE (ret);
 		return NULL;
 	}
-	s2[n2] = '\0';
+	ut8 *s2 = get_bytes (buffer, n2);
+	if (!s2) {
+		R_FREE (s1);
+		R_FREE (ret);
+		return NULL;
+	}
 
 	ret->type = TYPE_COMPLEX;
 	ret->data = r_str_newf ("%s+%sj", s1, s2);
@@ -380,127 +331,88 @@ static pyc_object *get_complex_object(RBuffer *buffer) {
 }
 
 static pyc_object *get_binary_complex_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
 	bool error = false;
-	double a, b;
-
-	//a + bj
-	a = get_float64 (buffer, &error);
-	b = get_float64 (buffer, &error);
-	if (error) {
-		return NULL;
+	double a = get_float64 (buffer, &error);
+	if (!error) {
+		double b = get_float64 (buffer, &error);
+		if (!error) {
+			pyc_object *ret = R_NEW0 (pyc_object);
+			ret->type = TYPE_BINARY_COMPLEX;
+			ret->data = r_str_newf ("%.15g+%.15gj", a, b);
+			if (ret->data) {
+				return ret;
+			}
+			R_FREE (ret);
+		}
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
-	ret->type = TYPE_BINARY_COMPLEX;
-	ret->data = r_str_newf ("%.15g+%.15gj", a, b);
-	if (!ret->data) {
-		R_FREE (ret);
-		return NULL;
-	}
-	return ret;
+	return NULL;
 }
 
 static pyc_object *get_string_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
 	bool error = false;
-	ut32 n = 0;
-
-	n = get_ut32 (buffer, &error);
-	if (n > ST32_MAX) {
-		eprintf ("bad marshal data (string size out of range)");
-		return NULL;
+	ut32 n = get_ut32 (buffer, &error);
+	if (!error && n < ST32_MAX) {
+		ut8 *data = get_bytes (buffer, n);
+		if (data) {
+			pyc_object *ret = R_NEW0 (pyc_object);
+			ret->type = TYPE_STRING;
+			ret->data = data;
+			return ret;
+		}
 	}
-	if (error) {
-		return NULL;
-	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
-	ret->type = TYPE_STRING;
-	ret->data = get_bytes (buffer, n);
-	if (!ret->data) {
-		R_FREE (ret);
-		return NULL;
-	}
-	return ret;
+	return NULL;
 }
 
 static pyc_object *get_unicode_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
 	bool error = false;
-	ut32 n = 0;
 
-	n = get_ut32 (buffer, &error);
-	if (n > ST32_MAX) {
-		eprintf ("bad marshal data (unicode size out of range)");
+	ut32 n = get_ut32 (buffer, &error);
+	if (error || n > ST32_MAX) {
 		return NULL;
 	}
-	if (error) {
+	ut8 *data = get_bytes (buffer, n);
+	if (!data) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->type = TYPE_UNICODE;
-	ret->data = get_bytes (buffer, n);
-	if (!ret->data) {
-		R_FREE (ret);
-		return NULL;
-	}
+	ret->data = data;
 	return ret;
 }
 
-static pyc_object *get_interned_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
+static pyc_object *get_interned_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut32 n = 0;
-
-	n = get_ut32 (buffer, &error);
+	ut32 n = get_ut32 (buffer, &error);
 	if (n > ST32_MAX) {
-		eprintf ("bad marshal data (string size out of range)");
+		R_LOG_DEBUG ("bad marshal data (string size out of range)");
 		return NULL;
 	}
 	if (error) {
 		return NULL;
 	}
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
+	ut8 *data = get_bytes (buffer, n);
+	if (!data) {
 		return NULL;
 	}
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->type = TYPE_INTERNED;
-	ret->data = get_bytes (buffer, n);
+	ret->data = data;
 	/* add data pointer to interned table */
-	r_list_append (interned_table, ret->data);
-	if (!ret->data) {
-		R_FREE (ret);
-	}
+	r_list_append (ctx->interned_table, ret->data);
 	return ret;
 }
 
-static pyc_object *get_array_object_generic(RBuffer *buffer, ut32 size) {
-	pyc_object *tmp = NULL;
-	pyc_object *ret = NULL;
-	ut32 i = 0;
-
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
+static pyc_object *get_array_object_generic(PycUnmarshalCtx *ctx, RBuffer *buffer, ut32 size) {
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->data = r_list_newf ((RListFree)free_object);
 	if (!ret->data) {
 		free (ret);
 		return NULL;
 	}
+	ut32 i;
 	for (i = 0; i < size; i++) {
-		tmp = get_object (buffer);
-		if (!tmp) {
-			r_list_free (ret->data);
-			R_FREE (ret);
-			return NULL;
-		}
-		if (!r_list_append (ret->data, tmp)) {
+		pyc_object *tmp = get_object (ctx, buffer, 0);
+		if (!tmp || !r_list_append (ret->data, tmp)) {
 			free_object (tmp);
 			r_list_free (ret->data);
 			free (ret);
@@ -511,17 +423,13 @@ static pyc_object *get_array_object_generic(RBuffer *buffer, ut32 size) {
 }
 
 /* small TYPE_SMALL_TUPLE doesn't exist in python2 */
-/* */
-static pyc_object *get_small_tuple_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
+static pyc_object *get_small_tuple_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut8 n = 0;
-
-	n = get_ut8 (buffer, &error);
+	ut8 n = get_ut8 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	ret = get_array_object_generic (buffer, n);
+	pyc_object *ret = get_array_object_generic (ctx, buffer, n);
 	if (ret) {
 		ret->type = TYPE_SMALL_TUPLE;
 		return ret;
@@ -529,41 +437,34 @@ static pyc_object *get_small_tuple_object(RBuffer *buffer) {
 	return NULL;
 }
 
-static pyc_object *get_tuple_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
+static pyc_object *get_tuple_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut32 n = 0;
-
-	n = get_ut32 (buffer, &error);
+	ut32 n = get_ut32 (buffer, &error);
 	if (n > ST32_MAX) {
-		eprintf ("bad marshal data (tuple size out of range)\n");
+		R_LOG_DEBUG ("bad marshal data (tuple size out of range)");
 		return NULL;
 	}
 	if (error) {
 		return NULL;
 	}
-	ret = get_array_object_generic (buffer, n);
+	pyc_object *ret = get_array_object_generic (ctx, buffer, n);
 	if (ret) {
 		ret->type = TYPE_TUPLE;
-		return ret;
 	}
-	return NULL;
+	return ret;
 }
 
-static pyc_object *get_list_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
+static pyc_object *get_list_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut32 n = 0;
-
-	n = get_ut32 (buffer, &error);
+	ut32 n = get_ut32 (buffer, &error);
 	if (n > ST32_MAX) {
-		eprintf ("bad marshal data (list size out of range)\n");
+		R_LOG_DEBUG ("bad marshal data (list size out of range)");
 		return NULL;
 	}
 	if (error) {
 		return NULL;
 	}
-	ret = get_array_object_generic (buffer, n);
+	pyc_object *ret = get_array_object_generic (ctx, buffer, n);
 	if (ret) {
 		ret->type = TYPE_LIST;
 		return ret;
@@ -571,37 +472,28 @@ static pyc_object *get_list_object(RBuffer *buffer) {
 	return NULL;
 }
 
-static pyc_object *get_dict_object(RBuffer *buffer) {
-	pyc_object *ret = NULL,
-		   *key = NULL,
-		   *val = NULL;
-
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
+static pyc_object *get_dict_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
+	pyc_object *ret = R_NEW0 (pyc_object);
 	ret->data = r_list_newf ((RListFree)free_object);
-	if (!ret->data) {
-		R_FREE (ret);
-		return NULL;
-	}
 	for (;;) {
-		key = get_object (buffer);
+		pyc_object *key = get_object (ctx, buffer, 0);
 		if (!key) {
 			break;
 		}
 		if (!r_list_append (ret->data, key)) {
+			((RList *)ret->data)->free = NULL;
 			r_list_free (ret->data);
 			R_FREE (ret);
 			free_object (key);
 			return NULL;
 		}
-		val = get_object (buffer);
+		pyc_object *val = get_object (ctx, buffer, 0);
 		if (!val) {
 			break;
 		}
 		if (!r_list_append (ret->data, val)) {
 			free_object (val);
+			((RList *)ret->data)->free = NULL;
 			r_list_free (ret->data);
 			R_FREE (ret);
 			return NULL;
@@ -611,105 +503,101 @@ static pyc_object *get_dict_object(RBuffer *buffer) {
 	return ret;
 }
 
-static pyc_object *get_set_object(RBuffer *buffer) {
-	pyc_object *ret = NULL;
+static pyc_object *get_set_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut32 n = 0;
-
-	n = get_ut32 (buffer, &error);
-	if (n > ST32_MAX) {
-		eprintf ("bad marshal data (set size out of range)\n");
+	ut32 n = get_ut32 (buffer, &error);
+	if (error || n < 1 || n > ST32_MAX) {
+		R_LOG_DEBUG ("bad marshal data (set size out of range)");
 		return NULL;
 	}
-	if (error) {
-		return NULL;
-	}
-	ret = get_array_object_generic (buffer, n);
-	if (!ret) {
-		return NULL;
-	}
-	ret->type = TYPE_SET;
-	return ret;
-}
-
-static pyc_object *get_ascii_object_generic(RBuffer *buffer, ut32 size, bool interned) {
-	pyc_object *ret = NULL;
-
-	ret = R_NEW0 (pyc_object);
-	if (!ret) {
-		return NULL;
-	}
-	ret->type = TYPE_ASCII;
-	ret->data = get_bytes (buffer, size);
-	if (!ret->data) {
-		R_FREE (ret);
+	pyc_object *ret = get_array_object_generic (ctx, buffer, n);
+	if (ret) {
+		ret->type = TYPE_SET;
 	}
 	return ret;
 }
 
-static pyc_object *get_ascii_object(RBuffer *buffer) {
-	bool error = false;
-	ut32 n = 0;
-
-	n = get_ut32 (buffer, &error);
-	if (error) {
-		return NULL;
+static pyc_object *get_ascii_object_generic(PycUnmarshalCtx *ctx, RBuffer *buffer, ut32 size, bool interned) {
+	ut8 *data = get_bytes (buffer, size);
+	if (data) {
+		pyc_object *ret = R_NEW0 (pyc_object);
+		ret->type = TYPE_ASCII;
+		ret->data = data;
+		if (interned && ctx && ctx->interned_table) {
+			if (!r_list_append (ctx->interned_table, ret->data)) {
+				R_LOG_DEBUG ("bad marshal data (interned table append failed)");
+				R_FREE (ret->data);
+				R_FREE (ret);
+				return NULL;
+			}
+			ret->type = TYPE_INTERNED; // the table owns the bytes, not us
+		}
+		return ret;
 	}
-	return get_ascii_object_generic (buffer, n, true);
+	return NULL;
 }
 
-static pyc_object *get_ascii_interned_object(RBuffer *buffer) {
+static pyc_object *get_ascii_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut32 n;
-
-	n = get_ut32 (buffer, &error);
+	ut32 n = get_ut32 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	return get_ascii_object_generic (buffer, n, true);
+	return get_ascii_object_generic (ctx, buffer, n, false);
 }
 
-static pyc_object *get_short_ascii_object(RBuffer *buffer) {
+static pyc_object *get_ascii_interned_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut8 n;
-
-	n = get_ut8 (buffer, &error);
+	ut32 n = get_ut32 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	return get_ascii_object_generic (buffer, n, false);
+	return get_ascii_object_generic (ctx, buffer, n, true);
 }
 
-static pyc_object *get_short_ascii_interned_object(RBuffer *buffer) {
+static pyc_object *get_short_ascii_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	ut8 n;
-
-	n = get_ut8 (buffer, &error);
+	ut8 n = get_ut8 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	return get_ascii_object_generic (buffer, n, true);
+	return get_ascii_object_generic (ctx, buffer, n, false);
 }
 
-static pyc_object *get_ref_object(RBuffer *buffer) {
+static pyc_object *get_short_ascii_interned_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-	pyc_object *ret;
-	pyc_object *obj;
-	ut32 index;
+	ut8 n = get_ut8 (buffer, &error);
+	return error? NULL: get_ascii_object_generic (ctx, buffer, n, true);
+}
 
-	index = get_ut32 (buffer, &error);
+// objects are immutable once parsed, so they are shared instead of copied
+static pyc_object *ref_object(pyc_object *object) {
+	object->refcount++;
+	return object;
+}
+
+static pyc_object *get_ref_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
+	bool error = false;
+	ut32 index = get_ut32 (buffer, &error);
 	if (error) {
 		return NULL;
 	}
-	if (index >= r_list_length (refs)) {
+	if (index >= r_list_length (ctx->refs)) {
 		return NULL;
 	}
-	obj = r_list_get_n (refs, index);
+	pyc_object *obj = r_list_get_n (ctx->refs, index);
 	if (!obj) {
 		return NULL;
 	}
-	ret = copy_object (obj);
-	return ret;
+	// the levels nested in the referenced object count for the limit too
+	const int deepest = ctx->depth + obj->height;
+	if (deepest > PYC_MAX_DEPTH) {
+		R_LOG_WARN ("pyc: marshal objects nested deeper than %d levels", PYC_MAX_DEPTH);
+		ctx->too_deep = true;
+		return NULL;
+	}
+	ctx->deepest = R_MAX (ctx->deepest, deepest);
+	return ref_object (obj);
 }
 
 static void free_object(pyc_object *object) {
@@ -719,9 +607,17 @@ static void free_object(pyc_object *object) {
 	if ((int)object->type == 0) {
 		return;
 	}
+	if (object->refcount > 0) {
+		object->refcount--;
+		return;
+	}
 	switch (object->type) {
 	case TYPE_SMALL_TUPLE:
 	case TYPE_TUPLE:
+	case TYPE_LIST:
+	case TYPE_SET:
+	case TYPE_FROZENSET:
+	case TYPE_DICT:
 		r_list_free (object->data);
 		break;
 	case TYPE_STRING:
@@ -734,7 +630,17 @@ static void free_object(pyc_object *object) {
 	case TYPE_SHORT_ASCII:
 	case TYPE_ASCII:
 	case TYPE_SHORT_ASCII_INTERNED:
+	case TYPE_UNICODE:
+	case TYPE_FLOAT:
+	case TYPE_BINARY_FLOAT:
+	case TYPE_INT64:
+	case TYPE_LONG:
+	case TYPE_COMPLEX:
+	case TYPE_BINARY_COMPLEX:
 		free (object->data);
+		break;
+	case TYPE_INTERNED:
+		// data is borrowed from interned_table, don't free
 		break;
 	case TYPE_CODE_v0:
 	case TYPE_CODE_v1: {
@@ -754,132 +660,35 @@ static void free_object(pyc_object *object) {
 	case TYPE_REF:
 		free_object (object->data);
 		break;
-	case TYPE_SET:
-	case TYPE_FROZENSET:
 	case TYPE_ELLIPSIS:
 	case TYPE_STOPITER:
-	case TYPE_BINARY_COMPLEX:
-	case TYPE_BINARY_FLOAT:
-	case TYPE_COMPLEX:
+		// no data to free
+		break;
 	case TYPE_STRINGREF:
-	case TYPE_DICT:
-	case TYPE_FLOAT:
-	case TYPE_INT64:
-	case TYPE_INTERNED:
-	case TYPE_LIST:
-	case TYPE_LONG:
-	case TYPE_UNICODE:
 	case TYPE_UNKNOWN:
-		eprintf ("Free not implemented for type %x\n", object->type);
+		R_LOG_DEBUG ("Free not implemented for type %x", object->type);
 		break;
 	default:
-		eprintf ("Undefined type in free_object (%x)\n", object->type);
+		R_LOG_DEBUG ("Undefined type in free_object (%x)", object->type);
 		break;
 	}
 	free (object);
 }
 
-static pyc_object *copy_object(pyc_object *object) {
-	pyc_object *copy = R_NEW0 (pyc_object);
-	if (!copy || !object) {
-		free (copy);
-		return NULL;
-	}
-	copy->type = object->type;
-	if ((int)object->type == 0) {
-		// do nothing
-	} else 
-	switch (object->type) {
-	case TYPE_NULL:
-		break;
-	case TYPE_TUPLE:
-	case TYPE_SMALL_TUPLE:
-		copy->data = r_list_clone (object->data);
-		break;
-	case TYPE_INT:
-	case TYPE_INT64:
-	case TYPE_NONE:
-	case TYPE_TRUE:
-	case TYPE_FALSE:
-	case TYPE_STRING:
-	case TYPE_ASCII:
-	case TYPE_SHORT_ASCII:
-	case TYPE_ASCII_INTERNED:
-	case TYPE_SHORT_ASCII_INTERNED:
-		copy->data = strdup (object->data);
-		break;
-	case TYPE_CODE_v0:
-	case TYPE_CODE_v1: {
-		pyc_code_object *src = object->data;
-		pyc_code_object *dst = R_NEW0 (pyc_code_object);
-		if (!dst) {
-			break;
-		}
-		memcpy (dst, src, sizeof (*dst));
-		dst->code = copy_object (src->code);
-		dst->consts = copy_object (src->consts);
-		dst->names = copy_object (src->names);
-		dst->varnames = copy_object (src->varnames);
-		dst->freevars = copy_object (src->freevars);
-		dst->cellvars = copy_object (src->cellvars);
-		dst->filename = copy_object (src->filename);
-		dst->name = copy_object (src->name);
-		dst->lnotab = copy_object (src->lnotab);
-		copy->data = dst;
-		break;
-	}
-	case TYPE_REF:
-		copy->data = copy_object (object->data);
-		break;
-	case TYPE_ELLIPSIS:
-	case TYPE_STOPITER:
-	case TYPE_BINARY_COMPLEX:
-	case TYPE_BINARY_FLOAT:
-	case TYPE_COMPLEX:
-	case TYPE_STRINGREF:
-	case TYPE_DICT:
-	case TYPE_FLOAT:
-	case TYPE_FROZENSET:
-	case TYPE_INTERNED:
-	case TYPE_LIST:
-	case TYPE_LONG:
-	case TYPE_SET:
-	case TYPE_UNICODE:
-	case TYPE_UNKNOWN:
-		eprintf ("Copy not implemented for type %x\n", object->type);
-		break;
-	default:
-		eprintf ("Undefined type in copy_object (%x)\n", object->type);
-		break;
-	}
-	if (!copy->data) {
-		R_FREE (copy);
-	}
-	return copy;
-}
-
-static pyc_object *get_code_object(RBuffer *buffer) {
+static pyc_object *get_code_object(PycUnmarshalCtx *ctx, RBuffer *buffer) {
 	bool error = false;
-
 	pyc_object *ret = R_NEW0 (pyc_object);
 	pyc_code_object *cobj = R_NEW0 (pyc_code_object);
-	if (!ret || !cobj) {
-		free (ret);
-		free (cobj);
-		return NULL;
-	}
-
-	//ret->type = TYPE_CODE_v1;
-	// support start from v1.0
 	ret->data = cobj;
 
-	bool v10_to_12 = magic_int_within (magic_int, 39170, 16679, &error); // 1.0.1 - 1.2
-	bool v13_to_22 = magic_int_within (magic_int, 11913, 60718, &error); // 1.3b1 - 2.2a1
-	bool v11_to_14 = magic_int_within (magic_int, 39170, 20117, &error); // 1.0.1 - 1.4
-	bool v15_to_22 = magic_int_within (magic_int, 20121, 60718, &error); // 1.5a1 - 2.2a1
-	bool v13_to_20 = magic_int_within (magic_int, 11913, 50824, &error); // 1.3b1 - 2.0b1
-	//bool v21_to_27 = (!v13_to_20) && magic_int_within (magic_int, 60124, 62212, &error);
-	bool has_posonlyargcount = magic_int_within (magic_int, 3410, 3424, &error); // v3.8.0a4 - latest
+	const char *ver = get_pyc_version (ctx->magic).version;
+	bool v10_to_12 = magic_int_within (ver, "1.0.1", "1.2", &error);
+	bool v13_to_22 = magic_int_within (ver, "1.3b1", "2.2a1", &error);
+	bool v11_to_14 = magic_int_within (ver, "1.0.1", "1.4", &error);
+	bool v15_to_22 = magic_int_within (ver, "1.5a1", "2.2a1", &error);
+	bool v13_to_20 = magic_int_within (ver, "1.3b1", "2.0b1", &error);
+	// bool v21_to_27 = (!v13_to_20) && magic_int_within (ver,  "2.1a1", "2.7a2", &error);
+	bool has_posonlyargcount = py_version_cmp (ver, "v3.8.0a4", &error) > 0? true: false;
 	if (error) {
 		free (ret);
 		free (cobj);
@@ -900,7 +709,7 @@ static pyc_object *get_code_object(RBuffer *buffer) {
 		cobj->posonlyargcount = 0; // None
 	}
 
-	if (((3020 < (magic_int & 0xffff)) && ((magic_int & 0xffff) < 20121)) && (!v11_to_14)) {
+	if (((3020 < (ctx->magic & 0xffff)) && ((ctx->magic & 0xffff) < 20121)) && (!v11_to_14)) {
 		cobj->kwonlyargcount = get_ut32 (buffer, &error); // Not included in argcount
 	} else {
 		cobj->kwonlyargcount = 0;
@@ -930,33 +739,35 @@ static pyc_object *get_code_object(RBuffer *buffer) {
 		cobj->flags = get_ut32 (buffer, &error);
 	}
 
-	//to help disassemble the code
-	cobj->start_offset = r_buf_tell (buffer) + 5; // 1 from get_object() and 4 from get_string_object()
-	if (!refs) {
+	// to help disassemble the code
+	// 1 from get_object() and 4 from get_string_object()
+	cobj->start_offset = r_buf_tell (buffer) + 5;
+	if (!ctx->refs) {
+		ret->type = TYPE_CODE_v1;
 		return ret; //return for entried part to get the root object of this file
 	}
-	cobj->code = get_object (buffer);
+	cobj->code = get_object (ctx, buffer, 0);
 	cobj->end_offset = r_buf_tell (buffer);
 
-	cobj->consts = get_object (buffer);
-	cobj->names = get_object (buffer);
+	cobj->consts = get_object (ctx, buffer, 0);
+	cobj->names = get_object (ctx, buffer, 0);
 
 	if (v10_to_12) {
 		cobj->varnames = NULL;
 	} else {
-		cobj->varnames = get_object (buffer);
+		cobj->varnames = get_object (ctx, buffer, 0);
 	}
 
 	if (!(v10_to_12 || v13_to_20)) {
-		cobj->freevars = get_object (buffer);
-		cobj->cellvars = get_object (buffer);
+		cobj->freevars = get_object (ctx, buffer, 0);
+		cobj->cellvars = get_object (ctx, buffer, 0);
 	} else {
 		cobj->freevars = NULL;
 		cobj->cellvars = NULL;
 	}
 
-	cobj->filename = get_object (buffer);
-	cobj->name = get_object (buffer);
+	cobj->filename = get_object (ctx, buffer, 0);
+	cobj->name = get_object (ctx, buffer, 0);
 
 	if (v15_to_22) {
 		cobj->firstlineno = get_ut16 (buffer, &error);
@@ -969,7 +780,7 @@ static pyc_object *get_code_object(RBuffer *buffer) {
 	if (v11_to_14) {
 		cobj->lnotab = NULL;
 	} else {
-		cobj->lnotab = get_object (buffer);
+		cobj->lnotab = get_object (ctx, buffer, 0);
 	}
 
 	if (error) {
@@ -990,40 +801,43 @@ static pyc_object *get_code_object(RBuffer *buffer) {
 }
 
 ut64 get_code_object_addr(RBuffer *buffer, ut32 magic) {
-	magic_int = magic;
-	pyc_object *co = get_code_object (buffer);
-	ut64 result = 0;
-	if (!co) {
-		return 0;
+	// Create a temporary context for entrypoint detection
+	// refs is NULL so get_code_object will return early with just start_offset
+	PycUnmarshalCtx ctx = {0};
+	ctx.magic = magic;
+	ctx.refs = NULL;
+	pyc_object *co = get_code_object (&ctx, buffer);
+	if (co) {
+		pyc_code_object *cobj = co->data;
+		ut64 result = cobj->start_offset;
+		free_object (co);
+		return result;
 	}
-
-	pyc_code_object *cobj = co->data;
-	result = cobj->start_offset;
-	free_object (co);
-
-	return result;
+	return 0;
 }
 
-static pyc_object *get_object(RBuffer *buffer) {
+static pyc_object *get_object_at_depth(PycUnmarshalCtx *ctx, RBuffer *buffer, int wanted_type) {
 	bool error = false;
 	pyc_object *ret = NULL;
 	ut8 code = get_ut8 (buffer, &error);
-	ut8 flag = code & FLAG_REF;
+	bool flag = (code & FLAG_REF);
 	RListIter *ref_idx = NULL;
-	ut8 type = code & ~FLAG_REF;
+	ut8 type = (code & ~FLAG_REF);
 
 	if (error) {
 		return NULL;
 	}
 
 	if (flag) {
-		ret = get_none_object ();
-		if (!ret) {
-			return NULL;
+		pyc_object *noneret = get_none_object ();
+		if (noneret) {
+			ref_idx = r_list_append (ctx->refs, noneret);
 		}
-		ref_idx = r_list_append (refs, ret);
-		if (!ref_idx) {
-			free_object (ret);
+	}
+	if (wanted_type != 0) {
+		R_LOG_DEBUG ("type %d %d", wanted_type, type);
+		if (wanted_type != type) {
+			R_LOG_WARN ("Unexpected object type");
 			return NULL;
 		}
 	}
@@ -1033,7 +847,6 @@ static pyc_object *get_object(RBuffer *buffer) {
 		free_object (ret);
 		return NULL;
 	case TYPE_TRUE:
-		free_object (ret);
 		return get_true_object ();
 	case TYPE_FALSE:
 		free_object (ret);
@@ -1043,24 +856,24 @@ static pyc_object *get_object(RBuffer *buffer) {
 		return get_none_object ();
 	case TYPE_REF:
 		free_object (ret);
-		return get_ref_object (buffer);
+		return get_ref_object (ctx, buffer);
 	case TYPE_SMALL_TUPLE:
-		ret = get_small_tuple_object (buffer);
+		ret = get_small_tuple_object (ctx, buffer);
 		break;
 	case TYPE_TUPLE:
-		ret = get_tuple_object (buffer);
+		ret = get_tuple_object (ctx, buffer);
 		break;
 	case TYPE_STRING:
 		ret = get_string_object (buffer);
 		break;
 	case TYPE_CODE_v0:
-		ret = get_code_object (buffer);
+		ret = get_code_object (ctx, buffer);
 		if (ret) {
 			ret->type = TYPE_CODE_v0;
 		}
 		break;
 	case TYPE_CODE_v1:
-		ret = get_code_object (buffer);
+		ret = get_code_object (ctx, buffer);
 		if (ret) {
 			ret->type = TYPE_CODE_v1;
 		}
@@ -1069,25 +882,25 @@ static pyc_object *get_object(RBuffer *buffer) {
 		ret = get_int_object (buffer);
 		break;
 	case TYPE_ASCII_INTERNED:
-		ret = get_ascii_interned_object (buffer);
+		ret = get_ascii_interned_object (ctx, buffer);
 		break;
 	case TYPE_SHORT_ASCII:
-		ret = get_short_ascii_object (buffer);
+		ret = get_short_ascii_object (ctx, buffer);
 		break;
 	case TYPE_ASCII:
-		ret = get_ascii_object (buffer);
+		ret = get_ascii_object (ctx, buffer);
 		break;
 	case TYPE_SHORT_ASCII_INTERNED:
-		ret = get_short_ascii_interned_object (buffer);
+		ret = get_short_ascii_interned_object (ctx, buffer);
 		break;
 	case TYPE_INT64:
 		ret = get_int64_object (buffer);
 		break;
 	case TYPE_INTERNED:
-		ret = get_interned_object (buffer);
+		ret = get_interned_object (ctx, buffer);
 		break;
 	case TYPE_STRINGREF:
-		ret = get_stringref_object (buffer);
+		ret = get_stringref_object (ctx, buffer);
 		break;
 	case TYPE_FLOAT:
 		ret = get_float_object (buffer);
@@ -1096,13 +909,13 @@ static pyc_object *get_object(RBuffer *buffer) {
 		ret = get_binary_float_object (buffer);
 		break;
 	case TYPE_COMPLEX:
-		ret = get_complex_object (buffer); // behaviour depends on Python version
+		ret = get_complex_object (ctx, buffer); // behaviour depends on Python version
 		break;
 	case TYPE_BINARY_COMPLEX:
 		ret = get_binary_complex_object (buffer);
 		break;
 	case TYPE_LIST:
-		ret = get_list_object (buffer);
+		ret = get_list_object (ctx, buffer);
 		break;
 	case TYPE_LONG:
 		ret = get_long_object (buffer);
@@ -1111,115 +924,163 @@ static pyc_object *get_object(RBuffer *buffer) {
 		ret = get_unicode_object (buffer);
 		break;
 	case TYPE_DICT:
-		ret = get_dict_object (buffer);
+		ret = get_dict_object (ctx, buffer);
 		break;
 	case TYPE_FROZENSET:
 	case TYPE_SET:
-		ret = get_set_object (buffer);
+		ret = get_set_object (ctx, buffer);
 		break;
 	case TYPE_STOPITER:
 	case TYPE_ELLIPSIS:
 		ret = R_NEW0 (pyc_object);
+		ret->type = type;
 		break;
 	case TYPE_UNKNOWN:
-		eprintf ("Get not implemented for type 0x%x\n", type);
+		R_LOG_DEBUG ("Get not implemented for type 0x%x", type);
 		free_object (ret);
 		return NULL;
 	case 0:
 		// nop
 		break;
 	default:
-		eprintf ("Undefined type in get_object (0x%x)\n", type);
-		free_object (ret);
+		R_LOG_DEBUG ("Undefined type in get_object (0x%x)", type);
 		return NULL;
 	}
 
-	if (flag && ref_idx) {
+	if (ret && flag && ref_idx) {
 		if (ref_idx->data != ret) {
 			free_object (ref_idx->data);
 		}
-		ref_idx->data = copy_object (ret);
+		ref_idx->data = ref_object (ret);
+	}
+	if (!ret) {
+		ret = get_none_object ();
+		if (ret) {
+			r_list_append (ctx->refs, ref_object (ret));
+		}
 	}
 	return ret;
 }
 
-static bool extract_sections_symbols(pyc_object *obj, RList *sections, RList *symbols, RList *cobjs, char *prefix) {
-	pyc_code_object *cobj = NULL;
-	RBinSection *section = NULL;
-	RBinSymbol *symbol = NULL;
+static pyc_object *get_object(PycUnmarshalCtx *ctx, RBuffer *buffer, int wanted_type) {
+	if (ctx->too_deep) {
+		return NULL;
+	}
+	if (ctx->depth >= PYC_MAX_DEPTH) {
+		R_LOG_WARN ("pyc: marshal objects nested deeper than %d levels", PYC_MAX_DEPTH);
+		ctx->too_deep = true;
+		return NULL;
+	}
+	const int deepest = ctx->deepest;
+	ctx->deepest = ++ctx->depth;
+	pyc_object *ret = get_object_at_depth (ctx, buffer, wanted_type);
+	if (ret) {
+		ret->height = ctx->deepest - ctx->depth;
+	}
+	ctx->deepest = R_MAX (ctx->deepest, deepest);
+	ctx->depth--;
+	if (ctx->too_deep) {
+		free_object (ret);
+		return NULL;
+	}
+	return ret;
+}
+
+static bool extract_sections_symbols(PycUnmarshalCtx *ctx, pyc_object *obj, RVecRBinSection *sections, RVecRBinSymbol *symbols, RList *cobjs, char *prefix) {
 	RListIter *i = NULL;
 
-	//each code object is a section
+	// each code object is a section
 	if_true_return (!obj || (obj->type != TYPE_CODE_v1 && obj->type != TYPE_CODE_v0), false);
 
-	cobj = obj->data;
+	pyc_code_object *cobj = obj->data;
 
 	if_true_return (!cobj || !cobj->name, false);
 	if_true_return (cobj->name->type != TYPE_ASCII && cobj->name->type != TYPE_STRING && cobj->name->type != TYPE_INTERNED, false);
 	if_true_return (!cobj->name->data, false);
 	if_true_return (!cobj->consts, false);
 
-	//add the cobj to objs list
+	// TYPE_REF shares the code objects, so register each of them only once
+	if (set_u_contains (ctx->seen, cobj->start_offset)) {
+		return false;
+	}
+	set_u_add (ctx->seen, cobj->start_offset);
+
+	// add the cobj to objs list
 	if (!r_list_append (cobjs, cobj)) {
-		goto fail;
+		return false;
 	}
-	section = R_NEW0 (RBinSection);
-	symbol = R_NEW0 (RBinSymbol);
-	prefix = r_str_newf ("%s%s%s", r_str_get (prefix),
-		prefix? ".": "", (const char *)cobj->name->data);
-	if (!prefix || !section || !symbol) {
-		goto fail;
+	if (cobj->end_offset <= cobj->start_offset) {
+		return false;
 	}
+	// TYPE_REF lets every level share one long co_name, so bound the dotted name
+	prefix = r_str_newf ("%s%s%.*s", r_str_get (prefix),
+		prefix? ".": "", R_BIN_SIZEOF_STRINGS, (const char *)cobj->name->data);
+	if (!prefix) {
+		return false;
+	}
+	if (strlen (prefix) > R_BIN_SIZEOF_STRINGS) {
+		prefix[R_BIN_SIZEOF_STRINGS] = 0;
+	}
+	const ut64 size = (ut64)(cobj->end_offset - cobj->start_offset);
+	RBinSection *section = RVecRBinSection_emplace_back (sections);
 	section->name = strdup (prefix);
-	if (!section->name) {
-		goto fail;
-	}
 	section->paddr = cobj->start_offset;
 	section->vaddr = cobj->start_offset;
-	section->size = cobj->end_offset - cobj->start_offset;
-	section->vsize = cobj->end_offset - cobj->start_offset;
-	if (!r_list_append (sections, section)) {
-		goto fail;
+	section->size = size;
+	section->vsize = size;
+	section->perm = R_PERM_RX;
+	if (cobj->consts->type != TYPE_TUPLE && cobj->consts->type != TYPE_SMALL_TUPLE) {
+		free (prefix);
+		return false;
 	}
-	// start building symbol
-	symbol->name = strdup (prefix);
-	//symbol->bind;
+	RBinSymbol *symbol = RVecRBinSymbol_emplace_back (symbols);
+	symbol->name = r_bin_name_new (prefix);
 	symbol->type = R_BIN_TYPE_FUNC_STR;
-	symbol->size = cobj->end_offset - cobj->start_offset;
+	symbol->attr.size = size;
 	symbol->vaddr = cobj->start_offset;
 	symbol->paddr = cobj->start_offset;
-	symbol->ordinal = symbols_ordinal++;
-	if (cobj->consts->type != TYPE_TUPLE && cobj->consts->type != TYPE_SMALL_TUPLE) {
-		goto fail2;
-	}
-	if (!r_list_append (symbols, symbol)) {
-		goto fail2;
+	symbol->ordinal = ctx->scount++;
+	const ut32 arg_count = cobj->argcount + cobj->kwonlyargcount;
+	const ut16 ret_count = 1;
+	if (arg_count > 0 || ret_count > 0) {
+		symbol->arg_first = 0;
+		symbol->arg_count = arg_count;
+		symbol->arg_prefix = "l";
+		symbol->ret_count = ret_count;
 	}
 	r_list_foreach (((RList *)(cobj->consts->data)), i, obj) {
-		extract_sections_symbols (obj, sections, symbols, cobjs, prefix);
+		extract_sections_symbols (ctx, obj, sections, symbols, cobjs, prefix);
 	}
 	free (prefix);
 	return true;
-fail:
-	free (section);
-	free (prefix);
-	free (symbol);
-	return false;
-fail2:
-	free (prefix);
-	free (symbol);
-	return false;
 }
 
-bool get_sections_symbols_from_code_objects(RBuffer *buffer, RList *sections, RList *symbols, RList *cobjs, ut32 magic) {
-	bool ret;
-	magic_int = magic;
-	refs = r_list_newf (NULL); // (RListFree)free_object);
-	if (!refs) {
+void pyc_object_free(pyc_object *obj) {
+	free_object (obj);
+}
+
+bool get_sections_symbols_from_code_objects(PycUnmarshalCtx *ctx, RBuffer *buffer, RVecRBinSection *sections, RVecRBinSymbol *symbols, RList *cobjs, pyc_object **out_pobj) {
+	if (!ctx) {
 		return false;
 	}
-	ret = extract_sections_symbols (get_object (buffer), sections, symbols, cobjs, NULL);
-	r_list_free (refs);
-	refs = NULL;
+	if (out_pobj) {
+		*out_pobj = NULL;
+	}
+	ctx->refs = r_list_newf ((RListFree)free_object);
+	ctx->seen = set_u_new ();
+	bool ret = false;
+	if (ctx->refs && ctx->seen) {
+		pyc_object *pobj = get_object (ctx, buffer, 0);
+		ret = extract_sections_symbols (ctx, pobj, sections, symbols, cobjs, NULL);
+		if (out_pobj) {
+			*out_pobj = pobj;
+		} else {
+			free_object (pobj);
+		}
+	}
+	r_list_free (ctx->refs);
+	ctx->refs = NULL;
+	set_u_free (ctx->seen);
+	ctx->seen = NULL;
 	return ret;
 }

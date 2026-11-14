@@ -7,7 +7,116 @@ af @ 1
 afl
 EOF
 EXPECT=<<EOF
-0x00000001    2 17   -> 15   fcn.00000001
-0x00000016    3 7            fcn.00000016
+0x00000001    2     15 fcn.00000001
+0x00000016    4      7 fcn.00000016
+EOF
+RUN
+
+NAME=z80: Basic search for functions
+ARGS=-a z80
+FILE=bins/elf/ioli/crackme0x00
+CMDS=<<EOF
+e asm.arch = z80
+pd 20
+e asm.pseudo=true
+pd 20
+EOF
+EXPECT=<<EOF
+        :   ;-- section..text:
+        :   ;-- entry0:
+        :   ;-- _start:
+        :   0x08048360      31ed5e         ld sp, 0x5eed               ; [13] -r-x section size 484 named .text
+        :   0x08048363      89             adc a, c
+        :   0x08048364      e1             pop hl
+        :   0x08048365      83             add a, e
+        :   0x08048366      e4f050         call po, 0x50f0
+        :   0x08048369      54             ld d, h
+        :   0x0804836a      52             ld d, d
+        :   0x0804836b      68             ld l, b
+        `=< 0x0804836c      1085           djnz 0x82f3
+            0x0804836e      04             inc b
+            0x0804836f      08             ex af, af'
+            0x08048370      68             ld l, b
+            0x08048371      a0             and b
+            0x08048372      84             add a, h
+            0x08048373      04             inc b
+            0x08048374      08             ex af, af'
+            0x08048375      51             ld d, c
+            0x08048376      56             ld d, [hl]
+            0x08048377      68             ld l, b
+            0x08048378      14             inc d
+        :   ;-- section..text:
+        :   ;-- entry0:
+        :   ;-- _start:
+        :   0x08048360      31ed5e         sp = 0x5eed                 ; [13] -r-x section size 484 named .text
+        :   0x08048363      89             a += c + carry
+        :   0x08048364      e1             hl = stack[--sp]
+        :   0x08048365      83             a += e
+        :   0x08048366      e4f050         if (po) 0x50f0()
+        :   0x08048369      54             d = h
+        :   0x0804836a      52             d = d
+        :   0x0804836b      68             l = b
+        `=< 0x0804836c      1085           b--; if (b != 0) goto 0x82f3
+            0x0804836e      04             b++
+            0x0804836f      08             swap(af, af')
+            0x08048370      68             l = b
+            0x08048371      a0             a &= b
+            0x08048372      84             a += h
+            0x08048373      04             b++
+            0x08048374      08             swap(af, af')
+            0x08048375      51             d = c
+            0x08048376      56             d = [hl]
+            0x08048377      68             l = b
+            0x08048378      14             d++
+EOF
+RUN
+
+NAME=z80: relative branch targets and cb/index jump types
+FILE=malloc://0x30000
+ARGS=-a z80
+CMDS=<<EOF
+wx 18fc10fc20fc
+ao~^jump
+s 2
+ao~^jump
+s 4
+ao~^jump
+s 0x20000
+wx 18fc
+ao~^jump
+s 0x10
+wx cb07cb1fcb26cb2fcb3fcb47cb87cbc7dde9fde9ddcb0106ddcb01c6
+pi 12
+ao 12~^type
+EOF
+EXPECT=<<EOF
+jump: 0x0000fffe
+jump: 0x00000000
+jump: 0x00000002
+jump: 0x0002fffe
+rlc a
+rr a
+sla [hl]
+sra a
+srl a
+bit 0, a
+res 0, a
+set 0, a
+jp [ix]
+jp [iy]
+rlc [ix+0x01]
+set 0, [ix+0x01]
+type: rol
+type: ror
+type: shl
+type: sar
+type: shr
+type: and
+type: and
+type: or
+type: ujmp
+type: ujmp
+type: rol
+type: or
 EOF
 RUN

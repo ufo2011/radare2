@@ -8,7 +8,7 @@ asl~?
 EOF
 
 EXPECT=<<EOF
-335
+362
 365
 EOF
 RUN
@@ -39,7 +39,7 @@ e asm.bits=64
 EOF
 EXPECT=<<EOF
 imul r9
-0x00000000 r9,rax,L*,rax,=,DUP,rdx,=,!,!,DUP,cf,:=,of,:=
+0x00000000 r9,rdx,=,63,rax,>>,rdx,*,63,rdx,>>,rax,*,+,rdx,rax,L*,rax,=,-,DUP,rdx,=,63,rax,>>,0,-,^,!,!,DUP,cf,:=,of,:=
 EOF
 RUN
 
@@ -119,7 +119,7 @@ e asm.bits=64
 EOF
 EXPECT=<<EOF
 imul eax, ecx
-0x00000000 32,eax,~,32,ecx,~,*,DUP,eax,=,32,eax,~,-,!,!,DUP,cf,:=,of,:=
+0x00000000 32,eax,~,32,ecx,~,*,DUP,eax,=,32,eax,~,-,!,!,DUP,cf,:=,of,:=,eax,rax,=
 EOF
 RUN
 
@@ -133,7 +133,62 @@ e asm.bits=64
 EOF
 EXPECT=<<EOF
 imul rax, r11, 0x33666667
-0x00000000 64,862348903,~,64,r11,~,*,DUP,rax,=,64,rax,~,-,!,!,DUP,cf,:=,of,:=
+0x00000000 r11,DUP,DUP,63,SWAP,>>,862348903,*,SWAP,63,862348903,>>,*,+,SWAP,862348903,L*,rax,=,-,63,rax,>>,0,-,^,!,!,DUP,cf,:=,of,:=
+EOF
+RUN
+
+NAME=imul 3 arg r64 cf of on overflow and fit
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 486bcbfe
+aeim
+ar rbx=0xa5a5000380000005
+aei
+aes
+ar rcx
+ar cf
+ar of
+ar PC=0
+ar rbx=5
+aes
+ar rcx
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0xb4b5fff8fffffff6
+0x00000001
+0x00000001
+0xfffffffffffffff6
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=imul 2 arg r64 signed bounds
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480fafcb
+aeim
+ar rbx=0x4000000000000000
+ar rcx=-2
+aes
+ar rcx
+ar of
+s 0
+ar PC=0
+ar rcx=2
+aes
+ar rcx
+ar of
+EOF
+EXPECT=<<EOF
+0x8000000000000000
+0x00000000
+0x8000000000000000
+0x00000001
 EOF
 RUN
 
@@ -209,7 +264,7 @@ EOF
 EXPECT=<<EOF
 opcode: imul eax, ebx, 0x89
 esilcost: 0
-esil: 32,137,~,32,ebx,~,*,DUP,eax,=,32,eax,~,-,!,!,DUP,cf,:=,of,:=
+esil: 32,137,~,32,ebx,~,*,DUP,eax,=,32,eax,~,-,!,!,DUP,cf,:=,of,:=,eax,rax,=
 EOF
 RUN
 
@@ -359,7 +414,6 @@ NAME=reg size bitmask
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=64
 aei
@@ -383,7 +437,6 @@ NAME=mem read
 FILE=-
 CMDS=<<EOF
 e io.va=true
-e esil.debug=true
 e asm.arch=x86
 e asm.bits=64
 aei
@@ -550,9 +603,3049 @@ EXPECT=<<EOF
 0x00000001
 0x300020100
 0x00000001
-0x3fffdff00
+0xfffdff00
 0x00000001
-0xfffffffc00020100
+0xffffffff00020100
 0x00000001
+EOF
+RUN
+
+NAME=pop mem rsp
+FILE=-
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+aei; aeim
+"wa push 0x41414141; push 0x42424242; pop [rsp]"
+3.aes
+pv4 @ rsp
+EOF
+EXPECT=<<EOF
+0x42424242
+EOF
+RUN
+
+NAME=push rsp,,pop rsp
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+e io.cache=true
+aei
+aeim
+ar rip=0 ; "wa push rsp ; pop rsp" @ 0 ; ?en rsp before : ; ?v rsp ; 2aes  ; ?en rsp after  : ; ?v rsp
+EOF
+EXPECT=<<EOF
+rsp before :0x178000
+rsp after :0x178000
+EOF
+RUN
+
+NAME=128set and weakset
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+ae 1,xmm0,=;ar xmm0
+ae 1,xmm0,:=;ar xmm0
+EOF
+EXPECT=<<EOF
+0x00000000000000000000000000000001
+0x00000000000000000000000000000001
+EOF
+RUN
+
+NAME=step until esil
+FILE=bins/mach0/ls-m1
+ARGS=-a arm -b 64
+CMDS=<<EOF
+aeim
+ar?pc
+aesue pc,0x100003ad0,==,$z
+ar?pc
+EOF
+EXPECT=<<EOF
+0x100003a90
+0x100003ad0
+EOF
+RUN
+
+NAME=x86-64 shl and neg flags
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 48d1e0
+ar rax=0x8000000000000000
+ar rip=0
+aes
+ar cf
+ar of
+wx 48f7d8
+ar rax=0x8000000000000000
+ar rip=0
+aes
+ar of
+ar pf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=x86-64 shl memory destination writes back and sets flags
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 48d120
+ar rax=0x20
+wv8 0x8000000000000000 @ 0x20
+ar rip=0
+s 0
+aes
+ar cf
+ar zf
+pv8 @ 0x20
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000001
+0x0000000000000000
+EOF
+RUN
+
+NAME=shift count is taken modulo the operand width
+FILE=malloc://0x100
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+aei
+aeim
+wx d3f8
+ar rax=0x80000000
+ar rcx=0xff
+aes
+ar eax
+EOF
+EXPECT=<<EOF
+0xffffffff
+EOF
+RUN
+
+NAME=32-bit register write zero-extends
+FILE=malloc://0x100
+CMDS=<<EOF
+e asm.arch=x86
+e asm.bits=64
+aei
+aeim
+wx 01c1
+ar rcx=0xffffffff00000001
+ar rax=1
+aes
+ar rcx
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000002
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=sbb 32-bit register write zero-extends
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 19c1
+ar rcx=0xffffffff00000005
+ar rax=1
+ar cf=1
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x00000003
+EOF
+RUN
+
+NAME=sbb stores to its memory destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 190e
+ar rsi=0x100100
+ar rcx=1
+ar cf=1
+wv4 0x11111111 @ 0x100100
+aes
+pv4 @ 0x100100
+EOF
+EXPECT=<<EOF
+0x1111110f
+EOF
+RUN
+
+NAME=sbb borrows when the carry-in wraps the operand width
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 19c1
+ar rcx=0x0
+ar rax=0xffffffff
+ar cf=1
+aes
+ar rcx
+ar cf
+ar af
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=sbb keeps the overflow correction off when the carry-in is set
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 19c1
+ar rcx=0x1
+ar rax=0x80000000
+ar cf=1
+aes
+ar rcx
+ar of
+ar cf
+ar sf
+EOF
+EXPECT=<<EOF
+0x80000000
+0x00000001
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=sbb overflows on an INT_MIN source without carry-in
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 19c1
+ar rcx=0x1
+ar rax=0x80000000
+ar cf=0
+aes
+ar rcx
+ar of
+ar cf
+EOF
+EXPECT=<<EOF
+0x80000001
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=sbb sets the adjust flag when the source nibble wraps
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 19c1
+ar rcx=0x0
+ar rax=0xf
+ar cf=1
+ar of=1
+aes
+ar rcx
+ar af
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0xfffffff0
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=sbb does not overflow when the source is the destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 19c9
+ar rcx=0x80000000
+ar cf=0
+ar of=1
+aes
+ar rcx
+ar of
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=adc carries out when the carry-in wraps the operand width
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 11c1
+ar rcx=0x0
+ar rax=0xffffffff
+ar cf=1
+ar af=0
+aes
+ar rcx
+ar cf
+ar af
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+NAME=adc overflows on an INT_MAX source with carry-in
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 11c1
+ar rcx=0x0
+ar rax=0x7fffffff
+ar cf=1
+ar af=0
+aes
+ar rcx
+ar of
+ar sf
+EOF
+EXPECT=<<EOF
+0x80000000
+0x00000001
+0x00000001
+EOF
+RUN
+NAME=sub adjust flag is the borrow out of bit 4
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 29c1
+ar rcx=0x18
+ar rax=0x4
+ar cf=0
+ar af=1
+aes
+ar rcx
+ar af
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000014
+0x00000000
+0x00000000
+EOF
+RUN
+NAME=cmp adjust flag is the borrow out of bit 4
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 38c1
+ar rcx=0x8
+ar rax=0x4
+ar cf=0
+ar af=1
+aes
+ar af
+ar cf
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+NAME=dec adjust flag is the borrow out of bit 4
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx ffc9
+ar rcx=0x18
+ar cf=0
+ar af=1
+aes
+ar rcx
+ar af
+EOF
+EXPECT=<<EOF
+0x00000017
+0x00000000
+EOF
+RUN
+NAME=neg sets the adjust flag from the low nibble
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx f7d9
+ar rcx=0x11
+ar cf=0
+ar af=0
+aes
+ar rcx
+ar af
+ar cf
+EOF
+EXPECT=<<EOF
+0xffffffef
+0x00000001
+0x00000001
+EOF
+RUN
+NAME=adc carries out from a sign-extended immediate source
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 83d1ff
+ar rcx=0x0
+ar cf=1
+ar of=1
+aes
+ar rcx
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+EOF
+RUN
+NAME=adc overflows when the source is the destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 11c9
+ar rcx=0x7fffffff
+ar cf=1
+ar of=0
+aes
+ar rcx
+ar of
+ar cf
+EOF
+EXPECT=<<EOF
+0xffffffff
+0x00000001
+0x00000000
+EOF
+RUN
+NAME=sub does not overflow when the source is the destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 29c9
+ar rcx=0x80000000
+ar cf=0
+ar of=1
+aes
+ar rcx
+ar of
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=imul zero-extends its 32-bit register destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fafca
+ar rcx=0xffffffff00000003
+ar rdx=4
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x0000000c
+EOF
+RUN
+
+NAME=mul zero-extends both of its implicit destinations
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx f7e1
+ar rax=0xffffffff00000003
+ar rcx=0xffffffff00000002
+ar rdx=0xdeadbeef00000000
+aes
+ar rax
+ar rdx
+EOF
+EXPECT=<<EOF
+0x00000006
+0x00000000
+EOF
+RUN
+
+NAME=div zero-extends the quotient and the remainder
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx f7f1
+ar rax=0xffffffff0000000d
+ar rdx=0xdeadbeef00000000
+ar rcx=4
+aes
+ar rax
+ar rdx
+EOF
+EXPECT=<<EOF
+0x00000003
+0x00000001
+EOF
+RUN
+
+NAME=bswap zero-extends its 32-bit destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fc9
+ar rcx=0xffffffff12345678
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x78563412
+EOF
+RUN
+
+NAME=bsf zero-extends when the destination is also the source
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fbcc9
+ar rcx=0xffffffff00000100
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x00000008
+EOF
+RUN
+
+NAME=bsr zero-extends its 32-bit destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fbdca
+ar rcx=0xffffffff00000000
+ar rdx=0x80000100
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x0000001f
+EOF
+RUN
+
+NAME=cwde zero-extends eax into rax
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 98
+ar rax=0xffffffff00008000
+aes
+ar rax
+EOF
+EXPECT=<<EOF
+0xffff8000
+EOF
+RUN
+
+NAME=cdq zero-extends edx into rdx
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 99
+ar rax=0x80000000
+ar rdx=0xa5a5000100000000
+aes
+ar rdx
+EOF
+EXPECT=<<EOF
+0xffffffff
+EOF
+RUN
+
+NAME=movsx stops the sign extension at its 32-bit destination
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fbec8
+ar rax=0x80
+ar rcx=0xffffffff00000000
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0xffffff80
+EOF
+RUN
+
+NAME=xchg zero-extends both of its 32-bit registers
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 87ca
+ar rdx=0xffffffff00000001
+ar rcx=0xaaaaaaaa00000002
+aes
+ar rdx
+ar rcx
+EOF
+EXPECT=<<EOF
+0x00000002
+0x00000001
+EOF
+RUN
+
+NAME=xadd zero-extends the register it exchanges into
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fc1d1
+ar rcx=0xffffffff00000005
+ar rdx=0xaaaaaaaa00000003
+aes
+ar rcx
+ar rdx
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000005
+EOF
+RUN
+
+NAME=shr does nothing when the count masks to zero
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d3ea
+ar rdx=0xa5a5000380000005
+ar rcx=32
+ar cf=1
+ar zf=1
+aes
+ar rdx
+ar cf
+ar zf
+EOF
+EXPECT=<<EOF
+0x80000005
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=sar does nothing when the count is zero
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d3fa
+ar rdx=0xa5a5000380000005
+ar rcx=0
+ar cf=1
+ar sf=1
+aes
+ar rdx
+ar cf
+ar sf
+EOF
+EXPECT=<<EOF
+0x80000005
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=shl does nothing when the count masks to zero
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d3e2
+ar rdx=0xa5a5000380000005
+ar rcx=64
+ar cf=1
+ar of=1
+aes
+ar rdx
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x80000005
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=shr by one still shifts and sets the carry
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d3ea
+ar rdx=0xa5a5000380000004
+ar rcx=1
+aes
+ar rdx
+ar cf
+EOF
+EXPECT=<<EOF
+0x40000002
+0x00000000
+EOF
+RUN
+
+NAME=rol and ror set the carry and the single-bit overflow flag
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d1c1
+ar rcx=0xa5a5000280000005
+ar cf=0
+ar of=0
+aes
+ar rcx
+ar cf
+ar of
+wx d1c9
+ar rcx=0xa5a5000280000005
+ar cf=0
+ar of=1
+ar rip=0
+s 0
+aes
+ar rcx
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x0000000b
+0x00000001
+0x00000001
+0xc0000002
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=a rotate whose count masks to zero leaves the flags alone
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d3c2
+ar rdx=0xa5a5000380000005
+ar rcx=32
+ar cf=1
+aes
+ar rdx
+ar cf
+EOF
+EXPECT=<<EOF
+0x80000005
+0x00000001
+EOF
+RUN
+
+NAME=rcl and rcr rotate the operand together with the carry flag
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c1d103
+ar rcx=0xa5a5000280000005
+ar cf=0
+aes
+ar rcx
+ar cf
+wx d1d9
+ar rcx=0xa5a5000280000005
+ar cf=0
+ar rip=0
+s 0
+aes
+ar rcx
+ar cf
+EOF
+EXPECT=<<EOF
+0x0000002a
+0x00000000
+0x40000002
+0x00000001
+EOF
+RUN
+
+NAME=a byte rcl takes its count modulo nine and a 64-bit one wraps a single bit
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c0d21f
+ar rdx=0x99aabb84
+ar cf=1
+aes
+ar rdx
+ar cf
+wx 48d3d2
+ar rdx=0x8000000000000005
+ar rcx=1
+ar cf=1
+ar rip=0
+s 0
+aes
+ar rdx
+ar cf
+EOF
+EXPECT=<<EOF
+0x99aabb4c
+0x00000000
+0x0000000b
+0x00000001
+EOF
+RUN
+
+NAME=shld and shrd shift by their third operand with the count masked
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fa4c105
+ar rcx=0xa5a5000212345678
+ar rax=0xa5a500019abcdef0
+aes
+ar rcx
+wx 0fa5c2
+ar rdx=0xa5a5000312345678
+ar rax=0x9abcdef0
+ar rcx=32
+ar cf=1
+ar rip=0
+s 0
+aes
+ar rdx
+ar cf
+wx 0fadc2
+ar rdx=0xa5a5000312345678
+ar rax=0x9abcdef0
+ar rcx=33
+ar rip=0
+s 0
+aes
+ar rdx
+EOF
+EXPECT=<<EOF
+0x468acf13
+0x12345678
+0x00000001
+0x091a2b3c
+EOF
+RUN
+
+NAME=the bmi2 shifts take their count from the third operand and touch no flags
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e263f7c8
+ar rcx=0xa5a5000212345678
+ar rax=0x80000005
+ar rbx=4
+ar cf=1
+aes
+ar rcx
+ar cf
+wx c4e262f7c8
+ar rcx=0xa5a5000212345678
+ar rip=0
+s 0
+aes
+ar rcx
+wx c4e261f7c8
+ar rcx=0xa5a5000212345678
+ar rip=0
+s 0
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x08000000
+0x00000001
+0xf8000000
+0x00000050
+EOF
+RUN
+
+NAME=sar and sarx sign-extend memory operands at their decoded width
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+ar rax=0x100
+wx d138 @ 0
+wv4 0x80000000 @ 0x100
+aes
+p8 4 @ 0x100
+ar sf
+wx c4e262f708 @ 0
+wv4 0x80000000 @ 0x100
+ar rbx=4
+ar cf=1
+ar rip=0
+aes
+ar rcx
+ar cf
+wx c4e2e2f708 @ 0
+wv8 0x8000000000000000 @ 0x100
+ar rip=0
+aes
+ar rcx
+ar cf
+EOF
+EXPECT=<<EOF
+000000c0
+0x00000001
+0xf8000000
+0x00000001
+0xf800000000000000
+0x00000001
+EOF
+RUN
+
+NAME=a single-bit shr keeps the old sign in of and sar clears it
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d1e9
+ar rcx=0xa5a5000280000005
+ar of=0
+aes
+ar rcx
+ar of
+ar cf
+wx d1f9
+ar rcx=0xa5a5000280000005
+ar of=1
+ar rip=0
+s 0
+aes
+ar rcx
+ar of
+EOF
+EXPECT=<<EOF
+0x40000002
+0x00000001
+0x00000001
+0xc0000002
+0x00000000
+EOF
+RUN
+
+NAME=a rotate flags itself from the pre-write operand and its own width
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d3c1
+ar rcx=0x80000001
+ar cf=0
+ar of=0
+aes
+ar rcx
+ar cf
+ar of
+wx 84 @ 0x20
+s 0
+wx d006
+ar rsi=0x20
+ar cf=0
+ar of=0
+ar rip=0
+aes
+pv1 @ 0x20
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000003
+0x00000001
+0x00000001
+0x09
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=a single-bit shld or shrd reports the sign change in of
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 0fa4c101
+ar rcx=0x99aabb84
+ar rax=0x9abcdef0
+ar of=0
+aes
+ar rcx
+ar of
+ar cf
+wx 0facc101
+ar rcx=0x99aabb84
+ar rax=0x9abcdef0
+ar of=0
+ar rip=0
+s 0
+aes
+ar rcx
+ar of
+ar cf
+EOF
+EXPECT=<<EOF
+0x33557709
+0x00000001
+0x00000001
+0x4cd55dc2
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=byte mul div and idiv use al and ax, not the whole eax
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f6e1
+aei
+ar rax=0x112233ff
+ar rcx=0x99aabbff
+s 0
+aeip
+aes
+ar ax
+ar cf
+wx f6f1
+ar rax=0x112233ff
+s 0
+aeip
+aes
+ar al
+ar ah
+wx f6f9
+ar rax=0x1122fff9
+ar rcx=0x99aabb02
+s 0
+aeip
+aes
+ar al
+ar ah
+EOF
+EXPECT=<<EOF
+0x0000fe01
+0x00000001
+0x00000034
+0x00000033
+0x000000fd
+0x000000ff
+EOF
+RUN
+
+NAME=idiv sign-extends the dx:ax dividend
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 66f7f9
+aei
+ar rax=0x1122fff9
+ar rdx=0x9999ffff
+ar rcx=0x77770002
+s 0
+aeip
+aes
+ar ax
+ar dx
+EOF
+EXPECT=<<EOF
+0x0000fffd
+0x0000ffff
+EOF
+RUN
+
+NAME=imul multiplies the whole signed product at 64 bits
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 48f7e9
+aei
+ar rax=-1
+ar rcx=2
+s 0
+aeip
+aes
+ar rdx
+ar rax
+ar cf
+ar rax=0x8000000000000000
+ar rcx=2
+s 0
+aeip
+aes
+ar rdx
+ar rax
+ar cf
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff
+0xfffffffffffffffe
+0x00000000
+0xffffffffffffffff
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=movbe swaps the bytes it loads and stores
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 1122334455667788 @ 0x40
+aei
+aeim
+ar rsi=0x40
+wx 480f38f00e @ 0
+s 0
+aeip
+aes
+ar rcx
+wx 660f38f00e @ 0
+ar rcx=0xaabbccdd
+s 0
+aeip
+aes
+ar rcx
+wx 480f38f10e @ 0
+wx a5a5a5a5a5a5a5a5 @ 0x40
+ar rcx=0x1122334455667788
+s 0
+aeip
+aes
+p8 8 @ 0x40
+EOF
+EXPECT=<<EOF
+0x1122334455667788
+0xaabb1122
+1122334455667788
+EOF
+RUN
+
+NAME=popcnt lzcnt and tzcnt count bits and flag a zero source
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f30fb8c8
+aei
+ar rax=0x80000100
+s 0
+aeip
+aes
+ar rcx
+ar zf
+wx f30fbdc8
+s 0
+aeip
+aes
+ar rcx
+wx f30fbcc8
+s 0
+aeip
+aes
+ar rcx
+ar cf
+ar rax=0
+s 0
+aeip
+aes
+ar rcx
+ar cf
+wx f30fb8c8
+ar rax=0
+s 0
+aeip
+aes
+ar rcx
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000002
+0x00000000
+0x00000000
+0x00000008
+0x00000000
+0x00000020
+0x00000001
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=att syntax keeps the popcnt and movbe operand order
+FILE=malloc://0x200
+ARGS=-a x86 -b 64 -e asm.syntax=att
+CMDS=<<EOF
+wx f30fb8c3
+aei
+ar rax=0
+ar rbx=0x80000100
+s 0
+aeip
+aes
+ar rax
+wx 1122334455667788 @ 0x40
+aeim
+ar rsi=0x40
+wx 0f38f006 @ 0
+s 0
+aeip
+aes
+ar rax
+EOF
+EXPECT=<<EOF
+0x00000002
+0x11223344
+EOF
+RUN
+
+NAME=the 64-bit imul reads a memory source once
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 48f72e
+ao 1~esilcost
+wx 0102030405060708 @ 0x40
+aei
+aeim
+ar rsi=0x40
+ar rax=-2
+s 0
+aeip
+aes
+ar rdx
+ar rax
+EOF
+EXPECT=<<EOF
+esilcost: 8
+0xffffffffffffffff
+0xeff1f3f5f7f9fbfe
+EOF
+RUN
+
+NAME=popcnt lzcnt and tzcnt at the other operand widths
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f3480fb8c8
+aei
+ar rax=0x8000000000000100
+ar rcx=0
+s 0
+aeip
+aes
+ar rcx
+wx f3480fbdc8
+s 0
+aeip
+aes
+ar rcx
+wx f3480fbcc8
+s 0
+aeip
+aes
+ar rcx
+wx 66f30fb8c8
+ar rax=0x11228100
+ar rcx=0x99aabbcc
+s 0
+aeip
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x00000002
+0x00000000
+0x00000008
+0x99aa0002
+EOF
+RUN
+
+NAME=unsigned div composes the dx:ax dividend
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 66f7f1
+aei
+ar rax=0x11220010
+ar rdx=0x99990001
+ar rcx=0x77770003
+s 0
+aeip
+aes
+ar ax
+ar dx
+EOF
+EXPECT=<<EOF
+0x0000555a
+0x00000002
+EOF
+RUN
+
+NAME=bsf and bsr scan a memory source addressed by their destination
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 00010000 @ 0x40
+wx 0fbc09 @ 0
+aei
+aeim
+ar rcx=0x40
+s 0
+aeip
+aes
+ar rcx
+wx 0fbd09 @ 0
+ar rcx=0x40
+s 0
+aeip
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000008
+EOF
+RUN
+
+NAME=xadd adds a register to itself instead of zeroing it
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fc1c9
+aei
+aeim
+ar rcx=0xffffffff80000005
+s 0
+aeip
+aes
+ar rcx
+ar cf
+EOF
+EXPECT=<<EOF
+0x0000000a
+0x00000001
+EOF
+RUN
+
+NAME=xadd stores through the source register it overwrites
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 1100000000000000 @ 0x40
+wx 480fc136 @ 0
+aei
+aeim
+ar rsi=0x40
+s 0
+aeip
+aes
+ar rsi
+p8 8 @ 0x40
+EOF
+EXPECT=<<EOF
+0x00000011
+5100000000000000
+EOF
+RUN
+
+NAME=x86-64 esil does not depend on asm.syntax
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 8739
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx a5
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx 6bc805
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx d323
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx d313
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx 83f8ab
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+wx c8080000
+e asm.syntax=intel
+ao 1~esil:
+e asm.syntax=att
+ao 1~esil:
+EOF
+EXPECT=<<EOF
+esil: rcx,[4],edi,^,edi,=,edi,rcx,[4],^,rcx,=[4],rcx,[4],edi,^,edi,=,edi,rdi,=
+esil: rcx,[4],edi,^,edi,=,edi,rcx,[4],^,rcx,=[4],rcx,[4],edi,^,edi,=,edi,rdi,=
+esil: rsi,[4],rdi,=[4],df,?{,4,rsi,-=,4,rdi,-=,},df,!,?{,4,rsi,+=,4,rdi,+=,}
+esil: rsi,[4],rdi,=[4],df,?{,4,rsi,-=,4,rdi,-=,},df,!,?{,4,rsi,+=,4,rdi,+=,}
+esil: 32,5,~,32,eax,~,*,DUP,ecx,=,32,ecx,~,-,!,!,DUP,cf,:=,of,:=,ecx,rcx,=
+esil: 32,5,~,32,eax,~,*,DUP,ecx,=,32,ecx,~,-,!,!,DUP,cf,:=,of,:=,ecx,rcx,=
+esil: cl,0x1f,&,?{,cl,0x1f,&,32,-,rbx,[4],>>,1,&,cf,:=,cl,0x1f,&,rbx,[4],<<,rbx,=[4],$z,zf,:=,$p,pf,:=,31,$s,sf,:=,31,rbx,[4],>>,1,&,cf,^,of,:=,}
+esil: cl,0x1f,&,?{,cl,0x1f,&,32,-,rbx,[4],>>,1,&,cf,:=,cl,0x1f,&,rbx,[4],<<,rbx,=[4],$z,zf,:=,$p,pf,:=,31,$s,sf,:=,31,rbx,[4],>>,1,&,cf,^,of,:=,}
+esil: cl,0x1f,&,?{,1,cl,0x1f,&,-,!,?{,30,rbx,[4],>>,1,&,31,rbx,[4],>>,1,&,^,of,:=,},cl,0x1f,&,rbx,[4],<<,1,cl,0x1f,&,-,cf,<<,|,1,cl,0x1f,&,32,-,rbx,[4],>>,>>,|,1,cl,0x1f,&,32,-,rbx,[4],>>,&,cf,:=,rbx,=[4],}
+esil: cl,0x1f,&,?{,1,cl,0x1f,&,-,!,?{,30,rbx,[4],>>,1,&,31,rbx,[4],>>,1,&,^,of,:=,},cl,0x1f,&,rbx,[4],<<,1,cl,0x1f,&,-,cf,<<,|,1,cl,0x1f,&,32,-,rbx,[4],>>,>>,|,1,cl,0x1f,&,32,-,rbx,[4],>>,&,cf,:=,rbx,=[4],}
+esil: 18446744073709551531,eax,==,$z,zf,:=,32,$b,cf,:=,$p,pf,:=,31,$s,sf,:=,18446744073709551531,0x80000000,-,!,31,$o,^,of,:=,4,$b,af,:=
+esil: 18446744073709551531,eax,==,$z,zf,:=,32,$b,cf,:=,$p,pf,:=,31,$s,sf,:=,18446744073709551531,0x80000000,-,!,31,$o,^,of,:=,4,$b,af,:=
+esil: 8,8,rsp,-,=[8],8,rsp,-=
+esil: 8,8,rsp,-,=[8],8,rsp,-=
+EOF
+RUN
+
+NAME=att xchg with a memory destination stores to memory
+FILE=malloc://0x200
+ARGS=-a x86 -b 64 -e asm.syntax=att
+CMDS=<<EOF
+wx 1122334455667788 @ 0x40
+wx 8739 @ 0
+aei
+aeim
+ar rcx=0x40
+ar rdi=0xaabbccdd
+s 0
+aeip
+aes
+ar rdi
+pv4 @ 0x40
+EOF
+EXPECT=<<EOF
+0x44332211
+0xaabbccdd
+EOF
+RUN
+
+NAME=att shift by cl takes its count from cl
+FILE=malloc://0x200
+ARGS=-a x86 -b 64 -e asm.syntax=att
+CMDS=<<EOF
+wx 44332211 @ 0x40
+wx d323 @ 0
+aei
+aeim
+ar rbx=0x40
+ar rcx=4
+s 0
+aeip
+aes
+pv4 @ 0x40
+EOF
+EXPECT=<<EOF
+0x12233440
+EOF
+RUN
+
+NAME=att three-operand imul writes the register destination
+FILE=malloc://0x200
+ARGS=-a x86 -b 64 -e asm.syntax=att
+CMDS=<<EOF
+wx 6bc805
+aei
+ar rax=7
+ar rcx=0
+s 0
+aeip
+aes
+ar rcx
+EOF
+EXPECT=<<EOF
+0x00000023
+EOF
+RUN
+
+NAME=imul r64, m64, imm8 reads the memory source once and sets cf/of on overflow
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 486b0bfe
+wx 050000800300a5a5 @ 0x20
+aoe 1
+aeim
+ar rbx=0x20
+aes
+ar rcx
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000000 rbx,[8],DUP,DUP,63,SWAP,>>,18446744073709551614,*,SWAP,63,18446744073709551614,>>,*,+,SWAP,18446744073709551614,L*,rcx,=,-,63,rcx,>>,0,-,^,!,!,DUP,cf,:=,of,:=
+0xb4b5fff8fffffff6
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=imul r64, m64, imm8 without overflow clears cf/of
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 486b0bfe
+wx fdffffffffffffff @ 0x20
+aeim
+ar rbx=0x20
+ar cf=1
+ar of=1
+aes
+ar rcx
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000006
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=sar on a byte or word register keeps its sign
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx d0f8 @ 0
+ar rax=0xa5a5000300000080
+ar cf=1
+aes
+ar al
+ar rax
+ar sf
+ar cf
+wx 66d1f8 @ 0
+ar rax=0xa5a5000300008000
+ar rip=0
+aes
+ar ax
+ar sf
+wx c0f808 @ 0
+ar rax=0xa5a5000300000080
+ar rip=0
+aes
+ar al
+ar cf
+wx c0f809 @ 0
+ar rax=0xa5a5000300000080
+ar rip=0
+aes
+ar al
+EOF
+EXPECT=<<EOF
+0x000000c0
+0xa5a50003000000c0
+0x00000001
+0x00000000
+0x0000c000
+0x00000001
+0x000000ff
+0x00000001
+0x000000ff
+EOF
+RUN
+
+NAME=zydis sar on narrow memory operands sign-fills at -b 64
+FILE=malloc://0x200
+ARGS=-a x86 -b 64 -e anal.arch=x86.zydis
+CMDS=<<EOF
+wx d138; aei; aeim; wx 00000080 @ 0x100; ar rax=0x100; aes; pv4 @ 0x100
+wx 66d138 @ 0; ar PC=0; wx 0080 @ 0x100; aes; pv4 @ 0x100
+wx d038 @ 0; ar PC=0; wx 80 @ 0x100; aes; pv4 @ 0x100
+wx d138 @ 0; ar PC=0; wx 00000040 @ 0x100; aes; pv4 @ 0x100
+EOF
+EXPECT=<<EOF
+0xc0000000
+0xc000c000
+0xc000c0c0
+0x20000000
+EOF
+RUN
+
+NAME=zydis sar on registers and qword memory sign-fills at -b 64
+FILE=malloc://0x200
+ARGS=-a x86 -b 64 -e anal.arch=x86.zydis
+CMDS=<<EOF
+wx 48d1f8; aei; ar rax=0x8000000000000000; aes; ar rax
+wx d0f8 @ 0; ar PC=0; ar rax=0x80; aes; ar al
+wx 48d138 @ 0; aeim; ar PC=0; ar rax=0x100; wv8 0x8000000000000000 @ 0x100; aes; pv8 @ 0x100
+wx 48d138 @ 0; ar PC=0; wv8 0x4000000000000000 @ 0x100; aes; pv8 @ 0x100
+EOF
+EXPECT=<<EOF
+0xc000000000000000
+0x000000c0
+0xc000000000000000
+0x2000000000000000
+EOF
+RUN
+
+NAME=cmpxchg equal sets zf and stores src into dst
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480fb10f @ 0
+aei
+ar rdi=0x100
+ar rax=0x1122
+ar rcx=0x3344
+wx 2211000000000000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+ar rax
+p8 8 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00001122
+4433000000000000
+EOF
+RUN
+
+NAME=cmpxchg unequal loads dst into acc and clears zf
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480fb10f @ 0
+aei
+ar rdi=0x100
+ar rax=0x1122
+ar rcx=0x3344
+wx 9999000000000000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+ar rax
+p8 8 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00009999
+9999000000000000
+EOF
+RUN
+
+NAME=cmpxchg flags come from acc minus dst
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480fb10f @ 0
+aei
+ar rdi=0x100
+ar rax=1
+ar rcx=9
+wx 0200000000000000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+ar cf
+ar sf
+ar pf
+ar af
+ar of
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000001
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=cmpxchg signed overflow at 16-bit boundary
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 660fb10f @ 0
+aei
+ar rdi=0x100
+ar ax=0x7fff
+ar cx=9
+wx ffff @ 0x100
+s 0
+aeip
+aes
+ar zf
+ar cf
+ar sf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=lock cmpxchg dword form sets zf and stores ecx
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f00fb10f @ 0
+aei
+ar rdi=0x100
+ar rax=0x1122
+ar rcx=0x3344
+wx 22110000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+p8 4 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000001
+44330000
+EOF
+RUN
+
+NAME=cmpxchg generated esil text
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480fb10f
+ao~opcode,esil
+EOF
+EXPECT=<<EOF
+opcode: cmpxchg qword [rdi], rcx
+esilcost: 24
+esil: rdi,[8],rax,==,$z,zf,:=,64,$b,cf,:=,$p,pf,:=,63,$s,sf,:=,rdi,[8],0x8000000000000000,-,!,63,$o,^,of,:=,4,$b,af,:=,zf,?{,rcx,rdi,=[8],},zf,!,?{,rdi,[8],rax,=,}
+EOF
+RUN
+
+NAME=cmpxchg dword mem failure zero-extends accumulator
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fb10f @ 0
+aei
+ar rdi=0x100
+ar rax=0xaaaaaaaa00008888
+ar rcx=0x3344
+wx 99990000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+ar rax
+p8 4 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00009999
+99990000
+EOF
+RUN
+
+NAME=cmpxchg dword mem success compares masked and leaves acc intact
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fb10f @ 0
+aei
+ar rdi=0x100
+ar rax=0xaaaaaaaa00009999
+ar rcx=0x3344
+wx 99990000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+ar rax
+p8 4 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000001
+0xaaaaaaaa00009999
+44330000
+EOF
+RUN
+
+NAME=cmpxchg dword reg failure loads acc and keeps dst intact
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fb1ca @ 0
+aei
+ar rax=0xdeadbeef00000005
+ar rdx=0xcccccccc00001122
+ar rcx=0xbbbbbbbb00009999
+s 0
+aeip
+aes
+ar zf
+ar rax
+ar rdx
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00001122
+0xcccccccc00001122
+EOF
+RUN
+
+NAME=cmpxchg dword reg success stores masked src and keeps acc intact
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fb1ca @ 0
+aei
+ar rax=0xdeadbeef00001122
+ar rdx=0xcccccccc00001122
+ar rcx=0xcafe00009999
+s 0
+aeip
+aes
+ar zf
+ar rdx
+ar rax
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00009999
+0xdeadbeef00001122
+EOF
+RUN
+
+NAME=cmpxchg8b equal stores low halves of rcx:rbx into m64
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fc70f @ 0
+aei
+ar rdi=0x100
+ar rax=0xdeadbeef00001122
+ar rdx=0x1234567800003344
+ar rbx=0xcafebabedead00aa
+ar rcx=0x11112222333300bb
+wx 2211000044330000 @ 0x100
+wx aaaaaaaaaaaaaaaa @ 0x108
+s 0
+aeip
+aes
+ar zf
+p8 24 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000001
+aa00addebb003333aaaaaaaaaaaaaaaa0000000000000000
+EOF
+RUN
+
+NAME=cmpxchg8b unequal loads m64 and clears accumulator tops
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fc70f @ 0
+aei
+ar rdi=0x100
+ar rax=0xcafebabedeadbeef
+ar rdx=0x1111222233334444
+wx 9999999922110000 @ 0x100
+wx deadbeef44330000 @ 0x108
+s 0
+aeip
+aes
+ar zf
+ar rax
+ar rdx
+p8 16 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000000
+0x99999999
+0x00001122
+9999999922110000deadbeef44330000
+EOF
+RUN
+
+NAME=cmpxchg8b ignores accumulator bits above 32
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fc70f @ 0
+aei
+ar rdi=0x100
+ar rax=0xffffffff00001122
+ar rdx=0xdeadbeef00003344
+ar rbx=0x55
+ar rcx=0x66
+wx 2211000044330000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+p8 8 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000001
+5500000066000000
+EOF
+RUN
+
+NAME=lock cmpxchg8b equal form
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f00fc70f @ 0
+aei
+ar rdi=0x100
+ar rax=0x1122
+ar rdx=0x3344
+ar rbx=0xcafe
+ar rcx=0xf00d
+wx 2211000044330000 @ 0x100
+s 0
+aeip
+aes
+ar zf
+p8 8 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000001
+feca00000df00000
+EOF
+RUN
+
+NAME=cmpxchg8b generated esil text
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0fc70f
+ao~opcode,esil
+EOF
+EXPECT=<<EOF
+opcode: cmpxchg8b qword [rdi]
+esilcost: 16
+esil: rdi,[4],rdi,4,+,[4],rdi,[4],0xffffffff,eax,&,^,rdi,4,+,[4],0xffffffff,edx,&,^,|,0,==,$z,zf,:=,zf,?{,ebx,rdi,=[4],ecx,rdi,4,+,=[4],},zf,!,?{,rdx,=,rax,=,}
+EOF
+RUN
+
+NAME=lock cmpxchg16b equal sets zf and stores rbx:rcx into m128
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f0480fc70f @ 0
+aei
+ar rdi=0x100
+ar rax=0x1122
+ar rdx=0x3344
+ar rbx=0xdead
+ar rcx=0xbeef
+wx 2211000000000000 @ 0x100
+wx 4433000000000000 @ 0x108
+s 0
+aeip
+aes
+ar zf
+p8 16 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000001
+adde000000000000efbe000000000000
+EOF
+RUN
+
+NAME=lock cmpxchg16b unequal loads m128 into rdx:rax and clears zf
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f0480fc70f @ 0
+aei
+ar rdi=0x100
+ar rax=0x1122
+ar rdx=0x3344
+wx 9999000000000000 @ 0x100
+wx 7777000000000000 @ 0x108
+s 0
+aeip
+aes
+ar zf
+ar rax
+ar rdx
+p8 16 @ 0x100
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00009999
+0x00007777
+99990000000000007777000000000000
+EOF
+RUN
+
+NAME=lock cmpxchg16b rax-relative addressing uses staged halves
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480fc708 @ 0
+aei
+ar rax=0x100
+wx 2001000000000000 @ 0x100
+wx 7777000000000000 @ 0x108
+s 0
+aeip
+aes
+ar zf
+ar rax
+ar rdx
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000120
+0x00007777
+EOF
+RUN
+
+NAME=lock cmpxchg16b rdx+rax addressing uses staged halves
+FILE=malloc://0x200
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 480fc70c02 @ 0
+aei
+ar rax=0xf8
+ar rdx=0x8
+wx 2001000000000000 @ 0x100
+wx 7777000000000000 @ 0x108
+s 0
+aeip
+aes
+ar zf
+ar rax
+ar rdx
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000120
+0x00007777
+EOF
+RUN
+
+NAME=lock cmpxchg16b generated esil text
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx f0480fc70f
+ao~opcode,esil
+EOF
+EXPECT=<<EOF
+opcode: lock cmpxchg16b xmmword [rdi]
+esilcost: 32
+esil: rdi,[8],rdi,8,+,[8],rdi,[8],rax,^,rdi,8,+,[8],rdx,^,|,0,==,$z,zf,:=,zf,?{,rbx,rdi,=[8],rcx,rdi,8,+,=[8],},zf,!,?{,rdx,=,rax,=,}
+EOF
+RUN
+
+NAME=lea with a 32-bit address size wraps the address at 32 bits
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 67488d84cbffffff7f
+ar rax=0x1111111111111111
+ar rbx=0x0
+ar rcx=0x7fffffff
+aes
+ar rax
+wx 678d040b
+ar rip=0
+ar rbx=0xffffffff00000010
+ar rcx=0xfffffff0
+aes
+ar rax
+EOF
+EXPECT=<<EOF
+0x7ffffff7
+0x00000000
+EOF
+RUN
+
+NAME=andn rax writes the complement of rbx and rcx and clears cf of
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e2e0f2c1
+ar rbx=0xff00ff00ff00ff00
+ar rcx=0xf0f0f0f0f0f0f0f
+ar cf=0x1
+ar of=0x1
+aes
+ar rax
+ar zf
+ar sf
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0xf000f000f000f
+0x00000000
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=andn eax zero-extends and sets sf from bit 31
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e260f2c1
+ar rax=0x1111111111111111
+ar rbx=0xffffffff00000000
+ar rcx=0x80000001
+aes
+ar rax
+ar sf
+ar zf
+EOF
+EXPECT=<<EOF
+0x80000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=blsi eax, ebx with ebx=0x18
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e278f3db
+ar rax=0x1111111111111111
+ar rbx=0x18
+ar zf=0x1
+aes
+ar rax
+ar zf
+ar sf
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000000
+0x00000000
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=blsi eax, ebx with ebx=0x0
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e278f3db
+ar rax=0x1111111111111111
+ar rbx=0x0
+ar zf=0x1
+aes
+ar rax
+ar zf
+ar sf
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=blsmsk eax, ebx with ebx=0x18
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e278f3d3
+ar rax=0x1111111111111111
+ar rbx=0x18
+ar zf=0x1
+aes
+ar rax
+ar zf
+ar sf
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x0000000f
+0x00000000
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=blsmsk eax, eax with eax=0x0
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e278f3d0
+ar rax=0x1111111100000000
+ar zf=0x1
+aes
+ar rax
+ar zf
+ar sf
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0xffffffff
+0x00000000
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=blsr eax, eax with eax=1
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e278f3c8
+ar rax=0x1111111100000001
+ar zf=0x1
+aes
+ar rax
+ar zf
+ar sf
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=blsr eax, ebx with ebx=0x0
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e278f3cb
+ar rax=0x1111111111111111
+ar rbx=0x0
+ar zf=0x1
+aes
+ar rax
+ar zf
+ar sf
+ar cf
+ar of
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000000
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=bzhi rcx, rbx, rcx with an index of 63
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e2f0f5cb
+ar rbx=0xffffffffffffffff
+ar rcx=0x3f
+aes
+ar rcx
+ar cf
+ar zf
+ar sf
+EOF
+EXPECT=<<EOF
+0x7fffffffffffffff
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=bzhi rax, rbx, rcx with an index of 64
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e2f0f5c3
+ar rbx=0xffffffffffffffff
+ar rcx=0x140
+aes
+ar rax
+ar cf
+ar zf
+ar sf
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff
+0x00000001
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=bzhi rax, rbx, rcx with an index of 1
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e2f0f5c3
+ar rbx=0xffffffffffffffff
+ar rcx=0x1f01
+aes
+ar rax
+ar cf
+ar zf
+ar sf
+EOF
+EXPECT=<<EOF
+0x00000001
+0x00000000
+0x00000000
+0x00000000
+EOF
+RUN
+
+NAME=rorx eax, ebx, 1 rotates within 32 bits and keeps the flags
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e37bf0c301
+ar rax=0xffffffffffffffff
+ar rbx=0x1
+ar cf=0x1
+ar zf=0x1
+aes
+ar rax
+ar cf
+ar zf
+EOF
+EXPECT=<<EOF
+0x80000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=rorx rax, rbx, 5
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e3fbf0c305
+ar rbx=0x1
+aes
+ar rax
+EOF
+EXPECT=<<EOF
+0x800000000000000
+EOF
+RUN
+
+NAME=mulx rax, rbx, rcx stores the high half in rax and the low half in rbx
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e2e3f6c1
+ar rdx=0xffffffffffffffff
+ar rcx=0x2
+ar cf=0x1
+aes
+ar rax
+ar rbx
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000001
+0xfffffffffffffffe
+0x00000001
+EOF
+RUN
+
+NAME=mulx eax, ebx, ecx multiplies by edx
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e263f6c1
+ar rdx=0x11111111ffffffff
+ar rcx=0x10
+aes
+ar rax
+ar rbx
+EOF
+EXPECT=<<EOF
+0x0000000f
+0xfffffff0
+EOF
+RUN
+
+NAME=adcx eax, ebx adds cf and only updates cf
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx 660f38f6c3
+ar rax=0xffffffff
+ar rbx=0x0
+ar cf=0x1
+ar of=0x1
+ar zf=0x0
+aes
+ar rax
+ar cf
+ar of
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000001
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=adox rax, rbx takes the carry from of and leaves cf
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx f3480f38f6c3
+ar rax=0x7fffffffffffffff
+ar rbx=0x1
+ar of=0x0
+ar cf=0x1
+aes
+ar rax
+ar of
+ar cf
+EOF
+EXPECT=<<EOF
+0x8000000000000000
+0x00000000
+0x00000001
+EOF
+RUN
+
+NAME=adox rax, rbx carries out of 64 bits into of
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx f3480f38f6c3
+ar rax=0xffffffffffffffff
+ar rbx=0xffffffffffffffff
+ar of=0x1
+ar cf=0x0
+aes
+ar rax
+ar of
+ar cf
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff
+0x00000001
+0x00000000
+EOF
+RUN
+
+NAME=blsi with the destination as the memory base
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e2f8f318
+wv8 0x18 @ 0x20
+ar rax=0x20
+aes
+ar rax
+ar cf
+EOF
+EXPECT=<<EOF
+0x00000008
+0x00000001
+EOF
+RUN
+
+NAME=mulx writes the high half last for aliased destinations
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e2fbf6c1c4e27bf6c1
+ar rdx=0xffffffffffffffff
+ar rcx=2
+aes
+ar rax
+ar rdx=0xffffffff
+ar rcx=0x10
+aes
+ar rax
+EOF
+EXPECT=<<EOF
+0x00000001
+0x0000000f
+EOF
+RUN
+
+NAME=bzhi eax, ebx, eax with zero and out of range indices
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e278f5c3c4e278f5c3
+ar rax=0xffffffff00000000
+ar rbx=0xffffffff
+aes
+ar rax
+ar cf
+ar zf
+ar rax=0x120
+ar rbx=0
+aes
+ar rax
+ar cf
+ar zf
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000001
+0x00000000
+0x00000001
+0x00000001
+EOF
+RUN
+
+NAME=rorx with zero and full width counts preserves the source and flags
+FILE=malloc://0x100
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+aeim
+wx c4e3fbf0c000c4e37bf0c020
+ar rax=0x8000000100000001
+ar rflags=0x8d7
+aes
+ar rax
+ar rflags
+aes
+ar rax
+ar rflags
+EOF
+EXPECT=<<EOF
+0x8000000100000001
+0x000008d7
+0x00000001
+0x000008d7
+EOF
+RUN
+
+NAME=AVX XMM xor uses both sources and preserves flags
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx c5f1efc2c5f157c2c5f057c2c5f1ef00c5f1efc0
+aei
+ar rax=0x80
+wx 0f000000000000005555555555555555 @ 0x80
+ar xmm0l=0xff
+ar xmm0h=0xff
+ar xmm1l=0x33
+ar xmm1h=0xaaaaaaaaaaaaaaaa
+ar xmm2l=0x0f
+ar xmm2h=0x5555555555555555
+ar eflags=0xad7
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+ar xmm1
+ar xmm2
+ar eflags
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff000000000000003c
+0xffffffffffffffff000000000000003c
+0xffffffffffffffff000000000000003c
+0xffffffffffffffff000000000000003c
+0x5555555555555555000000000000000f
+0xaaaaaaaaaaaaaaaa0000000000000033
+0x5555555555555555000000000000000f
+0x00000ad7
+EOF
+RUN
+
+NAME=AVX and SSE XMM moves preserve both chunks in memory and registers
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx c5fa7f00c5fa6f10c5fa6ff8f30f7f00f30f6f18
+aei
+ar rax=0x81
+ar xmm0l=0x1122334455667788
+ar xmm0h=0x99aabbccddeeff00
+aes
+p8 16 @ 0x81
+aes
+ar xmm2
+aes
+ar xmm7
+ar xmm0l=0x0123456789abcdef
+ar xmm0h=0xfedcba9876543210
+aes
+p8 16 @ 0x81
+aes
+ar xmm3
+EOF
+EXPECT=<<EOF
+887766554433221100ffeeddccbbaa99
+0x99aabbccddeeff001122334455667788
+0x99aabbccddeeff001122334455667788
+efcdab89674523011032547698badcfe
+0xfedcba98765432100123456789abcdef
+EOF
+RUN
+
+NAME=AVX widths masks and broadcasts expose ESIL
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx c5f5efc262f17509efc262f17518ef0062f17e097f00c5fe7f00
+ao 5~esil:~?
+EOF
+EXPECT=<<EOF
+5
+EOF
+RUN
+
+NAME=SSE XMM xor shares the chunk path without changing flags
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 660fefc20f57c2660f57c2660fef00
+aei
+ar rax=0x80
+wx 0f000000000000005555555555555555 @ 0x80
+ar xmm0l=0x33
+ar xmm0h=0xaaaaaaaaaaaaaaaa
+ar xmm2l=0xf
+ar xmm2h=0x5555555555555555
+ar eflags=0xad7
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+aes
+ar xmm0
+ar eflags
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff000000000000003c
+0xaaaaaaaaaaaaaaaa0000000000000033
+0xffffffffffffffff000000000000003c
+0xaaaaaaaaaaaaaaaa0000000000000033
+0x00000ad7
+EOF
+RUN
+
+NAME=AVX XMM moves accept absolute address zero
+FILE=malloc://128
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx c5fa7f042500000000c5fa6f0c2500000000 @ 0x40
+aei
+ar rip=0x40
+ar xmm0l=0x1122334455667788
+ar xmm0h=0x99aabbccddeeff00
+aes
+p8 16 @ 0
+aes
+ar xmm1
+EOF
+EXPECT=<<EOF
+887766554433221100ffeeddccbbaa99
+0x99aabbccddeeff001122334455667788
+EOF
+RUN
+
+NAME=AVX upper clearing preserves SSE upper lanes and unrelated vector registers
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0f28c1c5f1efc2c5f5efc2
+aei
+arv zmm0 2=0x22
+arv zmm0 7=0x77
+arv zmm1 0=0x11
+arv zmm1 3=0x33
+arv zmm1 7=0x55
+arv zmm2 0=0x1
+arv zmm2 3=0x3
+aes
+arv zmm0
+aes
+arv zmm0
+arv zmm0 7=0xff
+aes
+arv zmm0
+arv zmm1 7
+EOF
+EXPECT=<<EOF
+0x0000000000000011 0x0000000000000000 0x0000000000000022 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000077
+0x0000000000000010 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000010 0x0000000000000000 0x0000000000000000 0x0000000000000030 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000055
+EOF
+RUN
+
+NAME=AVX512 high registers alias XMM and YMM and support in-place XOR
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 6201fe486ffe62010540effe
+aei
+arv zmm30 0=0x1234
+arv zmm30 7=0x5678
+aes
+arv xmm31 0
+arv zmm31 7
+aes
+arv zmm31
+arv zmm30 7
+EOF
+EXPECT=<<EOF
+0x0000000000001234
+0x0000000000005678
+0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000005678
+EOF
+RUN
+
+NAME=VZEROUPPER and VZEROALL leave ZMM16 through ZMM31 unchanged
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx c5f877c5fc77
+aei
+arv zmm0 0=0x11
+arv zmm0 7=0x22
+arv zmm15 0=0x33
+arv zmm15 7=0x44
+arv zmm16 7=0x55
+arv zmm31 0=0x66
+aes
+arv zmm0
+arv zmm15
+aes
+arv zmm0
+arv zmm15
+arv zmm16 7
+arv zmm31 0
+EOF
+EXPECT=<<EOF
+0x0000000000000011 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000033 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000000055
+0x0000000000000066
+EOF
+RUN
+
+NAME=KXOR masks results to the instruction width without changing flags
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx c5f547c2c5f447c2c4e1f547c2c4e1f447c2
+aei
+ar k1=0xffffffffffffffff
+ar k2=0x1122334455667788
+ar eflags=0xad7
+aes
+ar k0
+aes
+ar k0
+aes
+ar k0
+aes
+ar k0
+ar eflags
+EOF
+EXPECT=<<EOF
+0x00000077
+0x00008877
+0xaa998877
+0xeeddccbbaa998877
+0x00000ad7
+EOF
+RUN
+
+NAME=Packed byte arithmetic wraps and saturates per lane without changing flags
+FILE=malloc://64
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 660ffcc1660ff8c1660fecc1660fdcc1660fe8c1660fd8c1
+aei
+ar xmm0l=0x80ff007f80ff007f
+ar xmm0h=0xdeadbeef
+ar xmm1l=0xff010101ff010101
+arv zmm0 7=0x1234
+ar eflags=0xad7
+aes
+ar xmm0l
+aes
+ar xmm0l
+aes
+ar xmm0l
+ar xmm0l=0x80ff007f80ff007f
+aes
+ar xmm0l
+ar xmm0l=0x80ff007f80ff007f
+ar xmm1l=0x01ff010101ff0101
+aes
+ar xmm0l
+ar xmm0l=0x80ff007f80ff007f
+aes
+ar xmm0l
+ar xmm0h
+arv zmm0 7
+ar eflags
+EOF
+EXPECT=<<EOF
+0x7f0001807f000180
+0x80ff007f80ff007f
+0x8000017f8000017f
+0xffff0180ffff0180
+0x8000ff7e8000ff7e
+0x7f00007e7f00007e
+0xdeadbeef
+0x0000000000001234
+0x00000ad7
+EOF
+RUN
+
+NAME=MMX lanes alias the FPU profile and packed AND NOT accepts memory
+FILE=malloc://128
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 0ffcc10ff8c10fdf00
+wx ffffffffffffffff @ 0x40
+aei
+ar rax=0x40
+ar mm0=0x80ff007f80ff007f
+ar mm1=0xff010101ff010101
+aes
+ar mm0
+ar st0
+aes
+ar mm0
+aes
+ar mm0
+EOF
+EXPECT=<<EOF
+0x7f0001807f000180
+0x7f0001807f000180
+0x80ff007f80ff007f
+0x7f00ff807f00ff80
+EOF
+RUN
+
+NAME=AVX512 masked packed add broadcasts dwords and zeroes inactive lanes
+FILE=malloc://256
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+wx 62f175d9fe00
+wx 01000000 @ 0x80
+aei
+ar rax=0x80
+ar k1=0x8005
+arv zmm0 0=0xaaaaaaaaaaaaaaaa
+arv zmm0 7=0xbbbbbbbbbbbbbbbb
+arv zmm1 0=0xfffffffe
+arv zmm1 1=0x7fffffff
+arv zmm1 7=0x7fffffff00000000
+aes
+arv zmm0
+EOF
+EXPECT=<<EOF
+0x00000000ffffffff 0x0000000080000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x0000000000000000 0x8000000000000000
 EOF
 RUN

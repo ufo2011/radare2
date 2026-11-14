@@ -1,18 +1,18 @@
-OBJ_ARC=asm_arc.o
-OBJ_ARC+=../arch/arc/gnu/arc-dis.o
-OBJ_ARC+=../arch/arc/gnu/arc-ext.o
-OBJ_ARC+=../arch/arc/gnu/arc-opc.o
-OBJ_ARC+=../arch/arc/gnu/arcompact-dis.o
+OBJ_ARCPSEUDO+=$(LIBR)/arch/p/arc/pseudo.o
 
-SHARED2_ARC=$(addprefix ../,${SHARED_ARC})
-
-STATIC_OBJ+=${OBJ_ARC}
-SHARED_OBJ+=${SHARED_ARC}
-TARGET_ARC=asm_arc.${EXT_SO}
+TARGET_ARCPSEUDO=parse_arc_pseudo.${EXT_SO}
+STATIC_OBJ+=${OBJ_ARCPSEUDO}
+ifeq ($(CC),cccl)
+LIBDEPS=-L../../util -llibr_util
+LIBDEPS+=-L../../flag -llibr_flag
+else
+LIBDEPS=-L../../util -lr_util
+LIBDEPS+=-L../../flag -lr_flag
+endif
 
 ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_ARC}
-
-${TARGET_ARC}: ${OBJ_ARC}
-	${CC} $(call libname,asm_arc) ${LDFLAGS} ${CFLAGS} -o ${TARGET_ARC} ${OBJ_ARC} ${SHARED2_ARC}
+ALL_TARGETS+=${TARGET_ARCPSEUDO}
+${TARGET_ARCPSEUDO}: ${OBJ_ARCPSEUDO}
+	${CC} $(call libname,parse_arc_pseudo) ${LIBDEPS} $(LDFLAGS) \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_ARCPSEUDO} ${OBJ_ARCPSEUDO}
 endif

@@ -1,10 +1,20 @@
-#ifeq ($(SHLR),)
-#SHLR=../../shlr
-#endif
+ifneq (${_INCLUDE_ZIP_DEPS_MK},1)
+_INCLUDE_ZIP_DEPS_MK=1
 
+# Link against system libzip when USE_LIB_ZIP=1.
+# Otherwise link against bundled otezip from subprojects/otezip.
+ifeq ($(WANT_ZIP),1)
 ifeq ($(USE_LIB_ZIP),1)
 LINK+=$(LIBZIP)
 else
-LINK+=$(SHLR)/zip/librz.$(EXT_AR)
-CFLAGS+=-I$(SHLR)/zip/include
+_INCLUDE_OTEZIP_MK_=1
+OTEZIP_ROOT=$(SHLR)/../subprojects/otezip
+OTEZIP_LIBA=$(OTEZIP_ROOT)/libotezip.$(EXT_AR)
+CFLAGS+=-I$(OTEZIP_ROOT)/src/include/otezip
+$(OTEZIP_LIBA):
+	$(MAKE) -C $(OTEZIP_ROOT) CC="$(CC)" EXT_AR="$(EXT_AR)" AR="$(AR)" RANLIB="$(RANLIB)" CFLAGS="$(CFLAGS) -fPIC -fvisibility=hidden" libotezip.$(EXT_AR)
+LINK+=$(OTEZIP_LIBA)
+endif
+endif
+
 endif

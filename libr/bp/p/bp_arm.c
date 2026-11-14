@@ -1,9 +1,9 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake */
+/* radare - LGPL - Copyright 2009-2023 - pancake */
 
 #include <r_bp.h>
 #include <r_lib.h>
 
-static struct r_bp_arch_t r_bp_plugin_arm_bps[] = {
+static RBreakpointArch r_bp_plugin_arm_bps[] = {
 	{ 64, 4, 0, (const ut8*)"\x00\x00\x20\xd4" }, // le - arm64 brk0
 	{ 64, 4, 1, (const ut8*)"\xd4\x20\x00\x00" }, // be - arm64
 	//{ 64, 1, 0, (const ut8*)"\xfe\xde\xff\xe7" }, // le - arm64 // hacky fix
@@ -18,7 +18,7 @@ static struct r_bp_arch_t r_bp_plugin_arm_bps[] = {
 #if 0
 	{ 4, 0, (const ut8*)"\xfe\xde\xff\xe7" }, // arm-le - from a gdb patch
 	{ 4, 1, (const ut8*)"\xe7\xff\xde\xfe" }, // arm-be
-        { 4, 0, (const ut8*)"\xf0\x01\xf0\xe7" }, // eabi-le - undefined instruction - for all kernels
+	{ 4, 0, (const ut8*)"\xf0\x01\xf0\xe7" }, // eabi-le - undefined instruction - for all kernels
 	{ 4, 1, (const ut8*)"\xe7\xf0\x01\xf0" }, // eabi-be
 #endif
 	{ 16, 2, 0, (const ut8*)"\x01\xbe" },         // thumb-le
@@ -30,10 +30,15 @@ static struct r_bp_arch_t r_bp_plugin_arm_bps[] = {
 	{ 0, 0, 0, NULL }
 };
 
-struct r_bp_plugin_t r_bp_plugin_arm = {
-	.name = "arm",
+RBreakpointPlugin r_bp_plugin_arm = {
+	.meta = {
+		.name = "arm",
+		.desc = "",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.arch = "arm",
-	.nbps = 9,
+	.nbps = 10,
 	.bps = r_bp_plugin_arm_bps,
 };
 

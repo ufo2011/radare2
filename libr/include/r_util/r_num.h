@@ -27,6 +27,8 @@ typedef union {
 typedef enum {
 	RNCNAME, RNCNUMBER, RNCEND, RNCINC, RNCDEC,
 	RNCLT, RNCGT, // comparison operators
+    RNCBNOT, RNCBAND, RNCBOR, RNCBXOR, RNCBXNOR, RNCBEQ, RNCBNEQ,
+	RNCLE, RNCGE, // "<=" and ">="
 	RNCPLUS='+', RNCMINUS='-', RNCMUL='*', RNCDIV='/', RNCMOD='%',
 	RNCNEG='~', RNCAND='&', RNCOR='|', RNCXOR='^',
 	RNCPRINT=';', RNCASSIGN='=', RNCLEFTP='(', RNCRIGHTP=')',
@@ -39,7 +41,7 @@ typedef struct r_num_calc_t {
 	char string_value[R_NUMCALC_STRSZ];
 	int errors;
 	char oc;
-	const char *calc_err;
+	const char *calc_err; // rename to errstr
 	int calc_i;
 	const char *calc_buf;
 	int calc_len;
@@ -47,8 +49,9 @@ typedef struct r_num_calc_t {
 } RNumCalc;
 
 typedef struct r_num_t {
-	ut64 (*callback)(struct r_num_t *userptr, const char *str, int *ok);
-	const char *(*cb_from_value)(struct r_num_t *userptr, ut64 value, int *ok);
+	R_REF_TYPE;
+	ut64 (*callback)(struct r_num_t *userptr, const char *str, bool *ok);
+	const char *(*cb_from_value)(struct r_num_t *userptr, ut64 value, bool *ok);
 //	RNumCallback callback;
 	ut64 value;
 	double fvalue;
@@ -57,33 +60,44 @@ typedef struct r_num_t {
 	RNumCalc nc;
 } RNum;
 
-typedef ut64 (*RNumCallback)(struct r_num_t *self, const char *str, int *ok);
-typedef const char *(*RNumCallback2)(struct r_num_t *self, ut64, int *ok);
+typedef ut64 (*RNumCallback)(struct r_num_t *self, const char *str, bool *ok);
+typedef const char *(*RNumCallback2)(struct r_num_t *self, ut64, bool *ok);
 
+static inline ut64 r_num_bitmask(ut8 width) {
+	if (width >= 64) {
+		return UT64_MAX;
+	}
+	return ((ut64)1ULL << (ut64)width) - 1;
+}
+
+// R2_600 - make this an api instead of a define
+#define r_num_failed(x) ((x)->nc.errors)
 R_API RNum *r_num_new(RNumCallback cb, RNumCallback2 cb2, void *ptr);
 R_API void r_num_free(RNum *num);
 R_API char *r_num_units(char *buf, size_t len, ut64 number);
 R_API int r_num_conditional(RNum *num, const char *str);
-R_API ut64 r_num_calc(RNum *num, const char *str, const char **err);
-R_API const char *r_num_calc_index(RNum *num, const char *p);
 R_API ut64 r_num_chs(int cylinder, int head, int sector, int sectorsize);
 R_API int r_num_is_valid_input(RNum *num, const char *input_value);
 R_API ut64 r_num_get_input_value(RNum *num, const char *input_value);
+R_API char *r_num_list_join(RList *str, const char *sep);
 R_API const char *r_num_get_name(RNum *num, ut64 n);
 R_API char* r_num_as_string(RNum *___, ut64 n, bool printable_only);
 R_API ut64 r_num_tail(RNum *num, ut64 addr, const char *hex);
 R_API ut64 r_num_tail_base(RNum *num, ut64 addr, ut64 off);
 R_API bool r_num_segaddr(ut64 addr, ut64 sb, int sg, ut32 *a, ut32 *b);
 R_API void r_num_minmax_swap(ut64 *a, ut64 *b);
-R_API void r_num_minmax_swap_i(int *a, int *b); // XXX this can be a cpp macro :??
-R_API ut64 r_num_math(RNum *num, const char *str);
+
 R_API ut64 r_num_get(RNum *num, const char *str);
+R_API ut64 r_num_get_err(RNum *num, const char *str, const char **err);
+R_API ut64 r_num_math(RNum *num, const char *str);
+R_API ut64 r_num_math_err(RNum *num, const char *str, const char **err);
+R_API const char *r_num_math_index(RNum *num, const char *p);
+
 R_API int r_num_to_bits(char *out, ut64 num);
 R_API int r_num_to_ternary(char *out, ut64 num);
 R_API int r_num_rand(int max);
+R_API ut64 r_num_genmask(int max);
 R_API void r_num_irand(void);
-R_API ut64 r_get_input_num_value(RNum *num, const char *input_value);
-R_API bool r_is_valid_input_num_value(RNum *num, const char *input_value);
 R_API int r_num_between(RNum *num, const char *input_value);
 R_API bool r_num_is_op(const char c);
 R_API int r_num_str_len(const char *str);
@@ -92,8 +106,9 @@ R_API RList *r_num_str_split_list(char *str);
 R_API void *r_num_dup(ut64 n);
 R_API double r_num_cos(double a);
 R_API double r_num_sin(double a);
-R_API size_t r_num_bit_count(ut32 val);
-R_API double r_num_get_float(RNum *num, const char *str);
+R_API double r_num_get_double(RNum *num, const char *str);
+R_API ut16 r_num_float_to_bf16(float f);
+R_API float r_num_bf16_to_float(ut16 b);
 
 static inline st64 r_num_abs(st64 num) {
 	return num < 0 ? -num : num;

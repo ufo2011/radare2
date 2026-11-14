@@ -13,7 +13,7 @@ typedef struct r_config_holder_t {
 } RConfigHolder;
 
 static void r_config_holder_free(RConfigHolder *hc) {
-	if (hc) {
+	if (R_LIKELY (hc)) {
 		free (hc->key);
 		if (hc->flags & CN_STR) {
 			free (hc->data.str);
@@ -24,7 +24,7 @@ static void r_config_holder_free(RConfigHolder *hc) {
 
 static RConfigHolder *node_to_holder(RConfigNode *node) {
 	RConfigHolder *hc = R_NEW0 (RConfigHolder);
-	if (hc) {
+	if (R_LIKELY (hc)) {
 		hc->key = strdup (node->name);
 		hc->flags = node->flags;
 		if (node->flags & CN_STR) {
@@ -37,32 +37,30 @@ static RConfigHolder *node_to_holder(RConfigNode *node) {
 }
 
 R_API bool r_config_hold(RConfigHold *h, ...) {
-	r_return_val_if_fail (h, false);
+	R_RETURN_VAL_IF_FAIL (h, false);
 	va_list ap;
 	char *key;
 	va_start (ap, h);
 	while ((key = va_arg (ap, char *))) {
 		RConfigNode *node = r_config_node_get (h->cfg, key);
-		r_return_val_if_fail (node, false);
-		r_list_append (h->list, node_to_holder (node));
+		if (R_LIKELY (node)) {
+			r_list_append (h->list, node_to_holder (node));
+		}
 	}
 	va_end (ap);
 	return true;
 }
 
-R_API RConfigHold* r_config_hold_new(RConfig *cfg) {
-	r_return_val_if_fail (cfg, NULL);
+R_API RConfigHold* R_NONNULL r_config_hold_new(RConfig *cfg) {
+	R_RETURN_VAL_IF_FAIL (cfg, NULL);
 	RConfigHold *hold = R_NEW0 (RConfigHold);
-	if (hold) {
-		hold->list = r_list_newf ((RListFree)r_config_holder_free);
-		hold->cfg = cfg;
-		return hold;
-	}
-	return NULL;
+	hold->list = r_list_newf ((RListFree)r_config_holder_free);
+	hold->cfg = cfg;
+	return hold;
 }
 
 R_API void r_config_hold_restore(RConfigHold *h) {
-	r_return_if_fail (h);
+	R_RETURN_IF_FAIL (h);
 	RListIter *iter;
 	RConfigHolder *hc;
 	RConfig *cfg = h->cfg;

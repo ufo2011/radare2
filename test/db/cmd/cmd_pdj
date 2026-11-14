@@ -8,40 +8,260 @@ EOF
 EXPECT=<<EOF
 [
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "            ;-- main:"
   },
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "            ;-- entry0:"
   },
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "            ;-- func.1000013d8:"
   },
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "            0x1000013d8      55             push rbp"
   }
 ]
 [
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;;--&nbsp;main:"
   },
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;;--&nbsp;entry0:"
   },
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;;--&nbsp;func.1000013d8:"
   },
   {
-    "offset": 4294972376,
+    "addr": 4294972376,
     "text": "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0x1000013d8&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;55&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;push&nbsp;rbp"
   }
 ]
 EOF
 RUN
 
+NAME=pdj negative count without analysis
+FILE=malloc://32
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+wx 1e0080d2e50300aa1f2003d5c0035fd6
+s 8
+pdj -2~{[0].addr}
+pdj -2~{[0].opcode}
+pdj -2~{[1].addr}
+pdj -2~{[1].opcode}
+EOF
+EXPECT=<<EOF
+0
+mov x30, 0
+4
+mov x5, x0
+EOF
+RUN
+
+NAME=pdj negative count with invalid instruction in window
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 64
+wow 1f2003d5
+wx ffffffff @ 0x24
+s 0x40
+pdj -9~{[0].addr}
+pdj -9~{[2].opcode}
+pdj -9~{[2].size}
+pdj -9~{[8].addr}
+EOF
+EXPECT=<<EOF
+28
+invalid
+4
+60
+EOF
+RUN
+
+NAME=pdj negative count near start of file
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 64
+wow 1f2003d5
+s 8
+pdj -4~{[0].addr}
+pdj -4~{[3].addr}
+EOF
+EXPECT=<<EOF
+0
+12
+EOF
+RUN
+
+NAME=pdj negative count at the very start of the file shows the forward window like pd
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 64
+wow 1f2003d5
+s 0
+pdj -4~{[0].addr}
+pdj -4~{[3].addr}
+EOF
+EXPECT=<<EOF
+0
+12
+EOF
+RUN
+
+NAME=pdj negative count with window larger than blocksize
+FILE=malloc://512
+ARGS=-a arm -e asm.bits=64
+CMDS=<<EOF
+b 512
+wow 1f2003d5
+b 64
+s 0x100
+pdj -20~{[0].addr}
+pdj -20~{[19].addr}
+EOF
+EXPECT=<<EOF
+176
+252
+EOF
+RUN
+
+NAME=pdj shows Cd data as data like pd
+FILE=malloc://16
+ARGS=-a arm -e asm.bits=16
+CMDS=<<EOF
+wx 5302794400bf
+Cd 4
+f data.x @ 0
+pdj 1
+pdj 2~{[1].addr}
+pdj 2~{[1].opcode}
+ahi 10
+pdj 1~{[0].disasm}
+EOF
+EXPECT=<<EOF
+[{"addr":0,"size":4,"opcode":".dword 0x44790253","disasm":".dword 0x44790253","bytes":"53027944","type":"data","flags":["data.x"]}]
+4
+nop
+.int32 1148781139
+EOF
+RUN
+
+NAME=pdj splits Cd data in hex.cols lines like pd
+FILE=malloc://64
+ARGS=-a arm -e asm.bits=16
+CMDS=<<EOF
+wx 5302794400bf
+Cd 20
+pdj 3~{[0].size}
+pdj 3~{[0].disasm}
+pdj 3~{[1].addr}
+pdj 3~{[1].size}
+pdj 3~{[2].addr}
+pdj 3~{[2].type}
+s 2
+pdj 1~{[0].addr}
+pdj 1~{[0].size}
+s 0
+e asm.meta=false
+pdj 1~{[0].opcode}
+EOF
+EXPECT=<<EOF
+16
+.hex 5302794400bf00000000000000000000
+16
+4
+20
+mov
+2
+16
+lsls r3, r2, 9
+EOF
+RUN
+
+NAME=pdj keeps Cd data inside the requested bytes
+FILE=malloc://256
+CMDS=<<EOF
+Cd 20
+pDj 1
+Cd-
+e hex.cols=32
+Cd 31
+ahi 1
+pdj 1~{[0].size}
+b 64
+e hex.cols=64
+wx 41424344 @ 192
+s 128
+Cd 4
+Cd 64 @ 132
+pdj 2~{[1].size}
+pdj 2~{[1].bytes}
+EOF
+EXPECT=<<EOF
+[{"addr":0,"size":1,"opcode":".hex 00","disasm":".hex 00","bytes":"00","type":"data"}]
+31
+64
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000041424344
+EOF
+RUN
+
+NAME=pdj only puts Cd text that assembles back in opcode
+FILE=malloc://16
+ARGS=-a arm -e asm.bits=32
+CMDS=<<EOF
+wx 01020304
+Cd 4
+ahi 1
+pdj 1~{[0].opcode}
+pdj 1~{[0].disasm}
+wx 01020384
+pdj 1~{[0].opcode}
+pdj 1~{[0].disasm}
+ahi 10
+wx ffffffff
+pdj 1~{[0].opcode}
+pdj 1~{[0].disasm}
+ahi 16
+pdj 1~{[0].opcode}
+pdj 1~{[0].disasm}
+Cd-
+Cd 1
+ahi 10
+pdj 1~{[0].opcode}
+pdj 1~{[0].disasm}
+Cd-
+e hex.cols=4
+wx 0102030405060708
+Cd 8
+ahi 16
+pdj 1~{[0].opcode}
+Cd-
+wx 0300
+Cd 2
+ahi 1
+pdj 1~{[0].opcode}
+EOF
+EXPECT=<<EOF
+.int32 00000100000000110000001000000001b
+.int32 00000100000000110000001000000001b
+.hex 01020384
+.int32 10000100000000110000001000000001b
+.hex ffffffff
+.int32 4294967295
+.hex ffffffff
+.dword 0xffffffff
+.hex ff
+.char 255
+.qword 0x0807060504030201
+.int16 0000000000000011b
+EOF
+RUN

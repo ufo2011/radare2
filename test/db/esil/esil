@@ -61,11 +61,26 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=bits
+FILE=-
+ARGS=-a arm -b 32
+CMDS=<<EOF
+ae 16,BITS
+e asm.bits
+ae 32,BITS
+e asm.bits
+EOF
+EXPECT=<<EOF
+16
+32
+EOF
+RUN
+
 NAME=shift-left
 FILE=-
 CMDS=<<EOF
-"ae 3,1,<<"
-"ae 1,3,<<"
+ae 3,1,LSL
+ae 1,3,LSL
 EOF
 EXPECT=<<EOF
 0x8
@@ -76,8 +91,8 @@ RUN
 NAME=shift-right
 FILE=-
 CMDS=<<EOF
-"ae 1,8,>>"
-"ae 8,1,>>"
+ae 1,8,LSR
+ae 8,1,LSR
 EOF
 EXPECT=<<EOF
 0x4
@@ -145,7 +160,6 @@ RUN
 
 NAME=memory write (non-MIPS big endian)
 FILE=-
-BROKEN=1
 CMDS=<<EOF
 e cfg.bigendian=true
 aeim
@@ -243,6 +257,40 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=esil peek some (32-bits ARM little endian)
+FILE=-
+ARGS=-a arm -b 32
+CMDS=<<EOF
+e cfg.bigendian=false
+aeim
+e io.cache=true
+wx 66676869 @ 0x00100000
+ar r0=0x00100000
+"ae r1,1,r0,[*]"
+ar r1
+EOF
+EXPECT=<<EOF
+0x69686766
+EOF
+RUN
+
+NAME=esil peek some (64-bits ARM little endian)
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+e cfg.bigendian=false
+aeim
+e io.cache=true
+wx 6667686900000080 @ 0x00100000
+ar x0=0x00100000
+"ae x1,1,x0,[*]"
+ar x1
+EOF
+EXPECT=<<EOF
+0x8000000069686766
+EOF
+RUN
+
 NAME=rol
 FILE=-
 CMDS=<<EOF
@@ -250,7 +298,7 @@ e asm.bits=32
 e asm.arch=x86
 aei
 ar eax=0x80000010
-"ae 0x1,eax,<<<,eax,="
+ae 0x1,eax,ROL,eax,=
 ar eax
 EOF
 EXPECT=<<EOF
@@ -265,7 +313,7 @@ e asm.bits=32
 e asm.arch=x86
 aei
 ar eax=0x02000001
-"ae 0x1,eax,>>>,eax,="
+ae 0x1,eax,ROR,eax,=
 ar eax
 EOF
 EXPECT=<<EOF
@@ -318,10 +366,7 @@ NAME=signext 8 32 64
 FILE=-
 CMDS="ae 8,0x80,~,8,0x70,~,32,0x80000000,~,64,0x80000000,~"
 EXPECT=<<EOF
-0x80000000
-0xffffffff80000000
-0x70
-0xffffffffffffff80
+0xffffffffffffff80,0x70,0xffffffff80000000,0x80000000
 EOF
 RUN
 
@@ -377,5 +422,676 @@ FILE=-
 CMDS="ae 9,I2D,SQRT,4,I2D,F+,3,I2D,F/,6,I2D,F*"
 EXPECT=<<EOF
 0x4004924924924924
+EOF
+RUN
+
+NAME=float compare is exact, not approximate
+FILE=-
+CMDS=<<EOF
+ae 1,I2D,1,I2D,F==
+ae 2,I2D,1,I2D,F==
+ae 0x3ff0000000000001,0x3ff0000000000000,F==
+ae 0x0000000000000001,0x0000000000000000,F==
+EOF
+EXPECT=<<EOF
+0x1
+0
+0
+0
+EOF
+RUN
+
+NAME=float compare of infinities and nan
+FILE=-
+CMDS=<<EOF
+ae 0x7ff0000000000000,0x7ff0000000000000,F==
+ae 0xfff0000000000000,0x7ff0000000000000,F==
+ae 0x7ff8000000000000,0x7ff8000000000000,F==
+ae 0x8000000000000000,0x0000000000000000,F==
+EOF
+EXPECT=<<EOF
+0x1
+0
+0
+0x1
+EOF
+RUN
+
+NAME=float not equal is exact too
+FILE=-
+CMDS=<<EOF
+ae 1,I2D,1,I2D,F!=
+ae 2,I2D,1,I2D,F!=
+ae 0x0000000000000001,0x0000000000000000,F!=
+EOF
+EXPECT=<<EOF
+0
+0x1
+0x1
+EOF
+RUN
+
+NAME=float not equal for nan and infinities
+FILE=-
+CMDS=<<EOF
+ae 0x7ff8000000000000,0x3ff0000000000000,F!=
+ae 0x3ff0000000000000,0x7ff8000000000000,F!=
+ae 0x7ff8000000000000,0x7ff8000000000000,F!=
+ae 0x7ff8000000000000,0x3ff0000000000000,F==,!
+ae 0x7ff0000000000000,0x7ff0000000000000,F!=
+ae 0xfff0000000000000,0x7ff0000000000000,F!=
+EOF
+EXPECT=<<EOF
+0x1
+0x1
+0x1
+0x1
+0
+0x1
+EOF
+RUN
+
+NAME=float less than orders and is strict
+FILE=-
+CMDS=<<EOF
+ae 0x4000000000000000,0x3ff0000000000000,F<
+ae 0x3ff0000000000000,0x4000000000000000,F<
+ae 0x3ff0000000000000,0x3ff0000000000000,F<
+ae 0xbff0000000000000,0xc000000000000000,F<
+ae 0xc000000000000000,0xbff0000000000000,F<
+ae 0x0000000000000000,0x8000000000000000,F<
+ae 0x3ff0000000000001,0x3ff0000000000000,F<
+ae 0x3ff0000000000000,0x3ff0000000000001,F<
+EOF
+EXPECT=<<EOF
+0x1
+0
+0
+0x1
+0
+0
+0x1
+0
+EOF
+RUN
+
+NAME=float less or equal orders and admits equality
+FILE=-
+CMDS=<<EOF
+ae 0x4000000000000000,0x3ff0000000000000,F<=
+ae 0x3ff0000000000000,0x4000000000000000,F<=
+ae 0x3ff0000000000000,0x3ff0000000000000,F<=
+ae 0xbff0000000000000,0xc000000000000000,F<=
+ae 0xc000000000000000,0xbff0000000000000,F<=
+ae 0x8000000000000000,0x0000000000000000,F<=
+ae 0x3ff0000000000001,0x3ff0000000000000,F<=
+ae 0x3ff0000000000000,0x3ff0000000000001,F<=
+EOF
+EXPECT=<<EOF
+0x1
+0
+0x1
+0x1
+0
+0x1
+0x1
+0
+EOF
+RUN
+
+NAME=float less ordering of infinities and nan
+FILE=-
+CMDS=<<EOF
+ae 0x7ff0000000000000,0xfff0000000000000,F<
+ae 0x7ff0000000000000,0x7ff0000000000000,F<
+ae 0x7ff0000000000000,0x7ff0000000000000,F<=
+ae 0x7ff0000000000000,0x3ff0000000000000,F<
+ae 0x3ff0000000000000,0x7ff0000000000000,F<
+ae 0x3ff0000000000000,0xfff0000000000000,F<
+ae 0xfff0000000000000,0x3ff0000000000000,F<
+ae 0x7ff0000000000000,0x3ff0000000000000,F<=
+ae 0x3ff0000000000000,0x7ff0000000000000,F<=
+ae 0x3ff0000000000000,0xfff0000000000000,F<=
+ae 0xfff0000000000000,0x3ff0000000000000,F<=
+ae 0xfff0000000000000,0xfff0000000000000,F<
+ae 0xfff0000000000000,0xfff0000000000000,F<=
+ae 0x7ff8000000000000,0x3ff0000000000000,F<
+ae 0x3ff0000000000000,0x7ff8000000000000,F<
+ae 0x7ff8000000000000,0x7ff8000000000000,F<
+ae 0x7ff8000000000000,0x3ff0000000000000,F<=
+ae 0x3ff0000000000000,0x7ff8000000000000,F<=
+ae 0x7ff8000000000000,0x7ff8000000000000,F<=
+EOF
+EXPECT=<<EOF
+0x1
+0
+0x1
+0x1
+0
+0x1
+0
+0x1
+0
+0x1
+0
+0
+0x1
+0
+0
+0
+0
+0
+0
+EOF
+RUN
+
+NAME=float less through conversions and registers
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+ae 2,I2D,1,I2D,F<
+ae 1,I2D,2,I2D,F<
+ae 1,I2D,1,I2D,F<
+ae 1,I2D,1,I2D,F<=
+ae 1,I2D,-1,I2D,F<
+ae -1,I2D,1,I2D,F<
+ae 32,0x40000000,F2D,32,0xbf800000,F2D,F<
+ae 32,0xbf800000,F2D,32,0x3f800000,F2D,F<
+ae 32,0x3f800000,F2D,32,0xbf800000,F2D,F<=
+ae 32,0xbf800000,F2D,32,0xbf800000,F2D,F<=
+ae 64,0x4000000000000000,F2D,64,0x3ff0000000000000,F2D,F<
+ae 64,0x3ff0000000000000,F2D,64,0x4000000000000000,F2D,F<
+ae 64,0x3ff0000000000000,F2D,64,0x3ff0000000000000,F2D,F<=
+ar rax=0xbf800000
+ar rbx=0x3f800000
+ae 32,rbx,F2D,32,rax,F2D,F<
+ae 32,rax,F2D,32,rbx,F2D,F<
+ae 32,rbx,F2D,32,rax,F2D,F<=
+EOF
+EXPECT=<<EOF
+0x1
+0
+0
+0x1
+0x1
+0
+0x1
+0
+0x1
+0x1
+0x1
+0
+0x1
+0x1
+0
+0x1
+EOF
+RUN
+
+NAME=float compare underflow leaves the stack empty
+FILE=-
+CMDS=<<EOF
+ae F==
+ae 1,F==
+ae F!=
+ae 1,F!=
+ae F<
+ae 1,F<
+ae F<=
+ae 1,F<=
+EOF
+EXPECT=<<EOF
+EOF
+RUN
+
+NAME=inc/dec
+FILE=-
+CMDS=<<EOF
+ae 0xffffffffffffffff,++ # 0
+ae 1,2,+,3,++,+ # should be 3 + 4
+ae 1,3,--,+ # should be 3
+ae 1,3,--,- # should be 1
+ae 0,++
+EOF
+EXPECT=<<EOF
+0
+0x7
+0x3
+0x1
+0x1
+EOF
+RUN
+
+NAME=mnemonic shift/rotate ops
+FILE=-
+CMDS=<<EOF
+e asm.bits=64
+ae 1,2,LSL
+ae 1,4,LSR
+ae 1,0xffffffffffffffff,ASR
+ae 1,1,ROR
+ae 1,0x8000000000000000,ROL
+EOF
+EXPECT=<<EOF
+0x4
+0x2
+0xffffffffffffffff
+0x8000000000000000
+0x1
+EOF
+RUN
+
+NAME=ae??
+FILE=-
+CMDS=ae??
+EXPECT=<<EOF
+| Examples:ESIL   examples and documentation
+| =       assign updating internal flags
+| :=      assign without updating internal flags
+| +=      a+=b => b,a,+=
+| /       division
+| *       multiply
+| *=      multiply and assign a *= b
+| L*      long multiply
+| +       a=a+b => b,a,+,a,=
+| ++      increment, 2,a,++ == 3 (see rsi,--=[1], ... )
+| --      decrement, 2,a,-- == 1
+| *=      a*=b => b,a,*=
+| /=      a/=b => b,a,/=
+| %       module
+| %=      a%=b => b,a,%=
+| &=      and ax, bx => bx,ax,&=
+| ^       xor
+| &       and
+| |       or r0, r1, r2 => r2,r1,|,r0,=
+| !=      negate all bits
+| ^=      xor ax, bx => bx,ax,^=
+| []      mov eax,[eax] => eax,[],eax,=
+| =[]     mov [eax+3], 1 => 1,3,eax,+,=[]
+| =[1]    mov byte[eax],1 => 1,eax,=[1]
+| =[8]    mov [rax],1 => 1,rax,=[8]
+| ()      execute an esil syscall
+| []      peek from random position
+| [N]     peek word of N bytes from popped address
+| [*]     peek some from random position
+| =[*]    poke some at random position
+| $       int 0x80 => 0x80,$
+| $$      simulate a hardware trap
+| ==      pops twice, compare and update esil flags
+| <       compare for smaller
+| <=      compare for smaller or equal
+| >       compare for bigger
+| >=      compare bigger for or equal
+| >>=     shr ax, bx => bx,ax,>>=  # shift right
+| <<=     shl ax, bx => bx,ax,<<=  # shift left
+| LSR     a >> b => b,a,LSR  # logical shift right (alias: >>)
+| LSL     a << b => b,a,LSL  # logical shift left (alias: <<)
+| ASR     a asr b => b,a,ASR  # arithmetic shift right
+| ROR     a ror b => b,a,ROR  # rotate right
+| ROL     a rol b => b,a,ROL  # rotate left
+| CLZ     leading zeros of b in a bits => a,b,CLZ  # a when b is 0
+| POPCNT  count the set bits => a,POPCNT
+| ?{      if popped value != 0 run the block until }
+| }{      else block
+| }       end of conditional block
+| NAN     checks if result in stack is not a number
+| I2D     signed to double
+| U2D     unsigned to double
+| D2I     double to signed
+| D2U     double to unsigned
+| D2IS    double to signed, saturating to a bit width
+| D2US    double to unsigned, saturating to a bit width
+| F==     float comparison
+| CEIL    float ceil
+| FLOOR   float floor
+| ROUND   float round
+| LOG2    float base-2 logarithm
+| EXP2    float base-2 exponentiation
+| LOG2P1  float base-2 logarithm of one plus the input
+| EXP2M1  float base-2 exponentiation minus one
+| FSCALE  float scaling by a power of two
+| SQRT    float square root
+| POP     drops last element in the esil stack
+| DUP     duplicate last value in stack
+| NUM     evaluate last item in stack to number
+| SWAP    swap last two values in stack
+| ROT     rotate the third element in the stack to the top
+| TRAP    stop execution
+| BITS    16,BITS  # change bits, useful for arm/thumb
+| TODO    the instruction is not yet esilized
+| STACK   show contents of stack
+| CLEAR   clears the esil stack
+| REPEAT  repeat n times
+| BREAK   terminates the string parsing
+| SETJT   set jump target
+| SETJTS  set jump target set
+| SETD    set delay slot
+| GOTO    jump to the Nth word popped from the stack
+| $       esil interrupt
+| $z      internal flag: zero
+| $c      internal flag: carry
+| $b      internal flag: borrow
+| $p      internal flag: parity
+| $s      internal flag: sign
+| $o      internal flag: overflow
+| $ds     internal flag: delay-slot
+| $jt     internal flag: jump-target
+| $js     internal flag: jump-target-set
+| $$      internal flag: pc address
+EOF
+RUN
+
+NAME=signed division of INT_MIN by -1 wraps instead of clearing
+FILE=-
+CMDS=<<EOF
+"ae 0xffffffffffffffff,0x8000000000000000,~/"
+"ae 0xffffffffffffffff,0x8000000000000000,~%"
+"ae 2,0xfffffffffffffff9,~/"
+EOF
+EXPECT=<<EOF
+0x8000000000000000
+0
+0xfffffffffffffffd
+EOF
+RUN
+
+NAME=esil rot
+FILE=malloc://8
+CMDS=ae 1,2,3,ROT
+EXPECT=<<EOF
+2,3,1
+EOF
+RUN
+
+NAME=esil compound assign flags
+FILE=-
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+aei
+ar rax=0xffffffffffffffff
+ae 1,rax,+=,63,$c,$z
+ar rax
+ar rbx=16
+ae 1,rbx,-=,64,$b
+ar rbx
+EOF
+EXPECT=<<EOF
+0x1,0x1
+0x00000000
+0
+0x0000000f
+EOF
+RUN
+
+NAME=esil compound memory ops
+FILE=-
+CMDS=<<EOF
+aeim
+e io.cache=true
+"ae 7,0x00100000,=[4]"
+"ae 3,0x00100000,+=[4]"
+"ae 2,0x00100000,*=[4]"
+"ae 1,0x00100000,-=[4]"
+"ae 4,0x00100000,/=[4]"
+"ae 3,0x00100000,%=[4]"
+"ae 0x00100000,++=[4]"
+"ae 0x00100000,--=[4]"
+"ae 1,0x00100000,<<=[4]"
+"ae 1,0x00100000,>>=[4]"
+"ae 0x00100000,[4]"
+EOF
+EXPECT=<<EOF
+0x1
+EOF
+RUN
+
+NAME=clz counts within the given width and masks the value to it
+FILE=-
+CMDS=<<EOF
+ae 32,0x80000000,CLZ
+ae 32,1,CLZ
+ae 32,0,CLZ
+ae 64,0,CLZ
+ae 32,0xffffffff00000001,CLZ
+ae 8,0x10,CLZ
+ae 70,1,CLZ
+EOF
+EXPECT=<<EOF
+0
+0x1f
+0x20
+0x40
+0x1f
+0x3
+0x3f
+EOF
+RUN
+
+NAME=popcnt counts the set bits
+FILE=-
+CMDS=<<EOF
+ae 0xf0f0,POPCNT
+ae 0,POPCNT
+ae 0xffffffffffffffff,POPCNT
+EOF
+EXPECT=<<EOF
+0x8
+0
+0x40
+EOF
+RUN
+
+NAME=esil.gotolimit counts jumps, not words
+FILE=-
+ARGS=-a x86 -b 64 -e esil.gotolimit=4
+CMDS=<<EOF
+'ae 1,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+,1,+
+'ae 0,rax,=,rax,1,+,rax,=,rax,4,==,$z,!,?{,3,GOTO,},rax
+EOF
+EXPECT=<<EOF
+0x15
+rax
+EOF
+RUN
+
+NAME=esil.gotolimit traps a runaway loop
+FILE=-
+ARGS=-a x86 -b 64 -e esil.gotolimit=2
+CMDS=<<EOF
+'ae 0,rax,=,rax,1,+,rax,=,rax,4,==,$z,!,?{,3,GOTO,},rax
+'ae 1,0,GOTO
+EOF
+EXPECT=<<EOF
+1,1,1
+EOF
+RUN
+
+NAME=esil ring wraps after popped words
+FILE=-
+ARGS=-e esil.stack.depth=3
+CMDS=<<EOF
+aei
+'ae 0x1122334455667788,POP,0x1122334455667788,POP,0x1122334455667788,POP,0x1122334455667788,POP,0x1122334455667788,POP,0x1122334455667788,POP,7
+EOF
+EXPECT=<<EOF
+7
+EOF
+RUN
+
+NAME=esil loop runs to the goto limit through ring wraps
+FILE=-
+ARGS=-a x86 -b 64 -e esil.stack.depth=3 -e esil.gotolimit=4096
+CMDS=<<EOF
+aei
+ae 5,rax,=,0,rbx,=
+ae 1,rax,-,rax,=,1,rbx,+,rbx,=,rax,?{,0,GOTO,}
+ar rbx
+EOF
+EXPECT=<<EOF
+0x00000005
+EOF
+RUN
+
+NAME=esil ring wraps under a value that stays live
+FILE=-
+ARGS=-e esil.stack.depth=3
+CMDS=<<EOF
+aei
+'ae 3,2,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+,DUP,+
+EOF
+EXPECT=<<EOF
+0x50000000000
+EOF
+RUN
+
+NAME=a shift count of 64 or more pushes zero
+FILE=-
+CMDS=<<EOF
+ae 65,1,LSL
+ae 64,1,LSL
+ae 63,1,LSL
+ae 64,0xffffffffffffffff,LSR
+ae 100,0xffffffffffffffff,LSR
+ae 63,0xffffffffffffffff,LSR
+EOF
+EXPECT=<<EOF
+0
+0
+0x8000000000000000
+0
+0
+0x1
+EOF
+RUN
+
+NAME=asr by the width or more is the sign fill
+FILE=-
+CMDS=<<EOF
+ae 64,0x8000000000000000,ASR
+ae 100,0x8000000000000000,ASR
+ae 63,0x8000000000000000,ASR
+ae 64,1,ASR
+ae 100,0x7fffffffffffffff,ASR
+ae 1,0x8000000000000000,ASR
+ae 0,0x8000000000000000,ASR
+ae 0,0xffffffffffffffff,ASR
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff
+0xffffffffffffffff
+0xffffffffffffffff
+0
+0
+0xc000000000000000
+0x8000000000000000
+0xffffffffffffffff
+EOF
+RUN
+
+NAME=asr at 32 bits takes its sign from bit 31
+FILE=-
+ARGS=-b 32
+CMDS=<<EOF
+ae 33,0x80000000,ASR
+ae 1,0x80000000,ASR
+ae 31,0x80000000,ASR
+ae 16,16,0x8000,LSL,ASR
+ae 1,0x40000000,ASR
+EOF
+EXPECT=<<EOF
+0xffffffffffffffff
+0xffffffffc0000000
+0xffffffffffffffff
+0xffffffffffff8000
+0x20000000
+EOF
+RUN
+
+NAME=asr takes its sign from the register width and a literal keeps its own
+FILE=malloc://0x10
+ARGS=-a x86 -b 16
+CMDS=<<EOF
+ar ax=0x8000
+ae 1,ax,ASR
+ar al=0x80
+ae 8,al,ASR
+ae 9,al,ASR
+ae 1,0x8000,ASR
+ae 1,0x80000000,ASR
+ae 1,0x8000000000000000,ASR
+EOF
+EXPECT=<<EOF
+0xffffffffffffc000
+0xffffffffffffffff
+0xffffffffffffffff
+0x4000
+0x40000000
+0xc000000000000000
+EOF
+RUN
+
+NAME=the assign forms inherit total shifts
+FILE=malloc://0x10
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+ar rax=1
+'ae 65,rax,<<=
+ar rax
+ar rbx=0xffffffffffffffff
+'ae 64,rbx,>>=
+ar rbx
+ar rbx=0x8000000000000000
+'ae 70,rbx,>>=
+ar rbx
+ar eax=0x80000000
+ae 31,eax,ASR
+EOF
+EXPECT=<<EOF
+0x00000000
+0x00000000
+0x00000000
+0xffffffffffffffff
+EOF
+RUN
+
+NAME=D2F preserves exceptional values at the requested width
+FILE=-
+CMDS=<<EOF
+ae 32,32,0x7f800000,F2D,D2F
+ae 32,32,0xff800000,F2D,D2F
+ae 32,32,0x7fc00000,F2D,D2F
+ae 64,64,0x7ff0000000000000,F2D,D2F
+ae 64,64,0xfff0000000000000,F2D,D2F
+ae 64,64,0x7ff8000000000000,F2D,D2F
+EOF
+EXPECT=<<EOF
+0x7f800000
+0xff800000
+0x7fc00000
+0x7ff0000000000000
+0xfff0000000000000
+0x7ff8000000000000
+EOF
+RUN
+
+NAME=D2F converts to binary16
+FILE=-
+CMDS=<<EOF
+ae 16,0x3ff8000000000000,D2F
+ae 16,0x7ff0000000000000,D2F
+ae 16,0xfff0000000000000,D2F
+ae 16,16,0x7ff8000000000000,D2F,F2D,NAN
+ae 16,16,0x3ff8000000000000,D2F,F2D,NAN
+ae 16,0x0,D2F
+ae 16,0x8000000000000000,D2F
+EOF
+EXPECT=<<EOF
+0x3e00
+0x7c00
+0xfc00
+0x1
+0
+0
+0x8000
 EOF
 RUN

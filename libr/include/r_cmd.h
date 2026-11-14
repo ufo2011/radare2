@@ -1,40 +1,110 @@
 #ifndef R2_CMD_H
 #define R2_CMD_H
 
-#include <r_types.h>
 #include <r_util.h>
 #include <r_bind.h>
-#include "ht_pp.h"
+#include <sdb/ht_pp.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct r_core_t RCore;
+typedef struct r_cons_t RCons;
+typedef struct r_libstore_t RLibStore;
+typedef struct r_cmd_t RCmd;
 
-//R_LIB_VERSION_HEADER (r_cmd);
+R_VEC_TYPE (RVecRStrs, RStrs);
 
 #define MACRO_LIMIT 1024
 #define MACRO_LABELS 20
 #define R_CMD_MAXLEN 4096
 
-typedef enum r_cmd_status_t {
-	R_CMD_STATUS_OK = 0, // command handler exited in the right way
-	R_CMD_STATUS_WRONG_ARGS, // command handler could not handle the arguments passed to it
-	R_CMD_STATUS_ERROR, // command handler had issues while running (e.g. allocation error, etc.)
-	R_CMD_STATUS_INVALID, // command could not be executed (e.g. shell level error, not existing command, bad expression, etc.)
-	R_CMD_STATUS_EXIT, // command handler asks to exit the prompt loop
-} RCmdStatus;
-
 typedef int (*RCmdCb) (void *user, const char *input);
-typedef RCmdStatus (*RCmdArgvCb) (RCore *core, int argc, const char **argv);
+// typedef RCmdStatus (*RCmdArgvCb) (RCore *core, int argc, const char **argv);
 typedef int (*RCmdNullCb) (void *user);
 
-typedef struct r_cmd_parsed_args_t {
-	int argc;
-	char **argv;
-	bool has_space_after_cmd;
-} RCmdParsedArgs;
+typedef enum {
+	R_CMD_ACTION_CONTINUE,
+	R_CMD_ACTION_ABORT,
+	R_CMD_ACTION_QUIT,
+	R_CMD_ACTION_UNHANDLED
+} RCmdAction;
+
+typedef struct r_cmd_result_t {
+	RCmdAction action;
+	bool has_value;
+	st64 status;
+	ut64 value;
+} RCmdResult;
+
+typedef struct r_cmd_context_t {
+	struct r_cmd_context_t *parent;
+	RCmd *cmd;
+	RCons *cons;
+	void *user;
+	void *handler_user;
+	int remaining_depth; // nested core command budget
+	ut32 blocksize; // block size snapshot inherited by nested command contexts
+	bool raw; // caller or registration requested verbatim argument handling
+	char *args_storage; // private: owned buffer backing args, do not use
+	RVecRStrs args; // NUL-terminated arguments; slice lengths preserve embedded NULs
+	RStrs subcmd; // command-token remainder after the registered name; slices the
+	// NUL-terminated input line, so subcmd.b is the raw undecoded tail as C string
+} RCmdContext;
+
+typedef RCmdResult (*RCmdCtxCb) (RCmdContext *ctx);
+
+// Borrow an argument slice, or { NULL, NULL } when the index is out of range.
+// The storage belongs to ctx; arg.b points to a NUL terminator.
+static inline RStrs r_cmdctx_arg(RCmdContext *ctx, size_t index) {
+	RStrs *arg = RVecRStrs_at (&ctx->args, index);
+	return arg? *arg: r_strs_new (NULL, NULL);
+}
+
+// Fill caller-owned storage with borrowed arguments, padding missing entries with NULL.
+static inline void r_cmdctx_args(RCmdContext *ctx, const char **args, size_t count) {
+	size_t i;
+	for (i = 0; i < count; i++) {
+		args[i] = r_cmdctx_arg (ctx, i).a;
+	}
+}
+
+// Optional numeric arguments retain the caller's default when absent.
+static inline bool r_cmdctx_num(RCmdContext *ctx, size_t index, RNum *num, ut64 *value) {
+	const char *arg = r_cmdctx_arg (ctx, index).a;
+	if (arg) {
+		const char *error = NULL;
+		*value = r_num_math_err (num, arg, &error);
+		if (R_STR_ISEMPTY (r_str_trim_head_ro (arg)) || error || num->dbz) {
+			R_LOG_ERROR ("Invalid numeric argument: %s", arg);
+			return false;
+		}
+	}
+	return true;
+}
+
+static inline size_t r_cmdctx_argc(RCmdContext *ctx) {
+	return RVecRStrs_length (&ctx->args);
+}
+
+/* True when the command token requests help: "agD?", "agDj?", "prjs?" */
+static inline bool r_cmdctx_help(RCmdContext *ctx) {
+	return r_strs_lastch (ctx->subcmd) == '?';
+}
+
+/* Trailing output-mode char from the given set, looking before any '?'.
+ * r_cmdctx_mode (ctx, "jq") is 'j' for "agDj" and "agDj?", 0 for "agD" */
+static inline char r_cmdctx_mode(RCmdContext *ctx, const char *modes) {
+	RStrs s = ctx->subcmd;
+	if (r_strs_lastch (s) == '?') {
+		s.b--;
+	}
+	const char last = r_strs_lastch (s);
+	return (last && strchr (modes, last))? last: 0;
+}
+
+typedef bool (*RCmdForeachCb) (RStrs name, void *user);
 
 typedef struct r_cmd_macro_label_t {
 	char name[80];
@@ -54,9 +124,8 @@ typedef struct r_cmd_macro_t {
 	ut64 *brk_value;
 	ut64 _brk_value;
 	int brk;
-// 	int (*cmd)(void *user, const char *cmd);
+	int macro_level;
 	RCoreCmd cmd;
-	PrintfCallback cb_printf;
 	void *user;
 	RNum *num;
 	int labels_n;
@@ -78,201 +147,42 @@ typedef struct r_cmd_alias_val_t {
 	bool is_data; // Is the buffer data or a command? (if false, is_str must be true - commands can't be raw)
 } RCmdAliasVal;
 
-typedef struct r_cmd_desc_example_t {
-	const char *example;
-	const char *comment;
-} RCmdDescExample;
 
-/**
- * Define how the command looks like in the help.
- */
-typedef struct r_cmd_desc_help_t {
-	/**
-	 * Short-sentence explaining what the command does.
-	 * This is shown, for example, when the list of sub-commands is printed
-	 * and each sub-command has a very short description on the right,
-	 * explaining what it does.
-	 */
-	const char *summary;
-	/**
-	 * Long description of what the command does. It can be as long as you
-	 * want and it should explain well how the command behaves.
-	 * This is shown, for example, when `??` is appended on command or `?`
-	 * is appended and the command has no children to show. In that case,
-	 * the short summary is extended with this longer description.
-	 *
-	 * Optional.
-	 */
-	const char *description;
-	/**
-	 * String used to identify the arguments. This usually comes together
-	 * with the summary.
-	 * TODO: explain how to differentiate between required and optional arguments
-	 */
-	const char *args_str;
-	/**
-	 * String that overrides the name+args_str usually used to describe the
-	 * command.
-	 *
-	 * Optional.
-	 */
-	const char *usage;
-	/**
-	 * String to use as sub-commands suggestions instead of the
-	 * auto-generated one (e.g. [abcd] or [?] that you can see near command
-	 * names when doing `w?`). If not provided, the options will be
-	 * auto-generated.
-	 *
-	 * Optional.
-	 */
-	const char *options;
-	/**
-	 * List of examples used to better explain how to use the command. This
-	 * is shown together with the long description.
-	 *
-	 * Optional.
-	 */
-	const RCmdDescExample *examples;
-} RCmdDescHelp;
-
-typedef enum {
-	// for old handlers that parse their own input and accept a single string
-	R_CMD_DESC_TYPE_OLDINPUT = 0,
-	// for handlers that accept argc/argv
-	R_CMD_DESC_TYPE_ARGV,
-	// for cmd descriptors that are just used to group together related
-	// sub-commands. Do not use this if the command can be used by itself or
-	// if it's necessary to show its help, because this descriptor is not
-	// stored in the hashtable and cannot be retrieved except by listing the
-	// children of its parent.
-	R_CMD_DESC_TYPE_INNER,
-	// for cmd descriptors that are parent of other sub-commands but that
-	// may also have a sub-command with the same name. For example, `wc` is
-	// both the parent of `wci`, `wc*`, etc. but there is also `wc` as a
-	// sub-command.
-	R_CMD_DESC_TYPE_GROUP,
-} RCmdDescType;
-
-typedef struct r_cmd_desc_t {
-	RCmdDescType type;
-	char *name;
-	struct r_cmd_desc_t *parent;
-	int n_children;
-	RPVector children;
-	const RCmdDescHelp *help;
-
-	union {
-		struct {
-			RCmdCb cb;
-		} oldinput_data;
-		struct {
-			RCmdArgvCb cb;
-		} argv_data;
-		struct {
-			struct r_cmd_desc_t *exec_cd;
-		} group_data;
-	} d;
-} RCmdDesc;
-
-typedef struct r_cmd_t {
-	void *data;
+struct r_cmd_t {
+	void *data; // maybe its user?
+	RCons *cons; // borrowed by new command contexts
+	RCons *(*get_cons)(void *data); // optional execution-console resolver
+	ut32 (*get_blocksize)(void *data); // optional block-size snapshot resolver
 	RCmdNullCb nullcallback;
-	RCmdItem *cmds[UT8_MAX];
+	RCmdItem *cmds[UT8_MAX + 1];
 	RCmdMacro macro;
-	RList *lcmds;
-	RList *plist;
+	RLibStore *libstore;
 	RCmdAlias aliases;
 	void *language; // used to store TSLanguage *
 	HtUP *ts_symbols_ht;
-	RCmdDesc *root_cmd_desc;
-	HtPP *ht_cmds;
-} RCmd;
-
-// TODO: remove this once transitioned to RCmdDesc
-typedef struct r_cmd_descriptor_t {
-	const char *cmd;
-	const char **help_msg;
-	const char **help_detail;
-	const char **help_detail2;
-	struct r_cmd_descriptor_t *sub[127];
-} RCmdDescriptor;
-
-#define DEFINE_CMD_ARGV_DESC_DETAIL(core, name, c_name, parent, handler, help) \
-	RCmdDesc *c_name##_cd = r_cmd_desc_argv_new (core->rcmd, parent, #name, handler, help); \
-	r_warn_if_fail (c_name##_cd)
-#define DEFINE_CMD_ARGV_DESC_SPECIAL(core, name, c_name, parent) \
-	DEFINE_CMD_ARGV_DESC_DETAIL (core, name, c_name, parent, c_name##_handler, &c_name##_help)
-#define DEFINE_CMD_ARGV_DESC_INNER(core, name, c_name, parent) \
-	RCmdDesc *c_name##_cd = r_cmd_desc_inner_new (core->rcmd, parent, #name, &c_name##_help); \
-	r_warn_if_fail (c_name##_cd)
-#define DEFINE_CMD_ARGV_GROUP_WITH_CHILD(core, name, parent)                                    \
-	RCmdDesc *name##_cd = r_cmd_desc_group_new (core->rcmd, parent, #name, name##_handler, &name##_help, &name##_group_help); \
-	r_warn_if_fail (name##_cd)
-#define DEFINE_CMD_ARGV_DESC(core, name, parent) \
-	DEFINE_CMD_ARGV_DESC_SPECIAL (core, name, name, parent)
-#define DEFINE_CMD_OLDINPUT_DESC(core, name, parent) \
-	RCmdDesc *name##_cd = r_cmd_desc_oldinput_new (core->rcmd, parent, #name, name##_handler_old, &name##_help); \
-	r_warn_if_fail (name##_cd)
+	// RCmdDesc *root_cmd_desc;
+	RTrie *handlers;
+	RThreadLock *handlers_lock; // protects the registry and active call counts
+	RThreadCond *handlers_idle; // notified when a handler has no active calls
+};
 
 #ifdef R_API
-R_API RCmd *r_cmd_new(void);
-R_API RCmd *r_cmd_free(RCmd *cmd);
+R_API RCmd *r_cmd_new(void *data);
+R_API void r_cmd_free(RCmd *cmd);
+R_API int r_cmd_call(RCmd *cmd, const char *command);
 R_API void r_cmd_set_data(RCmd *cmd, void *data);
 R_API bool r_cmd_add(RCmd *cmd, const char *command, RCmdCb callback);
-R_API bool r_core_del(RCmd *cmd, const char *command);
-R_API int r_cmd_call(RCmd *cmd, const char *command);
-R_API RCmdStatus r_cmd_call_parsed_args(RCmd *cmd, RCmdParsedArgs *args);
-R_API RCmdDesc *r_cmd_get_root(RCmd *cmd);
-R_API RCmdDesc *r_cmd_get_desc(RCmd *cmd, const char *cmd_identifier);
-R_API char *r_cmd_get_help(RCmd *cmd, RCmdParsedArgs *args, bool use_color);
-
-static inline RCmdStatus r_cmd_int2status(int v) {
-	if (v == -2) {
-		return R_CMD_STATUS_EXIT;
-	} else if (v < 0) {
-		return R_CMD_STATUS_ERROR;
-	} else {
-		return R_CMD_STATUS_OK;
-	}
-}
-
-static inline int r_cmd_status2int(RCmdStatus s) {
-	switch (s) {
-	case R_CMD_STATUS_OK:
-		return 0;
-	case R_CMD_STATUS_ERROR:
-	case R_CMD_STATUS_WRONG_ARGS:
-	case R_CMD_STATUS_INVALID:
-		return -1;
-	case R_CMD_STATUS_EXIT:
-	default:
-		return -2;
-	}
-}
-
-/* RCmdDescriptor */
-R_API RCmdDesc *r_cmd_desc_argv_new(RCmd *cmd, RCmdDesc *parent, const char *name, RCmdArgvCb cb, const RCmdDescHelp *help);
-R_API RCmdDesc *r_cmd_desc_inner_new(RCmd *cmd, RCmdDesc *parent, const char *name, const RCmdDescHelp *help);
-R_API RCmdDesc *r_cmd_desc_group_new(RCmd *cmd, RCmdDesc *parent, const char *name, RCmdArgvCb cb, const RCmdDescHelp *help, const RCmdDescHelp *group_help);
-R_API RCmdDesc *r_cmd_desc_oldinput_new(RCmd *cmd, RCmdDesc *parent, const char *name, RCmdCb cb, const RCmdDescHelp *help);
-R_API RCmdDesc *r_cmd_desc_parent(RCmdDesc *cd);
-R_API bool r_cmd_desc_has_handler(RCmdDesc *cd);
-R_API bool r_cmd_desc_remove(RCmd *cmd, RCmdDesc *cd);
-
-#define r_cmd_desc_children_foreach(root, it_cd) r_pvector_foreach (&root->children, it_cd)
-
-/* RCmdParsedArgs */
-R_API RCmdParsedArgs *r_cmd_parsed_args_new(const char *cmd, int n_args, char **args);
-R_API RCmdParsedArgs *r_cmd_parsed_args_newcmd(const char *cmd);
-R_API RCmdParsedArgs *r_cmd_parsed_args_newargs(int n_args, char **args);
-R_API void r_cmd_parsed_args_free(RCmdParsedArgs *args);
-R_API bool r_cmd_parsed_args_setargs(RCmdParsedArgs *arg, int n_args, char **args);
-R_API bool r_cmd_parsed_args_setcmd(RCmdParsedArgs *arg, const char *cmd);
-R_API char *r_cmd_parsed_args_argstr(RCmdParsedArgs *arg);
-R_API char *r_cmd_parsed_args_execstr(RCmdParsedArgs *arg);
-R_API const char *r_cmd_parsed_args_cmd(RCmdParsedArgs *arg);
-
-#define r_cmd_parsed_args_foreach_arg(args, i, arg) for ((i) = 1; (i) < (args->argc) && ((arg) = (args)->argv[i]); (i)++)
+/* New handlers are keyed by their complete command prefix. The registry copies
+ * name and borrows handler_user until the command is unregistered. */
+R_API bool r_cmd_register(RCmd *cmd, const char *name, RCmdCtxCb callback, void *handler_user);
+/* Removes only the exact registered name, preserving descendant handlers.
+ * Returns false rather than deadlocking if this thread is running it. */
+R_API bool r_cmd_unregister(RCmd *cmd, const char *name);
+/* Removes every handler whose name starts with prefix and returns their count. */
+R_API size_t r_cmd_unregister_prefix(RCmd *cmd, const char *prefix);
+/* Visits matching names in lexical order; name is transient and false stops.
+ * The callback must not mutate this command registry. */
+R_API bool r_cmd_foreach_prefix(const RCmd *cmd, const char *prefix, RCmdForeachCb callback, void *user);
 
 /* r_cmd_macro */
 R_API RCmdMacroItem *r_cmd_macro_item_new(void);
@@ -280,19 +190,14 @@ R_API void r_cmd_macro_item_free(RCmdMacroItem *item);
 R_API void r_cmd_macro_init(RCmdMacro *mac);
 R_API bool r_cmd_macro_add(RCmdMacro *mac, const char *name);
 R_API bool r_cmd_macro_rm(RCmdMacro *mac, const char *_name);
-R_API void r_cmd_macro_list(RCmdMacro *mac);
-R_API void r_cmd_macro_meta(RCmdMacro *mac);
+R_API char *r_cmd_macro_list(RCmdMacro *mac, int mode);
 R_API int r_cmd_macro_call(RCmdMacro *mac, const char *name);
 R_API int r_cmd_macro_break(RCmdMacro *mac, const char *value);
 
 R_API bool r_cmd_alias_del(RCmd *cmd, const char *k);
-R_API RList *r_cmd_alias_keys(RCmd *cmd);
-R_API int r_cmd_alias_set_cmd(RCmd *cmd, const char *k, const char *v);
-R_API int r_cmd_alias_set_str(RCmd *cmd, const char *k, const char *v);
-R_API int r_cmd_alias_set_raw(RCmd *cmd, const char *k, const ut8 *v, int sz);
+R_API bool r_cmd_alias_set_cmd(RCmd *cmd, const char *k, const char *v);
+R_API bool r_cmd_alias_set_raw(RCmd *cmd, const char *k, const ut8 *v, int sz, bool append);
 R_API RCmdAliasVal *r_cmd_alias_get(RCmd *cmd, const char *k);
-R_API int r_cmd_alias_append_str(RCmd *cmd, const char *k, const char *a);
-R_API int r_cmd_alias_append_raw(RCmd *cmd, const char *k, const ut8 *a, int sz);
 R_API char *r_cmd_alias_val_strdup(RCmdAliasVal *v);
 R_API char *r_cmd_alias_val_strdup_b64(RCmdAliasVal *v);
 R_API void r_cmd_alias_free(RCmd *cmd);

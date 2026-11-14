@@ -1,24 +1,23 @@
-/* radare - LGPL - Copyright 2010-2019 pancake, nibble */
+/* radare - LGPL - Copyright 2010-2022 pancake, nibble */
 
-#include <r_types.h>
 #include <r_util.h>
 #include "pe.h"
 
-// bool PE_(r_bin_pe_section_perms)(struct PE_(r_bin_pe_obj_t) *bin, const char *name, int perms) {
 bool PE_(r_bin_pe_section_perms)(RBinFile *bf, const char *name, int perms) {
-	struct PE_(r_bin_pe_obj_t) *pe = bf->o->bin_obj;
+	RBinPEObj *pe = PE_(get)(bf);
+	if (!pe) {
+		return false;
+	}
 	PE_(image_section_header) *shdr = pe->section_header;
-	int i;
-
 	if (!shdr) {
 		return false;
 	}
-
+	int i;
 	for (i = 0; i < pe->num_sections; i++) {
 		const char *sname = (const char*) shdr[i].Name;
 		if (!strncmp (name, sname, PE_IMAGE_SIZEOF_SHORT_NAME)) {
 			ut32 newperms = shdr[i].Characteristics;
-			ut32 newperms_le;
+			ut8 newperms_le[4];
 
 			/* Apply permission flags */
 			if (perms & R_PERM_X) {
@@ -45,9 +44,9 @@ bool PE_(r_bin_pe_section_perms)(RBinFile *bf, const char *name, int perms) {
 			int patchoff = pe->section_header_offset;
 			patchoff += i * sizeof (PE_(image_section_header));
 			patchoff += r_offsetof (PE_(image_section_header), Characteristics);
-			r_write_le32 (&newperms_le, newperms);
-			printf ("wx %02x @ 0x%x\n", newperms_le, patchoff);
-			int res = r_buf_write_at (bf->buf, patchoff, (ut8*)&newperms_le, sizeof (newperms_le));
+			r_write_le32 (newperms_le, newperms);
+			printf ("wx %08x @ 0x%x\n", newperms, patchoff);
+			int res = r_buf_write_at (bf->buf, patchoff, newperms_le, sizeof (newperms_le));
 			if (res != sizeof (newperms_le)) {
 				return false;
 			}

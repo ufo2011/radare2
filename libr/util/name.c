@@ -1,85 +1,45 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2026 - pancake */
 
 #include <r_util.h>
 
-#define FAST_FILTER 1
+// lookup table for r_name_validate_char: true = valid (alnum or . : _)
+static const bool valid_name_char[256] = {
+	['.'] = true,
+	['0'] = true, ['1'] = true, ['2'] = true, ['3'] = true, ['4'] = true,
+	['5'] = true, ['6'] = true, ['7'] = true, ['8'] = true, ['9'] = true,
+	[':'] = true,
+	['A'] = true, ['B'] = true, ['C'] = true, ['D'] = true, ['E'] = true, ['F'] = true, ['G'] = true,
+	['H'] = true, ['I'] = true, ['J'] = true, ['K'] = true, ['L'] = true, ['M'] = true, ['N'] = true,
+	['O'] = true, ['P'] = true, ['Q'] = true, ['R'] = true, ['S'] = true, ['T'] = true, ['U'] = true,
+	['V'] = true, ['W'] = true, ['X'] = true, ['Y'] = true, ['Z'] = true,
+	['_'] = true,
+	['a'] = true, ['b'] = true, ['c'] = true, ['d'] = true, ['e'] = true, ['f'] = true, ['g'] = true,
+	['h'] = true, ['i'] = true, ['j'] = true, ['k'] = true, ['l'] = true, ['m'] = true, ['n'] = true,
+	['o'] = true, ['p'] = true, ['q'] = true, ['r'] = true, ['s'] = true, ['t'] = true, ['u'] = true,
+	['v'] = true, ['w'] = true, ['x'] = true, ['y'] = true, ['z'] = true,
+};
 
-/* Validate if char is printable , why not use ISPRINTABLE() ?? */
-R_API bool r_name_validate_print(const char ch) {
-	// TODO: support utf8
-	if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || IS_DIGIT (ch)) {
-		return true;
-	}
-	switch (ch) {
-	case '(':
-	case ')':
-	case '[':
-	case ']':
-	case '<':
-	case '+':
-	case '-':
-	case '>':
-	case '$':
-	case '%':
-	case '@':
-	case ' ':
-	case '.':
-	case ',':
-	case ':':
-	case '_':
-		return true;
-	case '\b':
-	case '\t':
-	case '\n':
-	case '\r':
-		// must be replaced with ' ' and trimmed later
-		return false;
-	}
-	return false;
-}
+// lookup table for r_name_validate_dash: true = dash-like (replace with _)
+static const bool dash_char[256] = {
+	['!'] = true, ['"'] = true, ['$'] = true, ['%'] = true, ['('] = true, [')'] = true,
+	[','] = true, ['-'] = true, ['/'] = true, [';'] = true, ['<'] = true, ['>'] = true,
+	['?'] = true, ['@'] = true, ['['] = true, ['\\'] = true, [']'] = true, ['_'] = true,
+	['`'] = true, ['~'] = true, [' '] = true,
+};
+
+// lookup table for shell filter: true = skip char
+static const bool shell_skip_char[256] = {
+	['\n'] = true, ['\r'] = true, [' '] = true, ['"'] = true, ['='] = true, ['\\'] = true,
+};
 
 // used to determine if we want to replace those chars with '_' in r_name_filter()
 R_API bool r_name_validate_dash(const char ch) {
-	switch (ch) {
-	case ' ':
-	case '-':
-	case '_':
-	case '/':
-	case '\\':
-	case '(':
-	case ')':
-	case '[':
-	case ']':
-	case '<':
-	case '>':
-	case '!':
-	case '?':
-	case '$':
-	case ';':
-	case '%':
-	case '@':
-	case '`':
-	case ',':
-	case '"':
-		return true;
-	}
-	return false;
+	return dash_char[(ut8)ch];
 }
 
-#if 0
 R_API bool r_name_validate_char(const char ch) {
-	if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || IS_DIGIT (ch)) {
-		return true;
-	}
-	switch (ch) {
-	case '.':
-	case ':':
-	case '_':
-		return true;
-	}
-	return false;
+	return valid_name_char[(ut8)ch];
 }
-#endif
 
 R_API bool r_name_validate_first(const char ch) {
 	if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
@@ -93,106 +53,145 @@ R_API bool r_name_validate_first(const char ch) {
 	return false;
 }
 
-R_API bool r_name_check(const char *s) {
-	if (!r_name_validate_first (*s)) {
+static int name_utf8_size(const char *s) {
+	if ((ut8)*s < 0x80) {
+		return 0;
+	}
+	RRune ch;
+	int size = r_utf8_decode ((const ut8 *)s, -1, &ch);
+	return size > 1 && ch >= 0xa0 && ch != 0x2028 && ch != 0x2029? size: 0;
+}
+
+R_API bool r_name_check_utf8(const char *s, bool utf8) {
+	R_RETURN_VAL_IF_FAIL (s, false);
+	int size = utf8? name_utf8_size (s): 0;
+	if (!size && !r_name_validate_first (*s)) {
 		return false;
 	}
-	for (s++; *s; s++) {
-		if (!r_name_validate_char (*s)) {
+	for (s += size? size: 1; *s; s++) {
+		if (utf8 && (ut8)*s >= 0x80 && (size = name_utf8_size (s))) {
+			s += size - 1;
+			continue;
+		}
+		if (!valid_name_char[(ut8)*s]) {
 			return false;
 		}
 	}
 	return true;
 }
 
+R_API bool r_name_check(const char *s) {
+	return r_name_check_utf8 (s, false);
+}
+
 static inline bool is_special_char(char n) {
-	return (n == 'b' || n == 'f' || n == 'n' || n == 'r' || n == 't' || n == 'v' || n == 'a');
+	const char chars[] = "sbfnrtva";
+	return strchr (chars, n);
 }
 
 R_API const char *r_name_filter_ro(const char *a) {
+	R_RETURN_VAL_IF_FAIL (a, NULL);
 	while (*a++ == '_');
 	return a - 1;
 }
 
-// filter string for printing purposes
-R_API bool r_name_filter_print(char *s) {
-	char *es = s + strlen (s);
-	char *os = s;
-	while (*s && s < es) {
-		int us = r_utf8_size ((const ut8*)s);
-		if (us > 1) {
-			s += us;	
-			continue;
-		}
-		if (!r_name_validate_print (*s)) {
-			r_str_cpy (s, s + 1);
-		}
-		s++;
+R_API bool r_name_filter_utf8(char *s, int maxlen, bool utf8) {
+	R_RETURN_VAL_IF_FAIL (s, false);
+	if (R_STR_ISEMPTY (s)) {
+		return false;
 	}
-	return os;
+	size_t count = 0;
+	r_str_trim_head (s);
+	if (!*s) {
+		return false;
+	}
+	int size = utf8? name_utf8_size (s): 0;
+	bool valid = size || r_name_validate_first (*s);
+	if (!valid) {
+		*s = '_';
+	}
+	s += size? size: 1;
+	char *out = s;
+	for (; *s; s++, count++) {
+		if (maxlen > 0 && count > maxlen) {
+			valid = false;
+			break;
+		}
+		if (utf8 && (ut8)*s >= 0x80 && (size = name_utf8_size (s))) {
+			memmove (out, s, size);
+			out += size;
+			s += size - 1;
+		} else if (r_name_validate_char (*s)) {
+			*out++ = *s;
+		} else {
+			valid = false;
+			if (r_name_validate_dash (*s) && (*s != '\\' || is_special_char (s[1]))) {
+				*out++ = '_';
+			}
+		}
+	}
+	*out = 0;
+	return valid;
 }
 
 R_API bool r_name_filter(char *s, int maxlen) {
-	// if maxlen == -1 : R_FLAG_NAME_SIZE
-	// maxlen is ignored, the function signature must change
-	// char *os = s;
-	size_t count = 0;
-	r_str_trim_head (s);
-	if (!r_name_validate_first (*s)) {
-		*s = '_';
-	}
-#if 0
-		while (*s) {
-			if (maxlen > 0 && count > maxlen) {
-				*s = 0;
-				break;
-			}
-			if (r_name_validate_char (*s)) {
-				break;
-			}
-			if (r_name_validate_dash (*s)) {
-				break;
-			}
-			r_str_cpy (s, s + 1);
-			count++;
-		}
-	}
-#endif
-	for (s++; *s; s++) {
-		if (maxlen > 0 && count > maxlen) {
-			*s = 0;
-			break;
-		}
-		if (*s == '\\') {
-			if (is_special_char (s[1])) {
-				*s = '_';
-			} else {
-				r_str_cpy (s, s + 1);
-				s--;
-			}
-		}
-		if (!r_name_validate_char (*s)) {
-			if (r_name_validate_dash (*s)) {
-				*s = '_';
-			} else {
-				r_str_cpy (s, s + 1);
-				s--;
-			}
-		}
-		count++;
-	}
-#if FAST_FILTER
-	// that flag should be trimmed and checked already
-	// we dont want to iterate over it again
-	return true;
-#else
-	r_str_trim (os);
-	return r_name_check (os);
-#endif
+	return r_name_filter_utf8 (s, maxlen, false);
 }
 
-R_API char *r_name_filter2(const char *name) {
+R_API char *r_name_filter_dup(const char *name) {
+	R_RETURN_VAL_IF_FAIL (name, NULL);
 	char *s = strdup (name);
+	if (!s) {
+		return NULL;
+	}
 	r_name_filter (s, -1);
-	return s;
+	if (*s) {
+		return s;
+	}
+	free (s);
+	return NULL;
+}
+
+// filter out shell special chars
+R_API char *r_name_filter_shell(const char *s) {
+	R_RETURN_VAL_IF_FAIL (s, NULL);
+	char *a = malloc (strlen (s) + 1);
+	if (!a) {
+		return NULL;
+	}
+	char *b = a;
+	while (*s) {
+		switch (*s) {
+		case '@':
+		case '`':
+		case '|':
+		case ';':
+		case '=':
+		case '\n':
+			break;
+		default:
+			*b++ = *s;
+			break;
+		}
+		s++;
+	}
+	*b = 0;
+	return a;
+}
+
+R_API char *r_name_filter_quoted_shell(const char *s) {
+	R_RETURN_VAL_IF_FAIL (s, NULL);
+	char *a = malloc (strlen (s) + 1);
+	if (!a) {
+		return NULL;
+	}
+	char *b = a;
+	while (*s) {
+		if (!shell_skip_char[(ut8)*s]) {
+			*b++ = *s;
+		}
+		s++;
+	}
+	*b = 0;
+	return a;
 }

@@ -1,4 +1,5 @@
-/* radare2 - LGPL - Copyright 2019 - GustavoLCR */
+/* radare2 - LGPL - Copyright 2019-2025 - GustavoLCR */
+
 #include <r_debug.h>
 #include "windows_message.h"
 
@@ -253,11 +254,8 @@ void __free_window (void *ptr) {
 }
 
 static window *__window_from_handle(HANDLE hwnd) {
-	r_return_val_if_fail (hwnd, NULL);
+	R_RETURN_VAL_IF_FAIL (hwnd, NULL);
 	window *win = R_NEW0 (window);
-	if (!win) {
-		return NULL;
-	}
 	win->h = hwnd;
 	win->tid = GetWindowThreadProcessId (hwnd, &win->pid);
 	win->proc = GetClassLongPtrW (hwnd, GCLP_WNDPROC);
@@ -277,7 +275,7 @@ static window *__window_from_handle(HANDLE hwnd) {
 }
 
 static RTable *__create_window_table(void) {
-	RTable *tbl = r_table_new ("windows");
+	RTable *tbl = r_table_new ("windows", NULL);
 	if (!tbl) {
 		return NULL;
 	}
@@ -289,8 +287,8 @@ static RTable *__create_window_table(void) {
 }
 
 static void __add_window_to_table(RTable *tbl, window *win) {
-	r_return_if_fail (tbl && win);
-	char *handle = r_str_newf ("0x%08"PFMT64x"", (ut64)win->h);
+	R_RETURN_IF_FAIL (tbl && win);
+	char *handle = r_str_newf ("0x%08"PFMT64x, (ut64)win->h);
 	char *pid = r_str_newf ("%lu", win->pid);
 	char *tid = r_str_newf ("%lu", win->tid);
 	r_table_add_row (tbl, handle, pid, tid, win->name, NULL);
@@ -300,13 +298,14 @@ static void __add_window_to_table(RTable *tbl, window *win) {
 }
 
 R_API void r_w32_identify_window(void) {
-	while (!r_cons_yesno ('y', "Move cursor to the window to be identified. Ready?"));
+	RCons *cons = r_cons_singleton ();
+	while (!r_cons_yesno (cons, 'y', "Move cursor to the window to be identified. Ready?"));
 	POINT p;
 	GetCursorPos (&p);
 	HANDLE hwnd = WindowFromPoint (p);
 	window *win = NULL;
 	if (hwnd) {
-		if (r_cons_yesno ('y', "Try to get the child?")) {
+		if (r_cons_yesno (cons, 'y', "Try to get the child?")) {
 			HANDLE child = ChildWindowFromPoint (hwnd, p);
 			hwnd = child ? child : hwnd;
 		}
@@ -316,7 +315,7 @@ R_API void r_w32_identify_window(void) {
 		return;
 	}
 	if (!win) {
-		eprintf ("Error trying to get information from 0x%08"PFMT64x"\n", (ut64)hwnd);
+		R_LOG_ERROR ("trying to get information from 0x%08"PFMT64x, (ut64)hwnd);
 		return;
 	}
 	RTable *tbl = __create_window_table ();
@@ -325,7 +324,7 @@ R_API void r_w32_identify_window(void) {
 	}
 	__add_window_to_table (tbl, win);
 	char *tbl_str = r_table_tofancystring (tbl);
-	r_cons_print (tbl_str);
+	r_cons_print (cons, tbl_str);
 	free (tbl_str);
 	r_table_free (tbl);
 }
@@ -359,7 +358,7 @@ static RList *__get_windows(RDebug *dbg) {
 			}
 			r_list_push (windows, win);
 		}
-	} while (hCurWnd != NULL);
+	} while (hCurWnd);
 	return windows;
 }
 
@@ -377,21 +376,24 @@ static ut64 __get_dispatchmessage_offset(RDebug *dbg) {
 	if (!found) {
 		return 0;
 	}
-	char *res = dbg->corebind.cmdstr (dbg->corebind.core, "f~DispatchMessageW");
+	char *res = dbg->coreb.cmdStr (dbg->coreb.core, "f~DispatchMessageW");
 	if (!*res) {
 		free (res);
 		return 0;
 	}
-	char *line = strtok (res, "\n");
+	char *save_ptr = NULL;
+	char *line = r_str_tok_r (res, "\n", &save_ptr);
 	ut64 offset = 0;
 	do  {
 		char *sym = strrchr (line, ' ');
 		if (sym && r_str_startswith (sym + 1, "sym.imp")) {
 			offset = r_num_math (NULL, line);
-			dbg->iob.read_at (dbg->iob.io, offset, (ut8 *)&offset, sizeof (offset));
+			if (dbg->iob.read_at (dbg->iob.io, offset, (ut8 *)&offset, sizeof (offset)) != sizeof (offset)) {
+				offset = 0;
+			}
 			break;
 		}
-	} while ((line = strtok (NULL, "\n")));
+	} while ((line = r_str_tok_r (NULL, "\n", &save_ptr)));
 	free (res);
 	return offset;
 }
@@ -419,36 +421,27 @@ static DWORD __get_msg_type(char *name) {
 	return 0;
 }
 
-static void __print_windows(RDebug *dbg, RList *windows) {
-	RTable *tbl = __create_window_table ();
-	if (!tbl) {
-		return;
-	}
-	RListIter *it;
-	window *win;
-	r_list_foreach (windows, it, win) {
-		__add_window_to_table (tbl, win);
-	}
-	char *t = r_table_tofancystring (tbl);
-	dbg->cb_printf (t);
-	free (t);
-	r_table_free (tbl);
-}
-
-R_API void r_w32_print_windows(RDebug *dbg) {
+R_API R_OWNED char *r_w32_print_windows(RDebug *dbg) {
 	RList *windows = __get_windows (dbg);
-	if (windows) {
-		if (!windows->length) {
-			dbg->cb_printf ("No windows for this process.\n");
-			return;
+	char *s = NULL;
+	if (windows && !windows->length) {
+		s = strdup ("No windows for this process.\n");
+	} else if (windows) {
+		RTable *tbl = __create_window_table ();
+		RListIter *it;
+		window *win;
+		r_list_foreach (windows, it, win) {
+			__add_window_to_table (tbl, win);
 		}
-		__print_windows (dbg, windows);
+		s = r_table_tofancystring (tbl);
+		r_table_free (tbl);
 	}
 	r_list_free (windows);
+	return s;
 }
 
 R_API bool r_w32_add_winmsg_breakpoint(RDebug *dbg, const char *input) {
-	r_return_val_if_fail (dbg && input, false);
+	R_RETURN_VAL_IF_FAIL (dbg && input, false);
 	char *name = strdup (input);
 	r_str_trim (name);
 	char *window_id = strchr (name, ' ');
@@ -465,7 +458,7 @@ R_API bool r_w32_add_winmsg_breakpoint(RDebug *dbg, const char *input) {
 	if (window_id) {
 		RList *windows = __get_windows (dbg);
 		if (windows && !windows->length) {
-			dbg->cb_printf ("No windows for this process.\n");
+			R_LOG_WARN ("No windows for this process");
 		}
 		ut64 win_h = r_num_math (NULL, window_id);
 		RListIter *it;
@@ -477,8 +470,7 @@ R_API bool r_w32_add_winmsg_breakpoint(RDebug *dbg, const char *input) {
 			}
 		}
 		if (!offset) {
-			dbg->cb_printf ("Window not found, try these:\n");
-			__print_windows (dbg, windows);
+			R_LOG_ERROR ("Window not found, use dW to list them");
 		}
 		r_list_free (windows);
 	} else {
@@ -494,14 +486,14 @@ R_API bool r_w32_add_winmsg_breakpoint(RDebug *dbg, const char *input) {
 		cond = r_str_newf ("?= `ae %lu,edx,-`", type);
 	} else {
 		char *reg;
-		if (dbg->bits == R_SYS_BITS_64) {
+		if (R_SYS_BITS_CHECK (dbg->bits, 64)) {
 			reg = "rcx";
 		} else {
 			reg = "ecx";
 		}
 		cond = r_str_newf ("?= `ae %lu,%s,%d,+,[4],-`", type, reg, dbg->bits);
 	}
-	dbg->corebind.cmdf (dbg->corebind.core, "\"dbC 0x%"PFMT64x" %s\"", offset, cond);
+	dbg->coreb.cmdf (dbg->coreb.core, "\"dbC 0x%"PFMT64x" %s\"", offset, cond);
 	free (name);
 	return true;
 }

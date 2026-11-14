@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2019 - pancake */
+/* radare - LGPL - Copyright 2019-2025 - pancake */
 
 #include <r_core.h>
 
@@ -14,9 +14,9 @@ typedef struct {
 	bool canRight;
 } RCoreVisualViewZigns;
 
-static const char *cur_name = NULL;
+// cur_name moved to RCoreVisual struct
 
-static char *print_item (void *_core, void *_item, bool selected) {
+static char *print_item(void *_core, void *_item, bool selected) {
 	RSignItem *item = _item;
 	int i;
 	int bytes_mask = 0;
@@ -30,7 +30,8 @@ static char *print_item (void *_core, void *_item, bool selected) {
 		}
 	}
 	if (selected && item->name) {
-		cur_name = strdup (item->name);
+		RCore *core = _core;
+		core->visual.cur_name = strdup (item->name);
 	}
 	return r_str_newf ("%c 0x%08"PFMT64x" bytes=%d/%d %20s\n", selected?'>':' ',
 		item->addr, bytes_mask, bytes_size, item->name);
@@ -42,8 +43,9 @@ static RList *__signs(RCoreVisualViewZigns *status, ut64 addr, bool update) {
 }
 
 R_API int __core_visual_view_zigns_update(RCore *core, RCoreVisualViewZigns *status) {
-	int h, w = r_cons_get_size (&h);
-	r_cons_clear00 ();
+	RCons *cons = core->cons;
+	int h, w = r_cons_get_size (cons, &h);
+	r_cons_clear00 (cons);
 	int colh = h -2;
 	int colw = w -1;
 	RList *col0 = __signs (status, status->addr, true);
@@ -51,28 +53,28 @@ R_API int __core_visual_view_zigns_update(RCore *core, RCoreVisualViewZigns *sta
 
 	char *title = r_str_newf ("[r2-visual-signatures] 0x%08"PFMT64x" 0x%08"PFMT64x, status->addr, status->faddr);
 	if (title) {
-		r_cons_strcat_at (title, 0, 0, w - 1, 2);
+		r_cons_print_at (cons, title, 0, 0, w - 1, 2);
 		free (title);
 	}
-	r_cons_strcat_at (col0str, 0, 2, colw, colh);
+	r_cons_print_at (cons, col0str, 0, 2, colw, colh);
 	r_list_free (col0);
-	r_cons_flush();
+	r_cons_flush (core->cons);
 	return 0;
 }
 
 R_API int r_core_visual_view_zigns(RCore *core) {
 	RCoreVisualViewZigns status = {0};
 	status.core = core;
-	status.addr = core->offset;
+	status.addr = core->addr;
 	status.fcn = NULL;
 
 	while (true) {
 		__core_visual_view_zigns_update (core, &status);
-		int ch = r_cons_readchar ();
+		int ch = r_cons_readchar (core->cons);
 		if (ch == -1 || ch == 4) {
 			return true;
 		}
-		ch = r_cons_arrow_to_hjkl (ch); // get ESC+char, return 'hjkl' char
+		ch = r_cons_arrow_to_hjkl (core->cons, ch); // get ESC+char, return 'hjkl' char
 		switch (ch) {
 		case 'g':
 			r_core_cmd0 (core, "zg");
@@ -96,9 +98,9 @@ R_API int r_core_visual_view_zigns(RCore *core) {
 			}
 			break;
 		case 'd':
-			if (cur_name && *cur_name) {
-				r_sign_delete (core->anal, cur_name);
-				R_FREE (cur_name);
+			if (core->visual.cur_name && *core->visual.cur_name) {
+				r_sign_delete (core->anal, core->visual.cur_name);
+				R_FREE (core->visual.cur_name);
 			}
 			break;
 		case 'J':
@@ -139,8 +141,8 @@ R_API int r_core_visual_view_zigns(RCore *core) {
 			}
 			break;
 		case '?':
-			r_cons_clear00 ();
-			r_cons_printf (
+			r_cons_clear00 (core->cons);
+			r_cons_printf (core->cons,
 			"vbz: Visual Zignatures:\n\n"
 			" jkJK  - scroll up/down\n"
 			" d     - delete current signature\n"
@@ -148,29 +150,29 @@ R_API int r_core_visual_view_zigns(RCore *core) {
 			" q     - quit this visual mode\n"
 			" _     - enter the hud\n"
 			" :     - enter command\n");
-			r_cons_flush ();
-			r_cons_any_key (NULL);
+			r_cons_flush (core->cons);
+			r_cons_any_key (core->cons, NULL);
 			break;
 		case 'q':
-			R_FREE (cur_name);
+			R_FREE (core->visual.cur_name);
 			return false;
 		case ':': // TODO: move this into a separate helper function
 			{
-			char cmd[1024];
-			r_cons_show_cursor (true);
-			r_cons_set_raw (0);
-			cmd[0]='\0';
-			r_line_set_prompt (":> ");
-			if (r_cons_fgets (cmd, sizeof (cmd), 0, NULL) < 0) {
+			char cmd[1024] = {0};
+			r_cons_show_cursor (core->cons, true);
+			r_cons_set_raw (core->cons, 0);
+			r_line_set_prompt (core->cons->line, ":> ");
+			if (r_cons_fgets (core->cons, cmd, sizeof (cmd), 0, NULL) < 0) {
 				cmd[0] = '\0';
 			}
+			cmd[sizeof (cmd) - 1] = 0;
 			r_core_cmd_task_sync (core, cmd, 1);
-			r_cons_set_raw (1);
-			r_cons_show_cursor (false);
+			r_cons_set_raw (core->cons, 1);
+			r_cons_show_cursor (core->cons, false);
 			if (cmd[0]) {
-				r_cons_any_key (NULL);
+				r_cons_any_key (core->cons, NULL);
 			}
-			r_cons_clear ();
+			r_cons_clear (core->cons);
 			}
 			break;
 		}

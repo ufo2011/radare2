@@ -2,30 +2,34 @@
 #define R_GRAPH_H
 
 #include <r_list.h>
+#include <r_vec.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct r_graph_node_t {
-	unsigned int idx;
+typedef struct r_graph_node_t RGraphNode;
+R_VEC_TYPE(RVecGraphNodePtr, RGraphNode *);
+
+struct r_graph_node_t {
+	ut32 idx;
 	void *data;
-	RList *out_nodes;
-	RList *in_nodes;
-	RList *all_neighbours;
+	RVecGraphNodePtr out_nodes;
+	RVecGraphNodePtr in_nodes;
+	RVecGraphNodePtr all_neighbours;
 	RListFree free;
-} RGraphNode;
+};
 
 typedef struct r_graph_edge_t {
 	RGraphNode *from;
 	RGraphNode *to;
-	int nth;
+	st32 nth;
 } RGraphEdge;
 
 typedef struct r_graph_t {
-	unsigned int n_nodes;
-	unsigned int n_edges;
-	int last_index;
+	ut32 n_nodes;
+	ut32 n_edges;
+	st32 last_index;
 	RList *nodes; /* RGraphNode */
 } RGraph;
 
@@ -52,19 +56,23 @@ R_API RGraphNode *r_graph_add_node(RGraph *g, void *data);
 R_API RGraphNode *r_graph_add_nodef(RGraph *g, void *data, RListFree user_free);
 // XXX 'n' is destroyed after calling this function.
 R_API void r_graph_del_node(RGraph *g, RGraphNode *n);
+R_API void r_graph_del_nodes(RGraph *g, const RVecGraphNodePtr *nodes);
+R_API void r_graph_node_unlink(RGraph *g, RGraphNode *n);
 R_API void r_graph_add_edge(RGraph *g, RGraphNode *from, RGraphNode *to);
 R_API void r_graph_add_edge_at(RGraph *g, RGraphNode *from, RGraphNode *to, int nth);
 R_API RGraphNode *r_graph_node_split_forward(RGraph *g, RGraphNode *split_me, void *data);
 R_API void r_graph_del_edge(RGraph *g, RGraphNode *from, RGraphNode *to);
-R_API const RList *r_graph_get_neighbours(const RGraph *g, const RGraphNode *n);
+R_API const RVecGraphNodePtr *r_graph_get_neighbours(const RGraph *g, const RGraphNode *n);
 R_API RGraphNode *r_graph_nth_neighbour(const RGraph *g, const RGraphNode *n, int nth);
-R_API const RList *r_graph_innodes(const RGraph *g, const RGraphNode *n);
-R_API const RList *r_graph_all_neighbours(const RGraph *g, const RGraphNode *n);
+R_API const RVecGraphNodePtr *r_graph_innodes(const RGraph *g, const RGraphNode *n);
+R_API const RVecGraphNodePtr *r_graph_all_neighbours(const RGraph *g, const RGraphNode *n);
 R_API const RList *r_graph_get_nodes(const RGraph *g);
 R_API bool r_graph_adjacent(const RGraph *g, const RGraphNode *from, const RGraphNode *to);
 R_API void r_graph_dfs_node(RGraph *g, RGraphNode *n, RGraphVisitor *vis);
 R_API void r_graph_dfs_node_reverse(RGraph *g, RGraphNode *n, RGraphVisitor *vis);
 R_API void r_graph_dfs(RGraph *g, RGraphVisitor *vis);
+R_API RGraph *r_graph_dom_tree(RGraph *graph, RGraphNode *root);
+R_API RGraph *r_graph_pdom_tree(RGraph *graph, RGraphNode *root);
 
 #ifdef __cplusplus
 }

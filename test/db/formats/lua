@@ -1,0 +1,86 @@
+NAME=lua53 function name survives obr rebase
+FILE=hex://1b4c7561530019930d0a1a0a040804080878560000000000000000000000287740010a3d6d61696e66756e6300000000000000000001020100000026008000000000000000000000000000000000000000000000000000
+CMDS=<<EOF
+isq~func.=mainfunc
+obr 0x1000
+isq~func.=mainfunc
+EOF
+EXPECT=<<EOF
+0x0000003b 4 func.=mainfunc
+0x0000003b 4 func.=mainfunc
+EOF
+RUN
+
+NAME=lua53 symbols are stable across repeated obr
+FILE=bins/lua/61a79b66-a78a-46ce-823c-93d04df0a306
+CMDS=<<EOF
+isq~?
+obr 0x10000
+isq~?
+obr 0x20000
+isq~?
+EOF
+EXPECT=<<EOF
+162
+162
+162
+EOF
+RUN
+
+NAME=lua53 string with an embedded NUL reports the copied length
+FILE=bins/lua/string-nul.luac
+CMDS=<<EOF
+iz~ascii
+izj~{[0].length}
+EOF
+EXPECT=<<EOF
+0   0x0000004a 0x0000004a 2   11           ascii ab
+2
+EOF
+RUN
+
+NAME=lua nested function prototypes
+FILE=malloc://0x200
+CMDS=<<EOF
+e scr.color=0
+wx 1b4c7561530019930d0a1a0a0202040808785600000000000000000000002877400100 @ 0
+b 0x40
+wX 00000000000000000000000000000100 @ 0x22
+oba 0
+is~func.
+ie
+EOF
+EXPECT=<<EOF
+0   0x0000006c 0x0000006c NONE FUNC   0        func.0x62
+0   0x0000005c 0x0000005c NONE FUNC   0        func.0x52
+0   0x0000004c 0x0000004c NONE FUNC   0        func.0x42
+0   0x0000003c 0x0000003c NONE FUNC   0        func.0x32
+0   0x0000002c 0x0000002c NONE FUNC   0        func.0x22
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x0000002c 0x0000002c ---------- ---------- program
+EOF
+RUN
+
+NAME=lua deeply nested function prototypes do not exhaust the stack
+FILE=malloc://0x200000
+CMDS=<<EOF
+e scr.color=0
+wx 1b4c7561530019930d0a1a0a0202040808785600000000000000000000002877400100 @ 0
+b 0x100000
+wX 00000000000000000000000000000100 @ 0x22
+oba 0
+is~?func.
+iIj~{bits}
+EOF
+EXPECT=<<EOF
+0
+32
+EOF
+EXPECT_ERR=<<EOF
+WARN: Function prototypes nested deeper than 200 levels
+WARN: Function prototypes nested deeper than 200 levels
+WARN: Function prototypes nested deeper than 200 levels
+WARN: Function prototypes nested deeper than 200 levels
+EOF
+RUN

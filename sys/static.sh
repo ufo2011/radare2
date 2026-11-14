@@ -1,14 +1,18 @@
 #!/bin/sh
 
 [ -z "${STATIC_BINS}" ] && STATIC_BINS=0
+[ -z "${USE_LTO}" ] && USE_LTO=0
+[ "${NOLTO}" = 1 ] && USE_LTO=0
 
 if [ "$1" = "--help" ]; then
-	echo "Usage: sys/static.sh [--help,--meson]"
+	echo "Usage: sys/static.sh [--help,--meson] [prefix]"
+	echo "Set USE_LTO=1 to enable LTO builds"
 	exit 0
 fi
 
 if [ "$1" = "--meson" ]; then
-        CFLAGS="-static" LDFLAGS="-static" meson --prefix=${HOME}/.local --buildtype release --default-library static build
+	[ "`uname`" != Darwin ] && export CFLAGS="-static" LDFLAGS="-static" 
+	meson --prefix=${HOME}/.local --buildtype release --default-library static build
         ninja -C build && ninja -C build install
 	exit $?
 fi
@@ -16,7 +20,7 @@ fi
 case "$(uname)" in
 Linux)
 	LDFLAGS="${LDFLAGS} -lpthread -ldl -lutil -lm"
-	if [ "$NOLTO" != 1 ]; then
+	if [ "${USE_LTO}" = 1 ]; then
 		CFLAGS="${CFLAGS} -flto"
 		LDFLAGS="${LDFLAGS} -flto"
 	fi
@@ -26,8 +30,10 @@ Linux)
 	CFLAGS_STATIC=-static
 	;;
 Darwin)
-	CFLAGS="${CFLAGS} -flto"
-	LDFLAGS="${LDFLAGS} -flto"
+	if [ "${USE_LTO}" = 1 ]; then
+		CFLAGS="${CFLAGS} -flto"
+		LDFLAGS="${LDFLAGS} -flto"
+	fi
 	CFLAGS_STATIC=""
 	;;
 DragonFly|OpenBSD)
@@ -60,37 +66,67 @@ else
 	PREFIX=/usr
 fi
 # CFGARGS=--disable-loadlibs
-CFGARGS=--without-openssl
+# CFGARGS=--without-openssl
 DOCFG=1
+export CFLAGS="${CFLAGS} -O2"
+
 if [ 1 = "${DOCFG}" ]; then
 	# build
 	if [ -f config-user.mk ]; then
 		${MAKE} mrproper > /dev/null 2>&1
 	fi
 	export CFLAGS="${CFLAGS} -fPIC"
+	export CFGARGS="$CFGARGS --with-static-themes"
+	if [ -f binr/blob/r2blob ]; then
+		strip -s binr/blob/r2blob
+	fi
 	cp -f dist/plugins-cfg/plugins.static.nogpl.cfg plugins.cfg
 	./configure-plugins || exit 1
-	./configure --prefix="$PREFIX" --without-gpl --with-libr --without-libuv $CFGARGS || exit 1
+	./configure --prefix="$PREFIX" --without-gpl --with-libr $CFGARGS || exit 1
 fi
 ${MAKE} -j 8 || exit 1
-BINS="rarun2 rasm2 radare2 ragg2 rabin2 rax2 rahash2 rafind2 r2agent radiff2 r2r"
-# shellcheck disable=SC2086
-export CFLAGS="${CFLAGS_STATIC} ${CFLAGS}"
-for a in ${BINS} ; do
-(
-	cd binr/$a
-	${MAKE} clean
-	if [ "`uname`" = Darwin ]; then
-		${MAKE} -j4 || exit 1
+BINS="rarun2 r2pm rasm2 radare2 ragg2 rabin2 rax2 rahash2 rafind2 r2agent radiff2 r2r"
+CAPSTONE_LIB=subprojects/capstone-v5/libcapstone.a
+if grep -q '^USE_CSNEXT=1' config-user.mk 2> /dev/null; then
+	CAPSTONE_LIB=subprojects/capstone-next/libcapstone.a
+elif grep -q '^USE_CS4=1' config-user.mk 2> /dev/null; then
+	CAPSTONE_LIB=subprojects/capstone-v4/libcapstone.a
+fi
+STATIC_LIBS="shlr/gdb/lib/libgdbr.a subprojects/otezip/libotezip.a ${CAPSTONE_LIB}"
+if grep -q '^WANT_ZYDIS=1' config-user.mk 2> /dev/null && grep -q 'p/x86_zydis.mk' libr/config.mk 2> /dev/null; then
+	if grep -q '^USE_ZYDIS=1' config-user.mk 2> /dev/null; then
+		ZYDIS_LIB=`sed -n 's/^CONFIG_ZYDIS_LDFLAGS=//p' config-user.mk | tail -n 1`
 	else
-		if [ "${STATIC_BINS}" = 1 ]; then
-			CFLAGS=${CFLAGS_STATIC} LDFLAGS=${CFLAGS_STATIC} ${MAKE} -j4 || exit 1
-		else
-			${MAKE} -j4 || exit 1
-		fi
+		ZYDIS_LIB=subprojects/zydis/libzydis.a
 	fi
-)
-done
+	STATIC_LIBS="${STATIC_LIBS} ${ZYDIS_LIB}"
+fi
+STATIC_TEST_CFLAGS="${CFLAGS_STATIC} ${CFLAGS}"
+
+show_link_errors() {
+	if [ -s "$1" ]; then
+		grep -Ev "warning: Using '.*' in statically linked applications requires at runtime the shared libraries from the glibc version used for linking" "$1" || true
+	fi
+}
+
+if [ "${STATIC_BINS}" = 1 ]; then
+	for a in ${BINS} ; do
+	(
+		cd binr/$a
+		${MAKE} clean
+		if [ "`uname`" = Darwin ]; then
+			${MAKE} -j4 || exit 1
+		else
+			CFLAGS="${STATIC_TEST_CFLAGS}" LDFLAGS="${CFLAGS_STATIC} ${STATIC_LIBS}" ${MAKE} -j4 || exit 1
+		fi
+	) || exit 1
+	done
+fi
+
+${MAKE} -C binr/blob || exit 1
+if [ -f binr/blob/r2blob ]; then
+	strip -s binr/blob/r2blob
+fi
 
 rm -rf r2-static
 mkdir r2-static || exit 1
@@ -122,9 +158,11 @@ pkg-config \
 `
 
 set -x
-${CC} .test.c ${PKG_CONFIG_FLAGS} -o r2-pkgcfg-static
+${CC} .test.c ${STATIC_TEST_CFLAGS} ${PKG_CONFIG_FLAGS} ${LDFLAGS} -o r2-pkgcfg-static 2>.static-pkgcfg.err
 res=$?
 set +x
+show_link_errors .static-pkgcfg.err
+rm -f .static-pkgcfg.err
 if [ $res = 0 ]; then
 	echo SUCCESS
 	rm -f a.out
@@ -134,20 +172,25 @@ fi
 
 echo "[*] Static building with libr.a..."
 ${CC} .test.c \
-	${CFLAGS} \
+	${STATIC_TEST_CFLAGS} \
 	-I ${PWD}/r2-static/usr/include/libr \
 	-I ${PWD}/r2-static/usr/include/libr/sdb \
-	r2-static/usr/lib/libr.a ${LDFLAGS}
-res=$?
+	r2-static/usr/lib/libr.a ${LDFLAGS} ${STATIC_LIBS} 2>.static-libr.err
+res2=$?
 du -hs r2-static/usr/bin/radare2
 du -hs a.out
 set +x
-if [ $res = 0 ]; then
-	echo SUCCESS
+show_link_errors .static-libr.err
+rm -f .static-libr.err
+if [ $res2 = 0 ]; then
+	echo SUCCESS2
 	rm -f a.out
 else
-	echo FAILURE
+	echo FAILURE2
 fi
 
 rm -f .test.c
-exit $res
+if [ $res = 0 -a $res2 = 0 ]; then
+	exit 0
+fi
+exit 1

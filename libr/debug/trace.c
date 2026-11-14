@@ -1,24 +1,23 @@
-/* radare - LGPL - Copyright 2008-2020 - pancake */
+/* radare - LGPL - Copyright 2008-2025 - pancake, Luc Tielen */
 
 #include <r_debug.h>
+#include <r_core.h>
+#include <sdb/ht_pu.h>
 
-// DO IT WITH SDB
+R_VEC_TYPE(RVecDebugTracepoint, RDebugTracepointItem);
 
-R_API RDebugTrace *r_debug_trace_new (void) {
+R_API RDebugTrace *r_debug_trace_new(void) {
 	RDebugTrace *t = R_NEW0 (RDebugTrace);
-	if (!t) {
-		return NULL;
-	}
 	t->tag = 1; // UT32_MAX;
 	t->addresses = NULL;
 	t->enabled = false;
-	t->traces = r_list_new ();
+	t->traces = RVecDebugTracepoint_new ();
 	if (!t->traces) {
 		r_debug_trace_free (t);
 		return NULL;
 	}
-	t->traces->free = free;
 	t->ht = ht_pp_new0 ();
+	// t->ht = ht_pu_new0 ();
 	if (!t->ht) {
 		r_debug_trace_free (t);
 		return NULL;
@@ -26,41 +25,44 @@ R_API RDebugTrace *r_debug_trace_new (void) {
 	return t;
 }
 
-R_API void r_debug_trace_free (RDebugTrace *trace) {
-	if (!trace) {
-		return;
+R_API void r_debug_trace_free(RDebugTrace *t) {
+	if (t) {
+		RVecDebugTracepoint_free (t->traces);
+		ht_pp_free (t->ht);
+		// ht_pu_free (t->ht);
+		free (t);
 	}
-	r_list_purge (trace->traces);
-	free (trace->traces);
-	ht_pp_free (trace->ht);
-	R_FREE (trace);
 }
 
 // TODO: added overlap/mask support here... wtf?
-// TODO: think about tagged traces
-R_API int r_debug_trace_tag (RDebug *dbg, int tag) {
-	//if (tag>0 && tag<31) core->dbg->trace->tag = 1<<(sz-1);
-	return (dbg->trace->tag = (tag>0)? tag: UT32_MAX);
+// TODO: think about tagged traces .. must return 0 or ntag :?
+R_API int r_debug_trace_tag(RDebug *dbg, int tag) {
+	R_RETURN_VAL_IF_FAIL (dbg && dbg->trace, 0);
+	ut32 ntag = (tag > 0)? (ut32)tag: UT32_MAX;
+	dbg->trace->tag = ntag;
+	return ntag;
 }
 
 R_API bool r_debug_trace_ins_before(RDebug *dbg) {
+	R_RETURN_VAL_IF_FAIL (dbg, false);
 	RListIter *it, *it_tmp;
 	RAnalValue *val;
 	ut8 buf_pc[32];
 
 	// Analyze current instruction
-	ut64 pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
+	const char *pcreg = r_reg_alias_getname (dbg->reg, R_REG_ALIAS_PC);
+	if (!pcreg) {
+		return false;
+	}
+	ut64 pc = r_debug_reg_get (dbg, pcreg);
 	if (!dbg->iob.read_at) {
 		return false;
 	}
-	if (!dbg->iob.read_at (dbg->iob.io, pc, buf_pc, sizeof (buf_pc))) {
+	if (dbg->iob.read_at (dbg->iob.io, pc, buf_pc, sizeof (buf_pc)) != sizeof (buf_pc)) {
 		return false;
 	}
 	dbg->cur_op = R_NEW0 (RAnalOp);
-	if (!dbg->cur_op) {
-		return false;
-	}
-	if (!r_anal_op (dbg->anal, dbg->cur_op, pc, buf_pc, sizeof (buf_pc), R_ANAL_OP_MASK_VAL)) {
+	if (!r_anal_op (dbg->anal, dbg->cur_op, pc, buf_pc, sizeof (buf_pc), R_ARCH_OP_MASK_VAL)) {
 		r_anal_op_free (dbg->cur_op);
 		dbg->cur_op = NULL;
 		return false;
@@ -70,30 +72,30 @@ R_API bool r_debug_trace_ins_before(RDebug *dbg) {
 	r_list_foreach_safe (dbg->cur_op->access, it, it_tmp, val) {
 		switch (val->type) {
 		case R_ANAL_VAL_REG:
-			if (!(val->access & R_ANAL_ACC_W)) {
+			if (!(val->access & R_PERM_W)) {
 				r_list_delete (dbg->cur_op->access, it);
 			}
 			break;
 		case R_ANAL_VAL_MEM:
 			if (val->memref > 32) {
-				eprintf ("Error: adding changes to %d bytes in memory.\n", val->memref);
+				R_LOG_ERROR ("adding changes to %d bytes in memory", val->memref);
 				r_list_delete (dbg->cur_op->access, it);
 				break;
 			}
 
-			if (val->access & R_ANAL_ACC_W) {
+			if (val->access & R_PERM_W) {
 				// resolve memory address
 				ut64 addr = 0;
 				addr += val->delta;
 				if (val->seg) {
-					addr += r_reg_get_value (dbg->reg, val->seg);
+					addr += r_reg_getv (dbg->reg, val->seg);
 				}
 				if (val->reg) {
-					addr += r_reg_get_value (dbg->reg, val->reg);
+					addr += r_reg_getv (dbg->reg, val->reg);
 				}
 				if (val->regdelta) {
 					int mul = val->mul ? val->mul : 1;
-					addr += mul * r_reg_get_value (dbg->reg, val->regdelta);
+					addr += mul * r_reg_getv (dbg->reg, val->regdelta);
 				}
 				// resolve address into base for ins_after
 				val->base = addr;
@@ -114,7 +116,7 @@ R_API bool r_debug_trace_ins_after(RDebug *dbg) {
 	// Add reg/mem write change
 	r_debug_reg_sync (dbg, R_REG_TYPE_ALL, false);
 	r_list_foreach (dbg->cur_op->access, it, val) {
-		if (!(val->access & R_ANAL_ACC_W)) {
+		if (!(val->access & R_PERM_W)) {
 			continue;
 		}
 
@@ -122,20 +124,24 @@ R_API bool r_debug_trace_ins_after(RDebug *dbg) {
 		case R_ANAL_VAL_REG:
 		{
 			if (!val->reg) {
-				R_LOG_ERROR("invalid register, unable to trace register state\n");
+				R_LOG_ERROR ("invalid register, unable to trace register state");
 				continue;
 			}
-			ut64 data = r_reg_get_value (dbg->reg, val->reg);
-
-			// add reg write
-			r_debug_session_add_reg_change (dbg->session, val->reg->arena, val->reg->offset, data);
+			RRegItem *ri = r_reg_get (dbg->reg, val->reg, R_REG_TYPE_GPR);
+			if (ri) {
+				// add reg write
+				ut64 data = r_reg_get_value (dbg->reg, ri);
+				r_debug_session_add_reg_change (dbg->session, ri->arena, ri->offset, data);
+			} else {
+				R_LOG_WARN ("Missing register %s", val->reg);
+			}
 			break;
 		}
 		case R_ANAL_VAL_MEM:
 		{
-			ut8 buf[32] = { 0 };
-			if (!dbg->iob.read_at (dbg->iob.io, val->base, buf, val->memref)) {
-				eprintf ("Error reading memory at 0x%"PFMT64x"\n", val->base);
+			ut8 buf[32] = {0};
+			if (dbg->iob.read_at (dbg->iob.io, val->base, buf, val->memref) != val->memref) {
+				R_LOG_ERROR ("reading memory at 0x%"PFMT64x, val->base);
 				break;
 			}
 
@@ -158,16 +164,17 @@ R_API bool r_debug_trace_ins_after(RDebug *dbg) {
 /*
  * something happened at the given pc that we need to trace
  */
-R_API int r_debug_trace_pc(RDebug *dbg, ut64 pc) {
+R_API bool r_debug_trace_pc(RDebug *dbg, ut64 pc) {
+	R_RETURN_VAL_IF_FAIL (dbg && dbg->trace, false);
 	ut8 buf[32];
 	RAnalOp op = {0};
 	if (!dbg->iob.is_valid_offset (dbg->iob.io, pc, 0)) {
-		eprintf ("trace_pc: cannot read memory at 0x%"PFMT64x"\n", pc);
+		R_LOG_ERROR ("trace_pc: cannot read memory at 0x%"PFMT64x, pc);
 		return false;
 	}
-	(void)dbg->iob.read_at (dbg->iob.io, pc, buf, sizeof (buf));
-	if (r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf), R_ANAL_OP_MASK_ESIL) < 1) {
-		eprintf ("trace_pc: cannot get opcode size at 0x%"PFMT64x"\n", pc);
+	int res = dbg->iob.read_at (dbg->iob.io, pc, buf, sizeof (buf));
+	if (res < 1 || r_anal_op (dbg->anal, &op, pc, buf, res, R_ARCH_OP_MASK_ESIL) < 1) {
+		R_LOG_ERROR ("trace_pc: cannot get opcode size at 0x%"PFMT64x, pc);
 		return false;
 	}
 	r_debug_trace_op (dbg, &op);
@@ -176,97 +183,166 @@ R_API int r_debug_trace_pc(RDebug *dbg, ut64 pc) {
 }
 
 R_API void r_debug_trace_op(RDebug *dbg, RAnalOp *op) {
-	static ut64 oldpc = UT64_MAX; // Must trace the previously traced instruction
+	R_RETURN_IF_FAIL (dbg && dbg->trace);
 	if (dbg->trace->enabled) {
-		if (dbg->anal->esil) {
-			r_anal_esil_trace_op (dbg->anal->esil, op);
-		} else {
-			if (dbg->verbose) {
-				eprintf ("Run aeim to get dbg->anal->esil initialized\n");
-			}
-		}
+		r_debug_trace_add (dbg, op->addr, op->size);
 	}
-	if (oldpc != UT64_MAX) {
-		r_debug_trace_add (dbg, oldpc, op->size); //XXX review what this line really do
-	}
-	oldpc = op->addr;
 }
 
 R_API void r_debug_trace_at(RDebug *dbg, const char *str) {
+	R_RETURN_IF_FAIL (dbg && dbg->trace);
 	// TODO: parse offsets and so use ut64 instead of strstr()
 	free (dbg->trace->addresses);
-	dbg->trace->addresses = (str&&*str)? strdup (str): NULL;
+	dbg->trace->addresses = R_STR_ISNOTEMPTY (str)? strdup (str): NULL;
 }
 
-R_API RDebugTracepoint *r_debug_trace_get(RDebug *dbg, ut64 addr) {
-	int tag = dbg->trace->tag;
-	return ht_pp_find (dbg->trace->ht,
-		sdb_fmt ("trace.%d.%"PFMT64x, tag, addr), NULL);
-}
-
-static int cmpaddr(const void *_a, const void *_b) {
-	const RListInfo *a = _a, *b = _b;
-	return (r_itv_begin (a->pitv) > r_itv_begin (b->pitv))? 1:
-		 (r_itv_begin (a->pitv) < r_itv_begin (b->pitv))? -1: 0;
-}
-
-R_API void r_debug_trace_list(RDebug *dbg, int mode, ut64 offset) {
-	int tag = dbg->trace->tag;
-	RListIter *iter;
-	bool flag = false;
-	RList *info_list = r_list_new ();
-	if (!info_list && mode == '=') {
-		return;
+R_API RDebugTracepointItem *r_debug_trace_get(RDebug *dbg, ut64 addr) {
+	R_RETURN_VAL_IF_FAIL (dbg && dbg->trace, NULL);
+	const int tag = dbg->trace->tag;
+	r_strf_var (key, 64, "%d.%"PFMT64x, tag, addr);
+	bool found = false;
+	int pos = (int)(size_t)ht_pp_find (dbg->trace->ht, key, &found);
+	if (found) {
+		return RVecDebugTracepoint_at (dbg->trace->traces, pos - 1);
 	}
-	RDebugTracepoint *trace;
-	r_list_foreach (dbg->trace->traces, iter, trace) {
+	return NULL;
+	// return ht_pp_find (dbg->trace->ht, key, NULL);
+}
+
+static int cmpaddr(const RListInfo *a, const RListInfo *b) {
+	const ut64 begin_a = r_itv_begin (a->pitv);
+	const ut64 begin_b = r_itv_begin (b->pitv);
+	return (begin_a > begin_b)? 1: (begin_a < begin_b)? -1: 0;
+}
+
+static void r_debug_trace_list_json(RDebug *dbg, RStrBuf *sb) {
+	int tag = dbg->trace->tag;
+	PJ *pj = pj_new ();
+	pj_o (pj);
+	pj_kn (pj, "tag", tag);
+	pj_ka (pj, "traces");
+
+	RDebugTracepointItem *trace;
+	R_VEC_FOREACH (dbg->trace->traces, trace) {
 		if (!trace->tag || (tag & trace->tag)) {
-			switch (mode) {
-			case 'q':
-				dbg->cb_printf ("0x%"PFMT64x"\n", trace->addr);
-				break;
-			case '=': {
-				RListInfo *info = R_NEW0 (RListInfo);
-				if (!info) {
-					return;
-				}
-				info->pitv = (RInterval) {trace->addr, trace->size};
-				info->vitv = info->pitv;
-				info->perm = -1;
-				info->name = r_str_newf ("%d", trace->times);
-				info->extra = r_str_newf ("%d", trace->count);
-				r_list_append (info_list, info);
-				flag = true;
-			}	break;
-			case 1:
-			case '*':
-				dbg->cb_printf ("dt+ 0x%"PFMT64x" %d\n", trace->addr, trace->times);
-				break;
-			default:
-				dbg->cb_printf ("0x%08"PFMT64x" size=%d count=%d times=%d tag=%d\n",
-					trace->addr, trace->size, trace->count, trace->times, trace->tag);
-				break;
-			}
+			pj_o (pj);
+			pj_kn (pj, "addr", trace->addr);
+			pj_kn (pj, "tag", trace->tag);
+			pj_kn (pj, "times", trace->times);
+			pj_kn (pj, "count", trace->count);
+			pj_kn (pj, "size", trace->size);
+			pj_end (pj);
 		}
 	}
-	if (flag) {
-		r_list_sort (info_list, cmpaddr);
-		RTable *table = r_table_new ("traces");
-		table->cons = r_cons_singleton();
-		RIO *io = dbg->iob.io;
-		r_table_visual_list (table, info_list, offset, 1,
-			r_cons_get_size (NULL), io->va);
-		io->cb_printf ("\n%s\n", r_table_tostring (table));
-		r_table_free (table);
-		r_list_free (info_list);
+
+	pj_end (pj);
+	pj_end (pj);
+	r_strbuf_appendf (sb, "%s\n", pj_string (pj));
+	pj_free (pj);
+}
+
+static void r_debug_trace_list_quiet(RDebug *dbg, RStrBuf *sb) {
+	int tag = dbg->trace->tag;
+	RDebugTracepointItem *trace;
+	R_VEC_FOREACH (dbg->trace->traces, trace) {
+		if (!trace->tag || (tag & trace->tag)) {
+			r_strbuf_appendf (sb, "0x%"PFMT64x"\n", trace->addr);
+		}
 	}
+}
+
+static inline void listinfo_fini(RListInfo *info) {
+	R_RETURN_IF_FAIL (info);
+	free (info->name);
+	free (info->extra);
+}
+
+R_VEC_TYPE_WITH_FINI (RVecListInfo, RListInfo, listinfo_fini);
+
+static void r_debug_trace_list_table(RDebug *dbg, RStrBuf *sb, ut64 offset, RTable *t) {
+	RVecListInfo info_vec;
+	RVecListInfo_init (&info_vec);
+
+	bool flag = false;
+	int tag = dbg->trace->tag;
+
+	RDebugTracepointItem *trace;
+	R_VEC_FOREACH (dbg->trace->traces, trace) {
+		if (!trace->tag || (tag & trace->tag)) {
+			RListInfo *info = RVecListInfo_emplace_back (&info_vec);
+			info->pitv = (RInterval) {trace->addr, trace->size};
+			info->vitv = info->pitv;
+			info->perm = -1;
+			info->name = r_str_newf ("%d", trace->times);
+			info->extra = r_str_newf ("%d", trace->count);
+			flag = true;
+		}
+	}
+
+	if (flag) {
+		RVecListInfo_sort (&info_vec, cmpaddr);
+		RCore *core = (RCore *)dbg->coreb.core;
+		RTable *table = t? t: r_table_new ("traces", NULL);
+		RIO *io = dbg->iob.io;
+		r_table_visual_vec (table, &info_vec, offset, 1, r_cons_get_size (core->cons, NULL), io->va);
+		char *s = r_table_tostring (table);
+		r_strbuf_append (sb, s);
+		free (s);
+		r_table_free (table);
+	}
+
+	RVecListInfo_fini (&info_vec);
+}
+
+static void r_debug_trace_list_make(RDebug *dbg, RStrBuf *sb) {
+	int tag = dbg->trace->tag;
+	RDebugTracepointItem *trace;
+	R_VEC_FOREACH (dbg->trace->traces, trace) {
+		if (!trace->tag || (tag & trace->tag)) {
+			r_strbuf_appendf (sb, "dt+ 0x%"PFMT64x" %d\n", trace->addr, trace->times);
+		}
+	}
+}
+
+static void r_debug_trace_list_default(RDebug *dbg, RStrBuf *sb) {
+	int tag = dbg->trace->tag;
+	RDebugTracepointItem *trace;
+	R_VEC_FOREACH (dbg->trace->traces, trace) {
+		if (!trace->tag || (tag & trace->tag)) {
+			r_strbuf_appendf (sb, "0x%08"PFMT64x" size=%d count=%d times=%d tag=%d\n",
+				trace->addr, trace->size, trace->count, trace->times, trace->tag);
+		}
+	}
+}
+
+R_API R_OWNED char *r_debug_trace_list(RDebug *dbg, int mode, ut64 offset, RTable *t) {
+	R_RETURN_VAL_IF_FAIL (dbg && dbg->trace, NULL);
+	RStrBuf *sb = r_strbuf_new ("");
+	switch (mode) {
+	case 'j':
+		r_debug_trace_list_json (dbg, sb);
+		break;
+	case 'q':
+		r_debug_trace_list_quiet (dbg, sb);
+		break;
+	case '=':
+		r_debug_trace_list_table (dbg, sb, offset, t);
+		break;
+	case 1:
+	case '*':
+		r_debug_trace_list_make (dbg, sb);
+		break;
+	default:
+		r_debug_trace_list_default (dbg, sb);
+		break;
+	}
+	return r_strbuf_drain (sb);
 }
 
 // XXX: find better name, make it public?
-static int r_debug_trace_is_traceable(RDebug *dbg, ut64 addr) {
+static bool r_debug_trace_is_traceable(RDebug *dbg, ut64 addr) {
 	if (dbg->trace->addresses) {
-		char addr_str[32];
-		snprintf (addr_str, sizeof (addr_str), "0x%08"PFMT64x, addr);
+		r_strf_var (addr_str, 64, "0x%08"PFMT64x, addr);
 		if (!strstr (dbg->trace->addresses, addr_str)) {
 			return false;
 		}
@@ -274,34 +350,50 @@ static int r_debug_trace_is_traceable(RDebug *dbg, ut64 addr) {
 	return true;
 }
 
-R_API RDebugTracepoint *r_debug_trace_add (RDebug *dbg, ut64 addr, int size) {
-	RDebugTracepoint *tp;
-	int tag = dbg->trace->tag;
+R_API RDebugTracepointItem *r_debug_trace_add(RDebug *dbg, ut64 addr, int size) {
+	R_RETURN_VAL_IF_FAIL (dbg, NULL);
+	const int tag = dbg->trace->tag;
 	if (!r_debug_trace_is_traceable (dbg, addr)) {
 		return NULL;
 	}
 	r_anal_trace_bb (dbg->anal, addr);
-	tp = R_NEW0 (RDebugTracepoint);
-	if (!tp) {
-		return NULL;
+	int last_times = 1;
+	RDebugTracepointItem *last = r_debug_trace_get (dbg, addr);
+	if (last) {
+		RDebugTracepointItem *endtp = RVecDebugTracepoint_last (dbg->trace->traces);
+		if (last == endtp) {
+			// avoid tracing the same instruction twice
+			return NULL;
+		}
+		last_times = last->times + 1;
 	}
+	int pos = RVecDebugTracepoint_length (dbg->trace->traces) + 1;
+	// emplacedback pointers are not constant, so we may rely on the index instead of ptr
+	RDebugTracepointItem *tp = RVecDebugTracepoint_emplace_back (dbg->trace->traces);
 	tp->stamp = r_time_now ();
 	tp->addr = addr;
 	tp->tags = tag;
 	tp->size = size;
 	tp->count = ++dbg->trace->count;
-	tp->times = 1;
-	r_list_append (dbg->trace->traces, tp);
-	ht_pp_update (dbg->trace->ht,
-		sdb_fmt ("trace.%d.%"PFMT64x, tag, addr), tp);
+	tp->times = last_times;
+	r_strf_var (key, 64, "%d.%"PFMT64x, tag, addr);
+	void *ip = (void*)(size_t)(pos);
+	ht_pp_update (dbg->trace->ht, key, ip);
+	// for some reason pu mode doesnt work but storing integers as pointers works
+	// ht_pu_update (dbg->trace->ht, key, pos);
+	// ht_pp_delete (dbg->trace->ht, key);
+	// ht_pu_insert (dbg->trace->ht, key, pos);
+	// eprintf ("UP %s %llx\n", key, addr);
 	return tp;
 }
 
-R_API void r_debug_trace_reset (RDebug *dbg) {
+R_API void r_debug_trace_reset(RDebug *dbg) {
+	R_RETURN_IF_FAIL (dbg);
 	RDebugTrace *t = dbg->trace;
-	r_list_purge (t->traces);
 	ht_pp_free (t->ht);
 	t->ht = ht_pp_new0 ();
-	t->traces = r_list_new ();
-	t->traces->free = free;
+	// ht_pu_free (t->ht);
+	// t->ht = ht_pu_new0 ();
+	RVecDebugTracepoint_free (t->traces);
+	t->traces = RVecDebugTracepoint_new ();
 }

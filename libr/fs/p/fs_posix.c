@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2011-2021 - pancake */
+/* radare - LGPL - Copyright 2011-2024 - pancake */
 
 #include <r_fs.h>
 #include <r_lib.h>
@@ -8,17 +8,21 @@
 #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
 #define MAXPATHLEN 255
 #endif
+
 static RFSFile* fs_posix_open(RFSRoot *root, const char *path, bool create) {
-	FILE *fd;
 	RFSFile *file = r_fs_file_new (root, path);
 	if (!file) {
 		return NULL;
 	}
 	file->ptr = NULL;
 	file->p = root->p;
-	fd = r_sandbox_fopen (path, create? "wb": "rb");
+	FILE *fd = r_sandbox_fopen (path, create? "wb": "rb");
 	if (fd) {
-		fseek (fd, 0, SEEK_END);
+		if (fseek (fd, 0, SEEK_END) != 0) {
+			fclose (fd);
+			r_fs_file_free (file);
+			return NULL;
+		}
 		file->size = ftell (fd);
 		fclose (fd);
 	} else {
@@ -32,9 +36,10 @@ static int fs_posix_read(RFSFile *file, ut64 addr, int len) {
 	R_FREE (file->data);
 	char *abspath = r_str_newf ("%s/%s", file->path, file->name);
 	if (abspath) {
-		file->data = (void*)r_file_slurp_range (abspath, 0, len, NULL);
+		int nread = 0;
+		file->data = (void*)r_file_slurp_range (abspath, addr, len, &nread);
 		free (abspath);
-		return len;
+		return file->data? nread: -1;
 	}
 	return 0;
 }
@@ -59,12 +64,40 @@ static RList *fs_posix_dir(RFSRoot *root, const char *path, int view /*ignored*/
 		char *fp = r_str_newf ("%s/%s", path, file);
 		fsf->path = fp;
 		fsf->type = 'f';
-		if (!stat (fp, &st)) {
-			fsf->type = S_ISDIR (st.st_mode)?'d':'f';
+		fsf->time = 0;
+		bool is_symlink = false;
+#if R2__UNIX__
+		int stat_result = lstat (fp, &st);
+		if (stat_result == 0) {
+			is_symlink = S_IFLNK == (st.st_mode & S_IFMT);
+			if (is_symlink) {
+				// uppercase denotes symlink
+				stat (fp, &st);
+			}
+		}
+#else
+		int stat_result = stat (fp, &st);
+#endif
+		if (stat_result == 0) {
+			fsf->perm = st.st_mode & 0xfff;
+			fsf->uid = st.st_uid;
+			fsf->gid = st.st_gid;
+			if (S_ISDIR (st.st_mode)) {
+				fsf->type = 'd';
+#if R2__UNIX__
+			} else if (S_ISBLK (st.st_mode)) {
+				fsf->type = 'b';
+			} else if (S_ISCHR (st.st_mode)) {
+				fsf->type = 'c';
+#endif
+			} else {
+				// regular file
+				fsf->type = 'f';
+			}
+			if (is_symlink) {
+				fsf->type = toupper (fsf->type);
+			}
 			fsf->time = st.st_atime;
-		} else {
-			fsf->type = 'f';
-			fsf->time = 0;
 		}
 		r_list_append (list, fsf);
 	}
@@ -72,7 +105,7 @@ static RList *fs_posix_dir(RFSRoot *root, const char *path, int view /*ignored*/
 	return list;
 }
 
-static int fs_posix_mount(RFSRoot *root) {
+static bool fs_posix_mount(RFSRoot *root) {
 	root->ptr = NULL;
 	return true;
 }
@@ -82,9 +115,11 @@ static void fs_posix_umount(RFSRoot *root) {
 }
 
 RFSPlugin r_fs_plugin_posix = {
-	.name = "posix",
-	.desc = "POSIX filesystem",
-	.license = "MIT",
+	.meta = {
+		.name = "posix",
+		.desc = "POSIX filesystem",
+		.license = "MIT",
+	},
 	.open = fs_posix_open,
 	.read = fs_posix_read,
 	.close = fs_posix_close,
@@ -95,8 +130,8 @@ RFSPlugin r_fs_plugin_posix = {
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-        .type = R_LIB_TYPE_FS,
-        .data = &r_fs_plugin_posix,
-        .version = R2_VERSION
+	.type = R_LIB_TYPE_FS,
+	.data = &r_fs_plugin_posix,
+	.version = R2_VERSION
 };
 #endif

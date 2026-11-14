@@ -1,8 +1,18 @@
-/* radare - LGPL - Copyright 2009-2021 - pancake */
+/* radare - LGPL - Copyright 2009-2026 - pancake */
+
+#include "r_userconf.h"
+#ifndef R2_DOCDIR
+#define R2_DOCDIR "share/doc/radare2"
+#endif
+#include "r_util/r_str.h"
+#include "r_util/r_sys.h"
+#include <r_main.h>
+#include <r_lib.h>
+
+// R2R db/tools/r2
 
 #define USE_THREADS 1
-#define ALLOW_THREADED 0
-#define UNCOLORIZE_NONTTY 0
+#define ALLOW_THREADED 1
 #ifdef _MSC_VER
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -11,11 +21,7 @@
 
 #include <r_core.h>
 
-static bool is_valid_gdb_file(RIODesc *d) {
-	return d && strncmp (d->name, "gdb://", 6);
-}
-
-static char* get_file_in_cur_dir(const char *filepath) {
+static char *get_file_in_cur_dir(const char *filepath) {
 	filepath = r_file_basename (filepath);
 	if (r_file_exists (filepath) && !r_file_is_directory (filepath)) {
 		return r_file_abspath (filepath);
@@ -23,10 +29,121 @@ static char* get_file_in_cur_dir(const char *filepath) {
 	return NULL;
 }
 
-static int r_main_version_verify(int show) {
+static int prompt_outdated_plugin(RCons *cons, const char *pkgname) {
+	r_cons_set_raw (cons, false);
+	r_cons_show_cursor (cons, true);
+	for (;;) {
+		r_cons_printf (cons, "Rebuild outdated '%s' plugin? (Y/n/d/a/i, then Enter) ", pkgname);
+		r_cons_flush (cons);
+		char answer[128];
+		if (!fgets (answer, sizeof (answer), cons->fdin)) {
+			return 'i';
+		}
+		bool complete = strchr (answer, '\n') != NULL;
+		if (complete) {
+			r_str_trim (answer);
+			if (!*answer) {
+				return 'y';
+			}
+			int choice = tolower ((ut8)answer[0]);
+			if (!answer[1] && strchr ("yndai", choice)) {
+				return choice;
+			}
+		} else {
+			while (fgets (answer, sizeof (answer), cons->fdin)) {
+				if (strchr (answer, '\n')) {
+					break;
+				}
+			}
+		}
+		R_LOG_ERROR ("Invalid answer. Enter y, n, d, a or i, or press Enter to rebuild");
+	}
+}
+
+static void prompt_rebuild_outdated_plugins(RCore *core) {
+	RList *mismatches = core->lib->plugin_mismatches;
+	if (!r_config_get_b (core->config, "scr.prompt.r2pm")
+			|| !r_config_get_b (core->config, "scr.prompt")
+			|| !r_cons_is_interactive (core->cons)
+			|| r_list_empty (mismatches)) {
+		return;
+	}
+	r_cons_print (core->cons,
+		"\nOutdated r2pm plugins cannot be loaded with this version of radare2.\n"
+		"Enter a choice and press Enter (empty input rebuilds this plugin):\n"
+		"  y        Rebuild this plugin\n"
+		"  n        Skip this plugin\n"
+		"  d        Delete this plugin (r2pm -u)\n"
+		"  a        Rebuild this and all remaining outdated plugins\n"
+		"  i        Ignore all remaining outdated plugins for this session\n\n");
+	bool rebuild_all = false;
+	bool rebuilt = false;
+	RListIter *iter;
+	const char *pkgname;
+	r_list_foreach (mismatches, iter, pkgname) {
+		int choice = 'y';
+		if (!rebuild_all) {
+			choice = prompt_outdated_plugin (core->cons, pkgname);
+		}
+		if (choice == 'i') {
+			break;
+		}
+		if (choice == 'a') {
+			rebuild_all = true;
+		}
+		if (choice != 'y' && choice != 'd' && choice != 'a') {
+			continue;
+		}
+		char *epkgname = r_str_escape_sh (pkgname);
+		if (!epkgname) {
+			R_LOG_WARN ("Cannot escape r2pm plugin package name '%s'", pkgname);
+			continue;
+		}
+		const char *flag = choice == 'd'? "-u": "-ci";
+		if (!r_sys_cmdf ("r2pm %s \"%s\"", flag, epkgname)) {
+			R_LOG_INFO ("%s outdated r2pm plugin package '%s'", choice == 'd'? "Deleted": "Rebuilt", pkgname);
+			if (choice != 'd') {
+				rebuilt = true;
+			}
+		} else {
+			R_LOG_WARN ("Failed to run 'r2pm %s %s'", flag, pkgname);
+		}
+		free (epkgname);
+	}
+	r_list_purge (core->lib->plugin_mismatches);
+	if (rebuilt && r_config_get_b (core->config, "cfg.plugins")) {
+		r_lib_load_paths (core->lib, R_LIB_LOAD_ALL, r_config_get (core->config, "dir.plugins"));
+	}
+}
+
+static void json_plugins(RCore *core, PJ *pj, const char *name, const char *cmd) {
+	char *res = r_core_cmd_str (core, cmd);
+	r_str_trim (res);
+	if (*res == '[') {
+		pj_k (pj, name);
+		pj_raw (pj, res);
+	} else if (*res == '{') {
+		// XXX this happens only when listing the rbin plugins, so must be fixed there for consistency
+		char *arr = strchr (res, '[');
+		char *l = (char *)r_str_lchr (arr, ']');
+		if (l) {
+			l++;
+			*l = 0;
+		}
+		pj_k (pj, name);
+		pj_raw (pj, arr);
+	} else {
+		R_LOG_ERROR ("Invalid JSON for (%s) (%s)", cmd, res);
+	}
+	free (res);
+}
+
+static int r_main_version_verify(RCore *core, bool show, bool json) {
+	bool own_cons;
+	RCons *cons = r_main_cons_init (&own_cons);
 	int i, ret;
-	typedef const char* (*vc)();
-	const char *base = R2_GITTAP;
+	typedef const char *(*vc) ();
+	const char *base = R2_GITTAP "-" R2_ABIVERSION_STRING;
 	struct vcs_t {
 		const char *name;
 		vc callback;
@@ -39,197 +156,390 @@ static int r_main_version_verify(int show) {
 		{ "r_cons", r_cons_version },
 		{ "r_flag", r_flag_version },
 		{ "r_core", r_core_version },
-		{ "r_crypto", r_crypto_version },
+		{ "r_muta", r_muta_version },
 		{ "r_bp", r_bp_version },
 		{ "r_debug", r_debug_version },
 		{ "r_main", r_main_version },
-		{ "r_hash", r_hash_version },
 		{ "r_fs", r_fs_version },
 		{ "r_io", r_io_version },
 #if !USE_LIB_MAGIC
 		{ "r_magic", r_magic_version },
 #endif
-		{ "r_parse", r_parse_version },
 		{ "r_reg", r_reg_version },
 		{ "r_sign", r_sign_version },
 		{ "r_search", r_search_version },
 		{ "r_syscall", r_syscall_version },
 		{ "r_util", r_util_version },
 		/* ... */
-		{NULL,NULL}
+		{ NULL, NULL }
 	};
 
-	if (show) {
-		printf ("%s  r2\n", base);
-	}
-	for (i = ret = 0; vcs[i].name; i++) {
-		struct vcs_t *v = &vcs[i];
-		const char *name = v->callback ();
-		if (!ret && strcmp (base, name)) {
-			ret = 1;
-		}
+	if (json) {
+		PJ *pj = pj_new ();
+		pj_o (pj);
+		pj_ko (pj, "radare2");
+		pj_ks (pj, "version", R2_VERSION);
+		pj_ki (pj, "abiversion", R2_ABIVERSION);
+		pj_ks (pj, "birth", R2_BIRTH);
+		pj_ks (pj, "commit", R2_GITTIP);
+		pj_ki (pj, "commits", R2_VERSION_COMMIT);
+		pj_ks (pj, "license", "LGPL-3.0-only");
+		pj_ks (pj, "tap", R2_GITTAP);
+		pj_ko (pj, "semver");
+		pj_ki (pj, "major", R2_VERSION_MAJOR);
+		pj_ki (pj, "minor", R2_VERSION_MINOR);
+		pj_ki (pj, "patch", R2_VERSION_PATCH);
+		pj_end (pj);
+		pj_end (pj);
+		pj_ko (pj, "libraries");
 		if (show) {
-			printf ("%s  %s\n", name, v->name);
+			pj_ks (pj, "r2", base);
+		}
+		for (i = ret = 0; vcs[i].name; i++) {
+			struct vcs_t *v = &vcs[i];
+			const char *name = v->callback ();
+			if (!ret && strcmp (base, name)) {
+				ret = 1;
+			}
+			if (show) {
+				pj_ks (pj, v->name, name);
+			}
+		}
+		pj_end (pj);
+		if (ret) {
+			pj_ks (pj, "warning", "r2 library versions mismatch! Check r2 -V");
+		}
+		{
+			pj_ko (pj, "thirdparty");
+			{
+				pj_ko (pj, "capstone");
+				pj_ks (pj, "destdir", "subprojects/capstone-v*");
+				pj_ks (pj, "git", "https://github.com/capstone-engine/capstone");
+				pj_ks (pj, "branch", "v5");
+				pj_ks (pj, "license", "BSD-3-Clause");
+				pj_ks (pj, "commit", "097c04d9413c59a58b00d4d1c8d5dc0ac158ffaa");
+				pj_end (pj);
+			}
+			{
+				pj_ko (pj, "sdb");
+				pj_ks (pj, "destdir", "subprojects/sdb");
+				pj_ks (pj, "git", "https://github.com/radareorg/sdb");
+				pj_ks (pj, "branch", "master");
+				pj_ks (pj, "license", "MIT");
+				pj_ks (pj, "commit", "2e24eb0616dfce5e28130660313b56db9252dd5c"); // TODO SUBPROJECTS
+				pj_end (pj);
+			}
+			{
+				pj_ko (pj, "arm64v35");
+				pj_ks (pj, "destdir", "libr/arch/p/arm/v35/arch-arm64");
+				pj_ks (pj, "git", "https://github.com/radareorg/vector35-arch-arm64");
+				pj_ks (pj, "license", "Apache-2.0");
+				pj_ks (pj, "commit", "cb7a22763c112e6ca99558edec2b6a9137234fdc");
+				pj_ks (pj, "branch", "radare2-2024");
+				pj_end (pj);
+			}
+			{
+				pj_ko (pj, "armv7v35");
+				pj_ks (pj, "destdir", "libr/arch/p/arm/v35/arch-armv7");
+				pj_ks (pj, "git", "https://github.com/radareorg/vector35-arch-armv7");
+				pj_ks (pj, "commit", "7d7a78f52196f6333bd5746dc526684edbfd9af0");
+				pj_ks (pj, "license", "Apache-2.0");
+				pj_ks (pj, "branch", "radare2-2024");
+				pj_end (pj);
+			}
+			pj_end (pj);
+		}
+		pj_ko (pj, "plugins");
+		{
+			r_core_loadlibs (core, R_LIB_LOAD_ALL, NULL);
+			json_plugins (core, pj, "core", "Lcj");
+			json_plugins (core, pj, "bin", "Lbj");
+			json_plugins (core, pj, "arch", "Laj");
+			json_plugins (core, pj, "crypto", "Lhj");
+			json_plugins (core, pj, "debug", "Ldj");
+			json_plugins (core, pj, "egg", "Lgj");
+			json_plugins (core, pj, "fs", "Lmj");
+			json_plugins (core, pj, "io", "Loj");
+			json_plugins (core, pj, "lang", "Llj");
+			// json_plugins (core, pj, "parse", "Lpj");
+			// json_plugins (core, pj, "anal", "LAj");
+			//	json_plugins (core, pj, "asm", "LAj"); // should be psuedo but its not listed
+		}
+		pj_end (pj);
+		pj_end (pj);
+		char *s = pj_drain (pj);
+		r_cons_println (cons, s);
+		free (s);
+	} else {
+		if (show) {
+			r_cons_printf (cons, "%s  r2\n", base);
+		}
+		for (i = ret = 0; vcs[i].name; i++) {
+			struct vcs_t *v = &vcs[i];
+			const char *name = v->callback ();
+			if (!ret && strcmp (base, name)) {
+				ret = 1;
+			}
+			if (show) {
+				r_cons_printf (cons, "%s  %s\n", name, v->name);
+			}
+		}
+		if (ret) {
+			R_LOG_WARN ("r2 library versions mismatch! Check r2 -V");
 		}
 	}
-	if (ret) {
-		eprintf ("Warning: r2 library versions mismatch! Check r2 -V");
-	}
-	return ret;
+	return r_main_cons_fini (cons, own_cons, ret);
 }
 
 static int main_help(int line) {
 	if (line < 2) {
-		printf ("Usage: r2 [-ACdfLMnNqStuvwzX] [-P patch] [-p prj] [-a arch] [-b bits] [-i file]\n"
-			"          [-s addr] [-B baddr] [-m maddr] [-c cmd] [-e k=v] file|pid|-|--|=\n");
+		printf ("Usage: r2 [-ACdfjLMnNqStuvwzX] [-P patch] [-p prj] [-a arch] [-b bits] [-c cmd]\n"
+		"          [-s addr] [-B baddr] [-m maddr] [-i script] [-e k=v] file|pid|-|--|=\n");
 	}
 	if (line != 1) {
 		printf (
-		" --           run radare2 without opening any file\n"
-		" -            same as 'r2 malloc://512'\n"
-		" =            read file from stdin (use -i and -c to run cmds)\n"
-		" -=           perform !=! command to run all commands remotely\n"
-		" -0           print \\x00 after init and every command\n"
-		" -2           close stderr file descriptor (silent warning messages)\n"
-		" -a [arch]    set asm.arch\n"
-		" -A           run 'aaa' command to analyze all referenced code\n"
-		" -b [bits]    set asm.bits\n"
-		" -B [baddr]   set base address for PIE binaries\n"
-		" -c 'cmd..'   execute radare command\n"
-		" -C           file is host:port (alias for -c+=http://%%s/cmd/)\n"
-		" -d           debug the executable 'file' or running process 'pid'\n"
-		" -D [backend] enable debug mode (e cfg.debug=true)\n"
-		" -e k=v       evaluate config var\n"
-		" -f           block size = file size\n"
-		" -F [binplug] force to use that rbin plugin\n"
-		" -h, -hh      show help message, -hh for long\n"
-		" -H ([var])   display variable\n"
-		" -i [file]    run script file\n"
-		" -I [file]    run script file before the file is opened\n"
-		" -j           use json for -v, -L and maybe others\n"
-		" -k [OS/kern] set asm.os (linux, macos, w32, netbsd, ...)\n"
-		" -l [lib]     load plugin file\n"
-		" -L           list supported IO plugins\n"
-		" -m [addr]    map file at given address (loadaddr)\n"
-		" -M           do not demangle symbol names\n"
-		" -n, -nn      do not load RBin info (-nn only load bin structures)\n"
-		" -N           do not load user settings and scripts\n"
-		" -NN          do not load any script or plugin\n"
-		" -q           quiet mode (no prompt) and quit after -i\n"
-		" -qq          quit after running all -c and -i\n"
-		" -Q           quiet mode (no prompt) and quit faster (quickLeak=true)\n"
-		" -p [prj]     use project, list if no arg, load if no file\n"
-		" -P [file]    apply rapatch file and quit\n"
-		" -r [rarun2]  specify rarun2 profile to load (same as -e dbg.profile=X)\n"
-		" -R [rr2rule] specify custom rarun2 directive\n"
-		" -s [addr]    initial seek\n"
-		" -S           start r2 in sandbox mode\n"
+			" --           run radare2 without opening any file\n"
+			" -            same as 'r2 malloc://512'\n"
+			" =            read file from stdin (use -i and -c to run cmds)\n"
+			" -=           perform !=! command to run all commands remotely\n"
+			" -0           print \\x00 after init and every command\n"
+			" -1           redirect stderr to stdout\n"
+			" -2           close stderr file descriptor (silent warning messages)\n"
+			" -a [arch]    set asm.arch\n"
+			" -A           run 'aaa' command to analyze all referenced code\n"
+			" -b [bits]    set asm.bits\n"
+			" -B [baddr]   set base address for PIE binaries\n"
+			" -c 'cmd..'   execute radare command\n"
+			" -C           file is host:port (alias for -c+=http://%%s/cmd/)\n"
+			" -d           debug the executable 'file' or running process 'pid'\n"
+			" -D [backend] enable debug mode (e cfg.debug=true)\n"
+			" -e k=v       evaluate config var\n"
+			" -E           open cfg.editor with the user rc file\n"
+			" -f           block size = file size\n"
+			" -F [binplug] force to use that rbin plugin\n"
+			" -h, -hh      show help message, -hh for long\n"
+			" -H ([var])   display variable\n"
+			" -i [file]    run rlang program, r2script file or load plugin\n"
+			" -I [file]    run script file before the file is opened\n"
+			" -j           use json for -v, -L and maybe others\n"
+			" -k [OS/kern] set asm.os (linux, macos, w32, netbsd, ...)\n"
+			" -L, -LL      list supported IO plugins (-LL list core plugins)\n"
+			" -m [addr]    map file at given address (loadaddr)\n"
+			" -M           do not demangle symbol names\n"
+			" -n, -nn      do not load RBin info (-nn only load bin structures)\n"
+			" -N           do not load user settings and scripts\n"
+			" -NN          do not load any script or plugin\n"
+			" -q           quiet mode (no prompt) and quit after -i\n"
+			" -qq          quit after running all -c and -i\n"
+			" -Q           quiet mode (no prompt) and quit faster (quickLeak=true)\n"
+			" -p [prj]     use project, list if no arg, load if no file\n"
+			" -P [file]    apply rapatch file and quit\n"
+			" -r [rarun2]  specify rarun2 profile to load (same as -e dbg.profile=X)\n"
+			" -R [rr2rule] specify custom rarun2 directive (uses base64 dbg.profile)\n"
+			" -s [addr]    initial seek\n"
+			" -S           start r2 in sandbox mode\n"
 #if USE_THREADS && ALLOW_THREADED
-		" -t           load rabin2 info in thread\n"
+			" -t           load rabin2 info in thread\n"
 #endif
-		" -T           do not compute file hashes\n"
-		" -u           set bin.filter=false to get raw sym/sec/cls names\n"
-		" -v, -V       show radare2 version (-V show lib versions)\n"
-		" -w           open file in write mode\n"
-		" -x           open without exec-flag (asm.emu will not work), See io.exec\n"
-		" -X           same as -e bin.usextr=false (useful for dyldcache)\n"
-		" -z, -zz      do not load strings or load them even in raw\n");
+			" -u           set bin.filter=false to get raw sym/sec/cls names\n"
+			" -v, -V       show radare2 version (-V show lib versions)\n"
+			" -w           open file in write mode\n"
+			" -x           open without exec-flag (asm.emu will not work), See io.exec\n"
+			" -X           same as -e bin.usextr=false (useful for dyldcache)\n"
+			" -z, -zz      do not load strings or load them even in raw\n");
 	}
 	if (line == 2) {
-		char *datahome = r_str_home (R2_HOME_DATADIR);
-		const char *dirPrefix = r_sys_prefix (NULL);
-		printf (
-		"Scripts:\n"
-		" system       ${R2_PREFIX}/share/radare2/radare2rc\n"
-		" user         ~/.radare2rc " R_JOIN_2_PATHS ("~", R2_HOME_RC) " (and " R_JOIN_3_PATHS ("~", R2_HOME_RC_DIR,"") ")\n"
-		" file         ${filename}.r2\n"
-		"Plugins:\n"
-		" binrc        " R_JOIN_4_PATHS ("~", R2_HOME_BINRC, "bin-<format>",  "") " (elf, elf64, mach0, ..)\n"
-		" R2_USER_PLUGINS " R_JOIN_2_PATHS ("~", R2_HOME_PLUGINS) "\n"
-		" R2_LIBR_PLUGINS " R_JOIN_2_PATHS ("%s", R2_PLUGINS) "\n"
-		" R2_USER_ZIGNS " R_JOIN_2_PATHS ("~", R2_HOME_ZIGNS) "\n"
-		"Environment:\n"
-		" R2_CFG_NEWSHELL sets cfg.newshell=true\n"
-		" R2_DEBUG      if defined, show error messages and crash signal.\n"
-		" R2_DEBUG_ASSERT=1 set a breakpoint when hitting an assert.\n"
-		" R2_IGNVER=1   load plugins ignoring the specified version. (be careful)\n"
-		" R2_MAGICPATH " R_JOIN_2_PATHS ("%s", R2_SDB_MAGIC) "\n"
-		" R2_NOPLUGINS do not load r2 shared plugins\n"
-		" R2_RCFILE    ~/.radare2rc (user preferences, batch script)\n" // TOO GENERIC
-		" R2_RDATAHOME %s\n" // TODO: rename to RHOME R2HOME?
-		" R2_VERSION   contains the current version of r2\n"
-		"Paths:\n"
-		" R2_PREFIX    "R2_PREFIX"\n"
-		" R2_INCDIR    "R2_INCDIR"\n"
-		" R2_LIBDIR    "R2_LIBDIR"\n"
-		" R2_LIBEXT    "R_LIB_EXT"\n"
-		, dirPrefix, datahome, dirPrefix);
+		char *datahome = r_xdg_datadir (NULL);
+		char *dirPrefix = r_sys_prefix (NULL);
+		RStrBuf *sb = r_strbuf_new ("");
+
+		r_strbuf_append (sb, "Scripts:\n");
+		r_strbuf_appendf (sb, " system          %s/share/radare2/radare2rc\n", dirPrefix);
+		r_strbuf_append (sb, " user            ~/.radare2rc ${XDG_CONFIG_DIR:=~/.config/radare2}/rc{.d/}\n");
+		r_strbuf_append (sb, " file            ${filename}.r2\n");
+		r_strbuf_append (sb, "Plugins:\n");
+		r_strbuf_appendf (sb, " R2_LIBR_PLUGINS " R_JOIN_2_PATHS ("%s", R2_PLUGINS) "\n"
+										" R2_USER_PLUGINS ${XDG_DATA_HOME:=~/.local/share}/radare2/plugins\n"
+										" R2_USER_ZIGNS   ${XDG_DATA_HOME:=~/.local/share}/radare2/zigns\n"
+										"Environment:\n"
+										" R2_COLOR        sets the initial value for 'scr.color'. set to 0 for no color\n"
+										" R2_ARGS         ignore cli arguments and use these ones instead\n"
+										" R2_DEBUG        if defined, show error messages and crash signal\n"
+										" R2_DEBUG_TOOL   debugger command used by the crash handler\n"
+										" R2_CFLAGS       compiler flags to build against libr\n"
+										" R2_LDFLAGS      linker search path flags to build against libr\n"
+										" R2_LIBS         library flags to link against libr\n"
+										" R2_PAPI_SCRIPT  path to the custom r2papi script\n"
+										" R2_DEBUG_NOPAPI do not load r2papi in the -j qjs shell\n"
+										" R2_DEBUG_NOLANG do not load rlang plugins (except qjs)\n"
+										" R2_DEBUG_ASSERT set a breakpoint when hitting an assert\n"
+										" R2_DEBUG_FUZZ   crash when hitting an assert (requires R2_DEBUG_ASSERT)\n"
+										" R2_IGNVER       load plugins ignoring the specified version (be careful)\n"
+										" R2_IGNABI       ignore abiversion field from the radare (be even more careful)\n"
+										" R2_SAFE_PLUGINS load plugins with the safe two-step loader\n"
+										" R2_PLUGINS_ORDER plugin load order (i=internal,e=env,h=home,s=system,c=config)\n"
+										" R2_MAGICPATH    %s/" R2_SDB_MAGIC "\n"
+										" R2_NOPLUGINS    do not load r2 shared plugins\n",
+			dirPrefix,
+			dirPrefix);
+		r_strbuf_append (sb, " R2_HISTORY      ${XDG_CACHE_HOME:=~/.cache}/radare2/history\n");
+		r_strbuf_append (sb, " R2_RCFILE       ~/.radare2rc (user preferences, batch script)\n" // TOO GENERIC
+				" R2_CURL         set to '1' to use system curl program instead of r2 apis\n"
+				" R2_UTF8         force UTF-8 detection on or off\n"
+				" R2_WWWROOT      path to the HTTP server web root\n");
+		r_strbuf_appendf (sb, " R2_DATA_HOME    %s\n"
+				" R2_VERSION      contains the current version of r2\n"
+				" R2_ABIVERSION   contains the ABI version of r2\n"
+				" R2_VERSION_ABI  alias for R2_ABIVERSION\n"
+				" R2_LOG_LEVEL    numeric value of the max level of messages to show\n"
+				" R2_LOG_FILE     dump all logs to a file\n"
+				"Paths:\n"
+				" R2_RCFILE    ~/.radare2rc\n"
+				" R2_INCDIR    " R2_INCDIR "\n"
+				" R2_BINDIR    " R2_BINDIR "\n"
+				" R2_MANDIR    " R2_MANDIR "\n"
+				" R2_DOCDIR    " R2_DOCDIR "\n"
+				" R2_LIBDIR    " R2_LIBDIR "\n"
+				" R2_LIBEXT    " R_LIB_EXT "\n"
+				" R2_PREFIX    " R2_PREFIX "\n",
+			datahome);
 		free (datahome);
+		free (dirPrefix);
+
+		char *helpmsg = r_strbuf_drain (sb);
+		if (helpmsg) {
+			printf ("%s", helpmsg);
+			free (helpmsg);
+		}
 	}
 	return 0;
 }
 
 static int main_print_var(const char *var_name) {
 	int i = 0;
-#ifdef __WINDOWS__
+#ifdef R2__WINDOWS__
 	char *incdir = r_str_r2_prefix (R2_INCDIR);
 	char *libdir = r_str_r2_prefix (R2_LIBDIR);
+	char *bindir = r_str_r2_prefix (R2_BINDIR);
+	char *mandir = r_str_r2_prefix (R2_MANDIR);
+	char *docdir = r_str_r2_prefix (R2_DOCDIR);
 #else
 	char *incdir = strdup (R2_INCDIR);
 	char *libdir = strdup (R2_LIBDIR);
+	char *bindir = strdup (R2_BINDIR);
+	char *mandir = strdup (R2_MANDIR);
+	char *docdir = strdup (R2_DOCDIR);
 #endif
-	char *confighome = r_str_home (R2_HOME_CONFIGDIR);
-	char *datahome = r_str_home (R2_HOME_DATADIR);
-	char *cachehome = r_str_home (R2_HOME_CACHEDIR);
-	char *homeplugins = r_str_home (R2_HOME_PLUGINS);
-	char *homezigns = r_str_home (R2_HOME_ZIGNS);
+	char *rcfile = r_file_home (".radare2rc");
+	char *confighome = r_xdg_configdir (NULL);
+	char *datahome = r_xdg_datadir (NULL);
+	char *cachehome = r_xdg_cachedir (NULL);
+	char *homeplugins = r_xdg_datadir ("plugins");
+	char *homezigns = r_xdg_datadir ("zigns");
+	char *homedoc = r_xdg_datadir ("doc");
+	// printf ("homedoc = %s\n", homedoc);
 	char *plugins = r_str_r2_prefix (R2_PLUGINS);
 	char *magicpath = r_str_r2_prefix (R2_SDB_MAGIC);
-	struct radare2_var_t {
+	char *historyhome = r_xdg_cachedir ("history");
+	char *r2prefix = r_sys_prefix (NULL);
+	char *r2_cflags = NULL;
+	char *r2_ldflags = NULL;
+	char *r2_libs = NULL;
+	r_main_buildflags (&r2_cflags, &r2_ldflags, &r2_libs);
+	struct {
 		const char *name;
 		const char *value;
+		bool env;
 	} r2_vars[] = {
 		{ "R2_VERSION", R2_VERSION },
-		{ "R2_PREFIX", R2_PREFIX },
-		{ "R2_MAGICPATH", magicpath },
+		{ "R2_VERSION_ABI", R2_ABIVERSION_STRING },
+		{ "R2_VERSION_MAJOR", STRINGIFY (R2_VERSION_MAJOR) },
+		{ "R2_VERSION_MINOR", STRINGIFY (R2_VERSION_MINOR) },
+		{ "R2_VERSION_PATCH", STRINGIFY (R2_VERSION_PATCH) },
+		{ "R2_ABIVERSION", R2_ABIVERSION_STRING },
+		{ "R2_PREFIX", r2prefix, true },
+		{ "R2_MAGICPATH", magicpath, true },
 		{ "R2_INCDIR", incdir },
+		{ "R2_BINDIR", bindir },
+		{ "R2_MANDIR", mandir },
+		{ "R2_DOCDIR", docdir },
+		{ "R2_RCFILE", rcfile, true },
 		{ "R2_LIBDIR", libdir },
 		{ "R2_LIBEXT", R_LIB_EXT },
-		{ "R2_RCONFIGHOME", confighome },
+		{ "R2_DATA_HOME", datahome },
 		{ "R2_RDATAHOME", datahome },
-		{ "R2_RCACHEHOME", cachehome },
-		{ "R2_LIBR_PLUGINS", plugins },
+		{ "R2_HISTORY", historyhome },
+		{ "R2_CONFIG_HOME", confighome }, // from xdg
+		{ "R2_CACHE_HOME", cachehome }, //  from xdg
+		{ "R2_LIBR_PLUGINS", plugins, true },
 		{ "R2_USER_PLUGINS", homeplugins },
+		{ "R2_USER_DOCDIR", homedoc },
 		{ "R2_USER_ZIGNS", homezigns },
+		{ "R2_ZIGNS_HOME", homezigns },
+		{ "R2_CFLAGS", r2_cflags },
+		{ "R2_LDFLAGS", r2_ldflags },
+		{ "R2_LIBS", r2_libs },
+		{ "R2_ARGS", NULL, true },
+		{ "R2_COLOR", NULL, true },
+		{ "R2_CURL", NULL, true },
+		{ "R2_DEBUG", NULL, true },
+		{ "R2_DEBUG_ASSERT", NULL, true },
+		{ "R2_DEBUG_FUZZ", NULL, true },
+		{ "R2_DEBUG_NOLANG", NULL, true },
+		{ "R2_DEBUG_NOPAPI", NULL, true },
+		{ "R2_DEBUG_TOOL", NULL, true },
+		{ "R2_IGNABI", NULL, true },
+		{ "R2_IGNVER", NULL, true },
+		{ "R2_IHEX_IGNCSUM", NULL, true },
+		{ "R2_LOG_FILE", NULL, true },
+		{ "R2_LOG_LEVEL", NULL, true },
+		{ "R2_NOPLUGINS", NULL, true },
+		{ "R2_PAPI_SCRIPT", NULL, true },
+		{ "R2_PLUGINS_ORDER", NULL, true },
+		{ "R2_SAFE_PLUGINS", NULL, true },
+		{ "R2_SREC_IGNCSUM", NULL, true },
+		{ "R2_UTF8", NULL, true },
+		{ "R2_WWWROOT", NULL, true },
 		{ NULL, NULL }
 	};
 	int delta = 0;
-	if (var_name && strncmp (var_name, "R2_", 3)) {
+	if (var_name && !r_str_startswith (var_name, "R2_")) {
 		delta = 3;
 	}
-	if (var_name) {
-		while (r2_vars[i].name) {
+	while (r2_vars[i].name) {
+		char *env_value = r2_vars[i].env? r_sys_getenv (r2_vars[i].name): NULL;
+		const char *value = R_STR_ISNOTEMPTY (env_value)? env_value: r_str_get (r2_vars[i].value);
+		if (var_name) {
 			if (!strcmp (r2_vars[i].name + delta, var_name)) {
-				printf ("%s\n", r2_vars[i].value);
+				printf ("%s\n", value);
+				free (env_value);
 				break;
 			}
-			i++;
+		} else {
+			printf ("%s=%s\n", r2_vars[i].name, value);
 		}
-	} else {
-		while (r2_vars[i].name) {
-			printf ("%s=%s\n", r2_vars[i].name, r2_vars[i].value);
-			i++;
-		}
+		free (env_value);
+		i++;
 	}
+	free (rcfile);
 	free (incdir);
 	free (libdir);
+	free (bindir);
+	free (mandir);
+	free (docdir);
 	free (confighome);
+	free (historyhome);
 	free (datahome);
 	free (cachehome);
 	free (homeplugins);
+	free (homedoc);
 	free (homezigns);
 	free (plugins);
 	free (magicpath);
+	free (r2_cflags);
+	free (r2_ldflags);
+	free (r2_libs);
+	free (r2prefix);
 	return 0;
 }
 
@@ -237,18 +547,17 @@ static bool run_commands(RCore *r, RList *cmds, RList *files, bool quiet, int do
 	RListIter *iter;
 	const char *cmdn;
 	const char *file;
-	int ret;
 	/* -i */
 	bool has_failed = false;
 	r_list_foreach (files, iter, file) {
 		if (!r_file_exists (file)) {
-			eprintf ("Script '%s' not found.\n", file);
+			R_LOG_ERROR ("Script '%s' not found", file);
 			goto beach;
 		}
-		ret = r_core_run_script (r, file);
-		r_cons_flush ();
+		int ret = r_core_run_script (r, file);
+		r_cons_flush (r->cons);
 		if (ret == -2) {
-			eprintf ("[c] Cannot open '%s'\n", file);
+			R_LOG_ERROR ("Cannot open '%s'", file);
 		}
 		if (ret < 0) {
 			has_failed = true;
@@ -258,7 +567,7 @@ static bool run_commands(RCore *r, RList *cmds, RList *files, bool quiet, int do
 	/* -c */
 	r_list_foreach (cmds, iter, cmdn) {
 		r_core_cmd_lines (r, cmdn);
-		r_cons_flush ();
+		r_cons_flush (r->cons);
 	}
 beach:
 	if (quiet && !has_failed) {
@@ -272,22 +581,44 @@ beach:
 			return true;
 		}
 	}
-	return false;
+	return has_failed;
 }
 
-static bool mustSaveHistory(RConfig *c) {
-	if (!r_config_get_i (c, "scr.hist.save")) {
+static bool mustSaveHistory(RCore *core) {
+	if (!r_config_get_b (core->config, "scr.hist.save")) {
 		return false;
 	}
-	if (!r_cons_is_interactive ()) {
+	if (!r_cons_is_interactive (core->cons)) {
 		return false;
 	}
 	return true;
 }
 
+static inline void autoload_zigns(RCore *r) {
+	char *path = r_file_abspath (r_config_get (r->config, "dir.zigns"));
+	if (R_STR_ISNOTEMPTY (path)) {
+		RList *list = r_sys_dir (path);
+		RListIter *iter;
+		char *file;
+		r_list_foreach (list, iter, file) {
+			if (file && *file && *file != '.') {
+				char *complete_path = r_str_newf ("%s" R_SYS_DIR "%s", path, file);
+				if (r_str_endswith (complete_path, "gz")) {
+					r_sign_load_gz (r->anal, complete_path, false);
+				} else {
+					r_sign_load (r->anal, complete_path, false);
+				}
+				free (complete_path);
+			}
+		}
+		r_list_free (list);
+	}
+	free (path);
+}
+
 // Try to set the correct scr.color for the current terminal.
 static void set_color_default(RCore *r) {
-#ifdef __WINDOWS__
+#ifdef R2__WINDOWS__
 	char *alacritty = r_sys_getenv ("ALACRITTY_LOG");
 	if (alacritty) {
 		// Despite the setting of env vars to the contrary, Alacritty on
@@ -299,78 +630,265 @@ static void set_color_default(RCore *r) {
 		return;
 	}
 #endif
-	char *tmp = r_sys_getenv ("COLORTERM");
-	if (tmp) {
-		if ((r_str_endswith (tmp, "truecolor") || r_str_endswith (tmp, "24bit"))) {
-			r_config_set_i (r->config, "scr.color", COLOR_MODE_16M);
-		}
-	} else {
-		tmp = r_sys_getenv ("TERM");
-		if (!tmp) {
-			return;
-		}
-		if (r_str_endswith (tmp, "truecolor") || r_str_endswith (tmp, "24bit")) {
-			r_config_set_i (r->config, "scr.color", COLOR_MODE_16M);
-		} else if (r_str_endswith (tmp, "256color")) {
-			r_config_set_i (r->config, "scr.color", COLOR_MODE_256);
-		} else if (!strcmp (tmp, "dumb")) {
-			// Dumb terminals don't get color by default.
-			r_config_set_i (r->config, "scr.color", COLOR_MODE_DISABLED);
-		}
+	char *log_level = r_sys_getenv ("R2_LOG_LEVEL");
+	if (R_STR_ISNOTEMPTY (log_level)) {
+		r_config_set (r->config, "log.level", log_level);
 	}
-	free (tmp);
+	R_FREE (log_level);
+	char *log_file = r_sys_getenv ("R2_LOG_FILE");
+	if (R_STR_ISNOTEMPTY (log_file)) {
+		r_config_set (r->config, "log.file", log_file);
+	}
+	R_FREE (log_file);
+	int scr_color = -1;
+	char *r2c = r_sys_getenv ("R2_COLOR");
+	if (r2c) {
+		if (*r2c) {
+			int v = atoi (r2c);
+			if (v) {
+				r_config_set_i (r->config, "scr.color", v);
+				scr_color = v;
+			} else {
+				if (*r2c == '0') {
+					scr_color = 0;
+					r_config_set_i (r->config, "scr.color", 0);
+				}
+			}
+		}
+		free (r2c);
+	}
+	if (scr_color == -1) {
+		char *tmp = r_sys_getenv ("COLORTERM");
+		if (tmp) {
+			if ((r_str_endswith (tmp, "truecolor") || r_str_endswith (tmp, "24bit"))) {
+				r_config_set_i (r->config, "scr.color", COLOR_MODE_16M);
+			}
+		} else {
+			tmp = r_sys_getenv ("TERM");
+			if (!tmp) {
+				return;
+			}
+			if (r_str_endswith (tmp, "truecolor") || r_str_endswith (tmp, "24bit")) {
+				r_config_set_i (r->config, "scr.color", COLOR_MODE_16M);
+			} else if (r_str_endswith (tmp, "256color")) {
+				r_config_set_i (r->config, "scr.color", COLOR_MODE_256);
+			} else if (!strcmp (tmp, "dumb")) {
+				// Dumb terminals don't get color by default.
+				r_config_set_i (r->config, "scr.color", COLOR_MODE_DISABLED);
+			}
+		}
+		free (tmp);
+	}
+}
+
+typedef struct {
+	char *filepath;
+	ut64 baddr;
+	RCore *core;
+	int do_analysis;
+	RThread *th_bin;
+} ThreadData;
+
+static void perform_analysis(RCore *r, int do_analysis) {
+	r->times->file_anal_time = r_time_now_mono ();
+	const char *acmd = "aaaaa";
+	switch (do_analysis) {
+	case 0: acmd = ""; break;
+	case 1: acmd = "aa"; break;
+	case 2: acmd = "aaa"; break;
+	case 3: acmd = "aaaa"; break;
+	}
+	r_core_call (r, acmd);
+	r_cons_flush (r->cons);
+	r->times->file_anal_time = r_time_now_mono () - r->times->file_anal_time;
+}
+
+static RThreadFunctionRet th_analysis(RThread *th) {
+	ThreadData *td = (ThreadData *)th->user;
+	if (td->th_bin) {
+		R_LOG_INFO ("Waiting for rbin parsing");
+		r_th_wait (td->th_bin);
+		r_th_free (td->th_bin);
+		td->th_bin = NULL;
+	}
+	R_LOG_INFO ("Loading binary information in background");
+	// XXX R2_600 - cons
+	RCons *cons = r_cons_thready (r_cons_new ());
+	perform_analysis (td->core, td->do_analysis);
+	r_cons_free (cons);
+	R_FREE (th->user);
+	R_LOG_INFO ("bin.load done");
+	return false;
+}
+
+static RThreadFunctionRet th_binload(RThread *th) {
+	R_LOG_INFO ("Loading binary information in background");
+	RCons *cons = r_cons_thready (r_cons_new ());
+	ThreadData *td = (ThreadData *)th->user;
+	RCore *r = td->core;
+	const char *filepath = td->filepath;
+	const ut64 baddr = td->baddr;
+	(void)r_core_bin_load (r, filepath, baddr);
+	free (td->filepath);
+	r_cons_free (cons);
+	R_FREE (th->user);
+	R_LOG_INFO ("bin.load done");
+	return false;
+}
+
+static bool binload(RCore *r, const char *filepath, ut64 baddr, bool baddr_set) {
+	if (!r_core_bin_load (r, filepath, baddr)) {
+		return false;
+	}
+	// check if bin info is loaded and complain if -B was used
+	RBinFile *bi = r_bin_cur (r->bin);
+	bool haveBinInfo = bi && bi->bo && bi->bo->info && bi->bo->info->type;
+	if (!haveBinInfo && baddr_set) {
+		R_LOG_WARN ("Don't use -B on unknown files. Consider using -m");
+	}
+	return true;
+}
+
+typedef enum {
+	LOAD_BIN_ALL,
+	LOAD_BIN_NOTHING,
+	LOAD_BIN_STRUCTURES_ONLY
+} LoadBinMode;
+
+typedef struct {
+	RCore *r;
+	bool forcequit;
+	bool haveRarunProfile;
+	int do_analysis;
+	RIODesc *fh;
+	RIODesc *iod;
+	int debug;
+	int zflag;
+	bool do_connect;
+	bool fullfile;
+	bool zerosep;
+	int help;
+	LoadBinMode load_bin;
+	bool run_rc;
+	int perms;
+	bool sandbox;
+	ut64 baddr;
+	bool baddr_set;
+	ut64 seek;
+	bool do_list_io_plugins;
+	bool do_list_core_plugins;
+	char *patchfile;
+	char *file;
+	char *pfile;
+	char *asmarch;
+	char *asmos;
+	char *forcebin;
+	char *asmbits;
+	char *customRarunProfile;
+	char *s_seek;
+	ut64 mapaddr;
+	bool quiet;
+	bool quiet_leak;
+	bool is_gdb;
+	RThread *th_bin;
+	RThread *th_ana;
+	RList *cmds;
+	RList *evals;
+	RList *files;
+	RList *prefiles;
+	bool show_version;
+	bool show_versions;
+	bool json;
+	bool threaded;
+	bool load_l;
+	bool leave;
+	char *envprofile;
+	char *debugbackend;
+	char *project_name;
+	char *qjs_script;
+	bool noStderr;
+	bool stderrToStdout;
+} RMainRadare2;
+
+static void mainr2_init(RMainRadare2 *mr) {
+	memset (mr, 0, sizeof (RMainRadare2));
+	mr->load_l = true;
+	mr->run_rc = true;
+	mr->debugbackend = strdup ("native");
+	mr->load_bin = LOAD_BIN_ALL;
+	mr->baddr = UT64_MAX;
+	mr->seek = UT64_MAX;
+	mr->perms = R_PERM_RX;
+	mr->cmds = r_list_newf (free);
+	mr->evals = r_list_newf (free);
+	mr->files = r_list_newf (free);
+	mr->prefiles = r_list_newf (free);
+}
+
+static void mainr2_fini(RMainRadare2 *mr) {
+	r_list_free (mr->cmds);
+	r_list_free (mr->evals);
+	r_list_free (mr->files);
+	r_list_free (mr->prefiles);
+	free (mr->patchfile);
+	free (mr->file);
+	free (mr->pfile);
+	free (mr->asmarch);
+	free (mr->asmos);
+	free (mr->forcebin);
+	free (mr->asmbits);
+	free (mr->customRarunProfile);
+	free (mr->s_seek);
+	free (mr->envprofile);
+	free (mr->debugbackend);
+	free (mr->project_name);
+	free (mr->qjs_script);
+	r_core_free (mr->r);
+}
+
+static char *dp_read(RCore *core) {
+	const char *dbg_profile = r_config_get (core->config, "dbg.profile");
+	if (R_STR_ISNOTEMPTY (dbg_profile)) {
+		if (r_str_startswith (dbg_profile, "base64:")) {
+			int len;
+			char *s = (char *)r_base64_decode_dyn (dbg_profile + 7, -1, &len, false);
+			char *res = r_str_ndup (s, len);
+			free (s);
+			return res;
+		}
+		return r_file_slurp (dbg_profile, NULL);
+	}
+	return NULL;
+}
+
+static void dp_write(RCore *core, const char *s) {
+	if (R_STR_ISEMPTY (s)) {
+		r_config_set (core->config, "dbg.profile", "");
+	} else {
+		char *v = r_base64_encode_dyn ((const ut8 *)s, -1);
+		char *rs = r_str_newf ("base64:%s", v);
+		r_config_set (core->config, "dbg.profile", rs);
+		free (rs);
+		free (v);
+	}
+}
+
+#define OPTARGS "=012AjMCwxfF:Hhm:e:Enk:NdqQs:p:b:B:a:Lui:I:l:P:R:r:c:D:vVSzuXt"
+
+static int main_radare2(int argc, const char **argv, bool standalone);
+
+static int main_radare2_repl(int argc, const char **argv) {
+	return main_radare2 (argc, argv, false);
 }
 
 R_API int r_main_radare2(int argc, const char **argv) {
-	RCore *r;
-	bool forcequit = false;
-	bool haveRarunProfile = false;
-	RListIter *iter;
-	int do_analysis = 0;
-	char *cmdn, *tmp;
-	RIODesc *fh = NULL;
-	RIODesc *iod = NULL;
-	const char *patchfile = NULL;
-	int debug = 0;
-	int zflag = 0;
-	bool do_connect = false;
-	bool fullfile = false;
-	bool zerosep = false;
-	int help = 0;
-	enum { LOAD_BIN_ALL, LOAD_BIN_NOTHING, LOAD_BIN_STRUCTURES_ONLY } load_bin = LOAD_BIN_ALL;
-	bool run_rc = true;
- 	int ret, c, perms = R_PERM_RX;
-	bool sandbox = false;
-	ut64 baddr = UT64_MAX;
-	ut64 seek = UT64_MAX;
-	bool do_list_io_plugins = false;
-	char *file = NULL;
-	char *pfile = NULL;
-	const char *asmarch = NULL;
-	const char *asmos = NULL;
-	const char *forcebin = NULL;
-	const char *asmbits = NULL;
-	char *customRarunProfile = NULL;
-	ut64 mapaddr = 0LL;
-	bool quiet = false;
-	bool quietLeak = false;
-	int is_gdb = false;
-	const char * s_seek = NULL;
-	bool compute_hashes = true;
-	RList *cmds = r_list_new ();
-	RList *evals = r_list_new ();
-	RList *files = r_list_new ();
-	RList *prefiles = r_list_new ();
+	return main_radare2 (argc, argv, true);
+}
 
-#define LISTS_FREE() \
-		{ \
-			r_list_free (cmds); \
-			r_list_free (evals); \
-			r_list_free (files); \
-			r_list_free (prefiles); \
-		}
-
-	bool noStderr = false;
+static int main_radare2(int argc, const char **argv, bool standalone) {
+	int c, ret;
+	RMainRadare2 mr;
+	mainr2_init (&mr);
 
 #ifdef __UNIX
 	sigset_t sigBlockMask;
@@ -378,15 +896,12 @@ R_API int r_main_radare2(int argc, const char **argv) {
 	sigaddset (&sigBlockMask, SIGWINCH);
 	r_signal_sigmask (SIG_BLOCK, &sigBlockMask, NULL);
 #endif
-
 	r_sys_env_init ();
 	// Create rarun2 profile with startup environ
-	char **env = r_sys_get_environ ();
-	char *envprofile = r_run_get_environ_profile (env);
-
 	if (r_sys_getenv_asbool ("R2_DEBUG")) {
+		r_log_set_level (R_LOG_LEVEL_LAST - 1);
 		char *sysdbg = r_sys_getenv ("R2_DEBUG_TOOL");
-		char *fmt = (sysdbg && *sysdbg)
+		char *fmt = R_STR_ISNOTEMPTY (sysdbg)
 			? strdup (sysdbg)
 #if __APPLE__
 			: strdup ("lldb -p");
@@ -398,33 +913,97 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		free (sysdbg);
 	}
 	if (argc < 2) {
-		LISTS_FREE ();
-		free (envprofile);
+		mainr2_fini (&mr);
 		return main_help (1);
 	}
-	r = r_core_new ();
+	// Pre-RCore commandline flags
+	RGetopt opt = { 0 };
+	r_getopt_init (&opt, argc, argv, OPTARGS);
+	while ((c = r_getopt_next (&opt)) != -1) {
+		switch (c) {
+		case 'q':
+		case 'Q':
+			mr.quiet = true;
+			break;
+		case 'h':
+			mr.help++;
+			break;
+		case 'j':
+			mr.json = true;
+			break;
+		case 'v':
+			mr.show_version = true;
+			break;
+		case 'H':
+			if (R_STR_ISNOTEMPTY (opt.place)) {
+				main_print_var (opt.place);
+				opt.place = "";
+				opt.ind++;
+			} else if (opt.ind < argc && argv[opt.ind][0] != '-') {
+				main_print_var (argv[opt.ind]);
+				opt.ind++;
+			} else {
+				main_print_var (NULL);
+			}
+			mr.leave = true;
+			break;
+		}
+	}
+	if (mr.leave) {
+		mainr2_fini (&mr);
+		return 0;
+	}
+	if (mr.help > 0) {
+		int ret = main_help (mr.help > 1? 2: 0);
+		mainr2_fini (&mr);
+		return ret;
+	}
+	if (mr.show_version) {
+		int mode = 0;
+		if (mr.json) {
+			mode = 'j';
+		} else if (mr.quiet) {
+			mode = 'q';
+		}
+		int res = r_main_version_print (NULL, "radare2", mode);
+		mainr2_fini (&mr);
+		return res;
+	}
+	RCore *r = r_core_new ();
 	if (!r) {
-		eprintf ("Cannot initialize RCore\n");
-		free (envprofile);
-		LISTS_FREE ();
+		R_LOG_ERROR ("Cannot initialize RCore");
+		mainr2_fini (&mr);
 		return 1;
 	}
-	r->r_main_radare2 = r_main_radare2;
+	mr.r = r;
+	if (!r_cons_isatty (0) || !r_cons_isatty (1)) {
+		r_config_set_b (r->config, "scr.interactive", false);
+	}
+	if (!r_core_signal_init (r)) {
+		R_LOG_ERROR ("Cannot initialize user signal handlers");
+		mainr2_fini (&mr);
+		return 1;
+	}
+	r->r_main_radare2 = main_radare2_repl;
 	r->r_main_radiff2 = r_main_radiff2;
+	r->r_main_rapatch2 = r_main_rapatch2;
 	r->r_main_rafind2 = r_main_rafind2;
 	r->r_main_rabin2 = r_main_rabin2;
+	r->r_main_rahash2 = r_main_rahash2;
 	r->r_main_ragg2 = r_main_ragg2;
 	r->r_main_rasm2 = r_main_rasm2;
+	r->r_main_rafs2 = r_main_rafs2;
 	r->r_main_rax2 = r_main_rax2;
+	r->r_main_ravc2 = r_main_ravc2;
+	r->r_main_r2pm = r_main_r2pm;
 
-	r->io->envprofile = envprofile;
+	r->io->envprofile = mr.envprofile;
 
-	r_core_task_sync_begin (&r->tasks);
+	r_core_task_sync_begin (&mr.r->tasks);
 	if (argc == 2 && !strcmp (argv[1], "-p")) {
 		r_core_project_list (r, 0);
-		r_cons_flush ();
-		free (envprofile);
-		LISTS_FREE ();
+		r_cons_flush (r->cons);
+		mainr2_fini (&mr);
 		return 0;
 	}
 	// HACK TO PERMIT '#!/usr/bin/r2 - -i' hashbangs
@@ -434,393 +1013,374 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		argv++;
 	}
 
-	// -H option without argument
-	if (argc == 2 && !strcmp (argv[1], "-H")) {
-		main_print_var (NULL);
-		free (envprofile);
-		LISTS_FREE ();
-		return 0;
-	}
-
+	mr.quiet = false;
 	set_color_default (r);
-	bool show_version = false;
-	bool json = false;
-	bool load_l = true;
-	char *debugbackend = strdup ("native");
-	const char *project_name = NULL;
 
-	RGetopt opt;
-	r_getopt_init (&opt, argc, argv, "=02AjMCwxfF:H:hm:e:nk:NdqQs:p:b:B:a:Lui:I:l:P:R:r:c:D:vVSTzuXt");
+	r_getopt_init (&opt, argc, argv, OPTARGS);
 	while ((c = r_getopt_next (&opt)) != -1) {
 		switch (c) {
 		case 'j':
-			json = true;
+			mr.json = true;
 			break;
 		case '=':
 			R_FREE (r->cmdremote);
 			r->cmdremote = strdup ("");
 			break;
+		case '1':
+			mr.stderrToStdout = true;
+			break;
 		case '2':
-			noStderr = true;
+			mr.noStderr = true;
 			break;
 		case '0':
-			zerosep = true;
+			mr.zerosep = true;
 			/* implicit -q */
-			r_config_set (r->config, "scr.interactive", "false");
-			r_config_set (r->config, "scr.prompt", "false");
+			r_config_set_b (r->config, "scr.interactive", false);
+			r_config_set_b (r->config, "scr.prompt", false);
 			r_config_set_i (r->config, "scr.color", COLOR_MODE_DISABLED);
-			quiet = true;
+			mr.quiet = true;
 			break;
 		case 'u':
-			r_config_set (r->config, "bin.filter", "false");
+			r_config_set_b (r->config, "bin.filter", false);
 			break;
 		case 'a':
-			asmarch = opt.arg;
+			free (mr.asmarch);
+			mr.asmarch = strdup (opt.arg);
 			break;
 		case 'z':
-			zflag++;
+			mr.zflag++;
 			break;
 		case 'A':
-			do_analysis += do_analysis ? 1: 2;
+			mr.do_analysis += mr.do_analysis? 1: 2;
 			break;
 		case 'b':
-			asmbits = opt.arg;
+			free (mr.asmbits);
+			mr.asmbits = strdup (opt.arg);
 			r_config_set (r->config, "asm.bits", opt.arg);
 			break;
 		case 'B':
-			baddr = r_num_math (r->num, opt.arg);
+			mr.baddr = r_num_math (r->num, opt.arg);
+			mr.baddr_set = true;
 			break;
 		case 'X':
-			r_config_set (r->config, "bin.usextr", "false");
+			r_config_set_b (r->config, "bin.usextr", false);
 			break;
+		case 'E':
+			ret = r_core_call (r, "ed!");
+			mainr2_fini (&mr);
+			return ret == R_CMD_RC_SUCCESS? 0: 1;
 		case 'c':
-			r_list_append (cmds, (void*)opt.arg);
+			r_list_append (mr.cmds, (void *)strdup (opt.arg));
 			break;
 		case 'C':
-			do_connect = true;
+			mr.do_connect = true;
 			break;
+		case 'd':
 #if DEBUGGER
-		case 'd': debug = 1; break;
+			mr.debug = 1;
 #else
-		case 'd': eprintf ("Sorry. No debugger backend available.\n"); return 1;
+			R_LOG_ERROR ("Sorry. I'm built without debugger support");
+			mainr2_fini (&mr);
+			return 1;
 #endif
+			break;
 		case 'D':
-			debug = 2;
-			free (debugbackend);
-			debugbackend = strdup (opt.arg);
+			mr.debug = 2;
+			free (mr.debugbackend);
+			mr.debugbackend = strdup (opt.arg);
 			if (!strcmp (opt.arg, "?")) {
-				r_debug_plugin_list (r->dbg, 'q');
-				r_cons_flush ();
-				LISTS_FREE ();
-				free (envprofile);
-				free (debugbackend);
+				char *s = r_debug_plugin_list (r->dbg, 'q');
+				r_cons_print (r->cons, r_str_get (s));
+				free (s);
+				r_cons_flush (r->cons);
+				mainr2_fini (&mr);
 				return 0;
 			}
 			break;
 		case 'e':
-			if (!strcmp (opt.arg, "q")) {
-				r_core_cmd0 (r, "eq");
+			if (mr.json) {
+				// eval qjs script here!
+				free (mr.qjs_script);
+				mr.qjs_script = strdup (opt.arg);
 			} else {
-				r_config_eval (r->config, opt.arg, false);
-				r_list_append (evals, (void*)opt.arg);
+				if (!strcmp (opt.arg, "q")) {
+					r_core_cmd0 (r, "eq");
+				} else {
+					if (strchr (opt.arg, '=')) {
+						// TODO: i think r_config_eval must disapear
+						char *res = r_config_eval (r->config, opt.arg, false, NULL);
+						r_cons_print (r->cons, res);
+						free (res);
+						r_list_append (mr.evals, (void *)strdup (opt.arg));
+					} else {
+						R_LOG_ERROR ("Needed -e key=value");
+					}
+				}
 			}
 			break;
 		case 'f':
-			fullfile = true;
+			mr.fullfile = true;
 			break;
 		case 'F':
-			forcebin = opt.arg;
+			free (mr.forcebin);
+			mr.forcebin = strdup (opt.arg);
 			break;
-		case 'h':
-			help++;
-			break;
-		case 'H':
-			main_print_var (opt.arg);
-			LISTS_FREE ();
-            free (debugbackend);
-			return 0;
 		case 'i':
 			if (R_STR_ISEMPTY (opt.arg)) {
-				eprintf ("Cannot open empty script path\n");
+				R_LOG_ERROR ("Cannot open empty script path");
 				ret = 1;
 				goto beach;
 			}
-			r_list_append (files, (void*)opt.arg);
+			r_list_append (mr.files, strdup (opt.arg));
 			break;
 		case 'I':
 			if (R_STR_ISEMPTY (opt.arg)) {
-				eprintf ("Cannot open empty script path\n");
+				R_LOG_ERROR ("Cannot open empty script path");
 				ret = 1;
 				goto beach;
 			}
-			r_list_append (prefiles, (void*)opt.arg);
+			r_list_append (mr.prefiles, (void *)strdup (opt.arg));
 			break;
 		case 'k':
-			asmos = opt.arg;
-			break;
-		case 'l':
-			r_lib_open (r->lib, opt.arg);
+			free (mr.asmos);
+			mr.asmos = strdup (opt.arg);
 			break;
 		case 'L':
-			do_list_io_plugins = true;
+			if (mr.do_list_io_plugins) {
+				mr.do_list_core_plugins = true;
+			} else {
+				mr.do_list_io_plugins = true;
+			}
 			break;
 		case 'm':
-			mapaddr = r_num_math (r->num, opt.arg);
-			s_seek = opt.arg;
-			r_config_set_i (r->config, "file.offset", mapaddr);
+			r_config_set_i (r->config, "io.va", 1);
+			mr.mapaddr = r_num_math (r->num, opt.arg);
 			break;
 		case 'M':
-			r_config_set (r->config, "bin.demangle", "false");
-			r_config_set (r->config, "asm.demangle", "false");
+			r_config_set_b (r->config, "bin.demangle", false);
+			r_config_set_b (r->config, "asm.demangle", false);
 			break;
 		case 'n':
-			if (load_bin == LOAD_BIN_ALL) { // "-n"
-				load_bin = LOAD_BIN_NOTHING;
-			} else if (load_bin == LOAD_BIN_NOTHING) { // second n => "-nn"
-				load_bin = LOAD_BIN_STRUCTURES_ONLY;
+			if (mr.load_bin == LOAD_BIN_ALL) { // "-n"
+				mr.load_bin = LOAD_BIN_NOTHING;
+			} else if (mr.load_bin == LOAD_BIN_NOTHING) { // second n => "-nn"
+				mr.load_bin = LOAD_BIN_STRUCTURES_ONLY;
+				r_config_set_b (r->config, "bin.types", true);
 			}
-			r_config_set (r->config, "file.info", "false");
+			r_config_set_b (r->config, "file.info", false);
 			break;
 		case 'N':
-			if (run_rc) {
-				run_rc = false;
+			if (mr.run_rc) {
+				mr.run_rc = false;
 			} else {
-				load_l = false;
+				mr.load_l = false;
+				r_sys_setenv ("R2_NOPLUGINS", "1");
 			}
 			break;
 		case 'p':
 			if (!strcmp (opt.arg, "?")) {
 				r_core_project_list (r, 0);
-				r_cons_flush ();
-				free (envprofile);
-				free (debugbackend);
-				LISTS_FREE ();
+				r_cons_flush (r->cons);
+				mainr2_fini (&mr);
 				return 0;
 			}
-			project_name = opt.arg;
+			free (mr.project_name);
+			mr.project_name = strdup (opt.arg);
 			break;
 		case 'P':
 			if (R_STR_ISEMPTY (opt.arg)) {
-				eprintf ("Cannot open empty rapatch path\n");
+				R_LOG_ERROR ("Cannot open empty rapatch path");
 				ret = 1;
 				goto beach;
 			}
-			patchfile = opt.arg;
+			free (mr.patchfile);
+			mr.patchfile = strdup (opt.arg);
 			break;
 		case 'Q':
-			quiet = true;
-			quietLeak = true;
+			mr.quiet = true;
+			mr.quiet_leak = true;
 			break;
 		case 'q':
-			r_config_set (r->config, "scr.interactive", "false");
-			r_config_set (r->config, "scr.prompt", "false");
-			r_config_set (r->config, "cfg.fortunes", "false");
-			if (quiet) {
-				forcequit = true;
+			r_config_set_b (r->config, "scr.prompt", false);
+			r_config_set_b (r->config, "cfg.fortunes", false);
+			if (mr.quiet) {
+				mr.forcequit = true;
 			}
-			quiet = true;
+			mr.quiet = true;
 			break;
 		case 'r':
 			if (R_STR_ISEMPTY (opt.arg)) {
-				eprintf ("Cannot open empty rarun2 profile path\n");
+				R_LOG_ERROR ("Cannot open empty rarun2 profile path");
 				ret = 1;
 				goto beach;
 			}
-			haveRarunProfile = true;
+			mr.haveRarunProfile = true;
 			r_config_set (r->config, "dbg.profile", opt.arg);
 			break;
 		case 'R':
-			customRarunProfile = r_str_appendf (customRarunProfile, "%s\n", opt.arg);
+			mr.customRarunProfile = r_str_appendf (mr.customRarunProfile, "%s\n", opt.arg);
 			break;
 		case 's':
-			s_seek = opt.arg;
+			free (mr.s_seek);
+			mr.s_seek = strdup (opt.arg);
 			break;
 		case 'S':
-			sandbox = true;
+			mr.sandbox = true;
 			break;
 #if USE_THREADS
 		case 't':
 #if ALLOW_THREADED
-			threaded = true;
+			mr.threaded = true;
+			R_LOG_WARN ("-t is experimental and known to be buggy!");
 #else
-			eprintf ("Warning: -t is temporarily disabled!\n");
+			R_LOG_WARN ("-t is temporarily disabled!");
 #endif
 			break;
 #endif
-		case 'T':
-			compute_hashes = false;
-			break;
 		case 'v':
-			show_version = true;
+			// already parsed
 			break;
 		case 'V':
-			return r_main_version_verify (1);
+			{
+				int rc = r_main_version_verify (r, 1, mr.json);
+				mainr2_fini (&mr);
+				return rc;
+			}
 		case 'w':
-			perms |= R_PERM_W;
+			mr.perms |= R_PERM_W;
 			break;
 		case 'x':
-			perms &= ~R_PERM_X;
-			r_config_set (r->config, "io.exec", "false");
+			mr.perms &= ~R_PERM_X;
+			r_config_set_b (r->config, "io.exec", false);
 			break;
 		default:
-			help++;
+			break;
 		}
 	}
-	if (show_version) {
-		if (json) {
-			PJ *pj = pj_new ();
-			pj_o (pj);
-			pj_ks (pj, "name", "radare2");
-			pj_ks (pj, "version", R2_VERSION);
-			pj_ks (pj, "birth", R2_BIRTH);
-			pj_ks (pj, "commit", R2_GITTIP);
-			pj_ki (pj, "commits", R2_VERSION_COMMIT);
-			pj_ks (pj, "license", "LGPLv3");
-			pj_ks (pj, "tap", R2_GITTAP);
-			pj_ko (pj, "semver");
-			pj_ki (pj, "major", R2_VERSION_MAJOR);
-			pj_ki (pj, "minor", R2_VERSION_MINOR);
-			pj_ki (pj, "patch", R2_VERSION_MINOR);
-			pj_end (pj);
-			pj_end (pj);
-			char *s = pj_drain (pj);
-			printf ("%s\n", s);
-			free (s);
-		} else if (quiet) {
-			printf ("%s\n", R2_VERSION);
-			LISTS_FREE ();
-			free (debugbackend);
-			free (customRarunProfile);
-		} else {
-			r_main_version_verify (0);
-			LISTS_FREE ();
-			free (customRarunProfile);
-			free (debugbackend);
-			return r_main_version_print ("radare2");
+	if (mr.stderrToStdout) {
+#if __wasi__
+		R_LOG_ERROR ("Redirect stderr to stdout is not supported for this platform");
+#else
+		if (dup2 (1, 2) == -1) {
+			R_LOG_ERROR ("Cannot redirect stderr to stdout");
+			mainr2_fini (&mr);
+			return 1;
 		}
-		return 0;
+#endif
 	}
-	if (noStderr) {
-		if (-1 == close (2)) {
-			eprintf ("Failed to close stderr");
-			LISTS_FREE ();
-			R_FREE (debugbackend);
+	if (mr.noStderr) {
+		if (close (2) == -1) {
+			R_LOG_ERROR ("Failed to close stderr");
+			mainr2_fini (&mr);
 			return 1;
 		}
 		const char nul[] = R_SYS_DEVNULL;
 		int new_stderr = open (nul, O_RDWR);
-		if (-1 == new_stderr) {
-			eprintf ("Failed to open %s", nul);
-			LISTS_FREE ();
-			R_FREE (debugbackend);
+		if (new_stderr == -1) {
+			R_LOG_ERROR ("Failed to open %s for stderr", nul);
+			mainr2_fini (&mr);
 			return 1;
 		}
-		if (2 != new_stderr) {
+		if (new_stderr != 2) {
 #if !__wasi__
-			if (-1 == dup2 (new_stderr, 2)) {
-				eprintf ("Failed to dup2 stderr");
-				free (envprofile);
-				LISTS_FREE ();
-				R_FREE (debugbackend);
+			if (dup2 (new_stderr, 2) == -1) {
+				R_LOG_ERROR ("Failed to dup2 stderr");
+				mainr2_fini (&mr);
 				return 1;
 			}
 #endif
-			if (-1 == close (new_stderr)) {
-				eprintf ("Failed to close %s", nul);
-				LISTS_FREE ();
-				free (envprofile);
-				R_FREE (debugbackend);
+			if (close (new_stderr) == -1) {
+				R_LOG_ERROR ("Failed to close %s", nul);
+				mainr2_fini (&mr);
 				return 1;
 			}
 		}
 	}
 	{
-		const char *dbg_profile = r_config_get (r->config, "dbg.profile");
-		if (dbg_profile && *dbg_profile) {
-			char *msg = r_file_slurp (dbg_profile, NULL);
-			if (msg) {
-				char *program = strstr (msg, "program=");
-				if (program) {
-					program += 8;
-					char *p = 0;
-					p = strstr (program, "\r\n");
-					if (!p) {
-						p = strchr (program, '\n');
-					}
-					if (p) {
-						*p = 0;
-						pfile = strdup (program);
-					}
+		char *msg = dp_read (r);
+		if (R_STR_ISNOTEMPTY (msg)) {
+			char *program = strstr (msg, "program=");
+			if (program) {
+				program += 8;
+				char *p = 0;
+				p = strstr (program, "\n");
+				if (p) {
+					*p = 0;
+					mr.pfile = r_str_trim_dup (program);
 				}
-				free (msg);
-			} else {
-				eprintf ("Cannot read dbg.profile '%s'\n", dbg_profile);
-				pfile = NULL; //strdup ("");
 			}
-		} else {
-			pfile = argv[opt.ind] ? strdup (argv[opt.ind]) : NULL;
+		}
+		free (msg);
+		if (!mr.pfile) {
+			mr.pfile = argv[opt.ind]? strdup (argv[opt.ind]): NULL;
 		}
 	}
 
-	if (pfile && !*pfile) {
-		eprintf ("Cannot open empty path\n");
+	if (mr.pfile && !*mr.pfile) {
+		R_LOG_ERROR ("Cannot open empty path");
 		ret = 1;
 		goto beach;
 	}
 
-	if (do_list_io_plugins) {
-		if (r_config_get_i (r->config, "cfg.plugins")) {
-			r_core_loadlibs (r, R_CORE_LOADLIBS_ALL, NULL);
-		}
-		run_commands (r, NULL, prefiles, false, do_analysis);
-		run_commands (r, cmds, files, quiet, do_analysis);
-		if (quietLeak) {
-			exit (0);
-		}
-		if (json) {
-			r_io_plugin_list_json (r->io);
-		} else {
-			r_io_plugin_list (r->io);
-		}
-		r_cons_flush ();
-		LISTS_FREE ();
-		free (pfile);
-		R_FREE (debugbackend);
-		free (envprofile);
+	if (mr.do_list_core_plugins) { // "-LL"
+		r_core_cmd0 (r, mr.json? "Lcj": "Lc");
+		r_cons_flush (r->cons);
+		mainr2_fini (&mr);
 		return 0;
 	}
-
-	if (help > 0) {
-		LISTS_FREE ();
-		free (pfile);
-		R_FREE (debugbackend);
-		free (envprofile);
-		return main_help (help > 1? 2: 0);
-	}
-#if __WINDOWS__
-	pfile = r_acp_to_utf8 (pfile);
-#endif // __WINDOWS__
-	if (customRarunProfile) {
-		char *tfn = r_file_temp (".rarun2");
-		if (!r_file_dump (tfn, (const ut8*)customRarunProfile, strlen (customRarunProfile), 0)) {
-			eprintf ("Cannot create %s\n", tfn);
-		} else {
-			haveRarunProfile = true;
-			r_config_set (r->config, "dbg.profile", tfn);
+	if (mr.do_list_io_plugins) { // "-L"
+		if (r_config_get_b (r->config, "cfg.plugins")) {
+			r_core_loadlibs (r, R_LIB_LOAD_ALL, NULL);
 		}
-		free (tfn);
-		R_FREE (customRarunProfile);
+		run_commands (r, NULL, mr.prefiles, false, mr.do_analysis);
+		run_commands (r, mr.cmds, mr.files, mr.quiet, mr.do_analysis);
+		if (mr.quiet_leak) {
+			if (standalone) {
+				exit (0);
+			}
+			ret = 0;
+			goto beach;
+		}
+		const char *arg = argv[opt.ind];
+		if (mr.json) {
+			r_core_list_io (r, arg, 'j');
+		} else {
+			r_core_list_io (r, arg, 0);
+		}
+		r_cons_flush (r->cons);
+		mainr2_fini (&mr);
+		return 0;
 	}
-	if (debug == 1) {
-		if (opt.ind >= argc && !haveRarunProfile) {
-			eprintf ("Missing argument for -d\n");
-			LISTS_FREE ();
-			R_FREE (debugbackend);
-			free (envprofile);
+	if (mr.json) {
+		if (mr.qjs_script) {
+			r_core_callf (r, "js %s", mr.qjs_script);
+		} else if (opt.ind < argc) {
+			r_core_callf (r, "js:%s", argv[opt.ind]);
+		} else {
+			r_core_call (r, "js:");
+		}
+		mainr2_fini (&mr);
+		return 0;
+	}
+#if R2__WINDOWS__
+	{
+		char *pfile = r_acp_to_utf8 (mr.pfile);
+		free (mr.pfile);
+		mr.pfile = pfile;
+	}
+#endif // R2__WINDOWS__
+	if (mr.customRarunProfile) {
+		dp_write (r, mr.customRarunProfile);
+		R_FREE (mr.customRarunProfile);
+	}
+	if (mr.debug == 1) {
+		if (opt.ind >= argc && !mr.haveRarunProfile) {
+			R_LOG_ERROR ("Missing argument for -d");
+			mainr2_fini (&mr);
 			return 1;
 		}
-		const char *src = haveRarunProfile? pfile: argv[opt.ind];
-		if (src && *src) {
+		const char *src = mr.haveRarunProfile? mr.pfile: argv[opt.ind];
+		if (R_STR_ISNOTEMPTY (src)) {
 			char *uri = strdup (src);
 			if (uri) {
 				char *p = strstr (uri, "://");
@@ -828,46 +1388,35 @@ R_API int r_main_radare2(int argc, const char **argv) {
 					*p = 0;
 					// TODO: this must be specified by the io plugin, not hardcoded here
 					if (!strcmp (uri, "winedbg")) {
-						debugbackend = strdup ("io");
+						mr.debugbackend = strdup ("io");
 					} else {
-						debugbackend = uri;
+						mr.debugbackend = uri;
 						uri = NULL;
 					}
-					debug = 2;
+					mr.debug = 2;
 				}
 				free (uri);
 			}
 		}
 	}
 
-	tmp = NULL;
-	if (!load_l || (tmp = r_sys_getenv ("R2_NOPLUGINS"))) {
-		r_config_set_i (r->config, "cfg.plugins", 0);
-		free (tmp);
+	if (!mr.load_l || r_sys_getenv_asbool ("R2_NOPLUGINS")) {
+		r_config_set_b (r->config, "cfg.plugins", false);
 	}
-	if (r_config_get_i (r->config, "cfg.plugins")) {
-		r_core_loadlibs (r, R_CORE_LOADLIBS_ALL, NULL);
+	if (r_config_get_b (r->config, "cfg.plugins")) {
+		r_core_loadlibs (r, R_LIB_LOAD_ALL, NULL);
 	}
-	ret = run_commands (r, NULL, prefiles, false, do_analysis);
-	r_list_free (prefiles);
-	prefiles = NULL;
+	ret = run_commands (r, NULL, mr.prefiles, false, mr.do_analysis);
+	r_list_free (mr.prefiles);
+	mr.prefiles = NULL;
 
-	r_bin_force_plugin (r->bin, forcebin);
+	r_bin_force_plugin (r->bin, mr.forcebin);
 
-	if (project_name) {
-		if (!r_core_project_open (r, project_name)) {
-			eprintf ("Cannot find project.\n");
-			return 1;
-		}
-	}
-
-	if (do_connect) {
+	if (mr.do_connect) {
 		const char *uri = argv[opt.ind];
 		if (opt.ind >= argc) {
-			eprintf ("Missing URI for -C\n");
-			LISTS_FREE ();
-			R_FREE (debugbackend);
-			free (envprofile);
+			R_LOG_ERROR ("Missing URI for -C");
+			mainr2_fini (&mr);
 			return 1;
 		}
 		if (strstr (uri, "://")) {
@@ -880,61 +1429,58 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		argv[opt.ind] = "-";
 	}
 
-	switch (zflag) {
+	switch (mr.zflag) {
 	case 1:
-		r_config_set (r->config, "bin.strings", "false");
+		r_config_set_b (r->config, "bin.strings", false);
 		break;
 	case 2:
-		r_config_set (r->config, "bin.rawstr", "true");
+		r_config_set_b (r->config, "bin.str.raw", true);
 		break;
 	}
-	if (zflag > 3) {
-		eprintf ("Sleeping now...\n");
-		r_sys_sleep (zflag);
+	if (mr.zflag > 3) {
+		R_LOG_INFO ("Sleeping in progress");
+		r_sys_sleep (mr.zflag);
 	}
 
-	if (run_rc) {
+	if (mr.run_rc) {
 		r_core_parse_radare2rc (r);
 	} else {
-		r_config_set (r->config, "scr.utf8", "false");
+		r_config_set_b (r->config, "scr.utf8", false);
 	}
-
-	if (r_config_get_i (r->config, "zign.autoload")) {
-		char *path = r_file_abspath (r_config_get (r->config, "dir->zigns"));
-		char *complete_path = NULL;
-		RList *list = r_sys_dir (path);
+	// open the project after the rc files so prj.sandbox and dir.projects are honored
+	if (mr.project_name) {
 		RListIter *iter;
-		char *file = NULL;
-		r_list_foreach (list, iter, file) {
-			if (file && *file && *file != '.') {
-				complete_path = r_str_newf ("%s"R_SYS_DIR"%s", path, file);
-				if (r_str_endswith (complete_path, "gz")) {
-					r_sign_load_gz (r->anal, complete_path, false);
-				} else {
-					r_sign_load (r->anal, complete_path, false);
-				}
-				free (complete_path);
-			}
+		char *cmdn;
+		r_list_foreach (mr.evals, iter, cmdn) {
+			free (r_config_eval (r->config, cmdn, false, NULL));
 		}
-		r_list_free (list);
-		free (path);
-	}
-
-	if (pfile && r_file_is_directory (pfile)) {
-		if (debug) {
-			eprintf ("Error: Cannot debug directories, yet.\n");
-			LISTS_FREE ();
-			free (pfile);
-			R_FREE (debugbackend);
-			free (envprofile);
+		if (!r_core_project_open (r, mr.project_name)) {
+			R_LOG_ERROR ("Cannot find project");
+			mainr2_fini (&mr);
 			return 1;
 		}
-		if (r_sys_chdir (argv[opt.ind])) {
-			eprintf ("[d] Cannot open directory\n");
-			LISTS_FREE ();
-			free (pfile);
-			R_FREE (debugbackend);
-			free (envprofile);
+	}
+	prompt_rebuild_outdated_plugins (r);
+
+	char *history_file = r_xdg_cachedir ("history");
+	if (history_file) {
+		r_line_hist_load (r->cons->line, history_file);
+		free (history_file);
+	}
+
+	if (r_config_get_b (r->config, "zign.autoload")) {
+		autoload_zigns (r);
+	}
+
+	if (R_STR_ISNOTEMPTY (mr.pfile) && r_file_is_directory (mr.pfile)) {
+		if (mr.debug) {
+			R_LOG_ERROR ("Cannot debug directories, yet");
+			mainr2_fini (&mr);
+			return 1;
+		}
+		if (!r_sys_chdir (argv[opt.ind])) {
+			R_LOG_ERROR ("Cannot open directory");
+			mainr2_fini (&mr);
 			return 1;
 		}
 	} else if (argv[opt.ind] && !strcmp (argv[opt.ind], "=")) {
@@ -942,303 +1488,363 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		/* stdin/batch mode */
 		char *buf = r_stdin_slurp (&sz);
 		eprintf ("^D\n");
-		r_cons_set_raw (false);
-#if __UNIX__
+		r_cons_set_raw (r->cons, false);
+#if R2__UNIX__
 		// TODO: keep flags :?
-		(void)freopen ("/dev/tty", "rb", stdin);
-		(void)freopen ("/dev/tty", "w", stdout);
-		(void)freopen ("/dev/tty", "w", stderr);
+		R_UNUSED_RESULT (freopen ("/dev/tty", "rb", stdin));
+		R_UNUSED_RESULT (freopen ("/dev/tty", "w", stdout));
+		R_UNUSED_RESULT (freopen ("/dev/tty", "w", stderr));
 #else
-		eprintf ("Cannot reopen stdin without UNIX\n");
+		R_LOG_ERROR ("Cannot reopen stdin without UNIX");
 		free (buf);
-		R_FREE (debugbackend);
-		free (envprofile);
+		mainr2_fini (&mr);
 		return 1;
 #endif
 		if (buf && sz > 0) {
 			char *path = r_str_newf ("malloc://%d", sz);
-			fh = r_core_file_open (r, path, perms, mapaddr);
-			if (!fh) {
-				r_cons_flush ();
+			mr.fh = r_core_file_open (r, path, mr.perms, mr.mapaddr);
+			if (!mr.fh) {
+				r_cons_flush (r->cons);
 				free (buf);
-				eprintf ("[=] Cannot open '%s'\n", path);
-				LISTS_FREE ();
+				R_LOG_ERROR ("Cannot open '%s'", path);
 				free (path);
-				free (envprofile);
-				R_FREE (debugbackend);
+				mainr2_fini (&mr);
 				return 1;
 			}
-			r_io_map_new (r->io, fh->fd, 7, 0LL, mapaddr,
-					r_io_fd_size (r->io, fh->fd));
-			r_io_write_at (r->io, mapaddr, (const ut8 *)buf, sz);
+			size_t size = r_io_fd_size (r->io, mr.fh->fd);
+			r_io_map_add (r->io, mr.fh->fd, 7, 0LL, mr.mapaddr, size);
+			r_io_write_at (r->io, mr.mapaddr, (const ut8 *)buf, sz);
 			r_core_block_read (r);
 			free (buf);
 			free (path);
 			// TODO: load rbin thing
 		} else {
-			eprintf ("Cannot slurp from stdin\n");
+			R_LOG_ERROR ("Cannot slurp from stdin");
 			free (buf);
-			LISTS_FREE ();
-			free (envprofile);
+			mainr2_fini (&mr);
 			return 1;
 		}
-	} else if (strcmp (argv[opt.ind - 1], "--") && !project_name) {
-		if (debug) {
-			if (asmbits) {
-				r_config_set (r->config, "asm.bits", asmbits);
+	} else if (strcmp (argv[opt.ind - 1], "--") && !mr.project_name) {
+		if (mr.asmarch) {
+			r_config_set (r->config, "asm.arch", mr.asmarch);
+		}
+		if (mr.asmbits) {
+			r_config_set (r->config, "asm.bits", mr.asmbits);
+		}
+		if (mr.asmos) {
+			r_config_set (r->config, "asm.os", mr.asmos);
+		}
+		if (mr.pfile && strstr (mr.pfile, "sysgdb://")) {
+			mr.debug = 2;
+		}
+		if (mr.debug) {
+			if (mr.asmbits) {
+				r_config_set (r->config, "asm.bits", mr.asmbits);
 			}
 			r_config_set (r->config, "search.in", "dbg.map"); // implicit?
-			r_config_set (r->config, "cfg.debug", "true");
-			perms = R_PERM_RWX;
+			r_config_set_b (r->config, "cfg.debug", true);
+			mr.perms = R_PERM_RWX;
 			if (opt.ind >= argc) {
-				eprintf ("No program given to -d\n");
-				LISTS_FREE ();
-				R_FREE (debugbackend);
-				free (envprofile);
+				R_LOG_ERROR ("No program given to -d");
+				mainr2_fini (&mr);
 				return 1;
 			}
-			if (debug == 2) {
-				// autodetect backend with -D
-				r_config_set (r->config, "dbg.backend", debugbackend);
-				if (strcmp (debugbackend, "native")) {
-					if (!haveRarunProfile) {
-						pfile = strdup (argv[opt.ind++]);
+			if (mr.debug == 2) {
+				if (strstr (mr.pfile, "sysgdb://")) {
+					free (mr.debugbackend);
+					mr.debugbackend = strdup ("io");
+				}
+				// autodetect backend with -D when it's not native or esil
+				r_config_set (r->config, "dbg.backend", mr.debugbackend);
+				if (strcmp (mr.debugbackend, "native") && strcmp (mr.debugbackend, "esil")) {
+					if (!mr.haveRarunProfile) {
+						free (mr.pfile);
+						mr.pfile = strdup (argv[opt.ind++]);
 					}
-					perms = R_PERM_RX; // XXX. should work with rw too
-					debug = 2;
-					if (!strstr (pfile, "://")) {
+					mr.perms = R_PERM_RX; // XXX. should work with rw too
+					mr.debug = 2;
+					if (!strstr (mr.pfile, "://")) {
 						opt.ind--; // take filename
 					}
-#if __WINDOWS__
-					pfile = r_acp_to_utf8 (pfile);
-#endif // __WINDOWS__
-					fh = r_core_file_open (r, pfile, perms, mapaddr);
-					iod = (r->io && fh) ? r_io_desc_get (r->io, fh->fd) : NULL;
-					if (!strcmp (debugbackend, "gdb")) {
-						const char *filepath = r_config_get (r->config, "dbg.exe.path");
-						ut64 addr = baddr;
-						if (addr == UINT64_MAX) {
-							addr = r_config_get_i (r->config, "bin.baddr");
+#if R2__WINDOWS__
+					{
+						char *pfile = r_acp_to_utf8 (mr.pfile);
+						if (pfile != NULL) {
+							free (mr.pfile);
+							mr.pfile = pfile;
 						}
-						if (r_file_exists (filepath) && !r_file_is_directory (filepath)) {
-							char *newpath = r_file_abspath (filepath);
-							if (newpath) {
-								if (iod) {
-									free (iod->name);
-									iod->name = newpath;
-								}
-								if (addr == UINT64_MAX) {
-									addr = r_debug_get_baddr (r->dbg, newpath);
-								}
-								r_core_bin_load (r, NULL, addr);
+					}
+#endif
+					mr.fh = r_core_file_open (r, mr.pfile, mr.perms, mr.mapaddr);
+					mr.iod = (r->io && mr.fh)? r_io_desc_get (r->io, mr.fh->fd): NULL;
+					if (!strcmp (mr.debugbackend, "gdb")) {
+						const char *filepath = r_config_get (r->config, "dbg.exe.path");
+						if (R_STR_ISNOTEMPTY (filepath)) {
+							ut64 addr = mr.baddr;
+							if (addr == UT64_MAX) {
+								addr = r_config_get_i (r->config, "bin.baddr");
 							}
-						} else if (is_valid_gdb_file (fh)) {
-							filepath = iod->name;
 							if (r_file_exists (filepath) && !r_file_is_directory (filepath)) {
-								if (addr == UINT64_MAX) {
-									addr = r_debug_get_baddr (r->dbg, filepath);
+								char *newpath = r_file_abspath (filepath);
+								if (newpath) {
+									if (mr.iod) {
+										free (mr.iod->name);
+										mr.iod->name = newpath;
+									}
+									if (addr == UT64_MAX) {
+										addr = r_debug_get_baddr (r->dbg, newpath);
+									}
+									r_core_bin_load (r, NULL, addr);
 								}
-								r_core_bin_load (r, filepath, addr);
-							} else if ((filepath = get_file_in_cur_dir (filepath))) {
-								// Present in local directory
-								if (iod) {
-									free (iod->name);
-									iod->name = (char*) filepath;
+							} else if (mr.fh && mr.fh->name && r_str_startswith (mr.fh->name, "gdb://")) {
+								filepath = mr.iod->name;
+								if (r_file_exists (filepath) && !r_file_is_directory (filepath)) {
+									if (addr == UT64_MAX) {
+										addr = r_debug_get_baddr (r->dbg, filepath);
+									}
+									r_core_bin_load (r, filepath, addr);
+								} else if ((filepath = get_file_in_cur_dir (filepath))) {
+									// Present in local directory
+									if (mr.iod) {
+										free (mr.iod->name);
+										mr.iod->name = (char *)filepath;
+									}
+									if (addr == UT64_MAX) {
+										addr = r_debug_get_baddr (r->dbg, filepath);
+									}
+									r_core_bin_load (r, NULL, addr);
 								}
-								if (addr == UINT64_MAX) {
-									addr = r_debug_get_baddr (r->dbg, filepath);
-								}
-								r_core_bin_load (r, NULL, addr);
 							}
 						}
 					}
 				}
 			} else {
-				char *f = (haveRarunProfile && pfile)? strdup (pfile): strdup (argv[opt.ind]);
-				is_gdb = (!memcmp (f, "gdb://", R_MIN (f? strlen (f):0, 6)));
-				if (!is_gdb) {
-					free (pfile);
-					pfile = strdup ("dbg://");
+				char *f = (mr.haveRarunProfile && mr.pfile)? strdup (mr.pfile): strdup (argv[opt.ind]);
+				mr.is_gdb = r_str_startswith (f, "gdb://");
+				if (!mr.is_gdb) {
+					free (mr.pfile);
+					mr.pfile = strdup ("dbg://");
 				}
-#if __UNIX__
+#if R2__UNIX__
 				/* implicit ./ to make unix behave like windows */
 				if (f) {
-					char *path, *escaped_path;
+					char *path;
 					if (strchr (f, '/')) {
 						// f is a path
 						path = strdup (f);
 					} else {
-						// f is a filename
 						if (r_file_exists (f)) {
+							// f is a filename
 							path = r_str_prepend (strdup (f), "./");
+						} else if (isdigit (*f) && r_str_isnumber (f)) {
+							path = strdup (f);
 						} else {
 							path = r_file_path (f);
 						}
 					}
-					escaped_path = r_str_arg_escape (path);
-					pfile = r_str_append (pfile, escaped_path);
-					file = pfile; // probably leaks
-					R_FREE (escaped_path);
-					R_FREE (path);
+					if (path) {
+						char *escaped_path = r_str_arg_escape (path);
+						mr.pfile = r_str_append (mr.pfile, escaped_path);
+						mr.file = mr.pfile; // probably leaks
+						R_FREE (escaped_path);
+						free (path);
+					}
 				}
+#elif R2__WINDOWS__
+				char *acpfile = r_acp_to_utf8 (f);
+				if (!acpfile) {
+					acpfile = strdup (f);
+				}
+				if (isdigit (*acpfile) && r_str_isnumber (acpfile) && r_file_exists (acpfile)) {
+					acpfile = r_str_prepend (acpfile, ".\\");
+				}
+				// backslashes must be escaped because they are unscaped when parsing the uri
+				char *r = r_str_replace (acpfile, "\\", "\\\\", true);
+				if (r) {
+					acpfile = r;
+				}
+				mr.file = r_str_newf ("dbg://%s", acpfile);
 #else
-#	if __WINDOWS__
-				char *f2 = r_acp_to_utf8 (f);
-				free (f);
-				f = f2;
-#	endif // __WINDOWS__
 				if (f) {
 					char *escaped_path = r_str_arg_escape (f);
-					pfile = r_str_append (pfile, escaped_path);
+					mr.pfile = r_str_append (mr.pfile, escaped_path);
 					free (escaped_path);
-					file = pfile; // r_str_append (file, escaped_path);
+					mr.file = mr.pfile; // r_str_append (file, escaped_path);
 				}
 #endif
 				opt.ind++;
 				free (f);
 				while (opt.ind < argc) {
 					char *escaped_arg = r_str_arg_escape (argv[opt.ind]);
-					file = r_str_append (file, " ");
-					file = r_str_append (file, escaped_arg);
+					mr.file = r_str_appendf (mr.file, " %s", escaped_arg);
 					free (escaped_arg);
 					opt.ind++;
 				}
-				pfile = file;
-			}
-		}
-		if (asmarch) {
-			r_config_set (r->config, "asm.arch", asmarch);
-		}
-		if (asmbits) {
-			r_config_set (r->config, "asm.bits", asmbits);
-		}
-		if (asmos) {
-			r_config_set (r->config, "asm.os", asmos);
-		}
-
-		if (!debug || debug == 2) {
-			const char *dbg_profile = r_config_get (r->config, "dbg.profile");
-			if (opt.ind == argc && dbg_profile && *dbg_profile) {
-				if (R_STR_ISEMPTY (pfile)) {
-					eprintf ("Missing file to open\n");
+				if (mr.file) {
+					mr.pfile = strdup (mr.file);
+				} else {
+					R_LOG_ERROR ("Cannot find program to spawn");
 					ret = 1;
-					R_FREE (debugbackend);
 					goto beach;
 				}
-				fh = r_core_file_open (r, pfile, perms, mapaddr);
-				if (fh) {
-					r_core_bin_load (r, pfile, baddr);
+			}
+		}
+		if (!mr.debug || mr.debug == 2) {
+			// `-m` maps the file at the given address, so rbin must use it as
+			// base address too. otherwise the addresses of the bin objects
+			// (strings, symbols, sections, ...) are relative to the base
+			// address stored in the binary, while the contents of the file
+			// are mapped somewhere else, so they point outside of the maps
+			if (mr.mapaddr && r_config_get_b (r->config, "file.info")) {
+				mr.baddr = mr.mapaddr;
+			}
+			if (opt.ind == argc && mr.pfile) {
+				if (R_STR_ISEMPTY (mr.pfile)) {
+					R_LOG_ERROR ("Missing file to open");
+					ret = 1;
+					goto beach;
+				}
+				const char *binpath = mr.pfile;
+				if (mr.debug == 2 && mr.fh) {
+					binpath = NULL;
+				} else {
+					mr.fh = r_core_file_open (r, mr.pfile, mr.perms, mr.mapaddr);
+				}
+				if (mr.fh) {
+					r_core_bin_load (r, binpath, mr.baddr);
 				}
 			}
 			if (opt.ind < argc) {
-				R_FREE (pfile);
+				R_FREE (mr.pfile);
 				while (opt.ind < argc) {
-					pfile = strdup (argv[opt.ind++]);
-#if __WINDOWS__
-					pfile = r_acp_to_utf8 (pfile);
-#endif
-					fh = r_core_file_open (r, pfile, perms, mapaddr);
-					if (!fh && perms & R_PERM_W) {
-						perms |= R_PERM_CREAT;
-						fh = r_core_file_open (r, pfile, perms, mapaddr);
+					R_FREE (mr.pfile);
+#if R2__WINDOWS__
+					const char *argvi = argv[opt.ind++];
+					char *pfile = r_acp_to_utf8 (argvi);
+					if (pfile) {
+						mr.pfile = pfile;
+					} else {
+						mr.pfile = strdup (argvi);
 					}
-					if (perms & R_PERM_CREAT) {
-						if (fh) {
+#else
+					mr.pfile = strdup (argv[opt.ind++]);
+#endif
+					mr.fh = r_core_file_open (r, mr.pfile, mr.perms, mr.mapaddr);
+					if (!mr.fh && mr.perms & R_PERM_W) {
+						mr.perms |= R_PERM_CREAT;
+						mr.fh = r_core_file_open (r, mr.pfile, mr.perms, mr.mapaddr);
+					}
+					if (mr.perms & R_PERM_CREAT) {
+						if (mr.fh) {
 							r_config_set_i (r->config, "io.va", false);
 						} else {
-							 eprintf ("r_io_create: Permission denied.\n");
+							R_LOG_ERROR ("Permission denied");
 						}
 					}
-					if (baddr == UT64_MAX) {
+					if (mr.baddr == UT64_MAX) {
 						const ut64 io_plug_baddr = r_config_get_i (r->config, "bin.baddr");
 						if (io_plug_baddr != UT64_MAX) {
-							baddr = io_plug_baddr;
+							mr.baddr = io_plug_baddr;
 						}
 					}
-					if (fh) {
-						iod = r->io ? r_io_desc_get (r->io, fh->fd) : NULL;
-						if (iod && perms & R_PERM_X) {
-							iod->perm |= R_PERM_X;
+					if (mr.fh) {
+						mr.iod = r->io? r_io_desc_get (r->io, mr.fh->fd): NULL;
+						if (mr.iod && mr.perms & R_PERM_X) {
+							mr.iod->perm |= R_PERM_X;
 						}
-						if (load_bin == LOAD_BIN_ALL) {
-							const char *filepath = NULL;
-							if (debug) {
-								// XXX: incorrect for PIE binaries
-								filepath = file? strstr (file, "://"): NULL;
-								filepath = filepath ? filepath + 3 : pfile;
+						if (r_str_startswith (mr.pfile, "frida://")) {
+							if (r_config_get_b (r->config, "file.info")) {
+								r_core_cmd0 (r, ".:init");
 							}
-							if (r->io->desc && iod && (iod->fd == r->io->desc->fd) && iod->name) {
-								filepath = iod->name;
+							mr.load_bin = 0;
+						}
+						if (mr.load_bin == LOAD_BIN_ALL) {
+							const char *filepath = NULL;
+							if (mr.debug) {
+								// XXX: incorrect for PIE binaries
+								filepath = mr.file? strstr (mr.file, "://"): NULL;
+								filepath = filepath? filepath + 3: mr.pfile;
+							}
+							if (r->io->desc && mr.iod && (mr.iod->fd == r->io->desc->fd) && mr.iod->name) {
+								filepath = mr.iod->name;
 							}
 							/* Load rbin info from r2 dbg:// or r2 /bin/ls */
 							/* the baddr should be set manually here */
-							if (filepath) {
-								(void)r_core_bin_load (r, filepath, baddr);
-								// check if bin info is loaded and complain if -B was used
-								RBinFile *bi = r_bin_cur (r->bin);
-								bool haveBinInfo = bi && bi->o && bi->o->info && bi->o->info->type;
-								if (!haveBinInfo && baddr != UT64_MAX) {
-									eprintf ("Warning: Don't use -B on unknown files. Consider using -m.\n");
+							if (R_STR_ISNOTEMPTY (filepath)) {
+								if (mr.threaded) {
+									RBinPlugin *prj = r_libstore_find_name (r->bin->libstore, "prj");
+									RBuffer *buf = r_buf_new_with_io (&r->bin->iob, mr.iod->fd);
+									if (prj && buf && prj->check (NULL, buf)) {
+										mr.threaded = false;
+									}
+									r_unref (buf);
+								}
+								if (mr.threaded) {
+									ThreadData *td = R_NEW0 (ThreadData);
+									td->filepath = strdup (filepath);
+									td->baddr = mr.baddr;
+									td->core = r;
+									mr.th_bin = r_th_new (th_binload, td, false);
+									r_th_start (mr.th_bin);
+								} else {
+									if (!binload (r, filepath, mr.baddr, mr.baddr_set)) {
+										ret = 1;
+										goto beach;
+									}
+									mr.fh = r->io->desc;
 								}
 							}
 						} else {
-							r_io_map_new (r->io, iod->fd, perms, 0LL, mapaddr, r_io_desc_size (iod));
-							if (load_bin == LOAD_BIN_STRUCTURES_ONLY) {
-								r_core_bin_load_structs (r, iod->name);
+							r_io_map_add (r->io, mr.iod->fd, mr.perms, 0LL, mr.mapaddr, r_io_desc_size (mr.iod));
+							if (mr.load_bin == LOAD_BIN_STRUCTURES_ONLY) {
+								r_core_bin_load_structs (r, mr.iod->name);
 							}
 						}
 					}
 				}
 			} else {
-				if (project_name) {
-					pfile = r_core_project_name (r, project_name);
-					if (pfile) {
-						if (!fh) {
-							fh = r_core_file_open (r, pfile, perms, mapaddr);
+				if (mr.project_name) {
+					free (mr.pfile);
+					mr.pfile = r_core_project_name (r, mr.project_name);
+					if (mr.pfile) {
+						if (!mr.fh) {
+							mr.fh = r_core_file_open (r, mr.pfile, mr.perms, mr.mapaddr);
 						}
 						// load_bin = LOAD_BIN_NOTHING;
-						load_bin = LOAD_BIN_STRUCTURES_ONLY;
+						mr.load_bin = LOAD_BIN_STRUCTURES_ONLY;
 					} else {
-						eprintf ("Cannot find project file\n");
+						R_LOG_ERROR ("Cannot find project file");
 					}
 				} else {
-					if (fh) {
-						iod = r->io ? r_io_desc_get (r->io, fh->fd) : NULL;
-						if (iod) {
-							perms = iod->perm;
-							r_io_map_new (r->io, iod->fd, perms, 0LL, 0LL, r_io_desc_size (iod));
+					if (mr.fh) {
+						mr.iod = r->io? r_io_desc_get (r->io, mr.fh->fd): NULL;
+						if (mr.iod) {
+							mr.perms = mr.iod->perm;
+							r_io_map_add (r->io, mr.iod->fd, mr.perms, 0LL, 0LL, r_io_desc_size (mr.iod));
 						}
 					}
 				}
 			}
-			if (mapaddr) {
-				if (r_config_get_i (r->config, "file.info")) {
-					eprintf ("Warning: using oba to load the syminfo from different mapaddress.\n");
-					// load symbols when using r2 -m 0x1000 /bin/ls
-					r_core_cmdf (r, "oba 0 0x%"PFMT64x, mapaddr);
-					r_core_cmd0 (r, ".ies*");
-				}
-			}
-		} else {
-			RIODesc *f = r_core_file_open (r, pfile, perms, mapaddr);
+		} else if (mr.pfile) {
+			RIODesc *f = r_core_file_open (r, mr.pfile, mr.perms, mr.mapaddr);
 			if (f) {
-				fh = f;
+				mr.fh = f;
 			}
-			if (fh) {
-				r_debug_use (r->dbg, is_gdb ? "gdb" : debugbackend);
+			if (mr.fh) {
+				r_debug_use (r->dbg, mr.is_gdb? "gdb": mr.debugbackend);
 			}
 			/* load symbols when doing r2 -d ls */
 			// NOTE: the baddr is redefined to support PIE/ASLR
-			baddr = r_debug_get_baddr (r->dbg, pfile);
+			mr.baddr = r_debug_get_baddr (r->dbg, mr.pfile);
 
-			if (load_bin == LOAD_BIN_ALL) {
-				if (r_core_bin_load (r, pfile, baddr)) {
+			if (mr.load_bin == LOAD_BIN_ALL) {
+				if (r_core_bin_load (r, mr.pfile, mr.baddr)) {
 					RBinObject *obj = r_bin_cur_object (r->bin);
 					if (obj && obj->info) {
 #if __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__ && __x86_64__
 						ut64 bitness = r_config_get_i (r->config, "asm.bits");
 						if (bitness == 32) {
-							eprintf ("glibc.fc_offset = 0x00148\n");
+							R_LOG_INFO ("glibc.fc_offset = 0x00148");
 							r_config_set_i (r->config, "dbg.glibc.fc_offset", 0x00148);
 						}
 #endif
@@ -1246,25 +1852,25 @@ R_API int r_main_radare2(int argc, const char **argv) {
 				}
 			}
 			r_core_cmd0 (r, ".dm*");
-			if (asmarch && r_str_startswith (asmarch, "arm") && r_config_get_i (r->config, "asm.bits") < 64) {
+			if (mr.asmarch && r_str_startswith (mr.asmarch, "arm") && r_config_get_i (r->config, "asm.bits") < 64) {
 				// Set Thumb Mode if necessary
 				r_core_cmd0 (r, "dr? thumb;?? e asm.bits=16");
 			}
-			r_cons_reset ();
+			r_cons_reset (r->cons);
 		}
-		if (!pfile) {
-			pfile = file;
+		if (!mr.pfile) {
+			mr.pfile = mr.file;
 		}
-		if (!fh) {
-			if (pfile && *pfile) {
-				r_cons_flush ();
-				if (perms & R_PERM_W) {
-					eprintf ("[w] Cannot open '%s' for writing.\n", pfile);
+		if (!mr.fh) {
+			if (R_STR_ISNOTEMPTY (mr.pfile)) {
+				r_cons_flush (r->cons);
+				if (mr.perms & R_PERM_W) {
+					R_LOG_ERROR ("Cannot open '%s' for writing", mr.pfile);
 				} else {
-					eprintf ("[r] Cannot open '%s'\n", pfile);
+					R_LOG_ERROR ("Cannot open '%s'", mr.pfile);
 				}
 			} else {
-				eprintf ("Missing file to open\n");
+				R_LOG_ERROR ("Missing file to open");
 			}
 			ret = 1;
 			goto beach;
@@ -1273,98 +1879,127 @@ R_API int r_main_radare2(int argc, const char **argv) {
 			ret = 1;
 			goto beach;
 		}
-		if (r->bin->cur && r->bin->cur->o && r->bin->cur->o->info && r->bin->cur->o->info->rclass && !strcmp ("fs", r->bin->cur->o->info->rclass)) {
-			const char *fstype = r->bin->cur->o->info->bclass;
-			r_core_cmdf (r, "m /root %s @ 0", fstype);
+		RBinInfo *bi = R_UNWRAP5 (r, bin, cur, bo, info);
+		if (bi && bi->rclass && !strcmp ("fs", bi->rclass)) {
+			const char *fstype = r->bin->cur->bo->info->bclass;
+			if (!r_fs_mount (r->fs, fstype, "/root", 0)) {
+				R_LOG_ERROR ("Cannot mount /root");
+			}
 		}
-		r_core_cmd0 (r, "=!"); // initalize io subsystem
-		iod = r->io ? r_io_desc_get (r->io, fh->fd) : NULL;
-		if (mapaddr) {
-			r_core_seek (r, mapaddr, true);
+		r_core_cmd0 (r, "=!"); // initialize io subsystem
+		mr.iod = r_io_desc_get (r->io, mr.fh->fd);
+		if (mr.mapaddr) {
+			r_core_seek (r, mr.mapaddr, true);
 		}
-		r_list_foreach (evals, iter, cmdn) {
-			r_config_eval (r->config, cmdn, false);
-			r_cons_flush ();
+		RListIter *iter;
+		char *cmdn;
+		r_list_foreach (mr.evals, iter, cmdn) {
+			char *res = r_config_eval (r->config, cmdn, false, NULL);
+			r_cons_print (r->cons, res);
+			free (res);
+			r_cons_flush (r->cons);
 		}
-		if (asmbits) {
-			r_config_set (r->config, "asm.bits", asmbits);
+		if (mr.asmbits) {
+			r_config_set (r->config, "asm.bits", mr.asmbits);
 		}
-		if (asmarch) {
-			r_config_set (r->config, "asm.arch", asmarch);
+		if (mr.asmarch) {
+			r_config_set (r->config, "asm.arch", mr.asmarch);
 		}
-		if (asmos) {
-			r_config_set (r->config, "asm.os", asmos);
+		if (mr.asmos) {
+			r_config_set (r->config, "asm.os", mr.asmos);
 		}
 
-		debug = r->io->desc && iod && (r->io->desc->fd == iod->fd) && iod->plugin && \
-			iod->plugin->isdbg;
-		if (debug) {
-			r_core_setup_debugger (r, debugbackend, baddr == UT64_MAX);
+		mr.debug = r_io_desc_info (mr.iod).isdbg && r->io->desc && r->io->desc->fd == mr.iod->fd;
+		if (mr.debug) {
+			r_core_setup_debugger (r, mr.debugbackend, mr.baddr == UT64_MAX);
 		}
-		R_FREE (debugbackend);
+		R_FREE (mr.debugbackend);
 		RBinObject *o = r_bin_cur_object (r->bin);
-		if (!debug && o && !o->regstate) {
+		if (!mr.debug && o && !o->regstate) {
 			RFlagItem *fi = r_flag_get (r->flags, "entry0");
 			if (fi) {
-				r_core_seek (r, fi->offset, true);
+				r_core_seek (r, fi->addr, true);
 			} else {
-				if (o) {
-					RList *sections = r_bin_get_sections (r->bin);
-					RListIter *iter;
+				fi = r_flag_get (r->flags, "section.0.__TEXT.__text");
+				if (fi) {
+					r_core_seek (r, fi->addr, true);
+				} else if (o) {
+					RVecRBinSection *sections = r_bin_get_sections_vec (r->bin);
 					RBinSection *s;
-					r_list_foreach (sections, iter, s) {
-						if (s->perm & R_PERM_X) {
-							ut64 addr = s->vaddr? s->vaddr: s->paddr;
-							r_core_seek (r, addr, true);
-							break;
+					if (sections) {
+						R_VEC_FOREACH (sections, s) {
+							if (s->perm & R_PERM_X) {
+								ut64 addr = s->vaddr? s->vaddr: s->paddr;
+								if (addr) {
+									r_core_seek (r, addr, true);
+									break;
+								}
+							}
 						}
 					}
 				}
 			}
 		}
+#if 0
 		if (o && o->info && compute_hashes) {
-			// TODO: recall with limit=0 ?
+			// TODO: recall with !limit?
 			ut64 limit = r_config_get_i (r->config, "bin.hashlimit");
 			r_bin_file_set_hashes (r->bin, r_bin_file_compute_hashes (r->bin, limit));
 		}
-		if (s_seek) {
-			seek = r_num_math (r->num, s_seek);
-			if (seek != UT64_MAX) {
-				r_core_seek (r, seek, true);
+#endif
+		if (!mr.s_seek && mr.mapaddr && mr.mapaddr != r->addr) {
+			mr.s_seek = r_str_newf ("0x%08" PFMT64x, mr.mapaddr);
+		}
+		if (mr.s_seek) {
+			mr.seek = r_num_math (r->num, mr.s_seek);
+			if (mr.seek != UT64_MAX) {
+				r_core_seek (r, mr.seek, true);
 			}
 		}
 
-		if (fullfile) {
-			r_core_block_size (r, r_io_desc_size (iod));
+		if (mr.fullfile) {
+			r_core_block_size (r, r_io_desc_size (mr.iod));
 		}
 
-		r_core_seek (r, r->offset, true); // read current block
+		r_core_seek (r, r->addr, true); // read current block
 
-		r_list_foreach (evals, iter, cmdn) {
-			r_config_eval (r->config, cmdn, false);
-			r_cons_flush ();
+		r_list_foreach (mr.evals, iter, cmdn) {
+			char *res = r_config_eval (r->config, cmdn, false, NULL);
+			r_cons_print (r->cons, res);
+			free (res);
+			r_cons_flush (r->cons);
 		}
 
 		// no flagspace selected by default the beginning
 		r_flag_space_set (r->flags, NULL);
 		/* load <file>.r2 */
-		{
-			char* f = r_str_newf ("%s.r2", pfile);
+		if (mr.run_rc) {
+			char *f = r_str_newf ("%s.r2", mr.pfile);
 			const char *uri_splitter = strstr (f, "://");
 			const char *path = uri_splitter? uri_splitter + 3: f;
 			if (r_file_exists (path)) {
-				// TODO: should 'q' unset the interactive bit?
-				bool isInteractive = r_cons_is_interactive ();
-				if (isInteractive && r_cons_yesno ('n', "Do you want to run the '%s' script? (y/N) ", path)) {
+				const bool isint = !mr.quiet && r_cons_is_interactive (r->cons);
+				if (isint && r_cons_yesno (r->cons, 'n', "Do you want to run the '%s' script? (y/N) ", path)) {
 					r_core_cmd_file (r, path);
 				}
 			}
 			free (f);
 		}
 	} else {
+		if (mr.asmarch) {
+			r_config_set (r->config, "asm.arch", mr.asmarch);
+		}
+		if (mr.asmbits) {
+			r_config_set (r->config, "asm.bits", mr.asmbits);
+		}
+		if (mr.asmos) {
+			r_config_set (r->config, "asm.os", mr.asmos);
+		}
+		// R2R test/esil/cmp
+		r_core_cmd0 (r, "aei"); // should be implicit
 		r_core_block_read (r);
 	}
-	{
+	if (mr.run_rc) {
 		char *global_rc = r_str_r2_prefix (R2_GLOBAL_RC);
 		if (r_file_exists (global_rc)) {
 			(void)r_core_run_script (r, global_rc);
@@ -1375,95 +2010,113 @@ R_API int r_main_radare2(int argc, const char **argv) {
 	// only analyze if file contains entrypoint
 	{
 		char *s = r_core_cmd_str (r, "ieq");
-		if (s && *s) {
+		if (R_STR_ISNOTEMPTY (s)) {
 			int da = r_config_get_i (r->config, "file.analyze");
-			if (da > do_analysis) {
-				do_analysis = da;
+			if (da > mr.do_analysis) {
+				mr.do_analysis = da;
 			}
 		}
 		free (s);
 	}
-	if (do_analysis > 0) {
-		switch (do_analysis) {
-		case 1: r_core_cmd0 (r, "aa"); break;
-		case 2: r_core_cmd0 (r, "aaa"); break;
-		case 3: r_core_cmd0 (r, "aaaa"); break;
-		default: r_core_cmd0 (r, "aaaaa"); break;
+	if (r_config_get_b (r->config, "scr.demo")) {
+		int count = 0;
+		while (true) {
+			const char *msg = "Loading shards...";
+			if (count > 17) {
+				break;
+			} else if (count > 15) {
+				msg = "OK";
+			} else if (count > 10) {
+				msg = "Deltifying monads...";
+			}
+			r_print_spinbar (r->print, msg);
+			count++;
+			r_sys_usleep (100000);
 		}
-		r_cons_flush ();
+		eprintf ("\r");
 	}
-#if UNCOLORIZE_NONTTY
-#if __UNIX__
-	if (!r_cons_is_tty ()) {
-		r_config_set_i (r->config, "scr.color", COLOR_MODE_DISABLED);
+	if (mr.do_analysis > 0) {
+		if (mr.threaded) {
+			ThreadData *td = R_NEW0 (ThreadData);
+			td->th_bin = mr.th_bin;
+			td->do_analysis = mr.do_analysis;
+			td->core = r;
+			R_LOG_INFO ("Running analysis level %d in background", mr.do_analysis);
+			mr.th_ana = r_th_new (th_analysis, td, false);
+			r_th_start (mr.th_ana);
+			mr.th_bin = NULL;
+		} else {
+			perform_analysis (r, mr.do_analysis);
+		}
 	}
-#endif
-#endif
-	if (fullfile) {
-		r_core_block_size (r, r_io_desc_size (iod));
+	if (mr.fullfile) {
+		r_core_block_size (r, r_io_desc_size (mr.iod));
 	}
-	if (perms & R_PERM_W) {
-		r_core_cmd0 (r, "omfg+w");
+	if (mr.perms & R_PERM_W) {
+		r_core_cmd0 (r, "ompg+w");
 	}
-	ret = run_commands (r, cmds, files, quiet, do_analysis);
-	r_list_free (cmds);
-	r_list_free (evals);
-	r_list_free (files);
-	cmds = evals = files = NULL;
-	if (forcequit) {
-		ret = 1;
-	}
-	if (ret) {
-		ret = 0;
+	ret = run_commands (r, mr.cmds, mr.files, mr.quiet, mr.do_analysis);
+	r_list_free (mr.cmds);
+	r_list_free (mr.evals);
+	r_list_free (mr.files);
+	mr.cmds = mr.evals = mr.files = NULL;
+	if (mr.forcequit || mr.quiet_leak) {
+		ret = r->rc;
 		goto beach;
 	}
-	if (r_config_get_i (r->config, "scr.prompt")) {
-		if (run_rc && r_config_get_i (r->config, "cfg.fortunes")) {
+	if (ret) {
+		ret = r->rc;
+		goto beach;
+	}
+	if (r_config_get_b (r->config, "scr.prompt")) {
+		if (mr.run_rc && r_config_get_i (r->config, "cfg.fortunes")) {
 			r_core_fortune_print_random (r);
-			r_cons_flush ();
+			r_cons_flush (r->cons);
 		}
 	}
-	if (sandbox) {
-		r_config_set (r->config, "cfg.sandbox", "true");
+	if (mr.sandbox) {
+		r_config_set_b (r->config, "cfg.sandbox", true);
 	}
-	if (quiet) {
-		r_config_set (r->config, "scr.wheel", "false");
-		r_config_set (r->config, "scr.interactive", "false");
-		r_config_set (r->config, "scr.prompt", "false");
+	R_CRITICAL_ENTER (r);
+	if (mr.quiet) {
+		r_config_set_b (r->config, "scr.wheel", false);
+		r_config_set_b (r->config, "scr.interactive", false);
+		r_config_set_b (r->config, "scr.prompt", false);
 	}
 	r->num->value = 0;
-	if (patchfile) {
-		char *data = r_file_slurp (patchfile, NULL);
+	if (mr.patchfile) {
+		char *data = r_file_slurp (mr.patchfile, NULL);
 		if (data) {
 			ret = r_core_patch (r, data);
 			r_core_seek (r, 0, true);
 			free (data);
 		} else {
-			eprintf ("[p] Cannot open '%s'\n", patchfile);
+			R_LOG_ERROR ("Cannot open '%s'", mr.patchfile);
 		}
 	}
-	if ((patchfile && !quiet) || !patchfile) {
-		if (zerosep) {
-			r_cons_zero ();
+	R_CRITICAL_LEAVE (r);
+	if ((mr.patchfile && !mr.quiet) || !mr.patchfile) {
+		if (mr.zerosep) {
+			r_cons_zero (r->cons);
 		}
-		if (seek != UT64_MAX) {
-			r_core_seek (r, seek, true);
+		if (mr.seek != UT64_MAX) {
+			r_core_seek (r, mr.seek, true);
 		}
-
 		// no flagspace selected by default the beginning
 		r_flag_space_set (r->flags, NULL);
-		if (!debug && r->bin && r->bin->cur && r->bin->cur->o && r->bin->cur->o->info) {
-			if (r->bin->cur->o->info->arch) {
+		if (!mr.debug && r->bin && r->bin->cur && r->bin->cur->bo && r->bin->cur->bo->info) {
+			if (r->bin->cur->bo->info->arch) {
 				r_core_cmd0 (r, "aeip");
 			}
 		}
+		r_core_project_undirty (r);
 		for (;;) {
 			if (!r_core_prompt_loop (r)) {
-				quietLeak = true;
+				mr.quiet_leak = true;
 			}
 			ret = r->num->value;
-			debug = r_config_get_i (r->config, "cfg.debug");
-			if (ret != -1 && r_cons_is_interactive ()) {
+			mr.debug = r_config_get_b (r->config, "cfg.debug");
+			if (ret != -1 && r_cons_is_interactive (r->cons)) {
 				char *question;
 				bool no_question_debug = ret & 1;
 				bool no_question_save = (ret & 2) >> 1;
@@ -1471,23 +2124,24 @@ R_API int r_main_radare2(int argc, const char **argv) {
 				bool y_save_project = (ret & 8) >> 3;
 
 				if (r_core_task_running_tasks_count (&r->tasks) > 0) {
-					if (r_cons_yesno ('y', "There are running background tasks. Do you want to kill them? (Y/n)")) {
-						r_core_task_break_all (&r->tasks);
+					if (r_cons_yesno (r->cons, 'y', "There are running background tasks. Do you want to kill them? (Y/n)")) {
+						/* Use scheduler API to cancel all and join */
+						r_core_task_cancel_all (r, true);
 						r_core_task_join (&r->tasks, r->tasks.main_task, -1);
 					} else {
 						continue;
 					}
 				}
 
-				if (debug) {
+				if (mr.debug) {
 					if (no_question_debug) {
-						if (r_config_get_i (r->config, "dbg.exitkills") && y_kill_debug){
+						if (r_config_get_i (r->config, "dbg.exitkills") && y_kill_debug) {
 							r_debug_kill (r->dbg, r->dbg->pid, r->dbg->tid, 9); // KILL
 						}
 					} else {
-						if (r_cons_yesno ('y', "Do you want to quit? (Y/n)")) {
-							if (r_config_get_i (r->config, "dbg.exitkills") &&
-									r_cons_yesno ('y', "Do you want to kill the process? (Y/n)")) {
+						if (r_cons_yesno (r->cons, 'y', "Do you want to quit? (Y/n)")) {
+							if (r_config_get_b (r->config, "dbg.exitkills") &&
+								r_cons_yesno (r->cons, 'y', "Do you want to kill the process? (Y/n)")) {
 								r_debug_kill (r->dbg, r->dbg->pid, r->dbg->tid, 9); // KILL
 							} else {
 								r_debug_detach (r->dbg, r->dbg->pid);
@@ -1498,9 +2152,13 @@ R_API int r_main_radare2(int argc, const char **argv) {
 					}
 				}
 
+				const char *cmd_exit = r_config_get (r->config, "cmd.exit");
+				if (R_STR_ISNOTEMPTY (cmd_exit)) {
+					r_core_cmd0 (r, cmd_exit);
+				}
 				const char *prj = r_config_get (r->config, "prj.name");
 				if (R_STR_ISNOTEMPTY (prj)) {
-					if (r_core_project_is_saved (r)) {
+					if (r_core_project_is_dirty (r) && !r_config_get_b (r->config, "prj.alwaysprompt")) {
 						break;
 					}
 					if (no_question_save) {
@@ -1509,50 +2167,51 @@ R_API int r_main_radare2(int argc, const char **argv) {
 						}
 					} else {
 						question = r_str_newf ("Do you want to save the '%s' project? (Y/n)", prj);
-						if (r_cons_yesno ('y', "%s", question)) {
+						if (r_cons_yesno (r->cons, 'y', "%s", question)) {
 							r_core_project_save (r, prj);
 						}
 						free (question);
 					}
 				}
 				if (r_config_get_b (r->config, "scr.confirmquit")) {
-					if (!r_cons_yesno ('n', "Do you want to quit? (Y/n)")) {
+					if (!r_cons_yesno (r->cons, 'n', "Do you want to quit? (Y/n)")) {
 						continue;
 					}
 				}
 			} else {
 				// r_core_project_save (r, prj);
-				if (debug && r_config_get_b (r->config, "dbg.exitkills")) {
+				if (mr.debug && r_config_get_b (r->config, "dbg.exitkills")) {
 					r_debug_kill (r->dbg, 0, false, 9); // KILL
 				}
-
 			}
 			break;
 		}
 	}
 
-	if (mustSaveHistory (r->config)) {
-		r_line_hist_save (R2_HOME_HISTORY);
+	if (mustSaveHistory (r)) {
+		char *history_file = r_xdg_cachedir ("history");
+		if (history_file) {
+			r_line_hist_save (r->cons->line, history_file);
+			free (history_file);
+		}
 	}
 
-	/* capture return value */
-	ret = r->num->value;
+	ret = r->rc;
 beach:
-	if (quietLeak) {
-		exit (ret);
+	if (mr.quiet_leak && standalone) {
+		exit (r->rc);
 		return ret;
 	}
-
+	if (mr.th_bin) {
+		r_th_wait (mr.th_bin);
+		r_th_free (mr.th_bin);
+		mr.th_bin = NULL;
+	}
+	if (mr.th_ana) {
+		r_th_wait (mr.th_ana);
+		r_th_free (mr.th_ana);
+	}
 	r_core_task_sync_end (&r->tasks);
-
-	// not really needed, cause r_core_fini will close the file
-	// and this fh may be come stale during the command
-	// execution.
-	//r_core_file_close (r, fh);
-	free (envprofile);
-	free (debugbackend);
-	r_core_free (r);
-	LISTS_FREE ();
-	R_FREE (pfile);
-	return ret;
+	mainr2_fini (&mr);
+	return (ret < 0? 0: ret);
 }

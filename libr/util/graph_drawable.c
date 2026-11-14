@@ -1,32 +1,28 @@
+/* radare - LGPL - Copyright 2007-2020 - pancake, ret2libc */
+
 #include <r_core.h>
-#include <r_util/r_graph_drawable.h>
+#include <r_util.h>
 
 R_API void r_graph_free_node_info(void *ptr) {
-	if (!ptr) {
-		return;
+	if (ptr) {
+		RGraphNodeInfo *info = ptr;
+		free (info->body);
+		free (info->title);
+		free (info);
 	}
-	RGraphNodeInfo *info = ptr;
-	free (info->body);
-	free (info->title);
-	free (info);
 }
 
-R_API RGraphNodeInfo *r_graph_create_node_info(const char *title, const char *body, ut64 offset) {
+R_API RGraphNodeInfo * R_NONNULL r_graph_create_node_info(const char *title, const char * R_NULLABLE body, ut64 offset) {
 	RGraphNodeInfo *data = R_NEW0 (RGraphNodeInfo);
-	if (data) {
-		data->title = R_STR_DUP (title);
-		data->body = R_STR_DUP (body);
-		data->offset = offset;
-	}
+	data->title = strdup (title? title: "");
+	data->body = body? strdup (body): NULL;
+	data->offset = offset;
 	return data;
 }
 
 R_API RGraphNode *r_graph_add_node_info(RGraph *graph, const char *title, const char *body, ut64 offset) {
-	r_return_val_if_fail (graph, NULL);
+	R_RETURN_VAL_IF_FAIL (graph, NULL);
 	RGraphNodeInfo *data = r_graph_create_node_info (title, body, offset);
-	if (!data) {
-		return NULL;
-	}
 	RGraphNode *node = r_graph_add_nodef (graph, data, r_graph_free_node_info);
 	if (!node) {
 		r_graph_free_node_info (data);
@@ -36,7 +32,7 @@ R_API RGraphNode *r_graph_add_node_info(RGraph *graph, const char *title, const 
 
 R_API char *r_graph_drawable_to_dot(RGraph /*RGraphNodeInfo*/ *graph, const char *node_properties, const char *edge_properties) {
 	RList *nodes = graph->nodes;
-	RListIter *it, *itt;
+	RListIter *it;
 	RGraphNode *node = NULL, *target = NULL;
 	RStrBuf buf;
 	r_strbuf_init (&buf);
@@ -58,7 +54,9 @@ R_API char *r_graph_drawable_to_dot(RGraph /*RGraphNodeInfo*/ *graph, const char
 			r_strbuf_appendf (&buf, "%d [URL=\"%s\", color=\"lightgray\", label=\"%s\\n%s\"]\n",
 				node->idx, print_node->title, print_node->title, body);
 		}
-		r_list_foreach (node->out_nodes, itt, target) {
+		RGraphNode **itt;
+		R_VEC_FOREACH (&node->out_nodes, itt) {
+			target = *itt;
 			r_strbuf_appendf (&buf, "%d -> %d\n", node->idx, target->idx);
 		}
 	}
@@ -67,9 +65,9 @@ R_API char *r_graph_drawable_to_dot(RGraph /*RGraphNodeInfo*/ *graph, const char
 }
 
 R_API void r_graph_drawable_to_json(RGraph /*RGraphNodeInfo*/ *graph, PJ *pj, bool use_offset) {
-	RList *nodes = graph->nodes, *neighbours = NULL;
-	RListIter *it, *itt;
-	RGraphNode *node = NULL, *neighbour = NULL;
+	RList *nodes = graph->nodes;
+	RListIter *it;
+	RGraphNode *node = NULL;
 	if (!pj) {
 		return;
 	}
@@ -92,9 +90,9 @@ R_API void r_graph_drawable_to_json(RGraph /*RGraphNodeInfo*/ *graph, PJ *pj, bo
 		}
 		pj_k (pj, "out_nodes");
 		pj_a (pj);
-		neighbours = node->out_nodes;
-		r_list_foreach (neighbours, itt, neighbour) {
-			pj_i (pj, neighbour->idx);
+		RGraphNode **itt;
+		R_VEC_FOREACH (&node->out_nodes, itt) {
+			pj_i (pj, (*itt)->idx);
 		}
 		pj_end (pj);
 		pj_end (pj);

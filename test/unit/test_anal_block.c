@@ -6,6 +6,10 @@
 #define check_invariants block_check_invariants
 #define check_leaks block_check_leaks
 
+static void block_unref(RAnalBlock *block) {
+	r_unref (block);
+}
+
 static size_t blocks_count(RAnal *anal) {
 	size_t count = 0;
 	RBIter iter;
@@ -20,7 +24,7 @@ static size_t blocks_count(RAnal *anal) {
 #define assert_invariants(anal) do { if (!check_invariants (anal)) { return false; } } while (0)
 #define assert_leaks(anal) do { if (!check_leaks (anal)) { return false; } } while (0)
 
-bool test_r_anal_block_create() {
+bool test_r_anal_block_create(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -31,7 +35,7 @@ bool test_r_anal_block_create() {
 	mu_assert ("created block", block);
 	mu_assert_eq (block->addr, 0x1337, "created addr");
 	mu_assert_eq (block->size, 42, "created size");
-	mu_assert_eq (block->ref, 1, "created initial ref");
+	mu_assert_eq (r_ref_count (block), 1, "created initial ref");
 	mu_assert_eq (blocks_count (anal), 1, "count after create");
 
 	RAnalBlock *block2 = r_anal_create_block (anal, 0x133f, 100);
@@ -39,7 +43,7 @@ bool test_r_anal_block_create() {
 	mu_assert ("created block (overlap)", block2);
 	mu_assert_eq (block2->addr, 0x133f, "created addr");
 	mu_assert_eq (block2->size, 100, "created size");
-	mu_assert_eq (block2->ref, 1, "created initial ref");
+	mu_assert_eq (r_ref_count (block2), 1, "created initial ref");
 	mu_assert_eq (blocks_count (anal), 2, "count after create");
 
 	RAnalBlock *block3 = r_anal_create_block (anal, 0x1337, 5);
@@ -47,16 +51,16 @@ bool test_r_anal_block_create() {
 	mu_assert ("no double create on same start", !block3);
 	mu_assert_eq (blocks_count (anal), 2, "count after failed create");
 
-	r_anal_block_unref (block);
-	r_anal_block_unref (block2);
+	r_unref (block);
+	r_unref (block2);
 
 	assert_leaks (anal);
 	r_anal_free (anal);
 	mu_end;
 }
 
-bool test_r_anal_block_contains() {
-	RAnalBlock dummy = { 0 };
+bool test_r_anal_block_contains(void) {
+	RAnalBlock dummy = {0};
 	dummy.addr = 0x1337;
 	dummy.size = 42;
 	mu_assert ("contains before", !r_anal_block_contains (&dummy, 100));
@@ -67,7 +71,7 @@ bool test_r_anal_block_contains() {
 	mu_end;
 }
 
-bool test_r_anal_block_split() {
+bool test_r_anal_block_split(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -87,8 +91,8 @@ bool test_r_anal_block_split() {
 	assert_invariants (anal);
 	mu_assert_ptreq (second, block, "nop split on first addr");
 	mu_assert_eq (blocks_count (anal), 1, "count after nop split");
-	mu_assert_eq (block->ref, 2, "ref after nop split");
-	r_anal_block_unref (block);
+	mu_assert_eq (r_ref_count (block), 2, "ref after nop split");
+	r_unref (block);
 
 	second = r_anal_block_split (block, 0x1339);
 	assert_invariants (anal);
@@ -114,15 +118,15 @@ bool test_r_anal_block_split() {
 	mu_assert_eq (r_anal_bb_offset_inst (second, 1), 2, "second op_pos[1]");
 	mu_assert_eq (r_anal_bb_offset_inst (second, 2), 28, "second op_pos[2]");
 
-	r_anal_block_unref (block);
-	r_anal_block_unref (second);
+	r_unref (block);
+	r_unref (second);
 
 	assert_leaks (anal);
 	r_anal_free (anal);
 	mu_end;
 }
 
-bool test_r_anal_block_split_in_function() {
+bool test_r_anal_block_split_in_function(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -134,29 +138,29 @@ bool test_r_anal_block_split_in_function() {
 	mu_assert_eq (blocks_count (anal), 1, "count after create");
 	r_anal_function_add_block (fcn, block);
 	assert_invariants (anal);
-	mu_assert_eq (block->ref, 2, "block refs after adding to function");
+	mu_assert_eq (r_ref_count (block), 2, "block refs after adding to function");
 
 	RAnalBlock *second = r_anal_block_split (block, 0x1339);
 	assert_invariants (anal);
 	mu_assert_ptrneq (second, block, "non-nop split");
 	mu_assert_eq (blocks_count (anal), 2, "count after non-nop split");
-	mu_assert_eq (block->ref, 2, "first block refs after adding to function");
-	mu_assert_eq (second->ref, 2, "second block refs after adding to function");
+	mu_assert_eq (r_ref_count (block), 2, "first block refs after adding to function");
+	mu_assert_eq (r_ref_count (second), 2, "second block refs after adding to function");
 
-	mu_assert ("function has first block after split", r_list_contains (fcn->bbs, block));
-	mu_assert ("function has second block after split", r_list_contains (fcn->bbs, second));
+	mu_assert ("function has first block after split", RVecAnalBlockPtr_find (&fcn->bbs, block, find_bb_cmp));
+	mu_assert ("function has second block after split", RVecAnalBlockPtr_find (&fcn->bbs, second, find_bb_cmp));
 	mu_assert ("second block is in function after split", r_list_contains (block->fcns, fcn));
 	mu_assert ("second block is in function after split", r_list_contains (second->fcns, fcn));
 
-	r_anal_block_unref (block);
-	r_anal_block_unref (second);
+	r_unref (block);
+	r_unref (second);
 
 	assert_leaks (anal);
 	r_anal_free (anal);
 	mu_end;
 }
 
-bool test_r_anal_block_merge() {
+bool test_r_anal_block_merge(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -196,7 +200,7 @@ bool test_r_anal_block_merge() {
 	mu_assert_eq (r_anal_bb_offset_inst (first, 5), 42+9, "offset 5 after merge");
 	mu_assert_eq (r_anal_bb_offset_inst (first, 6), 42+30, "offset 6 after merge");
 
-	r_anal_block_unref (first);
+	r_unref (first);
 	// second must be already freed by the merge!
 
 	assert_invariants (anal);
@@ -204,7 +208,7 @@ bool test_r_anal_block_merge() {
 	mu_end;
 }
 
-bool test_r_anal_block_merge_in_function() {
+bool test_r_anal_block_merge_in_function(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -224,12 +228,12 @@ bool test_r_anal_block_merge_in_function() {
 	assert_invariants (anal);
 	mu_assert ("merge success", success);
 	mu_assert_eq (blocks_count (anal), 1, "count after merge");
-	mu_assert_eq (r_list_length (fcn->bbs), 1, "fcn bbs after merge");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&fcn->bbs), 1, "fcn bbs after merge");
 	mu_assert_eq (r_list_length (first->fcns), 1, "bb functions after merge");
-	mu_assert ("function has merged block", r_list_contains (fcn->bbs, first));
+	mu_assert ("function has merged block", RVecAnalBlockPtr_find (&fcn->bbs, first, find_bb_cmp));
 	mu_assert ("merged block is in function", r_list_contains (first->fcns, fcn));
 
-	r_anal_block_unref (first);
+	r_unref (first);
 	// second must be already freed by the merge!
 
 	assert_invariants (anal);
@@ -237,7 +241,7 @@ bool test_r_anal_block_merge_in_function() {
 	mu_end;
 }
 
-bool test_r_anal_block_delete() {
+bool test_r_anal_block_delete(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -249,23 +253,97 @@ bool test_r_anal_block_delete() {
 
 	r_anal_function_add_block (fcn, block);
 	assert_invariants (anal);
-	mu_assert_eq (block->ref, 2, "refs after adding");
-	mu_assert_eq (r_list_length (fcn->bbs), 1, "fcn bbs after add");
+	mu_assert_eq (r_ref_count (block), 2, "refs after adding");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&fcn->bbs), 1, "fcn bbs after add");
 	mu_assert_eq (r_list_length (block->fcns), 1, "bb fcns after add");
 
 	r_anal_delete_block (block);
 	assert_invariants (anal);
-	mu_assert_eq (block->ref, 1, "refs after delete");
-	mu_assert_eq (r_list_length (fcn->bbs), 0, "fcn bbs after delete");
+	mu_assert_eq (r_ref_count (block), 1, "refs after delete");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&fcn->bbs), 0, "fcn bbs after delete");
 	mu_assert_eq (r_list_length (block->fcns), 0, "bb fcns after delete");
 
-	r_anal_block_unref (block);
+	r_unref (block);
 
 	r_anal_free (anal);
 	mu_end;
 }
 
-bool test_r_anal_block_set_size() {
+bool test_r_anal_block_reset(void) {
+	RAnal *anal = r_anal_new ();
+	r_anal_block_reset (anal);
+	RAnalFunction *fcn = r_anal_create_function (anal, "owner", 0x100, 0, NULL);
+	RAnalFunction *shared_owner = r_anal_create_function (anal, "shared", 0x200, 0, NULL);
+	RAnalFunction *unregistered = r_anal_function_new (anal);
+	unregistered->name = strdup ("unregistered");
+	RAnalBlock *first = r_anal_create_block (anal, 0x100, 0x10);
+	RAnalBlock *second = r_anal_create_block (anal, 0x200, 0x20);
+	r_anal_create_block (anal, 0x300, 0x10);
+	r_anal_function_add_block (fcn, first);
+	r_anal_function_add_block (shared_owner, first);
+	r_anal_function_add_block (unregistered, second);
+	r_anal_function_add_block (fcn, second);
+	r_unref (first);
+	r_unref (second);
+	mu_assert_eq (r_anal_function_linear_size (fcn), 0x120, "cached range before reset");
+	fcn->meta.numcallrefs = 3;
+	assert_invariants (anal);
+
+	r_anal_block_reset (anal);
+	mu_assert_null (anal->bb_tree, "reset clears tree");
+	mu_assert_eq (r_list_length (anal->fcns), 2, "reset keeps functions");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&fcn->bbs), 0, "reset clears function blocks");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&shared_owner->bbs), 0, "reset clears shared blocks");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&unregistered->bbs), 0, "reset follows unregistered owners");
+	mu_assert_eq (r_anal_function_linear_size (fcn), 0, "reset invalidates cached range");
+	mu_assert_eq (fcn->meta.numcallrefs, -1, "reset invalidates cached call count");
+	assert_invariants (anal);
+	r_anal_function_free (unregistered);
+
+	r_anal_block_reset (anal);
+	RAnalBlock *replacement = r_anal_create_block (anal, 0x100, 0x30);
+	r_anal_function_add_block (fcn, replacement);
+	r_unref (replacement);
+	mu_assert_eq (r_anal_function_linear_size (fcn), 0x30, "function reusable after reset");
+	assert_invariants (anal);
+	assert_leaks (anal);
+	r_anal_free (anal);
+	mu_end;
+}
+
+bool test_r_anal_block_reset_refs(void) {
+	RAnal *anal = r_anal_new ();
+	RAnalFunction *fcn = r_anal_create_function (anal, "owner", 0x100, 0, NULL);
+	RAnalFunction *shared_owner = r_anal_create_function (anal, "shared", 0x200, 0, NULL);
+	RAnalBlock *block = r_anal_create_block (anal, 0x100, 0x10);
+	r_anal_function_add_block (fcn, block);
+	r_anal_function_add_block (shared_owner, block);
+	RList *retained = r_anal_get_blocks_in (anal, 0x100);
+	r_unref (block);
+	block = r_list_first (retained);
+	RAnalBlock *orphan = r_anal_create_block (anal, 0x300, 0x10);
+	(void)r_ref (orphan);
+
+	r_anal_block_reset (anal);
+	mu_assert_eq (r_ref_count (block), 1, "reset preserves query reference");
+	mu_assert_eq (r_list_length (block->fcns), 0, "retained block has no owners");
+	mu_assert_null (block->anal, "retained block detached from analysis");
+	mu_assert_eq (r_ref_count (orphan), 1, "reset releases orphan creation reference");
+	mu_assert_null (orphan->anal, "retained orphan detached from analysis");
+
+	RAnalBlock *replacement = r_anal_create_block (anal, 0x100, 0x20);
+	r_anal_function_add_block (fcn, replacement);
+	r_unref (replacement);
+	r_list_free (retained);
+	mu_assert_eq (blocks_count (anal), 1, "releasing old block keeps replacement");
+	assert_invariants (anal);
+	assert_leaks (anal);
+	r_anal_free (anal);
+	r_unref (orphan);
+	mu_end;
+}
+
+bool test_r_anal_block_set_size(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -296,15 +374,15 @@ bool test_r_anal_block_set_size() {
 	assert_invariants (anal);
 	mu_assert_eq (block->size, 80, "size after set_size");
 
-	r_anal_block_unref (block);
-	r_anal_block_unref (second);
+	r_unref (block);
+	r_unref (second);
 	assert_invariants (anal);
 
 	r_anal_free (anal);
 	mu_end;
 }
 
-bool test_r_anal_block_relocate() {
+bool test_r_anal_block_relocate(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -361,15 +439,15 @@ bool test_r_anal_block_relocate() {
 	mu_assert_eq (block->addr, 0x10, "addr after failed relocate");
 	mu_assert_eq (block->size, 0x333, "size after failed relocate");
 
-	r_anal_block_unref (block);
-	r_anal_block_unref (second);
+	r_unref (block);
+	r_unref (second);
 	assert_invariants (anal);
 
 	r_anal_free (anal);
 	mu_end;
 }
 
-bool test_r_anal_block_query() {
+bool test_r_anal_block_query(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -425,7 +503,7 @@ bool test_r_anal_block_query() {
 		RAnalBlock *block;
 		RListIter *it;
 		r_list_foreach (in, it, block) {
-			mu_assert_eq (block->ref, 2, "block refd in returned list");
+			mu_assert_eq (r_ref_count (block), 2, "block refd in returned list");
 		}
 
 		size_t linear_found = 0;
@@ -454,7 +532,7 @@ bool test_r_anal_block_query() {
 		RAnalBlock *block;
 		RListIter *it;
 		r_list_foreach (in, it, block) {
-			mu_assert_eq (block->ref, 2, "block refd in returned list");
+			mu_assert_eq (r_ref_count (block), 2, "block refd in returned list");
 		}
 
 		size_t linear_found = 0;
@@ -472,7 +550,7 @@ bool test_r_anal_block_query() {
 	}
 
 	for (i = 0; i < N; i++) {
-		r_anal_block_unref (blocks[i]);
+		r_unref (blocks[i]);
 	}
 
 	assert_leaks (anal);
@@ -480,13 +558,54 @@ bool test_r_anal_block_query() {
 	mu_end;
 }
 
-bool addr_list_cb(ut64 addr, void *user) {
+static bool addr_list_contains(RList *list, ut64 addr) {
+	RListIter *it;
+	ut64 *item;
+	r_list_foreach (list, it, item) {
+		if (*item == addr) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool addr_list_cb(ut64 addr, void *user) {
 	RList *list = user;
-	r_list_push (list, (void *)addr);
+	ut64 *item = R_NEW (ut64);
+	*item = addr;
+	r_list_push (list, item);
 	return true;
 }
 
-bool test_r_anal_block_successors() {
+static bool block_addr_list_cb(RAnalBlock *block, void *user) {
+	return addr_list_cb (block->addr, user);
+}
+
+bool test_r_anal_block_recurse_missing_successors(void) {
+	RAnal *anal = r_anal_new ();
+	RAnalBlock *a = r_anal_create_block (anal, 0x100, 0x10);
+	RAnalBlock *b = r_anal_create_block (anal, 0x110, 0x10);
+	RAnalBlock *c = r_anal_create_block (anal, 0x120, 0x10);
+	a->jump = 0;
+	a->fail = b->addr;
+	b->fail = 0xdead;
+	r_anal_block_add_switch_case (b, b->addr, 1, c->addr);
+	RList *visited = r_list_newf (free);
+	r_anal_block_recurse_depth_first (a, block_addr_list_cb, block_addr_list_cb, visited);
+	mu_assert_eq (r_list_length (visited), 6, "enter and exit all reachable blocks");
+	mu_assert_eq (*(ut64 *)r_list_get_n (visited, 1), b->addr, "missing jump keeps fallthrough");
+	mu_assert_eq (*(ut64 *)r_list_get_n (visited, 2), c->addr, "missing fail keeps switch cases");
+	mu_assert_eq (*(ut64 *)r_list_get_n (visited, 5), a->addr, "root exits last");
+	r_list_free (visited);
+	r_unref (a);
+	r_unref (b);
+	r_unref (c);
+	assert_leaks (anal);
+	r_anal_free (anal);
+	mu_end;
+}
+
+bool test_r_anal_block_successors(void) {
 	RAnal *anal = r_anal_new ();
 	assert_invariants (anal);
 
@@ -521,28 +640,45 @@ bool test_r_anal_block_successors() {
 	r_anal_switch_op_add_case (sop, 0x55, 5, 0x140);
 	blocks[2]->switch_op = sop;
 
-	RList *result = r_list_new ();
+	RList *result = r_list_newf (free);
 	r_anal_block_successor_addrs_foreach (blocks[0], addr_list_cb, result);
 	mu_assert_eq (r_list_length (result), 2, "jump/fail successors count");
-	mu_assert ("jmp successor", r_list_contains (result, (void *)0x30));
-	mu_assert ("fail successor", r_list_contains (result, (void *)0x50));
+	mu_assert ("jmp successor", addr_list_contains (result, 0x30));
+	mu_assert ("fail successor", addr_list_contains (result, 0x50));
 	r_list_purge (result);
 
 	r_anal_block_successor_addrs_foreach (blocks[2], addr_list_cb, result);
-	mu_assert_eq (r_list_length (result), 6, "switch successors count");
-	mu_assert ("jmp successor", r_list_contains (result, (void *)0x10));
-	mu_assert ("case successor", r_list_contains (result, (void *)0x100));
-	mu_assert ("case successor", r_list_contains (result, (void *)0x110));
-	mu_assert ("case successor", r_list_contains (result, (void *)0x120));
-	mu_assert ("case successor", r_list_contains (result, (void *)0x130));
-	mu_assert ("case successor", r_list_contains (result, (void *)0x140));
+	mu_assert_eq (r_list_length (result), 7, "switch successors count");
+	mu_assert ("jmp successor", addr_list_contains (result, 0x10));
+	mu_assert ("case successor", addr_list_contains (result, 0x100));
+	mu_assert ("case successor", addr_list_contains (result, 0x110));
+	mu_assert ("case successor", addr_list_contains (result, 0x120));
+	mu_assert ("case successor", addr_list_contains (result, 0x130));
+	mu_assert ("case successor", addr_list_contains (result, 0x140));
+	mu_assert ("default successor", addr_list_contains (result, 0x42));
+	r_list_purge (result);
+
+	// a default already reachable as the jump or a case is not repeated, and 0
+	// is the unset value both r_anal_switch_op_new call sites leave behind
+	sop->def_val = 0x120;
+	r_anal_block_successor_addrs_foreach (blocks[2], addr_list_cb, result);
+	mu_assert_eq (r_list_length (result), 6, "default duplicating a case");
+	r_list_purge (result);
+	sop->def_val = 0x10;
+	r_anal_block_successor_addrs_foreach (blocks[2], addr_list_cb, result);
+	mu_assert_eq (r_list_length (result), 6, "default duplicating the jump");
+	r_list_purge (result);
+	sop->def_val = 0;
+	r_anal_block_successor_addrs_foreach (blocks[2], addr_list_cb, result);
+	mu_assert_eq (r_list_length (result), 6, "unset default is no successor");
+	sop->def_val = 0x42;
 	r_list_free (result);
 
 	result = r_anal_block_recurse_list (blocks[0]);
 	RAnalBlock *block;
 	RListIter *it;
 	r_list_foreach (result, it, block) {
-		mu_assert_eq (block->ref, 2, "block refd in returned list");
+		mu_assert_eq (r_ref_count (block), 2, "block refd in returned list");
 	}
 
 	mu_assert_eq (r_list_length (result), 8, "recursive successors count");
@@ -559,7 +695,7 @@ bool test_r_anal_block_successors() {
 
 	size_t i;
 	for (i = 0; i < sizeof (blocks) / sizeof (RAnalBlock *); i++) {
-		r_anal_block_unref (blocks[i]);
+		r_unref (blocks[i]);
 	}
 
 	assert_leaks (anal);
@@ -567,7 +703,14 @@ bool test_r_anal_block_successors() {
 	mu_end;
 }
 
-bool test_r_anal_block_automerge() {
+bool test_r_anal_switch_spec_limits_ncases(void) {
+	RAnalSwitchSpec spec;
+	r_anal_switch_spec_legacy (&spec, 0x10, 0x20, 4, R_ANAL_SWITCH_MAXCASES + 1, 0);
+	mu_assert_eq (spec.ncases, R_ANAL_SWITCH_MAXCASES, "legacy switch ncases limit");
+	mu_end;
+}
+
+bool test_r_anal_block_automerge(void) {
 	size_t i;
 	for (i = 0; i < SAMPLES; i++) {
 		RAnal *anal = r_anal_new ();
@@ -615,7 +758,7 @@ bool test_r_anal_block_automerge() {
 
 		// Randomize the order in which we give the automerge the block.
 		// The outcome should always be the same but it can have some delicate implications on the algorithm inside.
-		RList *shuffled_blocks = r_list_newf ((RListFree)r_anal_block_unref);
+		RList *shuffled_blocks = r_list_newf ((RListFree)block_unref);
 		while (!r_list_empty (all_blocks)) {
 			int n = rand () % r_list_length (all_blocks);
 			r_list_push (shuffled_blocks, r_list_get_n (all_blocks, n));
@@ -671,8 +814,88 @@ bool test_r_anal_block_chop_noreturn(void) {
 	mu_end;
 }
 
-int all_tests() {
+bool test_r_anal_block_chop_noreturn_shared_roots(void) {
+	RAnal *anal = r_anal_new ();
+	RAnalFunction *with_pads = r_anal_create_function (anal, "with_pads", 0x100, R_ANAL_FCN_TYPE_FCN, NULL);
+	RAnalFunction *without_pads = r_anal_create_function (anal, "without_pads", 0x700, R_ANAL_FCN_TYPE_FCN, NULL);
+	RAnalBlock *entry = r_anal_create_block (anal, 0x100, 0x10);
+	RAnalBlock *chopped = r_anal_create_block (anal, 0x200, 0x10);
+	RAnalBlock *branch = r_anal_create_block (anal, 0x300, 0x10);
+	RAnalBlock *join = r_anal_create_block (anal, 0x350, 0x10);
+	RAnalBlock *tail = r_anal_create_block (anal, 0x380, 0x10);
+	RAnalBlock *dead = r_anal_create_block (anal, 0x400, 0x10);
+	RAnalBlock *pad = r_anal_create_block (anal, 0x500, 0x10);
+	RAnalBlock *other_pad = r_anal_create_block (anal, 0x600, 0x10);
+	RAnalBlock *other_entry = r_anal_create_block (anal, 0x700, 0x10);
+	entry->jump = chopped->addr;
+	other_entry->jump = chopped->addr;
+	chopped->jump = branch->addr;
+	chopped->fail = dead->addr;
+	branch->jump = join->addr;
+	branch->fail = tail->addr;
+	join->jump = branch->addr;
+	pad->jump = branch->addr;
+	other_pad->jump = join->addr;
+
+	r_anal_function_add_block (with_pads, entry);
+	r_anal_function_add_block (with_pads, pad);
+	r_anal_function_add_block (with_pads, other_pad);
+	r_anal_function_add_block (without_pads, other_entry);
+	RAnalBlock *shared[] = { chopped, branch, join, tail, dead };
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (shared); i++) {
+		r_anal_function_add_block (with_pads, shared[i]);
+		r_anal_function_add_block (without_pads, shared[i]);
+	}
+
+	mu_assert_ptreq (r_anal_block_chop_noreturn (chopped, 0x201), chopped, "chopped block survives");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&with_pads->bbs), 7, "landing pads keep their shared suffix");
+	mu_assert ("cycle remains reachable", RVecAnalBlockPtr_find (&with_pads->bbs, join, find_bb_cmp));
+	mu_assert ("other branch remains reachable", RVecAnalBlockPtr_find (&with_pads->bbs, tail, find_bb_cmp));
+	mu_assert ("unreachable successor removed", !RVecAnalBlockPtr_find (&with_pads->bbs, dead, find_bb_cmp));
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&without_pads->bbs), 2, "reachability resets for each function");
+	mu_assert ("second function keeps chopped block", RVecAnalBlockPtr_find (&without_pads->bbs, chopped, find_bb_cmp));
+	mu_assert_ptreq (r_anal_block_chop_noreturn (chopped, 0x201), chopped, "repeated chop survives");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&with_pads->bbs), 7, "repeated chop keeps landing pads");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&without_pads->bbs), 2, "repeated chop keeps second function");
+
+	r_unref (entry);
+	r_unref (pad);
+	r_unref (other_pad);
+	r_unref (other_entry);
+	for (i = 0; i < R_ARRAY_SIZE (shared); i++) {
+		r_unref (shared[i]);
+	}
+	assert_invariants (anal);
+	assert_leaks (anal);
+	r_anal_free (anal);
+	mu_end;
+}
+
+bool test_r_anal_block_chop_noreturn_contiguous(void) {
+	RAnal *anal = r_anal_new ();
+	RAnalFunction *fcn = r_anal_create_function (anal, "contiguous", 0x100, R_ANAL_FCN_TYPE_FCN, NULL);
+	RAnalBlock *entry = r_anal_create_block (anal, 0x100, 0x10);
+	RAnalBlock *chopped = r_anal_create_block (anal, 0x110, 0x10);
+	entry->jump = chopped->addr;
+	r_anal_function_add_block (fcn, entry);
+	r_anal_function_add_block (fcn, chopped);
+
+	mu_assert_null (r_anal_block_chop_noreturn (chopped, 0x111), "chopped block merged into entry");
+	mu_assert_eq (entry->size, 0x11, "entry includes shortened block");
+	mu_assert_eq (entry->jump, UT64_MAX, "merged block has no successor");
+	mu_assert_eq ((int)RVecAnalBlockPtr_length (&fcn->bbs), 1, "contiguous predecessor still merges");
+	r_unref (entry);
+	assert_invariants (anal);
+	assert_leaks (anal);
+	r_anal_free (anal);
+	mu_end;
+}
+
+int all_tests(void) {
 	mu_run_test (test_r_anal_block_chop_noreturn);
+	mu_run_test (test_r_anal_block_chop_noreturn_shared_roots);
+	mu_run_test (test_r_anal_block_chop_noreturn_contiguous);
 	mu_run_test (test_r_anal_block_create);
 	mu_run_test (test_r_anal_block_contains);
 	mu_run_test (test_r_anal_block_split);
@@ -680,10 +903,14 @@ int all_tests() {
 	mu_run_test (test_r_anal_block_merge);
 	mu_run_test (test_r_anal_block_merge_in_function);
 	mu_run_test (test_r_anal_block_delete);
+	mu_run_test (test_r_anal_block_reset);
+	mu_run_test (test_r_anal_block_reset_refs);
 	mu_run_test (test_r_anal_block_set_size);
 	mu_run_test (test_r_anal_block_relocate);
 	mu_run_test (test_r_anal_block_query);
 	mu_run_test (test_r_anal_block_successors);
+	mu_run_test (test_r_anal_block_recurse_missing_successors);
+	mu_run_test (test_r_anal_switch_spec_limits_ncases);
 	mu_run_test (test_r_anal_block_automerge);
 	return tests_passed != tests_run;
 }

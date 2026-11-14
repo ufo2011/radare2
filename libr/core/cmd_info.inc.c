@@ -1,0 +1,4472 @@
+/* radare - LGPL - Copyright 2009-2026 - pancake */
+
+#if R_INCLUDE_BEGIN
+
+// R2R db/formats/dwarf
+// R2R db/cmd/cmd_i
+// R2R db/cmd/cmd_iw
+
+#include "../bin/format/pdb/pdb_downloader.h"
+
+#include "cbin.h"
+
+// clang-format off
+static RCoreHelpMessage help_msg_ih = {
+	"Usage: ih", "[*jq]", "Display header information",
+	"ih", "", "normal output to display binary headers",
+	"ih*", "", "same as above, but in r2 commands",
+	"ihj", "", "in json format",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iH = {
+	"Usage: iH", "[*jq]", "Display header fields information",
+	"iH", "", "normal output to display binary headers",
+	"iH*", "", "same as above, but in r2 commands",
+	"iHj", "", "in json format",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_is = {
+	"Usage: is", "[*hjq]", "List symbols from current selected binary",
+	"is,", "[table-query]", "list symbols in table using given expression",
+	"is.", "", "current symbol",
+	"is*", "", "same as above, but in r2 commands",
+	"isj", "", "in json format",
+	"ise", "", "entrypoints symbols (see 'ies')",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iw = {
+	"Usage: iw", "[?jq*.cfF+-]", "Manage try/catch/finally blocks in the selected binary",
+	"iw", "", "list exception regions",
+	"iw.", "", "list exception regions for the current function",
+	"iwj", "", "list exception regions in JSON",
+	"iwj.", "", "list exception regions for the current function in JSON",
+	"iw.j", "", "same as iwj.",
+	"iwq", "", "list try start, exclusive end and handler addresses",
+	"iw*", "", "print exception region flags as r2 commands",
+	"iwc", " from to handler [type [typefilter]]", "add catch at current source (type * for catch-all)",
+	"iwf", " from to handler", "add a cleanup landing pad at current source",
+	"iwF", " from to handler filter [type [typefilter]]", "add filter at current source",
+	"iw+", " source from to handler [attr ...]", "append an exception region (iw+? for attributes)",
+	"iw-", " index", "delete the region with the given iw index (last region moves to this index)",
+	"iw-*", "", "delete all exception regions in the selected binary",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iwadd = {
+	"Usage: iw", "[cfF] from to handler ... [@ source]", "Add exception regions at the current source address",
+	"iwc", " from to handler [type [typefilter]]", "add a catch handler",
+	"iwf", " from to handler", "add a cleanup landing pad",
+	"iwF", " from to handler filter [type [typefilter]]", "add a filter handler",
+	"", "from to", "try start and exclusive end; addresses accept expressions",
+	"", "type", "quoted type name, * for catch-all, or an empty string for no type",
+	"", "typefilter", "signed type filter value (default: 0)",
+	"", "@ source", "owning function address (default: current seek)",
+	"", "iw+?", "full form with explicit source and optional attributes",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iwplus = {
+	"Usage: iw+", " source from to handler [attr ...]", "Append an exception region; addresses accept expressions",
+	"", "source", "function address owning the region",
+	"", "from to", "try start and exclusive end (from < to)",
+	"", "handler", "catch, finally or filter handler address",
+	"", "kind=catch|cleanup|finally|filter", "region kind (default: catch; finally is a funclet outside the function)",
+	"", "filter=expr", "filter address (default: 0)",
+	"", "typefilter=expr", "signed type filter value (default: 0)",
+	"", "type=name", "exception type name (quote names containing spaces)",
+	"", "catchall", "mark a catch-all handler",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_ic = {
+	"Usage: ic", "[.-+clgjsq][jq]", "Display class information",
+	"ic", "", "List classes, methods and fields (icj for json)",
+	"ic.", "", "show class and method name in current seek",
+	"ic,", "[table-query]", "query comma separated values",
+	"ic-", "[klass]", "delete class",
+	"ic-", "[klass.method]", "delete method",
+	"ic-", "[klass..field]", "delete field",
+	"ic-", "[klass:base]", "delete inheritance relation",
+	"ic+", "[klass]", "add new class at current seek (see ic+?)",
+	"ic+", "[klass.method]", "add new method at current seek",
+	"ic+", "[klass..field] [type]", "add new field at current seek",
+	"ic+", "[klass:base]", "add inheritance relation",
+	"icc", " [lang]", "List classes, methods and fields in Header Format",
+	"iccj", "", "List classes, methods and fields in JSON format",
+	"iccl", "[j]", "List supported icc languages",
+	"icg", " [str]", "List classes hirearchy graph with agn/age (match str if provided)",
+	"icq", "", "List classes, in quiet mode (just the classname)",
+	"icqq", "", "List classes, in quieter mode (only show non-system classnames)",
+	"icl", "[c]", "Show addresses of class and it methods, without names (iclc = class count)",
+	"ics", "", "Show class symbols in an easy to parse format",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_icplus = {
+	"Usage: ic+", "[klass](.method|..field) ([attr ..])", "Add classes, methods and fields",
+	"ic+", "[klass] ([attr ..])", "add new class at current seek",
+	"ic+", "[klass.method] ([attr ..])", "add new method at current seek",
+	"ic+", "[klass..field] [type] ([attr ..])", "add new field at current seek",
+	"ic+", "[klass:base]", "add inheritance relation",
+	"ic+??", "", "show usage examples",
+	"", "[attr]", "attribute words: getter, static, final, ..",
+	"", "key=value", "numeric or string keys: size=, offset=, ns=, lang=",
+	"", "names", "nonempty UTF-8 names without control characters",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_icplus_examples = {
+	"Examples:", "", "",
+	"ic+Foo", " size=32 abstract", "class Foo with 32 byte instances, abstract",
+	"ic+Foo:Bar", "", "class Foo extends Bar",
+	"ic+Foo.get_x", " getter @ 0x1234", "getter method at the given address",
+	"ic+Foo._new", " factory", "factory method (static constructor)",
+	"ic+Foo..count", " int offset=0x10 final", "final int field at struct offset 0x10",
+	"ic+Foo..name", " property static", "static property",
+	"'ic+Foo.~Foo", "", "raw command preserves syntax characters such as ~",
+	NULL
+};
+
+static const char *classdump_langs[] = {
+	"c",
+	"objc",
+	"java",
+	"kotlin",
+	"swift",
+	"cxx",
+	"c++",
+	"dart",
+	"cil",
+	"dotnet",
+	"csharp",
+	NULL
+};
+
+static void icc_langs(RCore *core, bool json) {
+	const char **lang = classdump_langs;
+	if (json) {
+		PJ *pj = pj_new ();
+		pj_a (pj);
+		for (; *lang; lang++) {
+			pj_s (pj, *lang);
+		}
+		pj_end (pj);
+		char *s = pj_drain (pj);
+		r_cons_print (core->cons, s);
+		free (s);
+	} else {
+		for (; *lang; lang++) {
+			r_cons_println (core->cons, *lang);
+		}
+	}
+}
+
+static RCoreHelpMessage help_msg_ii = {
+	"Usage: ii", "[+-?cj*,]", "List/edit imports (volatile, does not modify the binary)",
+	"ii", "", "list imports",
+	"ii,", "[table-query]", "query imports with table syntax (sig: can resolve a function prototype)",
+	"ii*", "", "list imports as radare2 commands",
+	"iij", "", "list imports as JSON",
+	"iiq", "", "list imports in quiet mode",
+	"ii+", " name [libname] [type] [bind] [ordinal]", "add an import to the loaded bin object",
+	"ii-", " name [libname]", "remove an import matching name (and optionally libname)",
+	"iic", "[?]", "classify imports (see iic?)",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iy = {
+	"Usage: iy", "", "Display type information",
+	"iy", "", "List types (structs, enums, function signatures)",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iz = {
+	"Usage: iz", "[?jq*auwWb] ([skip] [count])", "List strings",
+	"iz", " ([skip]) ([count])", "strings in data sections (skip N strings, show count)",
+	"iz.", "", "show string at current address",
+	"iz,", "[:help]", "perform a table query on strings listing",
+	"iz-", " ([addr]) ([len]) ([type])", "delete string (or current seek)",
+	"iz+", " [addr] ([len]) ([type])", "add string manually (len=auto, type=auto-detect)",
+	"iz*", "", "print flags and comments r2 commands for all the strings",
+	"iz[auwWb]", "", "filter by string type (ascii, utf8, utf16, utf32, base64)",
+	"izc", "", "count the strings in data sections",
+	"izj", "", "strings in data sections in JSON format",
+	"izj.", "", "show string at current address in JSON",
+	"izjq", "", "strings in data sections in quiet JSON (just vaddr and string)",
+	"izq", "[q]", "strings in data sections in quiet (and quieter) mode",
+	"izq.", "", "show string at current address (quiet)",
+	"izz", "[jq*auwWb] ([skip]) ([count])", "search for strings in the whole binary",
+	"izz[auwWb]", "", "filter by string type (ascii, utf8, utf16, utf32, base64)",
+	"izzc", "", "count the strings in the whole binary",
+	"izzz", "[jq]", "dump strings from whole binary to r2 shell (for huge files)",
+	"izzzc", "", "count strings dumped from the whole binary",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iE = { // rename to ise? maybe
+	"Usage: iE", "[][jq*]", "List exported symbols",
+	"iE", "", "exports (global symbols)",
+	"iE,", "[table-query]", "exported symbols using the table query",
+	"iE.", "", "show export in current address",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iS = {
+	"Usage: iS", "[][jq*]", "List sections and segments",
+	"iS ", "[sha1,crc32(,..)]", "sections (see Lh to list the hash algorithms supported)",
+	"iS.", "", "current section",
+	"iS,", "[table-query]", "list sections in table using given expression",
+	"iS=", "", "show ascii-art color bars with the section ranges",
+	"iSS", "[,tablequery]", "list memory segments (maps with om)",
+	"iSx", " [directory]", "extract all sections (default: <file>.sections; alias for ixS)",
+	"iSSx", " [directory]", "extract all segments (default: <file>.segments; alias for ixSS)",
+	"iSm", "[cj]", "list sections with the symbols contained (iSmc for count only, iSmj for json)",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iic = {
+	"Usage: iic", "[jklq*]", "info import classes",
+	"iic", "", "list imports grouped by class",
+	"iic", " [symname]", "show the classes of the given import name (iic strcpy)",
+	"iic.", "", "show classes associated with the import in the current address",
+	"iic*", "", "add comments at each import address with its classes",
+	"iicj", "", "list imports grouped by class in json",
+	"iick", "", "group imports by class, listed in key/value format",
+	"iicl", "[j] [class]", "list imports matching the given class (iicl string)",
+	"iiclx", " [class]", "show functions calling the imports of this class",
+	"iicq", "", "list the classes found in the imported symbols",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_ie = {
+	"Usage: ie", "[qj=]", "Show entrypoints and constructors",
+	"ie", "[j]", "show entrypointsie=entrypoint",
+	"iee", "[j]", "list constructors and destructors",
+	"ies", "[j]", "list entrypoint symbols (see 'ise')",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_i = {
+	"Usage: i", "", "Get info from opened file (see rabin2's manpage)",
+	"i", "[*jq]", "show info of current file (in JSON)",
+	"i:", "[?]", "run rbinplugin specific commands",
+	"ia", "", "list archs found in current binary (same as rabin2 -A)",
+	"ib", "", "reload the current buffer for setting of the bin (use once only)",
+	"ic", "[?]", "List classes, methods and fields (icj for json)",
+	"iC", "[j]", "show signature info (entitlements, ...)",
+	"id", "[?]", "show DWARF source lines information",
+	"iD", " lang sym", "demangle symbolname for given language",
+	"ie", "[?][es]", "ie=entrypoint, iee=constructors+destructors, ies=epsymbols",
+	"iE", "[?]", "exports (global symbols)",
+	"ig", "[?][h]", "guess size of binary program (h for human friendly unit)",
+	"ih", "[?]", "show binary headers (see iH)",
+	"iH", "[?]", "show binary headers fields",
+	"ii", "[?][cj*,]", "list the symbols imported from other libraries",
+	"iic", "[?][jklq*] ([type])", "classify imports",
+	"iI", "", "binary info", // deprecate imho, may confuse with il and its already in `i`
+	"ik", " [query]", "key-value database from RBinObject",
+	"il", "", "libraries",
+	"iL", " [plugin]", "list all RBin plugins loaded or plugin details",
+	"im", "", "show info about predefined memory allocation",
+	"iM", "", "show main address",
+	"io", " [file]", "load info from file (or last opened) use bin.baddr",
+	"iO", "[?]", "perform binary operation (dump, resize, change sections, ...)",
+	"ir", "[?][jq*]", "list the relocations (iR is an accidental alias for 'ir')",
+	"iu", "[?][,joq*x]", "list, open or extract binary resources",
+	"ix", "[?][u|S|SS] [directory]", "extract resources, sections or segments",
+	"is", "[?]", "list the symbols",
+	"iS", "[?]", "list sections, segments and compute their hash",
+	"it", "", "file hashes", // hashes in it? wtf, thats a pretty bad subcommand
+	"iT", "", "file signature", // iT for signatures omg thats worst
+	"iv", "", "display file version info", // wtf why not iv
+	"iw", "[?jq*cfF+-]", "list or edit try/catch/finally blocks",
+	"iz", "[?]", "strings in data sections (in JSON/Base64)",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_iu = {
+	"Usage: iu", "[,joq*x] [directory]", "Inspect or safely extract binary resources",
+	"iu", "", "list resources with all available metadata",
+	"iu,", "[table-query]", "list resources in table using given expression",
+	"iu*", "", "emit resource flags as radare commands",
+	"iuj", "", "list resources in JSON",
+	"iuo", " [name|id]", "open the given resource as a new file (copied into malloc://)",
+	"iuq", "", "list resource address, size, type and name",
+	"iuqq", "", "list resource names only",
+	"iux", " [directory]", "extract all resources (default: <file>.resources; alias for ixu)",
+	"", "", "output names are sanitized and existing files are never overwritten",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_ix = {
+	"Usage: ix", "[u|S|SS] [directory]", "Extract binary data to disk",
+	"ixu", " [directory]", "extract all resources (alias for iux)",
+	"ixS", " [directory]", "extract all sections (alias for iSx)",
+	"ixSS", " [directory]", "extract all segments (alias for iSSx)",
+	"", "", "default directories are <file>.resources, <file>.sections and <file>.segments",
+	"", "", "output names are sanitized and existing files are never overwritten",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_idl = {
+	"Usage: idl", "", "Debug information",
+	"idl", "", "show debuglink file",
+	"idl*", "", "show command to load the debuglink file",
+	"idld", "", "download associated debuglink file",
+	"idld*", "", "show url to pull the debuglink file",
+	NULL
+};
+
+static RCoreHelpMessage help_msg_id = {
+	"Usage: id", "", "Debug information",
+	"id", "", "show DWARF source lines information",
+	"idj", "", "show addrline information in json format",
+	"idl", "[?]", "show debug link file name",
+	"idp", " [file.pdb]", "load pdb file information",
+	"idpd", "", "download pdb file on remote server",
+	"idpi", " [file.pdb]", "show pdb file information",
+	"idpi*", "", "show symbols from pdb as flags (prefix with dot to import)",
+	"idx", "", "display source files used via dwarf (previously known as iX)",
+	NULL
+};
+
+// clang-format on
+
+#define PAIR_WIDTH 9
+// TODO: reuse implementation in core/bin.c
+static void pair(RCore *core, const char *a, const char *b) {
+	if (!b) {
+		return;
+	}
+	char ws[16];
+	size_t al = strlen (a);
+	memset (ws, ' ', sizeof (ws));
+	al = PAIR_WIDTH - al;
+	if (al < 0) {
+		al = 0;
+	}
+	ws[al] = 0;
+	r_cons_printf (core->cons, "%s%s%s\n", a, ws, b);
+}
+
+static void classdump_keys(RCore *core, RBinObject *bo) {
+	if (r_config_get_b (core->config, "bin.classes.namesonly")) {
+		return;
+	}
+	const int pref = r_config_get_b (core->config, "asm.demangle")? 'd': 0;
+	const bool iova = r_config_get_b (core->config, "io.va");
+	RBinClass *k;
+	RBinField *f;
+	RBinSymbol *m;
+	RListIter *iter;
+	r_list_foreach (bo->classes, iter, k) {
+		const char *kname = r_bin_name_tostring2 (k->name, pref);
+		R_VEC_FOREACH (&k->fields, f) {
+			const char *kind = r_bin_field_kindstr (f);
+			const char *fname = r_bin_name_tostring2 (f->name, 'f');
+			const ut64 addr = iova? f->vaddr: f->paddr;
+			r_cons_printf (core->cons, "klass.%s.field.%s.%s=0x%" PFMT64x "\n", kname, kind, fname, addr);
+		}
+		R_VEC_FOREACH (&k->methods, m) {
+			char *attr = r_bin_attr_tostring (m->attr.flags, true);
+			const char *mname = r_bin_name_tostring2 (m->name, 'f');
+			const ut64 addr = iova? m->vaddr: m->paddr;
+			r_cons_printf (core->cons, "klass.%s.method.%s.%s=0x%" PFMT64x "\n", kname, r_str_get (attr), mname, addr);
+			free (attr);
+		}
+	}
+}
+
+static void cmd_info_demangle(RCore *core, const char *input, PJ *pj, int mode) {
+	if (input[1] == 'j' && input[2] == ' ') {
+		mode = R_MODE_JSON;
+		input += 3;
+	} else if (input[1] == ' ') {
+		input += 2;
+	} else {
+		// iD receives no arguments
+		if (!pj) {
+			r_cons_cmd_help_match (core->cons, help_msg_i, "iD", 0, true);
+		} else {
+			r_cons_print (core->cons, "{}");
+		}
+		return;
+	}
+	char *args = r_str_trim_dup (input);
+	const char *lang = args;
+	char *text = strchr (args, ' ');
+	const char *err = "Cannot demangle string";
+	if (text) {
+		*text++ = 0;
+	} else {
+		// iD receives 1 argument we will assume language is the one defined in bin.lang config var
+		lang = r_config_get (core->config, "bin.lang");
+		if (R_STR_ISEMPTY (lang)) {
+			err = "Set the language in `e bin.lang` or pass a second argument";
+		}
+		text = args;
+	}
+	RBinLanguage lang_type = r_bin_demangle_type (lang);
+	if (lang_type == R_BIN_LANG_NONE) {
+		if (!pj) {
+			char *s = r_bin_demangle_list (core->bin);
+			r_cons_print (core->cons, s);
+			free (s);
+		}
+		r_core_return_value (core, 1);
+	}
+	char *res = NULL;
+	{
+		// RBinDemangle requires an RBinFile to get the RBinOptions for the trylib option
+		// when there's no current file, we need to pass core->bin for proper config access
+		RBinFile *bf = NULL;
+		RBinFile *temp_bf = NULL;
+		if (core->bin) {
+			bf = core->bin->cur;
+		}
+		if (!bf && core->bin) {
+			// create a temporary wrapper to ensure demangle has access to config
+			temp_bf = R_NEW0 (RBinFile);
+			temp_bf->rbin = core->bin;
+			bf = temp_bf;
+		}
+		res = r_bin_demangle (bf, lang, text, 0, false);
+		free (temp_bf);
+	}
+	if (mode == R_MODE_JSON) {
+		pj_o (pj);
+		pj_ks (pj, "lang", lang);
+		pj_ks (pj, "mangled", text);
+		if (res) {
+			pj_ks (pj, "demangled", res);
+		} else {
+			pj_ks (pj, "error", err);
+		}
+		pj_end (pj);
+	} else {
+		if (res) {
+			r_cons_println (core->cons, res);
+		} else {
+			R_LOG_ERROR ("%s", err);
+		}
+	}
+	free (res);
+	free (args);
+	return;
+}
+
+// XXX i.j ij. is inconsistent maybe move to 'ai'?
+static void cmd_info_here(RCore *core, PJ *pj, int mode) {
+	RCoreItem *item = r_core_item_at (core, core->addr);
+	// fixme: other modes
+	if (!item) {
+		return;
+	}
+	if (mode == R_MODE_JSON) {
+		pj_o (pj);
+		pj_ks (pj, "type", item->type);
+		pj_ks (pj, "perm", r_str_rwx_i (item->perm));
+		pj_kn (pj, "size", item->size);
+		pj_kn (pj, "addr", item->addr);
+		pj_kn (pj, "next", item->next);
+		pj_kn (pj, "prev", item->prev);
+		if (item->fcnname) {
+			pj_ks (pj, "fcnname", item->fcnname);
+		}
+		if (item->sectname) {
+			pj_ks (pj, "sectname", item->sectname);
+		}
+		if (item->comment) {
+			pj_ks (pj, "comment", item->comment);
+		}
+		if (item->data) {
+			pj_ks (pj, "data", item->data);
+		}
+		{
+			RVecAnalRef *refs = r_anal_refs_get (core->anal, core->addr);
+			if (refs && !RVecAnalRef_empty (refs)) {
+				pj_k (pj, "refs");
+				pj_a (pj);
+				RAnalRef *ref;
+				R_VEC_FOREACH (refs, ref) {
+					pj_o (pj);
+					pj_ks (pj, "type", r_anal_ref_type_tostring (ref->type));
+					pj_kn (pj, "addr", ref->addr);
+					pj_end (pj);
+				}
+				pj_end (pj);
+			}
+			RVecAnalRef_free (refs);
+		}
+		{
+			RVecAnalRef *refs = r_anal_xrefs_get (core->anal, core->addr);
+			if (refs && !RVecAnalRef_empty (refs)) {
+				pj_k (pj, "xrefs");
+				pj_a (pj);
+				RAnalRef *ref;
+				R_VEC_FOREACH (refs, ref) {
+					pj_o (pj);
+					pj_ks (pj, "type", r_anal_ref_type_tostring (ref->type));
+					pj_kn (pj, "addr", ref->addr);
+					pj_end (pj);
+				}
+				pj_end (pj);
+			}
+			RVecAnalRef_free (refs);
+		}
+		pj_end (pj);
+		r_core_item_free (item);
+	} else {
+		// TODO show more info
+		// type cant be code if perms are ---
+		r_cons_printf (core->cons, "type = %s\n", item->type);
+		r_cons_printf (core->cons, "perm = %s\n", r_str_rwx_i (item->perm));
+		r_cons_printf (core->cons, "size = %d\n", item->size);
+		r_cons_printf (core->cons, "addr = 0x%" PFMT64x "\n", item->addr);
+		// pj_kn (pj, "next", item->next);
+		// pj_kn (pj, "prev", item->prev);
+	}
+}
+
+static RFlagItem *get_flag_for_import(RCore *core, const char *value) {
+	char *fname = r_str_newf ("sym.imp.%s", value);
+	RFlagItem *item = r_flag_get (core->flags, fname);
+	if (!item) {
+		free (fname);
+		fname = r_str_newf ("reloc.%s", value);
+		item = r_flag_get (core->flags, fname);
+	}
+	free (fname);
+	return item;
+}
+
+static ut64 valstr(const void *_a) {
+	const char *a = _a;
+	return r_str_hash64 (a);
+}
+static int cmpstr(const void *_a, const void *_b) {
+	const char *a = _a, *b = _b;
+	return (int)strcmp (a, b);
+}
+static RList *uniqrefs_for(RCore *core, ut64 addr) {
+	RVecAnalRef *xrefs = r_anal_xrefs_get (core->anal, addr);
+	if (xrefs) {
+		RList *res = r_list_newf (free);
+		RAnalRef *xref;
+		R_VEC_FOREACH (xrefs, xref) {
+			RList *funcs = r_anal_get_functions_in (core->anal, xref->addr);
+			RAnalFunction *f = r_list_pop (funcs);
+			if (f) {
+				r_list_append (res, strdup (f->name));
+			} else {
+				r_list_append (res, r_str_newf ("0x%08" PFMT64x, xref->addr));
+			}
+			r_list_free (funcs);
+		}
+		RVecAnalRef_free (xrefs);
+		r_list_sort (res, cmpstr);
+		r_list_uniq_inplace (res, valstr);
+		return res;
+	}
+	return NULL;
+}
+
+static void pj_import_refs(RCore *core, PJ *pj, const char *name) {
+	pj_o (pj);
+	pj_ks (pj, "name", name);
+	RFlagItem *fi = get_flag_for_import (core, name);
+	if (fi) {
+		pj_kn (pj, "addr", fi->addr);
+	}
+	pj_ka (pj, "refs");
+	RVecAnalRef *xrefs = fi? r_anal_xrefs_get (core->anal, fi->addr): NULL;
+	if (xrefs) {
+		RAnalRef *xref;
+		R_VEC_FOREACH (xrefs, xref) {
+			pj_o (pj);
+			pj_kn (pj, "addr", xref->addr);
+			RAnalFunction *f = r_anal_get_fcn_in (core->anal, xref->addr, 0);
+			if (f) {
+				pj_ks (pj, "fcn", f->name);
+			}
+			pj_end (pj);
+		}
+		RVecAnalRef_free (xrefs);
+	}
+	pj_end (pj);
+	pj_end (pj);
+}
+
+static void cmd_iic2(RCore *core, int mode, const char *symname) {
+	if (symname && !mode) {
+		const char *un = r_bin_import_tags (core->bin, symname);
+		if (R_STR_ISNOTEMPTY (un)) {
+			r_cons_println (core->cons, un);
+		}
+		return;
+	}
+	RVecRBinImport *imports_vec = r_bin_get_imports_vec (core->bin);
+	RListIter *iter2;
+	RBinImport *imp;
+	Sdb *db = sdb_new0 ();
+	if (imports_vec) {
+		R_VEC_FOREACH (imports_vec, imp) {
+			const char *name = r_bin_name_tostring2 (imp->name, 'o');
+			const char *un = r_bin_import_tags (core->bin, name);
+			if (!un) {
+				R_LOG_DEBUG ("Symbol not classified %s", name);
+				continue;
+			}
+			char *a = strdup (un);
+			const char *key;
+			RList *keys = r_str_split_list (a, ",", 0);
+			r_list_foreach (keys, iter2, key) {
+				ut32 cas;
+				if (!sdb_array_contains (db, key, name, &cas)) {
+					sdb_array_append (db, key, name, cas);
+				}
+			}
+			free (a);
+			r_list_free (keys);
+		}
+	}
+	if (mode == 'l') {
+		char *s = sdb_querys (db, NULL, 0, symname);
+		if (R_STR_ISNOTEMPTY (s)) {
+			r_str_replace_ch (s, ',', '\n', -1);
+			r_cons_print (core->cons, s);
+		}
+		free (s);
+	} else if (mode == 'L') {
+		PJ *pj = r_core_pj_new (core);
+		pj_a (pj);
+		char *s = sdb_querys (db, NULL, 0, symname);
+		if (R_STR_ISNOTEMPTY (s)) {
+			r_str_trim (s);
+			const char *value;
+			RList *values = r_str_split_list (s, ",", 0);
+			r_list_foreach (values, iter2, value) {
+				pj_import_refs (core, pj, value);
+			}
+			r_list_free (values);
+		}
+		free (s);
+		pj_end (pj);
+		r_cons_println (core->cons, pj_string (pj));
+		pj_free (pj);
+	} else if (mode == 'q') {
+		SdbKv *kv;
+		SdbListIter *it;
+		SdbList *keys = sdb_foreach_list (db, true);
+		ls_foreach (keys, it, kv) {
+			r_cons_println (core->cons, sdbkv_key (kv));
+		}
+		ls_free (keys);
+	} else if (mode == 'x') {
+		char *s = sdb_querys (db, NULL, 0, symname);
+		RList *res = r_list_newf (free);
+		if (R_STR_ISNOTEMPTY (s)) {
+			r_str_trim (s);
+			const char *value;
+			RList *values = r_str_split_list (s, ",", 0);
+			r_list_foreach (values, iter2, value) {
+				RFlagItem *fi = get_flag_for_import (core, value);
+				if (fi) {
+					RList *refs = uniqrefs_for (core, fi->addr);
+					if (refs) {
+						r_list_join (res, refs);
+						r_list_free (refs);
+					}
+				} else {
+					R_LOG_WARN ("Cannot resolve %s", value);
+				}
+			}
+			r_list_free (values);
+		}
+		r_list_sort (res, cmpstr);
+		r_list_uniq_inplace (res, valstr);
+		RListIter *iter;
+		char *ref;
+		r_list_foreach (res, iter, ref) {
+			r_cons_println (core->cons, ref);
+		}
+		r_list_free (res);
+		free (s);
+	} else if (mode == '*') {
+		SdbKv *kv;
+		SdbListIter *it;
+		SdbList *keys = sdb_foreach_list (db, true);
+		ls_foreach (keys, it, kv) {
+			const char *k = sdbkv_key (kv);
+			char *v = strdup (sdbkv_value (kv));
+			const char *value;
+			RList *values = r_str_split_list (v, ",", 0);
+			r_list_foreach (values, iter2, value) {
+				RFlagItem *fi = get_flag_for_import (core, value);
+				if (fi) {
+					const ut64 at = fi->addr;
+					r_cons_printf (core->cons, "'@0x%08" PFMT64x "'CC kind(%s)\n", at, k);
+				}
+			}
+			free (v);
+			r_list_free (values);
+		}
+	} else if (mode == 'k') {
+		char *s = sdb_querys (db, NULL, 0, "*");
+		if (s) {
+			r_cons_print (core->cons, s);
+			free (s);
+		}
+	} else if (mode == 'j') {
+		PJ *pj = r_core_pj_new (core);
+		pj_o (pj);
+		SdbKv *kv;
+		SdbListIter *it;
+		SdbList *keys = sdb_foreach_list (db, true);
+		ls_foreach (keys, it, kv) {
+			char *v = strdup (sdbkv_value (kv));
+			pj_ka (pj, sdbkv_key (kv));
+			const char *value;
+			RList *values = r_str_split_list (v, ",", 0);
+			r_list_foreach (values, iter2, value) {
+				pj_import_refs (core, pj, value);
+			}
+			pj_end (pj);
+			free (v);
+			r_list_free (values);
+		}
+		ls_free (keys);
+		pj_end (pj);
+		r_cons_println (core->cons, pj_string (pj));
+		pj_free (pj);
+	} else {
+		SdbKv *kv;
+		SdbListIter *it;
+		SdbList *keys = sdb_foreach_list (db, true);
+		ls_foreach (keys, it, kv) {
+			const char *k = sdbkv_key (kv);
+			char *v = strdup (sdbkv_value (kv));
+			r_cons_printf (core->cons, "|- %s:\n", k);
+			const char *value;
+			RList *values = r_str_split_list (v, ",", 0);
+			r_list_foreach (values, iter2, value) {
+				r_cons_printf (core->cons, "|  |- %s\n", value);
+				RFlagItem *fi = get_flag_for_import (core, value);
+				if (fi) {
+					RList *refs = uniqrefs_for (core, fi->addr);
+					RListIter *iter;
+					char *ref;
+					r_list_foreach (refs, iter, ref) {
+						r_cons_printf (core->cons, "|  |  |- %s\n", ref);
+					}
+					r_list_free (refs);
+				} else {
+					R_LOG_WARN ("Cannot resolve %s", value);
+				}
+			}
+			free (v);
+			r_list_free (values);
+		}
+	}
+	sdb_free (db);
+}
+
+static int cmd_iic(RCore *core, const char *input) {
+	switch (input[2]) {
+	case 'j': // "iicj"
+	case 'q': // "iicq"
+	case 'k': // "iick"
+	case '*': // "iic*"
+	case 0: // "iic"
+		cmd_iic2 (core, input[2], NULL);
+		break;
+	case '.':
+		{
+			char *here = r_core_cmd_str (core, "fd.");
+			r_str_trim (here);
+			here = r_str_replace (here, "sym.imp.", "", 0);
+			here = r_str_replace (here, "reloc.", "", 0);
+			cmd_iic2 (core, 0, here);
+			free (here);
+		}
+		break;
+	case ' ': // "iic "
+		cmd_iic2 (core, 0, r_str_trim_head_ro (input + 3));
+		break;
+	case 'l': // "iicl"
+		if (input[3] == 'x' && input[4] == ' ') { // "iiclx"
+			cmd_iic2 (core, 'x', r_str_trim_head_ro (input + 5));
+		} else if (input[3] == 'j' && input[4] == ' ') { // "iiclj"
+			cmd_iic2 (core, 'L', r_str_trim_head_ro (input + 5));
+		} else if (input[3] == ' ') { // "iicl"
+			cmd_iic2 (core, 'l', r_str_trim_head_ro (input + 4));
+		} else {
+			r_cons_cmd_help_match (core->cons, help_msg_iic, "iicl", 0, false);
+		}
+		break;
+	case '?': // "iic?"
+		r_cons_cmd_help (core->cons, help_msg_iic);
+		break;
+	default:
+		r_core_return_invalid_command (core, "iic", input[2]);
+		break;
+	}
+	return 0;
+}
+
+static void r_core_file_info(RCore *core, PJ *pj, int mode) {
+	const char *fn = NULL;
+	bool io_cache = r_config_get_i (core->config, "io.cache");
+	RBinInfo *info = r_bin_get_info (core->bin);
+	RBinFile *binfile = r_bin_cur (core->bin);
+	int fd = r_io_fd_get_current (core->io);
+	RIODesc *desc = r_io_desc_get (core->io, fd);
+	RBinPlugin *plugin = r_bin_file_cur_plugin (binfile);
+	if (mode == R_MODE_JSON) {
+		pj_o (pj);
+	}
+	if (mode == R_MODE_RADARE) {
+		return;
+	}
+	if (mode == R_MODE_SIMPLE) {
+		return;
+	}
+	if (info) {
+		fn = info->file;
+		if (mode == R_MODE_JSON) {
+			pj_ks (pj, "type", r_str_get (info->type));
+		}
+	} else {
+		fn = desc? desc->name: NULL;
+	}
+	if (mode == R_MODE_JSON) {
+		const char *uri = fn;
+		if (!uri) {
+			if (desc && desc->uri && *desc->uri) {
+				uri = desc->uri;
+			} else {
+				uri = "";
+			}
+		}
+		pj_ks (pj, "file", uri);
+		if (desc) {
+			ut64 fsz = r_io_desc_size (desc);
+			pj_ki (pj, "fd", desc->fd);
+			if (fsz != UT64_MAX) {
+				char humansz[8];
+				pj_kN (pj, "size", fsz);
+				r_num_units (humansz, sizeof (humansz), fsz);
+				pj_ks (pj, "humansz", humansz);
+			}
+			pj_kb (pj, "iorw", io_cache || desc->perm & R_PERM_W);
+			pj_ks (pj, "mode", r_str_rwx_i (desc->perm & R_PERM_RWX));
+			if (desc->referer && *desc->referer) {
+				pj_ks (pj, "referer", desc->referer);
+			}
+		}
+		pj_ki (pj, "block", core->blocksize);
+		if (binfile) {
+			if (binfile->curxtr) {
+				pj_ks (pj, "packet", binfile->curxtr->meta.name);
+			}
+			if (plugin) {
+				pj_ks (pj, "format", plugin->meta.name);
+			}
+		}
+		pj_end (pj);
+	} else if (desc && mode != R_MODE_SIMPLE) {
+		r_strf_buffer (32);
+		if (desc) {
+			pair (core, "fd", r_strf ("%d", desc->fd));
+		}
+		if (fn || (desc && desc->uri)) {
+			char *escaped = r_str_escape_utf8_keep_printable (fn? fn: desc->uri, false, false);
+			if (escaped) {
+				pair (core, "file", escaped);
+				free (escaped);
+			}
+		}
+		if (desc) {
+			ut64 fsz = r_io_desc_size (desc);
+			if (fsz != UT64_MAX) {
+				char humansz[8];
+				pair (core, "size", r_strf ("0x%" PFMT64x, fsz));
+				r_num_units (humansz, sizeof (humansz), fsz);
+				pair (core, "humansz", humansz);
+			}
+		}
+		if (desc) {
+			pair (core, "mode", r_str_rwx_i (desc->perm & R_PERM_RWX));
+		}
+		if (plugin) {
+			pair (core, "format", plugin->meta.name);
+		}
+		if (desc) {
+			pair (core, "iorw", r_str_bool (io_cache || desc->perm & R_PERM_W));
+		}
+		pair (core, "block", r_strf ("0x%x", core->blocksize));
+
+		if (binfile && binfile->curxtr) {
+			pair (core, "packet", binfile->curxtr->meta.name);
+		}
+		if (desc && desc->referer && *desc->referer) {
+			pair (core, "referer", desc->referer);
+		}
+		if (info) {
+			pair (core, "type", info->type);
+		}
+	}
+}
+
+static int bin_is_executable(RBinObject *obj) {
+	RBinSection *sec;
+	if (obj) {
+		if (obj->info && obj->info->arch) {
+			return true;
+		}
+		R_VEC_FOREACH (&obj->sections_vec, sec) {
+			if (sec->perm & R_PERM_X) {
+				return true;
+			}
+		}
+		if (obj->info && obj->info->bclass) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void cmd_info_bin(RCore *core, int va, PJ *pj, int mode) {
+	RBinObject *obj = r_bin_cur_object (core->bin);
+	bool array = false;
+	if (core->io->desc || obj) {
+		if (pj) {
+			if (mode & R_MODE_ARRAY) {
+				array = true;
+			} else {
+				pj_o (pj);
+			}
+			mode = R_MODE_JSON;
+			pj_k (pj, "core");
+		}
+		r_core_file_info (core, pj, mode);
+		if (bin_is_executable (obj)) {
+			if (pj) {
+				pj_k (pj, "bin");
+			}
+			r_core_bin_info (core, R_CORE_BIN_ACC_INFO, pj, mode, va, NULL, NULL);
+		}
+		if (pj && !array) {
+			pj_end (pj);
+		}
+	} else {
+		if (pj) {
+			r_cons_print (core->cons, "{}");
+		} else {
+			R_LOG_ERROR ("No file selected");
+		}
+	}
+}
+
+static void tts_say(RCore *core, const char *n, int len) {
+	if (r_config_get_b (core->config, "scr.tts")) {
+		char *s = (*n && len > 0)
+			? r_str_newf ("%d %s", len, n)
+			: r_str_newf ("there are no %s", n);
+		if (s) {
+			r_sys_tts (s, true);
+			free (s);
+		}
+	}
+}
+
+static bool is_equal_file_hashes(RList *lfile_hashes, RList *rfile_hashes, bool *equal) {
+	R_RETURN_VAL_IF_FAIL (lfile_hashes, false);
+	R_RETURN_VAL_IF_FAIL (rfile_hashes, false);
+	R_RETURN_VAL_IF_FAIL (equal, false);
+
+	*equal = true;
+	RBinFileHash *fh_l, *fh_r;
+	RListIter *hiter_l, *hiter_r;
+	r_list_foreach (lfile_hashes, hiter_l, fh_l) {
+		r_list_foreach (rfile_hashes, hiter_r, fh_r) {
+			if (strcmp (fh_l->type, fh_r->type)) {
+				continue;
+			}
+			if (!!strcmp (fh_l->hex, fh_r->hex)) {
+				*equal = false;
+				return true;
+			}
+		}
+	}
+	return true;
+}
+
+static RList *r_core_bin_files(RCore *core) {
+	RList *list = r_list_newf (NULL);
+	if (core->allbins) {
+		RBinFile *bf;
+		RListIter *iter;
+		r_list_foreach (core->bin->binfiles, iter, bf) {
+			r_list_append (list, bf);
+		}
+	} else {
+		RBinFile *bf = r_bin_cur (core->bin);
+		if (bf && bf->bo) {
+			r_list_append (list, bf);
+		} else {
+			// no bin selected via `ob`, fall back to all bins
+			RListIter *iter;
+			r_list_foreach (core->bin->binfiles, iter, bf) {
+				r_list_append (list, bf);
+			}
+		}
+	}
+	return list;
+}
+
+static bool isKnownAndroidPackage(const char *cn) {
+	if (*cn == 'L') {
+		if (r_str_startswith (cn, "Lkotlin")) {
+			return true;
+		}
+		if (r_str_startswith (cn, "Lcom/google")) {
+			return true;
+		}
+		if (r_str_startswith (cn, "Lcom/facebook")) {
+			return true;
+		}
+		if (r_str_startswith (cn, "Lokhttp")) {
+			return true;
+		}
+		if (r_str_startswith (cn, "Landroid")) {
+			return true;
+		}
+		if (r_str_startswith (cn, "Ljava")) {
+			return true;
+		}
+		if (r_str_startswith (cn, "Lokio")) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void cmd_ic_comma(RCore *core, const char *input) {
+	R_RETURN_IF_FAIL (core && input[0] == ',');
+	const char *q = input + 1;
+	if (r_config_get_b (core->config, "bin.classes.namesonly")) {
+		return;
+	}
+	RList *bfiles = r_core_bin_files (core);
+	RListIter *objs_iter;
+	RBinFile *bf;
+	RBinFile *cur = core->bin->cur;
+	RTable *t = r_core_table_new (core, "flags");
+	RTableColumnType *typeString = r_table_type ("string");
+	RTableColumnType *typeNumber = r_table_type ("number");
+	r_table_add_column (t, typeNumber, "addr", 0);
+	r_table_add_column (t, typeString, "type", 0);
+	r_table_add_column (t, typeString, "klass", 0);
+	r_table_add_column (t, typeString, "name", 0);
+	r_table_add_column (t, typeString, "origin", 0);
+	const bool iova = r_config_get_b (core->config, "io.va");
+	r_list_foreach (bfiles, objs_iter, bf) {
+		RBinObject *obj = bf->bo;
+		RBinClass *klass;
+		RListIter *iter;
+		core->bin->cur = bf;
+		r_list_foreach (obj->classes, iter, klass) {
+			const char *kname = r_bin_name_tostring (klass->name);
+			RBinSymbol *method;
+			R_VEC_FOREACH (&klass->methods, method) {
+				char *addr = r_str_newf ("0x%08" PFMT64x, iova? method->vaddr: method->paddr);
+				const char *origin_str = r_bin_class_origin_tostring (klass->origin);
+				r_table_add_row (t, addr, "method", kname, method->name, origin_str, NULL);
+				free (addr);
+			}
+			RBinField *field;
+			R_VEC_FOREACH (&klass->fields, field) {
+				char *addr = r_str_newf ("0x%08" PFMT64x, iova? field->vaddr: field->paddr);
+				const char *origin_str = r_bin_class_origin_tostring (klass->origin);
+				r_table_add_row (t, addr, "field", kname, field->name, origin_str, NULL);
+				free (addr);
+			}
+		}
+	}
+	core->bin->cur = cur;
+	r_list_free (bfiles);
+	if (r_table_query (t, q)) {
+		char *s = r_table_tostring (t);
+		r_cons_printf (core->cons, "%s\n", s);
+		free (s);
+	}
+	r_table_free (t);
+}
+
+static void cmd_ic_invalidate_method_cache(RCore *core) {
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (bf && bf->bo && bf->bo->addr2klassmethod) {
+		ht_up_free (bf->bo->addr2klassmethod);
+		bf->bo->addr2klassmethod = NULL;
+	}
+}
+
+static RBinClass *cmd_ic_find_class(RList *klasses, const char *klass_name) {
+	RListIter *iter;
+	RBinClass *k;
+	r_list_foreach (klasses, iter, k) {
+		const char *kname = r_bin_name_tostring (k->name);
+		if (!strcmp (kname, klass_name)) {
+			return k;
+		}
+	}
+	return NULL;
+}
+
+static void cmd_ic_set_default_lang(RCore *core, RBinAttr *attr) {
+	const char *name = r_config_get (core->config, "bin.lang");
+	RBinLanguage lang = r_bin_lang_fromstring (name);
+	if (lang) {
+		attr->lang = lang;
+	}
+}
+
+static RBinClass *cmd_ic_get_or_add_class(RCore *core, RList *klasses, const char *klass_name) {
+	RBinClass *klass = cmd_ic_find_class (klasses, klass_name);
+	if (klass) {
+		return klass;
+	}
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (!bf || !bf->bo) {
+		return NULL;
+	}
+	klass = r_bin_file_add_class (bf, klass_name, NULL, 0);
+	if (klass) {
+		klass->origin = R_BIN_CLASS_ORIGIN_USER;
+		cmd_ic_set_default_lang (core, &klass->attr);
+	}
+	return klass;
+}
+
+static char *cmd_ic_single_colon(char *s) {
+	char *p = s;
+	const char *method = strchr (s, '.');
+	while ((p = strchr (p, ':'))) {
+		if (method && p > method) {
+			return NULL;
+		}
+		if ((p == s || p[-1] != ':') && p[1] != ':') {
+			return p;
+		}
+		p++;
+	}
+	return NULL;
+}
+
+static bool cmd_ic_class_has_super(RBinClass *klass, const char *super_name) {
+	if (!klass->super) {
+		return false;
+	}
+	RBinName *bn;
+	RListIter *iter;
+	r_list_foreach (klass->super, iter, bn) {
+		const char *name = r_bin_name_tostring (bn);
+		if (name && !strcmp (name, super_name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool cmd_ic_class_add_super(RBinClass *klass, const char *super_name) {
+	if (cmd_ic_class_has_super (klass, super_name)) {
+		return true;
+	}
+	if (!klass->super) {
+		klass->super = r_list_newf ((RListFree)r_bin_name_free);
+	}
+	RBinName *name = r_bin_name_new (super_name);
+	return r_list_append (klass->super, name);
+}
+
+static bool cmd_ic_class_delete_super(RBinClass *klass, const char *super_name) {
+	if (!klass->super) {
+		return false;
+	}
+	RBinName *bn;
+	RListIter *iter;
+	r_list_foreach (klass->super, iter, bn) {
+		const char *name = r_bin_name_tostring (bn);
+		if (name && !strcmp (name, super_name)) {
+			r_list_delete (klass->super, iter);
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool cmd_ic_class_delete_field(RBinClass *klass, const char *field_name) {
+	RBinField *f;
+	size_t i = 0;
+	R_VEC_FOREACH (&klass->fields, f) {
+		const char *fname = r_bin_name_tostring2 (f->name, 'o');
+		if (fname && !strcmp (fname, field_name)) {
+			RVecRBinField_remove (&klass->fields, i);
+			return true;
+		}
+		i++;
+	}
+	return false;
+}
+
+static void cmd_ic_sub(RCore *core, const char *input) {
+	const int pref = r_config_get_b (core->config, "asm.demangle")? 0: 'o';
+	RListIter *iter;
+	RBinClass *k;
+	RBinSymbol *m;
+
+	const char *arg = input;
+	if (*arg == '-') {
+		arg++;
+	}
+	const char ch0 = *arg;
+	if (ch0 == '*') {
+		R_LOG_TODO ("Cannot reset binclass info");
+		// reset!
+		return;
+	}
+	if (ch0 == 0 || ch0 == '?') {
+		r_cons_cmd_help_match (core->cons, help_msg_ic, "ic-", 0, true);
+		return;
+	}
+	char *klass_name = strdup (arg);
+	char *tail = (char *)r_str_trim_head_wp (klass_name);
+	if (*tail) {
+		*tail = 0;
+	}
+	char *field_name = strstr (klass_name, "..");
+	if (field_name) {
+		*field_name = 0;
+		field_name += 2;
+	}
+	char *super_name = field_name? NULL: cmd_ic_single_colon (klass_name);
+	if (super_name) {
+		*super_name++ = 0;
+	}
+	char *method_name = (field_name || super_name)? NULL: r_str_after (klass_name, '.');
+	RBinClass *klass = NULL;
+	RList *klasses = r_bin_get_classes (core->bin);
+	r_list_foreach (klasses, iter, k) {
+		const char *kname = r_bin_name_tostring2 (k->name, pref);
+		if (!strcmp (kname, klass_name)) {
+			if (field_name || super_name || method_name) {
+				klass = k;
+			} else {
+				// drop the name lookup first or ic+ gets the freed class back
+				RBinObject *bo = r_bin_cur_object (core->bin);
+				if (bo && k->name && ht_pp_find (bo->classes_ht, k->name->oname, NULL) == k) {
+					ht_pp_delete (bo->classes_ht, k->name->oname);
+				}
+				r_list_delete (klasses, iter);
+				cmd_ic_invalidate_method_cache (core);
+				free (klass_name);
+				return;
+			}
+			break;
+		}
+	}
+	if (klass && field_name) {
+		if (!cmd_ic_class_delete_field (klass, field_name)) {
+			R_LOG_ERROR ("Cannot find given klass field");
+		}
+		free (klass_name);
+		return;
+	}
+	if (klass && super_name) {
+		if (!cmd_ic_class_delete_super (klass, super_name)) {
+			R_LOG_ERROR ("Cannot find given klass inheritance");
+		}
+		free (klass_name);
+		return;
+	}
+	if (klass && method_name) {
+		size_t i = 0;
+		R_VEC_FOREACH (&klass->methods, m) {
+			const char *mname = r_bin_name_tostring2 (m->name, 'o');
+			if (!strcmp (method_name, mname)) {
+				RVecRBinSymbol_remove (&klass->methods, i);
+				cmd_ic_invalidate_method_cache (core);
+				free (klass_name);
+				return;
+			}
+			i++;
+		}
+	}
+	R_LOG_ERROR ("Cannot find given klass or method");
+	free (klass_name);
+}
+
+static void cmd_ic_field_update(RBinField *f, const char *s) {
+	char *type = r_bin_attr_update (&f->attr, s);
+	if (type) {
+		r_bin_name_free (f->type);
+		f->type = r_bin_name_new (type);
+		free (type);
+	}
+}
+
+static bool cmd_ic_check_name(const char *name) {
+	const ut8 *p = (const ut8 *)name;
+	if (*p) {
+		while (*p) {
+			RRune ch;
+			int size = r_utf8_decode (p, -1, &ch);
+			if (!size || ch <= 0x20 || (ch >= 0x7f && ch <= 0x9f) || ch == 0x2028 || ch == 0x2029) {
+				break;
+			}
+			p += size;
+		}
+		if (!*p) {
+			return true;
+		}
+	}
+	R_LOG_ERROR ("Invalid class or member name; see ic+?");
+	return false;
+}
+
+void cmd_ic_add(RCore *core, const char *input) {
+	const char ch0 = *input;
+	if (ch0 == 0 || ch0 == '?') {
+		if (ch0 == '?' && input[1] == '?') {
+			r_cons_cmd_help (core->cons, help_msg_icplus_examples);
+		} else {
+			r_cons_cmd_help (core->cons, help_msg_icplus);
+		}
+		return;
+	}
+	RList *klasses = r_bin_get_classes (core->bin);
+	if (!klasses) {
+		R_LOG_ERROR ("No class list for current binary");
+		return;
+	}
+	char *klass_name = strdup (input);
+	if (!klass_name) {
+		return;
+	}
+	char *tail = (char *)r_str_trim_head_wp (klass_name);
+	if (*tail) {
+		*tail++ = 0;
+		tail = (char *)r_str_trim_head_ro (tail);
+	}
+	char *field_name = strstr (klass_name, "..");
+	if (field_name) {
+		*field_name = 0;
+		field_name += 2;
+		if (R_STR_ISEMPTY (klass_name) || R_STR_ISEMPTY (field_name)) {
+			R_LOG_ERROR ("Usage: ic+[klassname]..[fieldname] [type]");
+			free (klass_name);
+			return;
+		}
+		if (!cmd_ic_check_name (klass_name) || !cmd_ic_check_name (field_name)) {
+			free (klass_name);
+			return;
+		}
+		RBinClass *klass = cmd_ic_get_or_add_class (core, klasses, klass_name);
+		if (!klass) {
+			R_LOG_ERROR ("Cannot add class %s", klass_name);
+			free (klass_name);
+			return;
+		}
+		RBinField *f;
+		R_VEC_FOREACH (&klass->fields, f) {
+			const char *fname = r_bin_name_tostring (f->name);
+			if (fname && !strcmp (fname, field_name)) {
+				cmd_ic_field_update (f, tail);
+				free (klass_name);
+				return;
+			}
+		}
+		f = RVecRBinField_emplace_back (&klass->fields);
+		memset (f, 0, sizeof (*f));
+		f->name = r_bin_name_new (field_name);
+		f->paddr = core->addr;
+		f->vaddr = core->addr;
+		f->attr.kind = R_BIN_FIELD_KIND_FIELD;
+		cmd_ic_set_default_lang (core, &f->attr);
+		cmd_ic_field_update (f, tail);
+		free (klass_name);
+		return;
+	}
+	char *super_name = cmd_ic_single_colon (klass_name);
+	if (super_name) {
+		*super_name++ = 0;
+		if (R_STR_ISEMPTY (klass_name) || R_STR_ISEMPTY (super_name)) {
+			R_LOG_ERROR ("Usage: ic+[klassname]:[supername]");
+			free (klass_name);
+			return;
+		}
+		if (!cmd_ic_check_name (klass_name) || !cmd_ic_check_name (super_name)) {
+			free (klass_name);
+			return;
+		}
+		RBinClass *klass = cmd_ic_get_or_add_class (core, klasses, klass_name);
+		if (!klass) {
+			R_LOG_ERROR ("Cannot add class %s", klass_name);
+			free (klass_name);
+			return;
+		}
+		if (!cmd_ic_class_add_super (klass, super_name)) {
+			R_LOG_ERROR ("Cannot add superclass %s", super_name);
+		}
+		free (klass_name);
+		return;
+	}
+	char *method_name = r_str_after (klass_name, '.');
+	if (!cmd_ic_check_name (klass_name) || (method_name && !cmd_ic_check_name (method_name))) {
+		free (klass_name);
+		return;
+	}
+	RBinClass *klass = cmd_ic_get_or_add_class (core, klasses, klass_name);
+	if (!klass) {
+		R_LOG_ERROR ("Cannot add class %s", klass_name);
+		free (klass_name);
+		return;
+	}
+	char *rest = NULL;
+	if (method_name == NULL) {
+		klass->addr = core->addr;
+		rest = r_bin_attr_update (&klass->attr, tail);
+	} else {
+		ut64 pa = core->addr; // XXX
+		ut64 va = core->addr;
+		RBinSymbol *m;
+		bool found = false;
+		R_VEC_FOREACH (&klass->methods, m) {
+			const char *mname = r_bin_name_tostring2 (m->name, 'o');
+			if (!strcmp (mname, method_name)) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			m = RVecRBinSymbol_emplace_back (&klass->methods);
+			memset (m, 0, sizeof (*m));
+			m->name = r_bin_name_new (method_name);
+			m->paddr = pa;
+			m->vaddr = va;
+			cmd_ic_set_default_lang (core, &m->attr);
+			cmd_ic_invalidate_method_cache (core);
+		}
+		rest = r_bin_attr_update (&m->attr, tail);
+	}
+	if (R_STR_ISNOTEMPTY (rest)) {
+		R_LOG_WARN ("Ignored unknown tokens: %s", rest);
+	}
+	free (rest);
+	free (klass_name);
+}
+
+static void cmd_ii_add(RCore *core, const char *input) {
+	if (R_STR_ISEMPTY (input) || *input == '?') {
+		r_cons_cmd_help_match (core->cons, help_msg_ii, "ii+", 0, true);
+		return;
+	}
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (!bf || !bf->bo) {
+		R_LOG_ERROR ("No file selected");
+		return;
+	}
+	// force lazy population of imports_vec from the legacy RList
+	(void)r_bin_get_imports_vec (core->bin);
+	char *args = strdup (r_str_trim_head_ro (input));
+	const int n = r_str_word_set0 (args);
+	const char *name = r_str_word_get0 (args, 0);
+	if (R_STR_ISEMPTY (name)) {
+		R_LOG_ERROR ("Missing import name");
+		free (args);
+		return;
+	}
+	RVecRBinImport *vec = &bf->bo->imports_vec;
+	RBinImport *imp = RVecRBinImport_emplace_back (vec);
+	memset (imp, 0, sizeof (*imp));
+	imp->name = r_bin_name_new (name);
+	imp->is_imported = true;
+	imp->bind = R_BIN_BIND_GLOBAL_STR;
+	imp->type = R_BIN_TYPE_FUNC_STR;
+	if (n > 1) {
+		const char *libname = r_str_word_get0 (args, 1);
+		if (R_STR_ISNOTEMPTY (libname)) {
+			imp->libname = strdup (libname);
+		}
+	}
+	if (n > 2) {
+		char *t = (char *)r_str_word_get0 (args, 2);
+		if (R_STR_ISNOTEMPTY (t)) {
+			r_str_case (t, true);
+			imp->type = r_str_constpool_get (&core->bin->constpool, t);
+		}
+	}
+	if (n > 3) {
+		char *b = (char *)r_str_word_get0 (args, 3);
+		if (R_STR_ISNOTEMPTY (b)) {
+			r_str_case (b, true);
+			imp->bind = r_str_constpool_get (&core->bin->constpool, b);
+		}
+	}
+	imp->ordinal = (n > 4)
+		? r_num_get (NULL, r_str_word_get0 (args, 4))
+		: RVecRBinImport_length (vec);
+	free (args);
+}
+
+static void cmd_ii_sub(RCore *core, const char *input) {
+	if (R_STR_ISEMPTY (input) || *input == '?') {
+		r_cons_cmd_help_match (core->cons, help_msg_ii, "ii-", 0, true);
+		return;
+	}
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (!bf || !bf->bo) {
+		R_LOG_ERROR ("No file selected");
+		return;
+	}
+	(void)r_bin_get_imports_vec (core->bin);
+	char *args = strdup (r_str_trim_head_ro (input));
+	const int n = r_str_word_set0 (args);
+	const char *name = r_str_word_get0 (args, 0);
+	const char *libname = (n > 1)? r_str_word_get0 (args, 1): NULL;
+	if (R_STR_ISEMPTY (name)) {
+		R_LOG_ERROR ("Missing import name");
+		free (args);
+		return;
+	}
+	RVecRBinImport *vec = &bf->bo->imports_vec;
+	size_t idx = 0;
+	RBinImport *it;
+	R_VEC_FOREACH (vec, it) {
+		const char *iname = it->name? r_bin_name_tostring (it->name): NULL;
+		if (iname && !strcmp (iname, name)
+				&& (!libname || (it->libname && !strcmp (it->libname, libname)))) {
+			RVecRBinImport_remove (vec, idx);
+			free (args);
+			return;
+		}
+		idx++;
+	}
+	R_LOG_ERROR ("Cannot find matching import");
+	free (args);
+}
+
+static void cmd_icg(RCore *core, RBinObject *obj, const char *arg) { // "icg"
+	const int pref = r_config_get_b (core->config, "asm.demangle")? 0: 'o';
+	RListIter *iter, *iter2;
+	RBinClass *cls;
+	if (!obj) {
+		return;
+	}
+	const char *trimmed = r_str_trim_head_ro (arg);
+	const char *match = R_STR_ISNOTEMPTY (trimmed)? trimmed: NULL;
+	r_list_foreach (obj->classes, iter, cls) {
+		const char *kname = r_bin_name_tostring2 (cls->name, pref);
+		if (match && !strstr (kname, match)) {
+			continue;
+		}
+		char *sk = r_str_sanitize_r2 (kname);
+		r_cons_printf (core->cons, "'agn %s\n", sk);
+		RBinName *bn;
+		r_list_foreach (cls->super, iter2, bn) {
+			const char *sname = r_bin_name_tostring2 (bn, pref);
+			if (match && !strstr (sname, match)) {
+				continue;
+			}
+			char *ss = r_str_sanitize_r2 (sname);
+			r_cons_printf (core->cons, "'agn %s\n'age %s %s\n", ss, ss, sk);
+			free (ss);
+		}
+		free (sk);
+	}
+}
+
+static bool isjvm(RCore *core) {
+	RArchConfig *cfg = R_UNWRAP3 (core, rasm, config);
+	if (cfg) {
+		const char *arch = cfg->arch;
+		if (!strcmp (arch, "dalvik")) {
+			return true;
+		}
+		if (!strcmp (arch, "java")) {
+			return true;
+		}
+	}
+	return false;
+}
+
+#define RBININFO(n, x, y, z) \
+	if (z) { \
+		tts_say (core, n, z); \
+	} \
+	r_core_bin_info (core, x, pj, mode, va, NULL, y);
+
+static char *cmd_ic_sdb_name(const char *name) {
+	char *safe = r_str_sanitize_sdb_key (name);
+	if (safe && !strcmp (safe, name) && !r_str_startswith (name, "r2name_")) {
+		return safe;
+	}
+	free (safe);
+	if (!name) {
+		return NULL;
+	}
+	size_t len = strlen (name);
+	if (len > INT_MAX / 2) {
+		return NULL;
+	}
+	char *hex = r_hex_bin2strdup ((const ut8 *)name, len);
+	char *encoded = hex? r_str_newf ("r2name_%s", hex): NULL;
+	free (hex);
+	return encoded;
+}
+
+static void cmd_ic0(RCore *core, RBinObject *obj, int mode, PJ *pj, bool is_array, bool va, int idx, const char *cls_name, int *count, bool is_doublerad) {
+	const bool iova = va; // r_config_get_b (core->config, "io.va");
+	const int pref = r_config_get_b (core->config, "asm.demangle")? 'd': 0;
+	const bool names_only = r_config_get_b (core->config, "bin.classes.namesonly");
+	RListIter *iter;
+	RBinSymbol *sym;
+	RBinClass *cls;
+	if (mode == 'c') {
+		r_cons_printf (core->cons, "%d\n", r_list_length (obj->classes));
+		return;
+	}
+	r_list_foreach (obj->classes, iter, cls) {
+		const char *kname = r_bin_name_tostring2 (cls->name, pref);
+		if ((idx >= 0 && idx != (*count)++) || (R_STR_ISNOTEMPTY (cls_name) && strcmp (cls_name, kname))) {
+			continue;
+		}
+		if (is_doublerad) {
+			char *sk = cmd_ic_sdb_name (kname);
+			if (!sk) {
+				continue;
+			}
+			r_cons_printf (core->cons, "'ac %s\n", sk);
+			if (!names_only) {
+				R_VEC_FOREACH (&cls->methods, sym) {
+					char *name = cmd_ic_sdb_name (r_bin_name_tostring2 (sym->name, pref));
+					if (!name) {
+						continue;
+					}
+					r_cons_printf (core->cons, "'acm %s %s 0x%08" PFMT64x "\n", sk, name, iova? sym->vaddr: sym->paddr);
+					free (name);
+				}
+			}
+			free (sk);
+			continue;
+		}
+		bool listed_classes = false;
+
+		switch (mode) {
+		case '*':
+			{
+				listed_classes = true;
+				int mode = R_MODE_RADARE;
+				RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, r_list_length (obj->classes));
+			}
+			break;
+		case 'l': // "icl"
+			if (!names_only) {
+				bool first = true;
+				R_VEC_FOREACH (&cls->methods, sym) {
+					r_cons_printf (core->cons, "%s0x%" PFMT64x, first? "": " ", iova? sym->vaddr: sym->paddr);
+					first = false;
+				}
+			}
+			r_cons_newline (core->cons);
+			break;
+		case 'j':
+			{
+				int mode = R_MODE_JSON; // (oldmode == 'q')? R_MODE_SIMPLE: 0;
+				int len = r_list_length (obj->classes);
+				listed_classes = true;
+				RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, len);
+			}
+			break;
+		case 0:
+			if (idx == -1 && R_STR_ISEMPTY (cls_name)) {
+				size_t len = r_list_length (obj->classes);
+				int mode = 0;
+				RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, len);
+				listed_classes = true;
+			} else {
+				r_cons_printf (core->cons, "class %s\n", kname);
+				if (!names_only) {
+					R_VEC_FOREACH (&cls->methods, sym) {
+						char *flags = r_core_bin_attr_tostring (core, sym->attr.flags, true);
+						const char *name = r_bin_name_tostring (sym->name);
+						r_cons_printf (core->cons, "0x%08" PFMT64x " method %s %-4s %s\n", iova? sym->vaddr: sym->paddr, kname, flags, name);
+						free (flags);
+					}
+				}
+			}
+			break;
+		case 'q':
+			{
+				size_t len = r_list_length (obj->classes);
+				int mode = R_MODE_SIMPLE;
+				RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, len);
+				listed_classes = true;
+			}
+			break;
+		default:
+			r_cons_printf (core->cons, "class %s\n", kname);
+			if (!names_only) {
+				R_VEC_FOREACH (&cls->methods, sym) {
+					char *flags = r_core_bin_attr_tostring (core, sym->attr.flags, true);
+					const char *name = r_bin_name_tostring (sym->name);
+					r_cons_printf (core->cons, "0x%08" PFMT64x " method %s %-4s %s\n", iova? sym->vaddr: sym->paddr, kname, flags, name);
+					free (flags);
+				}
+			}
+			break;
+		}
+		if (listed_classes) {
+			break;
+		}
+	}
+}
+
+static void cmd_ic(RCore *core, const char *input, PJ *pj, bool is_array, bool va) {
+	const int pref = r_config_get_b (core->config, "asm.demangle")? 'd': 0;
+	const bool names_only = r_config_get_b (core->config, "bin.classes.namesonly");
+	int cmd = input[0];
+	int mode = 0;
+	const char *arg = input + 2;
+	const char *lastchar = strchr (input, ' ');
+	if (lastchar) {
+		arg = r_str_trim_head_ro (lastchar + 1);
+		lastchar = lastchar - 1;
+	} else {
+		arg = "";
+		lastchar = input + strlen (input) - 1;
+	}
+	bool show_help = false;
+	if (*lastchar == '?') {
+		show_help = true;
+		lastchar--;
+	}
+	switch (*lastchar) {
+	case 'j':
+	case 'k':
+	case '*':
+	case 'q': // quiet
+	case 'Q': // quieter
+	case ',':
+		mode = *lastchar;
+		if (lastchar > input && cmd == *lastchar) {
+			cmd = 'Q';
+		}
+		break;
+	default:
+		mode = 0;
+		break;
+	}
+	const bool is_superquiet = strstr (input, "qq");
+	const bool is_doublerad = strstr (input, "**");
+	switch (cmd) {
+	// help message
+	case '?': // "ic?"
+		r_cons_cmd_help (core->cons, help_msg_ic);
+		break;
+	case '-': // "ic-"
+		cmd_ic_sub (core, input);
+		break;
+	case '+': // "ic+"
+		cmd_ic_add (core, r_str_trim_head_ro (input + 1));
+		break;
+	case ',':
+		mode = ',';
+	// commands that iterate
+	case ' ': // "ic "
+	case 'k': // "ick"
+	case 'q': // "icq"
+	case 'Q': // "icQ" // "icqq"
+	case '.': // "ic."
+	case 's': // "ics"
+	case 'g': // "icg"
+	case 'j': // "icj"
+	case 'l': // "icl"
+	case 'c': // "icc"
+	case '*': // "ic*"
+	case 0: // "ic" "icq"
+		if (mode == ',') {
+			cmd_ic_comma (core, input);
+		} else {
+			if (show_help) {
+				if (cmd == 'Q') {
+					r_cons_cmd_help_match (core->cons, help_msg_ic, "icqq", 0, false);
+				} else {
+					char kcmd[] = { 'i', 'c', cmd, 0};
+					r_cons_cmd_help_match (core->cons, help_msg_ic, kcmd, 0, false);
+				}
+				break;
+			}
+			if (cmd == 'c' && input[1] == 'l') { // "iccl"
+				icc_langs (core, input[2] == 'j');
+				break;
+			}
+			const bool is_jvm = isjvm (core);
+			const bool iova = r_config_get_b (core->config, "io.va");
+			RListIter *objs_iter;
+			RBinFile *bf;
+			RBinFile *cur = core->bin->cur;
+			RList *objs = r_core_bin_files (core);
+			int count = 0;
+			int idx = -1;
+			const char *cls_name = NULL;
+			if (r_num_is_valid_input (core->num, arg)) {
+				idx = r_num_math (core->num, arg);
+			} else {
+				const char *first_char = arg;
+				int not_space = strspn (first_char, " ");
+				if (first_char[not_space]) {
+					cls_name = first_char + not_space;
+				}
+			}
+			bool first = true;
+			if (r_list_empty (objs) && mode == 'j') {
+				r_cons_print (core->cons, "[]");
+				r_list_free (objs);
+				return;
+			}
+			r_list_foreach (objs, objs_iter, bf) {
+				RBinObject *bo = bf->bo;
+				if (!bo || !bo->classes || r_list_empty (bo->classes)) {
+					if (r_str_startswith (input, "lc")) { // "iclc"
+						r_cons_printf (core->cons, "0\n");
+					}
+					if (mode == 'j') {
+						r_cons_printf (core->cons, "%s[]", first? "": ",");
+					}
+					first = false;
+					continue;
+				}
+				first = false;
+				RBinClass *cls;
+				RBinSymbol *sym;
+				RListIter *iter;
+				core->bin->cur = bf;
+
+				if (is_superquiet && is_jvm) {
+					r_list_foreach (bo->classes, iter, cls) {
+						const char *kname = r_bin_name_tostring (cls->name);
+						if (!isKnownAndroidPackage (kname)) {
+							r_cons_printf (core->cons, "%s\n", kname);
+						}
+					}
+					break;
+				}
+				tts_say (core, "classes", r_list_length (bo->classes));
+				switch (cmd) {
+				case 'g': // "icg"
+					cmd_icg (core, bo, arg);
+					break;
+				case 's': // "ics"
+					if (!names_only) {
+						r_list_foreach (bo->classes, iter, cls) {
+							const char *kname = r_bin_name_tostring (cls->name);
+							R_VEC_FOREACH (&cls->methods, sym) {
+								ut64 addr = iova? sym->vaddr: sym->paddr;
+								if (addr == 0 || addr == UT64_MAX) {
+									continue;
+								}
+								const char *sname = r_bin_name_tostring2 (sym->name, pref);
+								r_cons_printf (core->cons, "0x%" PFMT64x " [%s] %s\n", addr, kname, sname);
+							}
+						}
+					}
+					break;
+				case 'k': // "ick"
+					classdump_keys (core, bo);
+					break;
+				case 'l': // "icl"
+					if (r_str_startswith (input, "lc")) {
+						cmd_ic0 (core, bo, 'c', pj, is_array, va, idx, cls_name, &count, is_doublerad);
+					} else if (!names_only) {
+						r_list_foreach (bo->classes, iter, cls) {
+							bool first = true;
+							R_VEC_FOREACH (&cls->methods, sym) {
+								r_cons_printf (core->cons, "%s0x%" PFMT64x, first? "": " ", iova? sym->vaddr: sym->paddr);
+								first = false;
+							}
+							if (!RVecRBinSymbol_empty (&cls->methods)) {
+								r_cons_newline (core->cons);
+							}
+						}
+					}
+					break;
+				case '.': // "ic."
+					{
+						ut64 addr = core->addr;
+						ut64 min = UT64_MAX;
+						const char *method = NULL;
+						ut64 max = 0LL;
+						if (names_only) {
+							break;
+						}
+						r_list_foreach (bo->classes, iter, cls) {
+							method = NULL;
+							R_VEC_FOREACH (&cls->methods, sym) {
+								ut64 at = iova? sym->vaddr: sym->paddr;
+								if (at < min) {
+									min = at;
+								}
+								if (at + sym->attr.size > max) {
+									max = at + sym->attr.size;
+								}
+								if (addr >= at && addr <= at + sym->attr.size) {
+									method = r_bin_name_tostring (sym->name);
+								}
+							}
+							if (addr >= min && addr < max) {
+								const char *kname = r_bin_name_tostring (cls->name);
+								if (method) {
+									r_cons_printf (core->cons, "%s::%s\n", kname, method);
+								} else {
+									r_cons_printf (core->cons, "%s\n", kname);
+								}
+							}
+							min = UT64_MAX;
+							max = 0LL;
+						}
+					}
+					break;
+				case 'c': // "icc"
+					if (input[1] == 'j') { // "iccj"
+						mode = R_MODE_JSON;
+						RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, r_list_length (bo->classes));
+						break;
+					}
+					mode = R_MODE_CLASSDUMP;
+					if (mode == '*') {
+						mode |= R_MODE_RADARE;
+					} else if (mode == 'k') { // "icck"
+						classdump_keys (core, bo);
+						r_list_free (objs);
+						return;
+					}
+					const char *lang = strchr (input, ' ');
+					char *olang = NULL;
+					if (lang) {
+						olang = strdup (r_config_get (core->config, "bin.lang"));
+						r_config_set (core->config, "bin.lang", lang + 1);
+					}
+					RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, r_list_length (bo->classes));
+					if (olang) {
+						r_config_set (core->config, "bin.lang", olang);
+						free (olang);
+					}
+					// input = " ";
+					break;
+				case 'j':
+					mode = R_MODE_JSON;
+					RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, r_list_length (bo->classes));
+					break;
+				case '*':
+					mode = R_MODE_RADARE;
+					RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, r_list_length (bo->classes));
+					break;
+				case 'Q':
+				case 'q':
+					mode = (cmd == 'Q')? R_MODE_SIMPLEST: R_MODE_SIMPLE;
+					// TODO add the ability to filter by name
+					RBININFO ("classes", R_CORE_BIN_ACC_CLASSES, NULL, r_list_length (bo->classes));
+					break;
+				case ' ': // "ic"
+				case 0: // "ic"
+					cmd_ic0 (core, bo, mode, pj, is_array, va, idx, cls_name, &count, is_doublerad);
+					break;
+				default:
+					r_core_return_invalid_command (core, "ic", mode);
+					break;
+				}
+				core->bin->cur = cur;
+			}
+			r_list_free (objs);
+		}
+		break;
+	default:
+		r_core_return_invalid_command (core, "ic", cmd);
+		break;
+	}
+}
+
+typedef struct {
+	ut64 addr;
+	ut64 len;
+	char type;
+} IzArgs;
+
+static void parse_iz_args(RCore *core, const char *input, int skip, IzArgs *args) {
+	args->addr = core->addr;
+	args->len = 0;
+	args->type = 0;
+	if (input[skip] == ' ') {
+		char *s = strdup (r_str_trim_head_ro (input + skip + 1));
+		int nwords = r_str_word_set0 (s);
+		if (nwords > 0) {
+			const char *a0 = r_str_word_get0 (s, 0);
+			if (R_STR_ISNOTEMPTY (a0)) {
+				args->addr = r_num_get (NULL, a0);
+			}
+		}
+		if (nwords > 1) {
+			const char *a1 = r_str_word_get0 (s, 1);
+			if (R_STR_ISNOTEMPTY (a1)) {
+				args->len = r_num_get (NULL, a1);
+			}
+		}
+		if (nwords > 2) {
+			const char *a2 = r_str_word_get0 (s, 2);
+			if (R_STR_ISNOTEMPTY (a2)) {
+				args->type = *a2;
+			}
+		}
+		free (s);
+	}
+}
+
+static void cmd_izplus(RCore *core, const char *input) {
+	const char *arg = r_str_trim_head_ro (input + 2);
+	if (R_STR_ISEMPTY (arg) || *arg == '?') {
+		r_cons_cmd_help_match (core->cons, help_msg_iz, "iz+", 0, true);
+		return;
+	}
+	if (input[2] != ' ') {
+		r_core_return_invalid_command (core, "iz+", input[2]);
+		return;
+	}
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (!bf || !bf->bo) {
+		R_LOG_ERROR ("No file selected");
+		return;
+	}
+	IzArgs args;
+	parse_iz_args (core, input, 2, &args);
+	ut64 paddr = r_io_v2p (core->io, args.addr);
+	ut64 vaddr = args.addr;
+	if (paddr == UT64_MAX) {
+		paddr = args.addr;
+	}
+	RBinString *bs = r_bin_file_string_add (bf, paddr, vaddr, args.len, args.type);
+	if (bs) {
+		R_LOG_INFO ("Added string at 0x%08" PFMT64x, vaddr);
+	}
+}
+
+static void cmd_izminus(RCore *core, const char *input) {
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (!bf) {
+		return;
+	}
+	IzArgs args;
+	parse_iz_args (core, input, 2, &args);
+	r_bin_file_string_delete (bf, args.addr, args.len, args.type);
+}
+
+static void cmd_iz(RCore *core, PJ *pj, int mode, int is_array, bool va, const char *input) {
+	switch (input[1]) {
+	case '+': // "iz+"
+		cmd_izplus (core, input);
+		return;
+	case '-': // "iz-"
+		cmd_izminus (core, input);
+		return;
+	case 'c': ; // "izc"
+		RList *bfiles = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		ut64 total = 0;
+		r_list_foreach (bfiles, iter, bf) {
+			RBinObject *bo = bf->bo;
+			if (bo) {
+				total += RVecRBinString_length (&bo->strings);
+			}
+		}
+		r_list_free (bfiles);
+		r_cons_printf (core->cons, "%" PFMT64u "\n", total);
+		return;
+	}
+	// Parse command: iz[z][z][jq*auwWb] [skip] [count]
+	const char *p = input + 1;
+	bool raw = false; // izz = raw strings from whole binary
+	bool rdump = false; // izzz = dump mode
+	ut64 skip = 0;
+	ut64 count = 0;
+	int type_filter = 0; // 0 = no filter, 'a'=ascii, 'u'=utf8, 'w'=wide, 'W'=wide32, 'b'=base64
+	// Count 'z' characters
+	while (*p == 'z') {
+		if (!raw) {
+			raw = true;
+		} else {
+			rdump = true;
+		}
+		p++;
+	}
+	// Handle count mode for izz and izzz: "izzc" and "izzzc"
+	if (*p == 'c') {
+		RBinFile *bf = r_bin_cur (core->bin);
+		if (bf) {
+			RVecRBinString *strings = r_bin_raw_strings (bf, 0);
+			r_cons_printf (core->cons, "%d\n", strings? (int)RVecRBinString_length (strings): 0);
+			RVecRBinString_free (strings);
+		}
+		return;
+	}
+	// Parse type filter suffix (a, u, w, W, b) — not supported in izzz dump mode
+	if (!rdump) {
+		if (*p == 'a') {
+			type_filter = R_STRING_TYPE_ASCII;
+			p++;
+		} else if (*p == 'u') {
+			type_filter = R_STRING_TYPE_UTF8;
+			p++;
+		} else if (*p == 'w') {
+			type_filter = R_STRING_TYPE_WIDE;
+			p++;
+		} else if (*p == 'W') {
+			type_filter = R_STRING_TYPE_WIDE32;
+			p++;
+		} else if (*p == 'b') {
+			type_filter = R_STRING_TYPE_BASE64;
+			p++;
+		}
+	}
+	// Parse suffix (j, jq, qj, q, qq, *, ,)
+	bool local_pj = false;
+	bool dotmode = false;
+	if (*p == 'j') {
+		mode = R_MODE_JSON;
+		p++;
+		if (*p == 'q') {
+			mode |= R_MODE_SIMPLE;
+			p++;
+		}
+		if (!pj) {
+			pj = r_core_pj_new (core);
+			local_pj = true;
+		}
+	} else if (*p == 'q') {
+		p++;
+		if (*p == 'q') {
+			mode = R_MODE_SIMPLEST;
+			p++;
+		} else if (*p == 'j') {
+			mode = R_MODE_JSON | R_MODE_SIMPLE;
+			p++;
+			if (!pj) {
+				pj = r_core_pj_new (core);
+				local_pj = true;
+			}
+		} else {
+			mode = R_MODE_SIMPLE;
+		}
+	} else if (*p == '*') {
+		mode = R_MODE_RADARE;
+		p++;
+	} else if (*p == ',') {
+		R_FREE (core->table_query);
+		core->table_query = strdup (p + 1);
+		p = ""; // consume rest
+	}
+	// Check for '.' suffix after mode specifier
+	if (*p == '.') {
+		dotmode = true;
+		p++;
+	}
+	// Handle "iz.", "izj.", "izq." - show string at current address
+	if (dotmode) {
+		RVecRBinString *list = r_bin_get_strings (core->bin);
+		if (list) {
+			ut64 addr = core->addr;
+			RBinString *string;
+		R_VEC_FOREACH (list, string) {
+			ut64 vaddr = va? string->vaddr: string->paddr;
+			if (type_filter && string->type != type_filter) {
+				continue;
+			}
+			if (vaddr == addr || string->paddr == addr) {
+					if (mode & R_MODE_JSON) {
+						PJ *lpj = r_core_pj_new (core);
+						pj_o (lpj);
+						pj_kn (lpj, "vaddr", string->vaddr);
+						pj_kn (lpj, "paddr", string->paddr);
+						pj_ki (lpj, "ordinal", string->ordinal);
+						pj_ki (lpj, "size", string->size);
+						pj_ki (lpj, "length", string->length);
+						pj_ks (lpj, "type", r_bin_string_type (string->type));
+						pj_ks (lpj, "string", string->string);
+						pj_end (lpj);
+						r_cons_println (core->cons, pj_string (lpj));
+						pj_free (lpj);
+					} else if (mode & R_MODE_SIMPLE) {
+						r_cons_printf (core->cons, "0x%" PFMT64x " %d %d %s\n", vaddr, string->size, string->length, string->string);
+					} else {
+						r_cons_println (core->cons, string->string);
+					}
+					if (local_pj) {
+						pj_free (pj);
+					}
+					return;
+				}
+			}
+		}
+		if (local_pj) {
+			pj_free (pj);
+		}
+		return;
+	}
+	// Parse optional pagination arguments: "skip count" or just "count"
+	if (*p == ' ') {
+		char *args = strdup (r_str_trim_head_ro (p + 1));
+		int nwords = r_str_word_set0 (args);
+		if (nwords == 1) {
+			count = r_num_get (NULL, args);
+		} else if (nwords >= 2) {
+			skip = r_num_get (NULL, r_str_word_get0 (args, 0));
+			count = r_num_get (NULL, r_str_word_get0 (args, 1));
+		}
+		free (args);
+	}
+	// Execute command
+	if (rdump) {
+		RBinFile *bf = r_bin_cur (core->bin);
+		int min = r_config_get_i (core->config, "bin.str.min");
+		if (bf) {
+			bf->strmode = mode;
+			RStrBuf output = {0};
+			r_bin_dump_strings (bf, min, 2, &output);
+			size_t length = r_strbuf_length (&output);
+			if (length > 0) {
+				r_cons_write (core->cons, r_strbuf_get (&output), length);
+			}
+			r_strbuf_fini (&output);
+		}
+	} else if (raw) {
+		bin_raw_strings (core, pj, mode, va, skip, count, type_filter);
+	} else {
+		RList *bfiles = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		r_list_foreach (bfiles, iter, bf) {
+			core->bin->cur = bf;
+			bin_strings (core, pj, mode, va, skip, count, type_filter);
+		}
+		core->bin->cur = cur;
+		r_list_free (bfiles);
+	}
+	if (local_pj) {
+		r_cons_println (core->cons, pj_string (pj));
+		pj_free (pj);
+	}
+}
+
+static bool inrange(RBinSection *sec, RBinSymbol *sym) {
+	const ut64 symva = sym->vaddr;
+	const ut64 secva = sec->vaddr;
+	return (symva >= secva && symva < secva + sec->vsize);
+}
+
+static void cmd_iSm(RCore *core, const char *input, PJ **_pj, int mode, const bool va, const bool is_array) {
+	// TODO: Add iSm= to show with progressbars
+	RBinFile *bf = core->bin->cur;
+	if (!bf || !bf->bo) {
+		return;
+	}
+	RBinObject *bo = bf->bo;
+	RBinSection *sec;
+	RBinSymbol *sym;
+	bool countmode = (input[2] == 'c');
+
+	PJ *pj = *_pj;
+	RVecRBinSymbol *symbols = r_bin_file_get_symbols_vec (bf);
+	R_VEC_FOREACH (&bo->sections_vec, sec) {
+		int vsize = sec->vsize;
+		if (vsize < 1) {
+			continue;
+		}
+		if (pj) {
+			pj_o (pj);
+			pj_ks (pj, "section", sec->name);
+			pj_ka (pj, "symbols");
+			R_VEC_FOREACH (symbols, sym) {
+				if (inrange (sec, sym)) {
+					pj_o (pj);
+					pj_ks (pj, "name", r_bin_name_tostring (sym->name));
+					if (sym->attr.size > 0) {
+						pj_ki (pj, "size", sym->attr.size);
+						pj_kd (pj, "percent", (sym->attr.size * 100) / vsize);
+					}
+					pj_end (pj);
+				}
+			}
+			pj_end (*_pj);
+			pj_end (*_pj);
+		} else {
+			char *hsz = r_num_units (NULL, 0, sec->vsize);
+			r_cons_printf (core->cons, "0x%08" PFMT64x "-0x%08" PFMT64x " %8s %s", sec->vaddr, sec->vaddr + sec->vsize, hsz, sec->name);
+			free (hsz);
+			if (countmode) {
+				int count = 0;
+				R_VEC_FOREACH (symbols, sym) {
+					if (inrange (sec, sym)) {
+						count++;
+					}
+				}
+				r_cons_printf (core->cons, " = %d symbols\n", count);
+			} else {
+				r_cons_newline (core->cons);
+				R_VEC_FOREACH (symbols, sym) {
+					if (inrange (sec, sym)) {
+						r_cons_printf (core->cons, "    - %8u %s\n", sym->attr.size, r_bin_name_tostring (sym->name));
+					}
+				}
+			}
+		}
+	}
+}
+
+static void cmd_info_extract(RCore *core, const char *output, bool resources, bool segments) {
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (!bf) {
+		R_LOG_ERROR ("No binary file loaded");
+		r_core_return_value (core, 1);
+		return;
+	}
+	bool ok = resources
+		? r_bin_file_extract_resources (bf, output)
+		: r_bin_file_extract_sections (bf, output, segments);
+	if (!ok) {
+		r_core_return_value (core, 1);
+	}
+}
+
+static RBinResource *find_resource(RVecRBinResource *resources, const char *arg) {
+	RBinResource *r;
+	R_VEC_FOREACH (resources, r) {
+		if (R_STR_ISNOTEMPTY (r->name) && !strcmp (r->name, arg)) {
+			return r;
+		}
+	}
+	if (isdigit (*arg)) {
+		const ut64 n = r_num_get (NULL, arg);
+		R_VEC_FOREACH (resources, r) {
+			if (r->index == n || r->id == n) {
+				return r;
+			}
+		}
+	}
+	return NULL;
+}
+
+static void cmd_iuo(RCore *core, const char *arg) {
+	if (R_STR_ISEMPTY (arg)) {
+		r_cons_cmd_help_match (core->cons, help_msg_iu, "iuo", 0, true);
+		return;
+	}
+	RBinFile *bf = r_bin_cur (core->bin);
+	RVecRBinResource *resources = bf? r_bin_file_get_resources (bf): NULL;
+	if (!resources || RVecRBinResource_empty (resources)) {
+		R_LOG_ERROR ("No resources found in the current binary");
+		r_core_return_value (core, 1);
+		return;
+	}
+	RBinResource *resource = find_resource (resources, arg);
+	if (!resource) {
+		R_LOG_ERROR ("Cannot find any resource matching '%s'", arg);
+		r_core_return_value (core, 1);
+		return;
+	}
+	RBuffer *buf = r_bin_file_get_resource_data (bf, resource, !core->bin->options.resraw);
+	const ut64 size = buf? r_buf_size (buf): 0;
+	// copy the bytes out so the new fd holds no reference into bf->buf
+	ut8 *data = (size > 0 && size <= INT_MAX)? malloc (size): NULL;
+	if (!data || r_buf_read_at (buf, 0, data, size) != (st64)size) {
+		R_LOG_ERROR ("Cannot read resource %u", resource->index);
+		free (data);
+		r_unref (buf);
+		r_core_return_value (core, 1);
+		return;
+	}
+	r_unref (buf);
+	char *uri = r_str_newf ("malloc://%"PFMT64u, size);
+	RIODesc *fd = r_io_open (core->io, uri, R_PERM_RW, 0);
+	free (uri);
+	if (fd) {
+		r_io_desc_write (fd, data, (int)size);
+		// oba 0 loads bin info; obo raises the new binfile so
+		// config (arch/bits/baddr) and seek land on it
+		r_core_cmdf (core, "oba 0;obo %d", fd->fd);
+	} else {
+		R_LOG_ERROR ("Cannot open malloc://%"PFMT64u" to hold the resource", size);
+		r_core_return_value (core, 1);
+	}
+	free (data);
+}
+
+static void cmd_iS(RCore *core, const char *input, PJ **_pj, int mode, const bool va, const bool is_array) {
+	PJ *pj = *_pj;
+	if (input[1] == 'x') { // "iSx"
+		if (input[2] == '?') {
+			r_cons_cmd_help_match (core->cons, help_msg_iS, "iSx", 0, true);
+		} else {
+			cmd_info_extract (core, r_str_trim_head_ro (input + 2), false, false);
+		}
+		return;
+	}
+	if (input[1] == 'S' && input[2] == 'x') { // "iSSx"
+		if (input[3] == '?') {
+			r_cons_cmd_help_match (core->cons, help_msg_iS, "iSSx", 0, true);
+		} else {
+			cmd_info_extract (core, r_str_trim_head_ro (input + 3), false, true);
+		}
+		return;
+	}
+	RBinInfo *info = r_bin_get_info (core->bin);
+	if (!info && pj) {
+		r_cons_print (core->cons, "[]");
+		r_core_return_value (core, 1);
+		return;
+	}
+	if (!input[1]) {
+		RBININFO ("sections", R_CORE_BIN_ACC_SECTIONS, NULL, 0);
+	} else if (input[1] == 'm') {
+		cmd_iSm (core, input, &pj, mode, va, is_array);
+	} else if (input[1] == 'S' && !input[2]) { // "iSS"
+		RBININFO ("segments", R_CORE_BIN_ACC_SEGMENTS, NULL, 0);
+	} else { // iS/iSS entropy,sha1
+		const char *name = "sections";
+		int action = R_CORE_BIN_ACC_SECTIONS;
+		int param_shift = 0;
+		if (input[1] == 'S') {
+			name = "segments";
+			input++;
+			action = R_CORE_BIN_ACC_SEGMENTS;
+		}
+		char input0 = input[1];
+		if (*input == ' ') {
+			input++;
+		}
+		const char *comma = strchr (input, ',');
+		if (comma) {
+			R_FREE (core->table_query);
+			core->table_query = strdup (comma + 1);
+		}
+		switch (input0) {
+		case '=': // "iS="
+			mode = R_MODE_EQUAL;
+			break;
+		case '*':
+			mode = R_MODE_RADARE;
+			break;
+		case 'q':
+			mode = (input[2] == 'q')? R_MODE_SIMPLEST: R_MODE_SIMPLE;
+			break;
+		case 'j':
+			if (input[2] == '.') {
+				mode = R_MODE_JSON;
+				if (!pj) {
+					*_pj = r_core_pj_new (core);
+					pj = *_pj;
+					// pj_o (pj);
+				}
+			}
+		}
+		if (mode == R_MODE_RADARE || mode == R_MODE_JSON || mode == R_MODE_SIMPLE) {
+			if (input[param_shift + 1]) {
+				param_shift++;
+			}
+		}
+		RList *objs = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		r_list_foreach (objs, iter, bf) {
+			RBinObject *obj = bf->bo;
+			core->bin->cur = bf;
+			int count = obj? RVecRBinSection_length (&obj->sections_vec): 0;
+			RBININFO (name, action, input + 1 + param_shift, count);
+		}
+		core->bin->cur = cur;
+		r_list_free (objs);
+	}
+}
+
+static void cmd_ix(RCore *core, const char *input) {
+	const char *command = NULL;
+	const char *output = NULL;
+	bool resources = false;
+	bool segments = false;
+	switch (input[1]) {
+	case 'u': // "ixu"
+		command = "ixu";
+		output = input + 2;
+		resources = true;
+		break;
+	case 'S': // "ixS", "ixSS"
+		if (input[2] == 'S') {
+			command = "ixSS";
+			output = input + 3;
+			segments = true;
+		} else {
+			command = "ixS";
+			output = input + 2;
+		}
+		break;
+	case '?':
+	case '\0':
+	case ' ':
+		r_cons_cmd_help (core->cons, help_msg_ix);
+		return;
+	default:
+		r_core_return_invalid_command (core, "ix", input[1]);
+		return;
+	}
+	if (*output == '?') {
+		r_cons_cmd_help_match (core->cons, help_msg_ix, command, 0, true);
+		return;
+	}
+	cmd_info_extract (core, r_str_trim_head_ro (output), resources, segments);
+}
+
+static bool bin_header(RCore *r, int mode, PJ *pj) {
+	R_RETURN_VAL_IF_FAIL (r, false);
+	RBinFile *cur = r_bin_cur (r->bin);
+	if (cur) {
+		RBinPlugin *plg = r_bin_file_cur_plugin (cur);
+		if (plg && plg->header) {
+			char *s = plg->header (cur, mode);
+			if (s) {
+				if (pj && s[0] != '{') {
+					pj_o (pj);
+					pj_ks (pj, "header", s);
+					pj_end (pj);
+				} else {
+					r_cons_print (r->cons, s);
+				}
+				free (s);
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+static void cmd_it(RCore *core, PJ *pj) {
+	bool is_json = pj != NULL;
+	ut64 limit = r_config_get_i (core->config, "bin.hashlimit");
+	RBinInfo *info = r_bin_get_info (core->bin);
+	if (!info) {
+		if (is_json) {
+			r_cons_print (core->cons, "{}");
+		} else {
+			R_LOG_ERROR ("Cannot get bin info");
+		}
+		r_core_return_value (core, 1);
+		return;
+	}
+
+	RList *new_hashes = r_bin_file_compute_hashes (core->bin, limit);
+	RList *old_hashes = r_bin_file_set_hashes (core->bin, new_hashes);
+	bool equal = true;
+	if (!r_list_empty (new_hashes) && !r_list_empty (old_hashes)) {
+		if (!is_equal_file_hashes (new_hashes, old_hashes, &equal)) {
+			R_LOG_ERROR ("is_equal_file_hashes: Cannot compare file hashes");
+			r_list_free (old_hashes);
+			r_core_return_value (core, 1);
+			return;
+		}
+	}
+	RBinFileHash *fh_old, *fh_new;
+	RListIter *hiter_old, *hiter_new;
+	if (is_json) { // "itj"
+		pj_o (pj);
+		r_list_foreach (new_hashes, hiter_new, fh_new) {
+			pj_ks (pj, fh_new->type, fh_new->hex);
+		}
+		if (!equal) {
+			// print old hashes prefixed with `o` character like `omd5` and `isha1`
+			r_list_foreach (old_hashes, hiter_old, fh_old) {
+				char *key = r_str_newf ("o%s", fh_old->type);
+				pj_ks (pj, key, fh_old->hex);
+				free (key);
+			}
+		}
+		pj_end (pj);
+	} else { // "it"
+		if (!equal) {
+			R_LOG_INFO ("File has been modified");
+			hiter_new = r_list_iterator (new_hashes);
+			hiter_old = r_list_iterator (old_hashes);
+			while (r_list_iter_next (hiter_new) && r_list_iter_next (hiter_old)) {
+				fh_new = (RBinFileHash *)r_list_iter_get (hiter_new);
+				fh_old = (RBinFileHash *)r_list_iter_get (hiter_old);
+				if (strcmp (fh_new->type, fh_old->type)) {
+					R_LOG_WARN ("Wrong file hashes structure");
+				}
+				if (!strcmp (fh_new->hex, fh_old->hex)) {
+					r_cons_printf (core->cons, "= %s %s\n", fh_new->type, fh_new->hex); // output one line because hash remains same `= hashtype hashval`
+				} else {
+					// output diff-like two lines, one with old hash val `- hashtype hashval` and one with new `+ hashtype hashval`
+					r_cons_printf (core->cons, "- %s %s\n+ %s %s\n", fh_old->type, fh_old->hex, fh_new->type, fh_new->hex);
+				}
+			}
+		} else { // hashes are equal
+			r_list_foreach (new_hashes, hiter_new, fh_new) {
+				r_cons_printf (core->cons, "%s %s\n", fh_new->type, fh_new->hex);
+			}
+		}
+	}
+	r_list_free (old_hashes);
+}
+
+static void cmd_idp(RCore *core, PJ *pj, const char *input, bool is_array, int mode) {
+	SPDBOptions pdbopts;
+	RBinInfo *info;
+	bool file_found;
+	char *filename;
+
+	switch (input[2]) {
+	case ' ': // "idp file.pdb"
+		if (r_str_is_r2safe (input + 3)) {
+			r_core_callf (core, ".idpi* %s", input + 3);
+		} else {
+			R_LOG_ERROR ("Invalid pdb path");
+		}
+		break;
+	case '\0': // "idp"
+		r_core_cmd0 (core, ".idpi*");
+		break;
+	case 'd': // "idpd"
+		if (input[3] == '?') {
+			r_cons_cmd_help_match (core->cons, help_msg_id, "idpd", 0, false);
+			break;
+		}
+		pdbopts.user_agent = (char *)r_config_get (core->config, "pdb.useragent");
+		pdbopts.extract = r_config_get_i (core->config, "pdb.extract");
+		pdbopts.symbol_store_path = (char *)r_config_get (core->config, "pdb.symstore");
+		char *str = strdup (r_config_get (core->config, "pdb.server"));
+		RList *server_l = r_str_split_list (str, " ", 0);
+		RListIter *it;
+		char *server;
+		int r = 1;
+		r_list_foreach (server_l, it, server) {
+			pdbopts.symbol_server = server;
+			r = r_bin_pdb_download (core, pj, &pdbopts);
+			if (!r) {
+				break;
+			}
+		}
+		if (r > 0) {
+			R_LOG_ERROR ("Cannot download the pdb file");
+		}
+		free (str);
+		r_list_free (server_l);
+		input++;
+		break;
+	case 'i': // "idpi"
+		if (input[3] == '?') {
+			r_cons_cmd_help_match (core->cons, help_msg_id, "idpi", 0, false);
+			break;
+		}
+		info = r_bin_get_info (core->bin);
+		const char *arg = strchr (input, ' ');
+		if (arg) {
+			filename = strdup (arg + 1);
+			file_found = r_file_exists (filename);
+		} else {
+			if (!info || !info->debug_file_name || !info->guid) {
+				R_LOG_ERROR ("Cannot get file's debug information");
+				break;
+			}
+			const char *basename = r_file_basename (info->debug_file_name);
+			char *dir = r_file_dirname (core->bin->cur->file);
+			const char *symstore = r_config_get (core->config, "pdb.symstore");
+			char *candidates[] = {
+				r_str_newf ("%s" R_SYS_DIR "%s", dir, basename),
+				strdup (info->debug_file_name),
+				strdup (basename),
+				r_str_newf ("%s" R_SYS_DIR "%s" R_SYS_DIR "%s" R_SYS_DIR "%s",
+					symstore, basename, info->guid, basename)
+			};
+			free (dir);
+			file_found = false;
+			filename = NULL;
+			size_t i;
+			for (i = 0; i < R_ARRAY_SIZE (candidates); i++) {
+				if (!file_found && candidates[i] && r_file_exists (candidates[i])) {
+					file_found = bin_pdb_info (core, candidates[i], pj, mode, true);
+				}
+				free (candidates[i]);
+			}
+		}
+		if (!file_found) {
+			if (info && info->debug_file_name) {
+				const char *fn = r_file_basename (info->debug_file_name);
+				R_LOG_ERROR ("File '%s' not found in file directory or symbol store", fn);
+			} else {
+				R_LOG_ERROR ("Cannot open file");
+			}
+			r_core_return_value (core, 1);
+			free (filename);
+			break;
+		}
+		if (arg) {
+			r_core_pdb_info (core, filename, pj, mode);
+		}
+		free (filename);
+		break;
+	case '?':
+		r_cons_cmd_help (core->cons, help_msg_id);
+		break;
+	default:
+		r_core_return_invalid_command (core, "id", input[1]);
+		break;
+	}
+}
+
+static void print_obf(RCore *core, const char *file) {
+	char *arg = r_str_r2arg (file);
+	r_cons_printf (core->cons, "'obf %s\n", arg);
+	free (arg);
+}
+
+static void cmd_idl(RCore *core, const char *input) {
+	char *linkname = NULL;
+	RBinInfo *info = r_bin_get_info (core->bin);
+	if (info && info->dbglink) {
+		linkname = strdup (info->dbglink);
+		char *dot = (char *)r_str_lchr (linkname, '.');
+		if (dot) {
+			*dot = 0;
+		}
+	}
+	switch (input[2]) {
+	case '?':
+		r_cons_cmd_help (core->cons, help_msg_idl);
+		break;
+	case 0:
+		if (linkname) {
+			r_cons_println (core->cons, info->dbglink);
+		}
+		break;
+	case 'd': // "idld" // download debug info file from remote dwarf symbols server
+		if (linkname) {
+			char *encoded_name = r_str_uri_encode (linkname);
+			if (!encoded_name) {
+				break;
+			}
+			char *url = r_str_newf ("%s/%s/debuginfo", r_config_get (core->config, "dbg.linkurl"), encoded_name);
+			free (encoded_name);
+			if (input[3] == '*') {
+				r_cons_printf (core->cons, "%s\n", url);
+			} else {
+				char *dir_debuglink = strdup (r_config_get (core->config, "dir.debuglink"));
+				char *colon = strchr (dir_debuglink, ':');
+				if (colon) {
+					*colon = 0;
+				}
+				char *fullpath = r_str_newf ("%s/%s", dir_debuglink, info->dbglink);
+				if (r_file_exists (fullpath)) {
+					R_LOG_INFO ("Debuglink file already exists: %s", fullpath);
+				} else {
+					if (r_socket_http_download (url, NULL, fullpath)) {
+						R_LOG_INFO ("Downloaded debuglink file to %s", fullpath);
+					} else {
+						R_LOG_ERROR ("Failed to download debuglink file");
+					}
+				}
+				free (fullpath);
+				free (dir_debuglink);
+			}
+			free (url);
+		} else {
+			R_LOG_ERROR ("No debuglink file to download");
+		}
+		break;
+	case '*': // "idl*"
+		if (linkname) {
+			char *dirlink = strdup (r_config_get (core->config, "dir.debuglink"));
+			RList *paths = r_str_split_list (dirlink, ":", 0);
+			RListIter *iter;
+			bool found = false;
+			char *path;
+			r_list_foreach (paths, iter, path) {
+				char *f = r_str_newf ("%s/%s", path, info->dbglink);
+				if (r_file_exists (f)) {
+					found = true;
+					print_obf (core, f);
+					free (f);
+					break;
+				}
+				free (f);
+			}
+			r_list_free (paths);
+			free (dirlink);
+			if (!found) {
+				R_LOG_ERROR ("Cannot find %s in dir.debuglink. Use idld instead", info->dbglink);
+				print_obf (core, info->dbglink);
+			}
+		}
+		break;
+	default:
+		r_core_return_invalid_command (core, "idl", input[2]);
+		break;
+	}
+	free (linkname);
+}
+
+static char *idd_type_base(const char *type, int *ptrs, int *array_count) {
+	char *base = strdup (r_str_trim_head_ro (type));
+	if (!base) {
+		return NULL;
+	}
+	r_str_trim (base);
+	char *bracket = strchr (base, '[');
+	if (bracket) {
+		if (array_count) {
+			*array_count = atoi (bracket + 1);
+		}
+		*bracket = 0;
+	}
+	int n_ptrs = 0;
+	char *p = base;
+	while (*p) {
+		if (*p == '*') {
+			n_ptrs++;
+			*p = ' ';
+		}
+		p++;
+	}
+	if (ptrs) {
+		*ptrs = n_ptrs;
+	}
+	if (r_str_startswith (base, "const ")) {
+		memmove (base, base + 6, strlen (base + 6) + 1);
+	}
+	if (r_str_startswith (base, "volatile ")) {
+		memmove (base, base + 9, strlen (base + 9) + 1);
+	}
+	if (r_str_startswith (base, "struct ")) {
+		memmove (base, base + 7, strlen (base + 7) + 1);
+	} else if (r_str_startswith (base, "union ")) {
+		memmove (base, base + 6, strlen (base + 6) + 1);
+	}
+	r_str_trim (base);
+	return base;
+}
+
+static const char *idd_type_kind(RCore *core, const char *type) {
+	return sdb_const_get (core->anal->sdb_types, type, NULL);
+}
+
+static char *idd_type_display(RCore *core, const char *type) {
+	int ptrs = 0;
+	int array_count = 0;
+	char *base = idd_type_base (type, &ptrs, &array_count);
+	if (!base) {
+		return NULL;
+	}
+	const char *kind = idd_type_kind (core, base);
+	RStrBuf *sb = r_strbuf_new ("");
+	if (kind && !strcmp (kind, "struct")) {
+		r_strbuf_appendf (sb, "struct %s", base);
+	} else if (kind && !strcmp (kind, "union")) {
+		r_strbuf_appendf (sb, "union %s", base);
+	} else {
+		r_strbuf_append (sb, base);
+	}
+	if (ptrs > 0) {
+		r_strbuf_append (sb, " ");
+		int i;
+		for (i = 0; i < ptrs; i++) {
+			r_strbuf_append (sb, "*");
+		}
+	} else {
+		r_strbuf_append (sb, " ");
+	}
+	free (base);
+	return r_strbuf_drain (sb);
+}
+
+static int idd_type_size(RCore *core, const char *type);
+
+static int idd_struct_size(RCore *core, const char *kind, const char *name) {
+	const char *value = sdb_const_getf (core->anal->sdb_types, NULL, "%s.%s", kind, name);
+	char *members = value? strdup (value): NULL;
+	if (!members) {
+		return 0;
+	}
+	int size = 0;
+	int nargs = r_str_split (members, ',');
+	int i;
+	for (i = 0; i < nargs; i++) {
+		const char *member = r_str_word_get0 (members, i);
+		const char *member_value = sdb_const_getf (core->anal->sdb_types, NULL, "%s.%s.%s", kind, name, member);
+		char *member_data = member_value? strdup (member_value): NULL;
+		if (member_data) {
+			int vlen = r_str_split (member_data, ',');
+			if (vlen >= 2) {
+				const char *member_type = r_str_word_get0 (member_data, 0);
+				int offset = atoi (r_str_word_get0 (member_data, 1));
+				int end = offset + idd_type_size (core, member_type);
+				if (end > size) {
+					size = end;
+				}
+			}
+			free (member_data);
+		}
+	}
+	free (members);
+	return size;
+}
+
+static int idd_type_size(RCore *core, const char *type) {
+	int ptrs = 0;
+	int array_count = 0;
+	char *base = idd_type_base (type, &ptrs, &array_count);
+	if (!base) {
+		return 0;
+	}
+	int size = 0;
+	if (ptrs > 0) {
+		size = core->anal->config->bits / 8;
+	} else {
+		const char *kind = idd_type_kind (core, base);
+		if (kind && !strcmp (kind, "typedef")) {
+			const char *real_type = sdb_const_getf (core->anal->sdb_types, NULL, "typedef.%s", base);
+			size = real_type? idd_type_size (core, real_type): 0;
+		} else if (kind && (!strcmp (kind, "struct") || !strcmp (kind, "union"))) {
+			size = idd_struct_size (core, kind, base);
+		} else {
+			size = (int)(sdb_num_getf (core->anal->sdb_types, NULL, "type.%s.size", base) / 8);
+			if (!size) {
+				char *sbase = strdup (base);
+				if (sbase) {
+					r_str_replace_char (sbase, ' ', '_');
+					size = (int)(sdb_num_getf (core->anal->sdb_types, NULL, "type.%s.size", sbase) / 8);
+					free (sbase);
+				}
+			}
+			if (!size) {
+				if (strstr (base, "char")) {
+					size = 1;
+				} else if (strstr (base, "short")) {
+					size = 2;
+				} else if (!strcmp (base, "int") || !strcmp (base, "unsigned int")) {
+					size = 4;
+				} else if (strstr (base, "long") || !strcmp (base, "size_t")) {
+					size = 8;
+				}
+			}
+		}
+	}
+	free (base);
+	return size * R_MAX (1, array_count);
+}
+
+static bool idd_member_info(RCore *core, const char *type, const char *member, char **member_type, ut64 *offset) {
+	int ptrs = 0;
+	char *base = idd_type_base (type, &ptrs, NULL);
+	if (!base) {
+		return false;
+	}
+	const char *kind = idd_type_kind (core, base);
+	if (kind && !strcmp (kind, "typedef")) {
+		const char *real_type = sdb_const_getf (core->anal->sdb_types, NULL, "typedef.%s", base);
+		if (real_type) {
+			free (base);
+			base = idd_type_base (real_type, NULL, NULL);
+			kind = base? idd_type_kind (core, base): NULL;
+		}
+	}
+	if (!kind || (strcmp (kind, "struct") && strcmp (kind, "union"))) {
+		free (base);
+		return false;
+	}
+	const char *member_value = sdb_const_getf (core->anal->sdb_types, NULL, "%s.%s.%s", kind, base, member);
+	free (base);
+	char *value = member_value? strdup (member_value): NULL;
+	if (!value) {
+		return false;
+	}
+	int vlen = r_str_split (value, ',');
+	if (vlen < 2) {
+		free (value);
+		return false;
+	}
+	*member_type = strdup (r_str_word_get0 (value, 0));
+	*offset = r_num_get (NULL, r_str_word_get0 (value, 1));
+	free (value);
+	return *member_type != NULL;
+}
+
+static ut64 idd_read_num(RCore *core, ut64 addr, int size) {
+	ut8 buf[8] = {0};
+	if (size < 1) {
+		size = 1;
+	} else if (size > 8) {
+		size = 8;
+	}
+	if (r_io_read_at (core->io, addr, buf, size) < 1) {
+		return 0;
+	}
+	return r_read_ble (buf, r_config_get_b (core->config, "cfg.bigendian"), size * 8);
+}
+
+static bool idd_resolve_path(RCore *core, const char *path, ut64 *addr, char **type) {
+	char *words = strdup (r_str_trim_head_ro (path));
+	if (!words) {
+		return false;
+	}
+	int nargs = r_str_split (words, '.');
+	if (nargs < 1) {
+		free (words);
+		return false;
+	}
+	char *cur_type = strdup (r_str_word_get0 (words, 0));
+	ut64 cur_addr = core->addr;
+	int i;
+	for (i = 1; i < nargs; i++) {
+		const char *member = r_str_word_get0 (words, i);
+		char *member_type = NULL;
+		ut64 offset = 0;
+		if (!idd_member_info (core, cur_type, member, &member_type, &offset)) {
+			free (cur_type);
+			free (words);
+			return false;
+		}
+		cur_addr += offset;
+		if (i + 1 < nargs) {
+			int ptrs = 0;
+			char *base = idd_type_base (member_type, &ptrs, NULL);
+			if (ptrs > 0) {
+				cur_addr = idd_read_num (core, cur_addr, core->anal->config->bits / 8);
+			}
+			free (cur_type);
+			cur_type = base;
+			free (member_type);
+		} else {
+			free (cur_type);
+			cur_type = member_type;
+		}
+	}
+	*addr = cur_addr;
+	*type = cur_type;
+	free (words);
+	return true;
+}
+
+static void cmd_iddd(RCore *core, const char *input, bool json) {
+	const char *name = r_str_trim_head_ro (input);
+	const char *kind = idd_type_kind (core, name);
+	if (!kind || (strcmp (kind, "struct") && strcmp (kind, "union"))) {
+		return;
+	}
+	const char *value = sdb_const_getf (core->anal->sdb_types, NULL, "%s.%s", kind, name);
+	char *members = value? strdup (value): NULL;
+	if (!members) {
+		return;
+	}
+	int nargs = r_str_split (members, ',');
+	if (json) {
+		PJ *pj = r_core_pj_new (core);
+		pj_o (pj);
+		pj_ks (pj, "name", name);
+		pj_ki (pj, "size", idd_type_size (core, name));
+		pj_kb (pj, "inbits", false);
+		pj_kb (pj, kind, true);
+		pj_ka (pj, "members");
+		int i;
+		for (i = 0; i < nargs; i++) {
+			const char *member = r_str_word_get0 (members, i);
+			char *member_type = NULL;
+			ut64 offset = 0;
+			if (idd_member_info (core, name, member, &member_type, &offset)) {
+				int ptrs = 0;
+				int array_count = 0;
+				char *base = idd_type_base (member_type, &ptrs, &array_count);
+				const char *member_kind = base? idd_type_kind (core, base): NULL;
+				bool is_typedef = member_kind && !strcmp (member_kind, "typedef");
+				if (!is_typedef && !member_kind && base && r_str_endswith (base, "_t")) {
+					is_typedef = true;
+				}
+				char *display = idd_type_display (core, member_type);
+				pj_o (pj);
+				pj_ks (pj, "name", member);
+				pj_ks (pj, "type", display? display: member_type);
+				pj_kb (pj, "typedef", is_typedef);
+				pj_kb (pj, "struct", member_kind && !strcmp (member_kind, "struct"));
+				pj_kb (pj, "union", member_kind && !strcmp (member_kind, "union"));
+				pj_ki (pj, "pointer", ptrs);
+				pj_kb (pj, "const", strstr (member_type, "const ") != NULL);
+				pj_kb (pj, "volatile", strstr (member_type, "volatile ") != NULL);
+				pj_kb (pj, "function", false);
+				pj_kb (pj, "enum", member_kind && !strcmp (member_kind, "enum"));
+				pj_kb (pj, "array", array_count > 0);
+				if (array_count > 0) {
+					pj_ka (pj, "array_dimension");
+					pj_i (pj, array_count);
+					pj_end (pj);
+				}
+				pj_ki (pj, "size", idd_type_size (core, member_type));
+				pj_kb (pj, "inbits", false);
+				pj_ki (pj, "offset", offset);
+				pj_end (pj);
+				free (display);
+				free (base);
+				free (member_type);
+			}
+		}
+		pj_end (pj);
+		pj_end (pj);
+		char *s = pj_drain (pj);
+		if (s) {
+			r_cons_print (core->cons, s);
+			free (s);
+		}
+	} else {
+		r_cons_printf (core->cons, "%s %s {\n", kind, name);
+		int i;
+		for (i = 0; i < nargs; i++) {
+			const char *member = r_str_word_get0 (members, i);
+			char *member_type = NULL;
+			ut64 offset = 0;
+			if (idd_member_info (core, name, member, &member_type, &offset)) {
+				int array_count = 0;
+				char *base = idd_type_base (member_type, NULL, &array_count);
+				free (base);
+				char *display = idd_type_display (core, member_type);
+				if (display) {
+					r_cons_printf (core->cons, "  %s%s", display, member);
+					free (display);
+				}
+				if (array_count > 0) {
+					r_cons_printf (core->cons, "[%d]", array_count);
+				}
+				r_cons_println (core->cons, ";");
+				free (member_type);
+			}
+		}
+		r_cons_println (core->cons, "};");
+	}
+	free (members);
+}
+
+static bool idd_sdb_function(void *user, const char *k, const char *v) {
+	return !strcmp (v, "fcn");
+}
+
+static ut32 idd_symbol_size(RCore *core, const char *name) {
+	RVecRBinSymbol *symbols = r_bin_get_symbols_vec (core->bin);
+	if (symbols) {
+		RBinSymbol *sym;
+		R_VEC_FOREACH (symbols, sym) {
+			const char *sname = r_bin_name_tostring2 (sym->name, 'o');
+			if (!strcmp (sname, name) || (r_str_startswith (sname, "sym.") && !strcmp (sname + 4, name))) {
+				return sym->attr.size;
+			}
+		}
+	}
+	return 0;
+}
+
+static void idd_print_flag(RCore *core, const char *name, ut32 size, ut64 addr) {
+	bool valid_name = r_name_check_utf8 (name, core->flags->utf8);
+	char *flagname = valid_name? NULL: strdup (name);
+	if (flagname) {
+		r_flag_name_filter (core->flags, flagname);
+	}
+	if (valid_name || flagname) {
+		r_cons_printf (core->cons, "'@0x%08" PFMT64x "'f sym.%s %u\n", addr, flagname? flagname: name, size);
+	}
+	free (flagname);
+}
+
+static void cmd_iddlf(RCore *core) {
+	Sdb *dwarf_sdb = sdb_ns (core->anal->sdb, "dwarf", 0);
+	if (!dwarf_sdb) {
+		return;
+	}
+	SdbList *l = sdb_foreach_list_filter (dwarf_sdb, idd_sdb_function, false);
+	SdbListIter *iter;
+	SdbKv *kv;
+	ls_foreach (l, iter, kv) {
+		const char *key = sdbkv_key (kv);
+		const char *name = sdb_const_getf (dwarf_sdb, NULL, "fcn.%s.name", key);
+		if (R_STR_ISEMPTY (name)) {
+			name = key;
+		}
+		ut64 addr = sdb_num_getf (dwarf_sdb, NULL, "fcn.%s.addr", key);
+		idd_print_flag (core, name, idd_symbol_size (core, name), addr);
+	}
+	ls_free (l);
+}
+
+static void cmd_iddlg(RCore *core) {
+	RVecRBinSymbol *symbols = r_bin_get_symbols_vec (core->bin);
+	if (!symbols) {
+		return;
+	}
+	Sdb *seen = sdb_new0 ();
+	RBinSymbol *sym;
+	R_VEC_FOREACH (symbols, sym) {
+		if (sym->is_imported || !sym->type || strcmp (sym->type, R_BIN_TYPE_OBJECT_STR) || sym->attr.size < 1) {
+			continue;
+		}
+		if (!sym->bind || strcmp (sym->bind, "GLOBAL")) {
+			continue;
+		}
+		const char *name = r_bin_name_tostring2 (sym->name, 'o');
+		if (r_str_startswith (name, "obj.")) {
+			name += 4;
+		}
+		if (r_str_startswith (name, "_fp_") || sdb_exists (seen, name)) {
+			continue;
+		}
+		sdb_set (seen, name, "1", 0);
+		idd_print_flag (core, name, sym->attr.size, sym->vaddr);
+	}
+	sdb_free (seen);
+}
+
+static void cmd_idd(RCore *core, const char *input) {
+	switch (input[2]) {
+	case 'i': { // "iddi"
+		const char *file = r_str_trim_head_ro (input + 3);
+		if (R_STR_ISNOTEMPTY (file) && (!core->bin->file || strcmp (core->bin->file, file))) {
+			if (r_core_file_open (core, file, R_PERM_R, 0)) {
+				r_core_bin_load (core, file, UT64_MAX);
+			}
+		}
+		const bool va = r_config_get_b (core->config, "io.va");
+		(void)r_core_bin_info (core, R_CORE_BIN_ACC_ADDRLINE, NULL, R_MODE_SET, va, NULL, NULL);
+		break;
+	}
+	case 'd': // "iddd"
+		cmd_iddd (core, input + (input[3] == 'j'? 4: 3), input[3] == 'j');
+		break;
+	case 'l': // "iddl"
+		if (input[3] == 'f') {
+			cmd_iddlf (core);
+		} else if (input[3] == 'g') {
+			cmd_iddlg (core);
+		}
+		break;
+	case 't': { // "iddt"
+		ut64 addr = 0;
+		char *type = NULL;
+		if (idd_resolve_path (core, input + 3, &addr, &type)) {
+			char *display = idd_type_display (core, type);
+			r_cons_printf (core->cons, "type : %s\n", display? display: type);
+			r_cons_printf (core->cons, "size : %d\n", idd_type_size (core, type));
+			free (display);
+			free (type);
+		}
+		break;
+	}
+	case 'a': // "idda"
+	case 'v': { // "iddv"
+		ut64 addr = 0;
+		char *type = NULL;
+		if (idd_resolve_path (core, input + 3, &addr, &type)) {
+			if (input[2] == 'a') {
+				r_cons_printf (core->cons, "addr = 0x%" PFMT64x "\n", addr);
+			} else {
+				r_cons_printf (core->cons, "0x%" PFMT64x "\n", idd_read_num (core, addr, idd_type_size (core, type)));
+			}
+			free (type);
+		}
+		break;
+	}
+	case ' ': { // "idd"
+		const char *arg = r_str_trim_head_ro (input + 2);
+		if (strchr (arg, '.')) {
+			ut64 addr = 0;
+			char *type = NULL;
+			if (idd_resolve_path (core, arg, &addr, &type)) {
+				r_cons_printf (core->cons, "addr = 0x%" PFMT64x "\n", addr);
+				free (type);
+			}
+			break;
+		}
+		const char *kind = idd_type_kind (core, arg);
+		if (!kind || (strcmp (kind, "struct") && strcmp (kind, "union"))) {
+			break;
+		}
+		const char *value = sdb_const_getf (core->anal->sdb_types, NULL, "%s.%s", kind, arg);
+		char *members = value? strdup (value): NULL;
+		if (members) {
+			int nargs = r_str_split (members, ',');
+			int i;
+			for (i = 0; i < nargs; i++) {
+				const char *member = r_str_word_get0 (members, i);
+				char *member_type = NULL;
+				ut64 offset = 0;
+				if (idd_member_info (core, arg, member, &member_type, &offset)) {
+					ut64 value = idd_read_num (core, core->addr + offset, idd_type_size (core, member_type));
+					r_cons_printf (core->cons, "%s = 0x%" PFMT64x "%s\n", member, value, (i + 1 < nargs)? ",": "");
+					free (member_type);
+				}
+			}
+			free (members);
+		}
+		break;
+	}
+	default:
+		r_core_return_invalid_command (core, "idd", input[2]);
+		break;
+	}
+}
+
+static void cmd_id(RCore *core, PJ *pj, const char *input, bool is_array, int mode) {
+	const bool va = r_config_get_b (core->config, "io.va");
+	switch (input[1]) {
+	case '?': // "id?"
+		r_cons_cmd_help (core->cons, help_msg_id);
+		break;
+	case 'd': // "idd"
+		cmd_idd (core, input);
+		break;
+	case 'l': // "idl"
+		cmd_idl (core, input);
+		break;
+	case 'x': // "idx"
+		RBININFO ("source", R_CORE_BIN_ACC_SOURCE, NULL, 0);
+		break;
+	case 'p': // "idp"
+		cmd_idp (core, pj, input, is_array, mode);
+		break;
+	case 0:
+	case '*':
+	case 'j':
+	case 'q':
+		RBININFO ("dwarf", R_CORE_BIN_ACC_ADDRLINE, NULL, -1);
+		break;
+	default:
+		r_core_return_invalid_command (core, "id", input[1]);
+		break;
+	}
+}
+
+static void cmd_is(RCore *core, const char *input, PJ *pj, bool is_array, int mode, bool va) {
+	RList *objs = r_core_bin_files (core);
+	RListIter *iter;
+	RBinFile *bf;
+	if (r_list_empty (objs)) {
+		if (pj) {
+			pj_a (pj);
+			pj_end (pj);
+		}
+		r_list_free (objs);
+		return;
+	}
+	r_list_foreach (objs, iter, bf) {
+		RBinObject *obj = bf->bo;
+		if (!obj) {
+			continue;
+		}
+		core->bin->cur = bf;
+		char cmd_char = input[1];
+		size_t symcount = RVecRBinSymbol_length (&obj->symbols_vec);
+		// Use switch for cleaner code (simplified from multiple if-else chains)
+		switch (cmd_char) {
+		case 'j':
+			if (input[2] == '.') {
+				RBININFO ("symbols", R_CORE_BIN_ACC_SYMBOLS, input + 2, symcount);
+			} else {
+				RBININFO ("symbols", R_CORE_BIN_ACC_SYMBOLS, input + 1, symcount);
+			}
+			break;
+		case ',':
+			R_FREE (core->table_query);
+			core->table_query = strdup (input + 2);
+			RBININFO ("symbols", R_CORE_BIN_ACC_SYMBOLS, input + 1, symcount);
+			break;
+		case 'q':
+			if (input[2] == 'q') {
+				mode = R_MODE_SIMPLEST;
+				RBININFO ("symbols", R_CORE_BIN_ACC_SYMBOLS, input + 3, symcount);
+			} else if (input[2] == '.') {
+				mode = R_MODE_SIMPLE;
+				RBININFO ("symbols", R_CORE_BIN_ACC_SYMBOLS, input + 2, 0);
+			} else {
+				RBININFO ("symbols", R_CORE_BIN_ACC_SYMBOLS, input + 1, symcount);
+			}
+			break;
+		default:
+			RBININFO ("symbols", R_CORE_BIN_ACC_SYMBOLS, input + 1, symcount);
+			break;
+		}
+	}
+	input += strlen (input) - 1;
+	r_list_free (objs);
+}
+
+static void cmd_ik(RCore *core, const char *input) {
+	RBinObject *o = r_bin_cur_object (core->bin);
+	Sdb *db = o? o->kv: NULL;
+	switch (input[1]) {
+	case 'v':
+		if (db) {
+			char *o = sdb_querys (db, NULL, 0, input + 3);
+			if (R_STR_ISNOTEMPTY (o)) {
+				r_cons_print (core->cons, o);
+			}
+			free (o);
+		}
+		break;
+	case '*':
+		r_core_bin_export_info (core, R_MODE_RADARE);
+		break;
+	case '.':
+	case ' ':
+		if (db) {
+			char *o = sdb_querys (db, NULL, 0, input + 2);
+			if (R_STR_ISNOTEMPTY (o)) {
+				r_cons_print (core->cons, o);
+			}
+			free (o);
+		}
+		break;
+	case '\0':
+		if (db) {
+			char *o = sdb_querys (db, NULL, 0, "*");
+			if (R_STR_ISNOTEMPTY (o)) {
+				r_cons_print (core->cons, o);
+			}
+			free (o);
+		}
+		break;
+	case '?':
+	default:
+		r_cons_cmd_help_match (core->cons, help_msg_i, "ik", 0, false);
+		break;
+	}
+}
+
+struct fdof_t {
+	RCore *core;
+	const char *fn;
+	int fd;
+};
+
+static bool fdof_cb(void *user, void *data, ut32 id) {
+	struct fdof_t *fof = (struct fdof_t *)user;
+	RIODesc *desc = (RIODesc *)data;
+	if (fof && desc) {
+		if (!strcmp (desc->uri, fof->fn)) {
+			fof->fd = desc->fd;
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool is_entrypoint_symbol(const char *name) {
+	// TODO: On Swift any method can be an entrypoint if @main is used as attribute
+	const char *words[] = {
+		// clang-format off
+		"main", "_start", "_main", "Main", "WinMain", "wmain", "DllMain", "wWinMain",
+		"loadView",
+		"viewDidLoad",
+		"UIApplicationMain",
+		"applicationDidFinishLaunching",
+		"application:didFinishLaunchingWithOptions",
+		"applicationWillResignActive",
+		"applicationDidEnterBackground",
+		"applicationWillEnterForeground",
+		"applicationDidBecomeActive",
+		"applicationWillTerminate",
+		"application:configurationForConnectingSceneSession:options",
+		"application:didDiscardSceneSessions",
+		"application:openURL:options",
+		"application:performFetchWithCompletionHandler",
+		"application:didReceiveRemoteNotification:fetchCompletionHandler",
+		"application:handleEventsForBackgroundURLSession:completionHandler",
+		"application:shouldSaveSecureApplicationState",
+		"application:shouldRestoreSecureApplicationState",
+		"application:didRegisterForRemoteNotificationsWithDeviceToken",
+		"application:didFailToRegisterForRemoteNotificationsWithError",
+		"application:didReceiveRemoteNotification",
+		"application:handleOpenURL",
+		"application:continueUserActivity:restorationHandler",
+		"application:didUpdateUserActivity",
+		"scene:willConnectToSession:options",
+		"sceneDidDisconnect",
+		"sceneDidBecomeActive",
+		"sceneWillResignActive",
+		"sceneWillEnterForeground",
+		"sceneDidEnterBackground",
+		"application:handleWatchKitExtensionRequest:reply",
+		"JNI_OnLoad",
+		"JNI_OnUnload",
+		// android dalvik lifecycle entrypoints
+		"onCreate",
+		"onReceive",
+		// clang-format on
+	};
+	size_t i, size = sizeof (words) / sizeof (words[0]);
+
+	for (i = 0; i < size; i++) {
+		if (!strcmp (name, words[i])) {
+			return true;
+		}
+	}
+	// dex/java symbols are stored as "Lcls/path.method.<name>(<sig>)<ret>"
+	const char *p = strstr (name, ".method.");
+	if (p) {
+		p += strlen (".method.");
+		const char *q = strchr (p, '(');
+		if (q && q > p) {
+			const size_t len = q - p;
+			for (i = 0; i < size; i++) {
+				if (strlen (words[i]) == len && !memcmp (p, words[i], len)) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
+static void cmd_ies(RCore *core, const char *input, PJ *pj, int mode, int va) {
+	RList *bfiles = r_core_bin_files (core);
+	if (!bfiles) {
+		return;
+	}
+	const bool names_only = r_config_get_b (core->config, "bin.classes.namesonly");
+	RBinFile *bf;
+	RListIter *objs_iter;
+	r_list_foreach (bfiles, objs_iter, bf) {
+		RBinObject *obj = bf->bo;
+		RBinClass *klass;
+		RListIter *iter;
+		core->bin->cur = bf;
+		RBinSymbol *method;
+		RVecRBinSymbol *symbols = r_bin_file_get_symbols_vec (bf);
+		if (symbols) {
+			RBinSymbol *sym;
+			R_VEC_FOREACH (symbols, sym) {
+				const char *name = r_bin_name_tostring2 (sym->name, 'o');
+				if (is_entrypoint_symbol (name)) {
+					if (pj) {
+						pj_o (pj);
+						pj_kn (pj, "addr", sym->vaddr);
+						pj_ks (pj, "name", name);
+						pj_end (pj);
+					} else {
+						r_cons_printf (core->cons, "0x%08" PFMT64x "  %s\n", sym->vaddr, name);
+					}
+				}
+			}
+		}
+		if (!names_only) {
+			r_list_foreach (obj->classes, iter, klass) {
+				R_VEC_FOREACH (&klass->methods, method) {
+					const char *name = r_bin_name_tostring2 (method->name, 'o');
+					if (is_entrypoint_symbol (name)) {
+						const char *kname = r_bin_name_tostring2 (klass->name, 'o');
+						if (pj) {
+							pj_o (pj);
+							pj_kn (pj, "addr", method->vaddr);
+							char *fname = r_str_newf ("%s.%s", kname, name);
+							pj_ks (pj, "name", fname);
+							free (fname);
+							pj_end (pj);
+						} else {
+							r_cons_printf (core->cons, "0x%08" PFMT64x "  %s.%s\n", method->vaddr, kname, name);
+						}
+					}
+				}
+			}
+		}
+	}
+	r_list_free (bfiles);
+	RFlagItem *fi = r_flag_get (core->flags, "main");
+	if (fi) {
+		if (pj) {
+			pj_o (pj);
+			pj_kn (pj, "addr", fi->addr);
+			pj_ks (pj, "name", "main");
+			pj_end (pj);
+		} else {
+			r_cons_printf (core->cons, "0x%08" PFMT64x "  main\n", fi->addr);
+		}
+	}
+	fi = r_flag_get (core->flags, "entry0");
+	if (fi) {
+		if (pj) {
+			pj_o (pj);
+			pj_kn (pj, "addr", fi->addr);
+			pj_ks (pj, "name", "entry0");
+			pj_end (pj);
+		} else {
+			r_cons_printf (core->cons, "0x%08" PFMT64x "  entry0\n", fi->addr);
+		}
+	}
+}
+
+static void cmd_ie(RCore *core, const char *input, PJ *pj, int mode, bool is_array, int va) {
+	char i1 = input[1];
+	char i2 = input[1]? input[2]: 0;
+	if (i1 == ',') {
+		i1 = 0;
+		R_FREE (core->table_query);
+		core->table_query = strdup (input + 2);
+	}
+	if (i1 == '?') {
+		r_cons_cmd_help (core->cons, help_msg_ie);
+	} else if (i1 == 's') {
+		if (i2 == '?') {
+			r_cons_cmd_help_match (core->cons, help_msg_ie, "ies", 0, false);
+		} else {
+			cmd_ies (core, input, pj, mode, va);
+		}
+	} else if (i1 == ' ' || i1 == '*' || i1 == 'e' || i1 == 'j' || i1 == '=' || i1 == 'q' || !i1) {
+		if (i1 && i2 == '?') {
+			r_cons_cmd_help (core->cons, help_msg_ie);
+			return;
+		}
+		RList *objs = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		size_t objs_count = r_list_length (objs);
+		bool show_constructors = r_str_startswith (input, "ee"); // "iee"
+		if (objs_count == 1) {
+			if (show_constructors) {
+				RBININFO ("initfini", R_CORE_BIN_ACC_INITFINI, NULL, 0);
+			} else {
+				RBININFO ("entries", R_CORE_BIN_ACC_ENTRIES, NULL, 0);
+			}
+		} else {
+			if (mode & R_MODE_JSON) {
+				pj_a (pj);
+			}
+			r_list_foreach (objs, iter, bf) {
+				if (mode & R_MODE_JSON) {
+					pj_o (pj);
+					pj_kn (pj, "id", bf->id);
+					pj_ks (pj, "filename", bf->file);
+					pj_k (pj, "data");
+				}
+				core->bin->cur = bf;
+				if (show_constructors) {
+					RBININFO ("initfini", R_CORE_BIN_ACC_INITFINI, NULL, 0);
+				} else {
+					RBININFO ("entries", R_CORE_BIN_ACC_ENTRIES, NULL, 0);
+				}
+				if (mode & R_MODE_JSON) {
+					pj_end (pj);
+				}
+			}
+			if (mode & R_MODE_JSON) {
+				pj_end (pj);
+			}
+		}
+		core->bin->cur = cur;
+		r_list_free (objs);
+	} else {
+		r_core_return_invalid_command (core, "ie", input[1]);
+	}
+}
+
+static bool cmd_iw_num(RCore *core, const char *arg, ut64 *value) {
+	const char *err = NULL;
+	*value = r_num_math_err (core->num, arg, &err);
+	if (!*arg || err || core->num->dbz) {
+		R_LOG_ERROR ("Invalid exception region expression: %s", arg);
+		return false;
+	}
+	return true;
+}
+
+static bool cmd_iw_edit(RCore *core, const char *input) {
+	const bool add = *input != '-';
+	const bool compact = add && *input != '+';
+	const char *arg = r_str_trim_head_ro (input + 1);
+	if (!*arg || *arg == '?') {
+		if (compact) {
+			r_cons_cmd_help (core->cons, help_msg_iwadd);
+		} else if (add) {
+			r_cons_cmd_help (core->cons, help_msg_iwplus);
+		} else {
+			r_cons_cmd_help_match (core->cons, help_msg_iw, "iw-", 0, true);
+		}
+		return true;
+	}
+	RBinFile *bf = r_bin_cur (core->bin);
+	if (!bf || !bf->bo) {
+		R_LOG_ERROR ("No current binary");
+		return false;
+	}
+	const RVecRBinTrycatch *regions = r_bin_file_get_trycatch (bf);
+	if (!regions) {
+		return false;
+	}
+	if (!add && !strcmp (arg, "*")) {
+		const RBinTrycatch *tc;
+		size_t index = 0;
+		r_flag_space_push (core->flags, R_FLAGS_FS_TRYCATCH);
+		R_VEC_FOREACH (regions, tc) {
+			bin_trycatch_flag (core, tc, index++, false);
+		}
+		r_flag_space_pop (core->flags);
+		return r_bin_trycatch_clear (bf);
+	}
+	int argc;
+	char **argv = r_str_argv (arg, &argc);
+	bool success = false;
+	RBinTrycatch region = { .kind = R_BIN_TRYCATCH_CATCH };
+	if (!argv) {
+		return false;
+	}
+	if (!add) {
+		ut64 index;
+		if (argc != 1) {
+			R_LOG_ERROR ("Usage: iw- index");
+			goto beach;
+		}
+		if (!cmd_iw_num (core, argv[0], &index)) {
+			goto beach;
+		}
+		if (index >= RVecRBinTrycatch_length (regions)) {
+			R_LOG_ERROR ("Invalid exception region index: %"PFMT64u, index);
+			goto beach;
+		}
+		size_t last_index = RVecRBinTrycatch_length (regions) - 1;
+		RBinTrycatch removed = *RVecRBinTrycatch_at (regions, (size_t)index);
+		RBinTrycatch last = *RVecRBinTrycatch_at (regions, last_index);
+		if (!r_bin_trycatch_delete (bf, (size_t)index)) {
+			goto beach;
+		}
+		r_flag_space_push (core->flags, R_FLAGS_FS_TRYCATCH);
+		bin_trycatch_flag (core, &removed, (size_t)index, false);
+		if (index != last_index) {
+			bin_trycatch_flag (core, &last, last_index, false);
+			bin_trycatch_flag (core, &last, (size_t)index, true);
+		}
+		r_flag_space_pop (core->flags);
+	} else {
+		const int first = compact? 1: 0;
+		const int required = compact? (*input == 'F'? 4: 3): 4;
+		if (compact && (argc < required || argc > required + (*input == 'f'? 0: 2))) {
+			R_LOG_ERROR ("Invalid arguments for iw%c (see iw%c?)", *input, *input);
+			goto beach;
+		}
+		if (argc < required) {
+			R_LOG_ERROR ("Usage: iw+ source from to handler [attr ...]");
+			goto beach;
+		}
+		region.source = core->addr;
+		ut64 *addresses[] = { &region.source, &region.from, &region.to, &region.handler };
+		int i;
+		for (i = first; i < 4; i++) {
+			if (!cmd_iw_num (core, argv[i - first], addresses[i])) {
+				goto beach;
+			}
+		}
+		if (region.from >= region.to) {
+			R_LOG_ERROR ("Exception region start must precede its exclusive end");
+			goto beach;
+		}
+		if (compact) {
+			if (*input == 'f') {
+				region.kind = R_BIN_TRYCATCH_CLEANUP;
+			} else if (*input == 'F') {
+				region.kind = R_BIN_TRYCATCH_FILTER;
+				if (!cmd_iw_num (core, argv[3], &region.filter)) {
+					goto beach;
+				}
+			}
+			if (argc > required) {
+				const char *type = argv[required];
+				if (!strcmp (type, "*")) {
+					region.catch_all = true;
+				} else if (*type) {
+					region.type = strdup (type);
+					if (!region.type) {
+						goto beach;
+					}
+				}
+			}
+			if (argc > required + 1) {
+				ut64 value;
+				if (!cmd_iw_num (core, argv[required + 1], &value)) {
+					goto beach;
+				}
+				region.type_filter = (st64)value;
+			}
+		} else {
+			for (i = 4; i < argc; i++) {
+				const char *attr = argv[i];
+				if (r_str_startswith (attr, "kind=")) {
+					const char *kind = attr + 5;
+					if (!strcmp (kind, "catch")) {
+						region.kind = R_BIN_TRYCATCH_CATCH;
+					} else if (!strcmp (kind, "cleanup")) {
+						region.kind = R_BIN_TRYCATCH_CLEANUP;
+					} else if (!strcmp (kind, "finally")) {
+						region.kind = R_BIN_TRYCATCH_FINALLY;
+					} else if (!strcmp (kind, "filter")) {
+						region.kind = R_BIN_TRYCATCH_FILTER;
+					} else {
+						R_LOG_ERROR ("Invalid exception region kind: %s", kind);
+						goto beach;
+					}
+				} else if (r_str_startswith (attr, "filter=")) {
+					if (!cmd_iw_num (core, attr + 7, &region.filter)) {
+						goto beach;
+					}
+				} else if (r_str_startswith (attr, "typefilter=")) {
+					ut64 value;
+					if (!cmd_iw_num (core, attr + 11, &value)) {
+						goto beach;
+					}
+					region.type_filter = (st64)value;
+				} else if (r_str_startswith (attr, "type=")) {
+					free (region.type);
+					region.type = strdup (attr + 5);
+					if (!region.type) {
+						goto beach;
+					}
+				} else if (!strcmp (attr, "catchall")) {
+					region.catch_all = true;
+				} else {
+					R_LOG_ERROR ("Invalid exception region attribute: %s", attr);
+					goto beach;
+				}
+			}
+		}
+		size_t index = RVecRBinTrycatch_length (regions);
+		if (!r_bin_trycatch_insert (bf, &region)) {
+			goto beach;
+		}
+		r_flag_space_push (core->flags, R_FLAGS_FS_TRYCATCH);
+		bin_trycatch_flag (core, &region, index, true);
+		r_flag_space_pop (core->flags);
+	}
+	success = true;
+beach:
+	r_bin_trycatch_fini (&region);
+	r_str_argv_free (argv);
+	return success;
+}
+
+static bool cmd_info_bin_plugin(RCore *core, const char *cmd) {
+	char *res = r_bin_cmd (core->bin, cmd);
+	if (!res) {
+		return false;
+	}
+	r_cons_print (core->cons, res);
+	free (res);
+	return true;
+}
+
+static int cmd_info(void *data, const char *input) {
+	RCore *core = (RCore *)data;
+	if (!strcmp (input, "qqc") || !strcmp (input, "qcq")) {
+		input = "cqq";
+	}
+	int i, fd = r_io_fd_get_current (core->io);
+	RIODesc *desc = r_io_desc_get (core->io, fd);
+	const bool va = core->io->va || r_config_get_b (core->config, "cfg.debug");
+	bool is_array = false;
+	PJ *pj = NULL;
+
+	if (r_str_startswith (input, "ddqd")) {
+		r_cons_printf (core->cons, "GOD MODE ON\n");
+		return 0;
+	}
+	int mode = 0;
+#if 1
+	// advance input until theres a space.. maybe not needed
+	for (i = 0; input[i] && input[i] != ' '; i++)
+		;
+	if (i > 0) {
+		switch (input[i - 1]) {
+		case '*': mode = R_MODE_RADARE; break;
+		case 'j': mode = R_MODE_JSON; break;
+		case '=': mode = R_MODE_EQUAL; break;
+		case 'k': mode = R_MODE_KV; break;
+		case 'q':
+			if (i > 1 && input[i - 2] == 'q') {
+				mode = R_MODE_SIMPLEST;
+			} else {
+				mode = R_MODE_SIMPLE;
+			}
+			break;
+		}
+	}
+#endif
+#define INIT_PJ() \
+	if (!pj) { \
+		pj = r_core_pj_new (core); \
+	}
+	if (mode == R_MODE_JSON) {
+		INIT_PJ ();
+	}
+	r_core_return_value (core, 0);
+	if (!*input) {
+		cmd_info_bin (core, va, pj, mode);
+	}
+	/* i* is an alias for iI* */
+	if (!strcmp (input, "*")) {
+		input = "I*";
+	}
+	const char *question = strchr (input, '?');
+	const char *space = strchr (input, ' ');
+	if (!space && question) {
+		space = question + 1;
+	}
+	if (input[0] && input[1] == '?') {
+		char cmd[3] = "ii";
+		cmd[1] = input[0];
+		switch (input[0]) {
+		case 'h': // "ih?"
+			r_cons_cmd_help (core->cons, help_msg_ih);
+			break;
+		case 'E': // "iE?"
+			r_cons_cmd_help (core->cons, help_msg_iE);
+			break;
+		case 's': // "is?"
+			r_cons_cmd_help (core->cons, help_msg_is);
+			break;
+		case 'S': // "iS?"
+			r_cons_cmd_help (core->cons, help_msg_iS);
+			break;
+		case 'u': // "iu?"
+			r_cons_cmd_help (core->cons, help_msg_iu);
+			break;
+		case 'x': // "ix?"
+			r_cons_cmd_help (core->cons, help_msg_ix);
+			break;
+		case 'z': // "iz?"
+			r_cons_cmd_help (core->cons, help_msg_iz);
+			break;
+		case 'w': // "iw?"
+			r_cons_cmd_help (core->cons, help_msg_iw);
+			break;
+		case 'c': // "ic?"
+			r_cons_cmd_help (core->cons, help_msg_ic);
+			break;
+		case 'i': // "ii?"
+			r_cons_cmd_help (core->cons, help_msg_ii);
+			break;
+		case 'y': // "iy?"
+			r_cons_cmd_help (core->cons, help_msg_iy);
+			break;
+		case 'd': // "id?"
+			r_cons_cmd_help (core->cons, help_msg_id);
+			break;
+		case 'e': // "ie?"
+			r_cons_cmd_help (core->cons, help_msg_ie);
+			break;
+		case ':': // "i:?"
+			if (cmd_info_bin_plugin (core, "?")) {
+				break;
+			}
+			// fallthrough
+		default:
+			r_cons_cmd_help_match (core->cons, help_msg_i, cmd, 0, false);
+			break;
+		}
+		return 0;
+	}
+	switch (input[0]) {
+	case 'O': // "iO"
+	{
+		char *res = NULL;
+		switch (input[1]) {
+		case ' ':
+			{
+				char *einput = r_str_escape_sh (r_str_trim_head_ro (input + 1));
+				char *ename = r_str_escape_sh (desc->name);
+				res = (einput && ename)
+					? r_sys_cmd_strf ("rabin2 -O \"%s\" \"%s\"", einput, ename)
+					: NULL;
+				free (einput);
+				free (ename);
+			}
+			break;
+		default:
+			res = r_sys_cmd_strf ("rabin2 -O help");
+			break;
+		}
+		if (res) {
+			r_cons_print (core->cons, res);
+			free (res);
+		}
+	}
+	break;
+	case 'i': // "ii"
+		if (input[1] == 'c') { // "iic"
+			return cmd_iic (core, input);
+		} else if (input[1] == '+') { // "ii+"
+			cmd_ii_add (core, r_str_trim_head_ro (input + 2));
+		} else if (input[1] == '-') { // "ii-"
+			cmd_ii_sub (core, r_str_trim_head_ro (input + 2));
+		} else {
+			RList *objs = r_core_bin_files (core);
+			RListIter *iter;
+			RBinFile *bf;
+			RBinFile *cur = core->bin->cur;
+			if (input[1] == ',') {
+				R_FREE (core->table_query);
+				core->table_query = strdup (input + 2);
+			}
+			if (!r_list_empty (objs)) {
+				r_list_foreach (objs, iter, bf) {
+					RBinObject *obj = bf->bo;
+					core->bin->cur = bf;
+					int amount = obj? RVecRBinImport_length (&obj->imports_vec): 0;
+					RBININFO ("imports", R_CORE_BIN_ACC_IMPORTS, NULL, amount);
+				}
+			} else if (mode & R_MODE_JSON) {
+				r_cons_print (core->cons, "[]");
+			}
+			core->bin->cur = cur;
+			r_list_free (objs);
+		}
+		break;
+	case 'I': // "iI" -- dupe of "i"
+	{
+		RList *objs = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		if (!cur && pj) {
+			r_cons_print (core->cons, "{}");
+		}
+		r_list_foreach (objs, iter, bf) {
+			core->bin->cur = bf;
+			RBININFO ("info", R_CORE_BIN_ACC_INFO, NULL, 0);
+		}
+		core->bin->cur = cur;
+		r_list_free (objs);
+	}
+	break;
+	case 'M': // "iM"
+	{
+		RList *objs = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		if (!cur && pj) {
+			r_cons_print (core->cons, "{}");
+		}
+		r_list_foreach (objs, iter, bf) {
+			core->bin->cur = bf;
+			RBININFO ("main", R_CORE_BIN_ACC_MAIN, NULL, 0);
+		}
+		core->bin->cur = cur;
+		r_list_free (objs);
+	}
+	break;
+	case 'm': // "im"
+	{
+		RList *objs = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		if (!cur && pj) {
+			r_cons_print (core->cons, "[]");
+		}
+		r_list_foreach (objs, iter, bf) {
+			core->bin->cur = bf;
+			RBININFO ("memory", R_CORE_BIN_ACC_MEM, input + 1, 0);
+		}
+		core->bin->cur = cur;
+		r_list_free (objs);
+	}
+	break;
+	case 'w': // "iw"
+	{
+		if (input[1] == '+' || input[1] == '-' || input[1] == 'c' || input[1] == 'f' || input[1] == 'F') {
+			if (!cmd_iw_edit (core, input + 1)) {
+				r_core_return_value (core, R_CMD_RC_FAILURE);
+			}
+			break;
+		}
+		bool here = input[1] == '.'; // "iw." and "iw.j" (json mode for "iw.j" comes from the arg parser)
+		if (input[1] == 'j' && input[2] == '.') { // "iwj."
+			here = true;
+			mode = R_MODE_JSON; // the mode parser only checks the last char, so "j." is not detected
+			INIT_PJ ();
+		}
+		RList *objs = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		r_list_foreach (objs, iter, bf) {
+			core->bin->cur = bf;
+			if (here) {
+				RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->addr, 0);
+				if (fcn) {
+					RCoreBinFilter filter = { .addr = fcn->addr };
+					r_core_bin_info (core, R_CORE_BIN_ACC_TRYCATCH, pj, mode, va, &filter, NULL);
+				} else if (pj) {
+					pj_a (pj);
+					pj_end (pj);
+				}
+			} else {
+				RBININFO ("trycatch", R_CORE_BIN_ACC_TRYCATCH, NULL, 0);
+			}
+		}
+		core->bin->cur = cur;
+		r_list_free (objs);
+	}
+	break;
+	case 'v': // "iv" // should replace iV imho.. but 'V' is there because of rabin2 -v is for version
+	case 'V': // "iV"
+	{
+		RList *bfiles = r_core_bin_files (core);
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		if (!cur && pj) {
+			r_cons_print (core->cons, "[]");
+		}
+		r_list_foreach (bfiles, iter, bf) {
+			core->bin->cur = bf;
+			RBININFO ("versioninfo", R_CORE_BIN_ACC_VERSIONINFO, NULL, 0);
+		}
+		core->bin->cur = cur;
+		r_list_free (bfiles);
+	}
+	break;
+	case 'q': // "iq"
+		mode = R_MODE_SIMPLE;
+		cmd_info_bin (core, va, pj, mode);
+		break;
+	case 'j': // "ij"
+		mode = R_MODE_JSON;
+		if (is_array) {
+			mode |= R_MODE_ARRAY;
+		}
+		INIT_PJ ();
+		cmd_info_bin (core, va, pj, mode);
+		break;
+	case 'E':
+		if (input[1] == 'j' && input[2] == '.') {
+			mode = R_MODE_JSON;
+			INIT_PJ ();
+			RBININFO ("exports", R_CORE_BIN_ACC_EXPORTS, input + 2, 0);
+		} else if (input[1] == ',') {
+			R_FREE (core->table_query);
+			core->table_query = strdup (input + 2);
+			RBinObject *obj = r_bin_cur_object (core->bin);
+			RBININFO ("exports", R_CORE_BIN_ACC_EXPORTS, input + 1, obj? RVecRBinSymbol_length (&obj->symbols_vec): 0);
+			// table query here
+		} else {
+			RBININFO ("exports", R_CORE_BIN_ACC_EXPORTS, input + 1, 0);
+		}
+		input = input + strlen (input) - 1;
+		break;
+	case 'a': // "ia"
+		if (r_str_startswith (input, "iaito")) {
+			R_LOG_ERROR ("Missing plugin. Run: r2pm -ci r2iaito");
+		} else if (input[1] == 'j') {
+			RTable *t = r_core_table_new (core, "archs");
+			pj_o (pj); // weird
+			print_owned (core, r_bin_list_archs (core->bin, pj, t, 'j'));
+			pj_end (pj);
+		} else {
+			RTable *t = r_core_table_new (core, "archs");
+			print_owned (core, r_bin_list_archs (core->bin, NULL, t, 1));
+		}
+		break;
+	case 'e': // "ie"
+		cmd_ie (core, input, pj, mode, is_array, va);
+		break;
+	case 'k': // "ik"
+		cmd_ik (core, input);
+		break;
+	case 'o': // "io"
+		if (desc) {
+			int oldfd = -1;
+			const char *fn = (input[1] == ' ')
+				? r_str_trim_head_ro (input + 2)
+				: desc->name;
+			struct fdof_t fof = { core, fn, -1 };
+			r_id_storage_foreach (&core->io->files, fdof_cb, &fof);
+			if (fof.fd != -1) {
+				oldfd = fof.fd;
+			}
+			ut64 baddr = r_config_get_i (core->config, "bin.baddr");
+			fof.fd = -1;
+			r_core_bin_load (core, fn, baddr);
+			r_id_storage_foreach (&core->io->files, fdof_cb, &fof);
+			if (fof.fd != oldfd) {
+				r_core_cmdf (core, "o-%d", fof.fd);
+			}
+		} else {
+			R_LOG_ERROR ("Core file not open");
+			return 0;
+		}
+		break;
+	case 'h': // "ih"
+		if (question) {
+			r_cons_cmd_help (core->cons, help_msg_ih);
+		} else {
+			RBININFO ("fields", R_CORE_BIN_ACC_FIELDS, NULL, 0);
+		}
+		break;
+	case 'H': // "iH"
+		if (question) {
+			r_cons_cmd_help (core->cons, help_msg_iH);
+		} else if (mode & R_MODE_RADARE) {
+			RBININFO ("fields", R_CORE_BIN_ACC_FIELDS, NULL, 0);
+		} else if (!bin_header (core, mode, pj)) {
+			/// XXX header vs fields wtf
+			if (!r_core_bin_info (core, R_CORE_BIN_ACC_HEADER, pj, mode, va, NULL, NULL)) {
+				if (!pj) {
+					R_LOG_ERROR ("No header fields found");
+				}
+				r_core_return_value (core, 1);
+			}
+		}
+		break;
+	case 'L': // "iL"
+	{
+		const char *ptr = strchr (input, ' ');
+		int json = input[1] == 'j'? 'j': 0;
+		if (ptr && ptr[0] && ptr[1]) {
+			const char *plugin_name = ptr + 1;
+			if (is_array) {
+				pj_k (pj, "plugin");
+			}
+			r_core_list_bin_plugin (core, plugin_name, pj, json);
+		} else {
+			r_core_list_bin (core, pj, json);
+		}
+		break;
+	}
+	case 't': // "it"
+		cmd_it (core, pj);
+		break;
+	case 'Z': // "iZ"
+		RBININFO ("size", R_CORE_BIN_ACC_SIZE, NULL, 0);
+		break;
+	case 'u': // "iu"
+		if (question) {
+			char *cmd = r_str_newf ("i%.*s", (int)(question - input), input);
+			r_cons_cmd_help_match (core->cons, help_msg_iu, cmd, 0, true);
+			free (cmd);
+		} else {
+			switch (input[1]) {
+			case 'x':
+				cmd_info_extract (core, r_str_trim_head_ro (input + 2), true, false);
+				break;
+			case 'o': // "iuo"
+				cmd_iuo (core, r_str_trim_head_ro (input + 2));
+				break;
+			case ',':
+				R_FREE (core->table_query);
+				core->table_query = strdup (input + 2);
+				RBININFO ("resources", R_CORE_BIN_ACC_RESOURCES, NULL, 0);
+				break;
+			case 0:
+			case '*':
+			case 'j':
+			case 'q':
+				RBININFO ("resources", R_CORE_BIN_ACC_RESOURCES, NULL, 0);
+				break;
+			default:
+				r_core_return_invalid_command (core, "iu", input[1]);
+				break;
+			}
+		}
+		break;
+	case 'x': // "ix"
+		cmd_ix (core, input);
+		break;
+	case 'g': // "ig"
+		if (input[1] == '?') {
+			r_cons_cmd_help_match (core->cons, help_msg_i, "ig", 0, true);
+		} else if (input[1] == 'h') {
+			char ss[64];
+			ut64 bs = r_bin_get_size (core->bin);
+			if (r_num_units (ss, sizeof (ss), bs)) {
+				r_cons_printf (core->cons, "%s\n", ss);
+			}
+		} else {
+			ut64 bs = r_bin_get_size (core->bin);
+			r_cons_printf (core->cons, "0x%08" PFMT64x "\n", bs);
+		}
+		break;
+	case 'c': // "ic"
+		cmd_ic (core, input + 1, pj, is_array, va);
+		break;
+	case 'y': // "iy"
+	{
+		char *types = r_bin_get_types (core->bin);
+		if (types) {
+			r_cons_println (core->cons, types);
+			free (types);
+		}
+	}
+	break;
+	case 'D': // "iD"
+		cmd_info_demangle (core, input, pj, mode);
+		break;
+	case ':': // "i:"
+		if (!cmd_info_bin_plugin (core, input + 1)) {
+			R_LOG_ERROR ("Unhandled RBinPlugin.cmd");
+		}
+		break;
+	case 's': // "is"
+		switch (input[1]) {
+		case 'e': // "ise"
+			r_core_cmdf (core, "ies%s", input + 1);
+			return 0;
+		case '*':
+			mode = R_MODE_RADARE;
+			break;
+		case 'j':
+			mode = R_MODE_JSON;
+			INIT_PJ ();
+			break;
+		case 'q':
+			if (input[2] == 'q') {
+				mode = R_MODE_SIMPLEST;
+			}
+		case 0:
+		case ' ':
+		case '.':
+		case ',':
+			break;
+		default:
+			r_core_return_invalid_command (core, "is", input[1]);
+			break;
+		}
+		cmd_is (core, input, pj, is_array, mode, va);
+		break;
+	case 'T': // "iT"
+	case 'C': // "iC" // rabin2 -C create // should be deprecated and just use iT (or find a better name)
+	{
+		RListIter *iter;
+		RBinFile *bf;
+		RBinFile *cur = core->bin->cur;
+		if (!cur && pj) {
+			r_cons_print (core->cons, "{}");
+			break;
+		}
+		RList *bfiles = r_core_bin_files (core);
+		r_list_foreach (bfiles, iter, bf) {
+			core->bin->cur = bf;
+			RBININFO ("signature", R_CORE_BIN_ACC_SIGNATURE, NULL, 0);
+		}
+		r_list_free (bfiles);
+		core->bin->cur = cur;
+	}
+	break;
+	case 'd':
+		cmd_id (core, pj, input, is_array, mode);
+		break;
+	case 'l': // "il"
+		{
+			RList *objs = r_core_bin_files (core);
+			RListIter *iter;
+			RBinFile *cur = core->bin->cur;
+			RBinFile *bf;
+			switch (r_list_length (objs)) {
+			case 0:
+			if (!cur && pj) {
+					r_cons_print (core->cons, "[]");
+				}
+				break;
+			case 1:
+				if (core->bin->cur) {
+					RBinFile *bf = core->bin->cur;
+					RBinObject *obj = bf->bo;
+				int nlibs = (obj && obj->libs)? r_list_length (obj->libs): 0;
+					RBININFO ("libs", R_CORE_BIN_ACC_LIBS, NULL, nlibs);
+				}
+				break;
+			default:;
+				if (pj) {
+					pj_a (pj);
+				}
+				r_list_foreach (objs, iter, bf) {
+					if (pj) {
+						pj_o (pj);
+						pj_kn (pj, "id", bf->id);
+						pj_ks (pj, "filename", bf->file);
+						pj_k (pj, "data");
+					}
+					RBinObject *obj = bf->bo;
+					core->bin->cur = bf;
+				int nlibs = (obj && obj->libs)? r_list_length (obj->libs): 0;
+					RBININFO ("libs", R_CORE_BIN_ACC_LIBS, NULL, nlibs);
+					if (mode & R_MODE_JSON) {
+						pj_end (pj);
+					}
+				}
+				core->bin->cur = cur;
+				if (mode & R_MODE_JSON) {
+					pj_end (pj);
+				}
+				break;
+			}
+			r_list_free (objs);
+		}
+		break;
+	case 'R': // "iR", accidental alias for "ir"
+	case 'r': // "ir"
+		{
+			RList *objs = r_core_bin_files (core);
+			RListIter *iter;
+			RBinFile *bf;
+			RBinFile *cur = core->bin->cur;
+			if (!cur && pj) {
+				r_cons_print (core->cons, "[]");
+			}
+			r_list_foreach (objs, iter, bf) {
+				core->bin->cur = bf;
+				RBININFO ("relocs", R_CORE_BIN_ACC_RELOCS, NULL, 0);
+			}
+			core->bin->cur = cur;
+			r_list_free (objs);
+		}
+		break;
+	case 'S': // "iS"
+		cmd_iS (core, input, &pj, mode, va, is_array);
+		break;
+	case '.': // "i."
+		cmd_info_here (core, pj, mode); // input[1]);
+		break;
+	case 'z': // "iz"
+		cmd_iz (core, pj, mode, is_array, va, input);
+		break;
+	case '?':
+		r_cons_cmd_help (core->cons, help_msg_i);
+		break;
+	case 0:
+		// do nothing
+		break;
+	default:
+		r_core_return_invalid_command (core, "i", *input);
+		break;
+	}
+	R_FREE (core->table_query);
+	if (pj) {
+		r_cons_println (core->cons, pj_string (pj));
+		pj_free (pj);
+	}
+	return 0;
+}
+
+#endif

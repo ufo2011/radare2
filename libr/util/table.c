@@ -1,12 +1,64 @@
-/* radare - LGPL - Copyright 2019-2021 - pancake */
+/* radare - LGPL - Copyright 2019-2025 - pancake */
 
 #include <r_util/r_table.h>
-#include "r_cons.h"
+#include <r_cons.h>
 
-// cant do that without globals because RList doesnt have void *user :(
-static int Gnth = 0;
-static RListComparator Gcmp = NULL;
+#define READ_SHOW_FLAG(t, bitflag) (((t)->showMode & bitflag) != 0)
+#define WRITE_SHOW_FLAG(t, bitflag, condition) \
+	if ((condition) == true) { \
+		(t)->showMode |= bitflag; \
+	} else { \
+		(t)->showMode &= ~bitflag; \
+	}
 
+#define SHOULD_SHOW_HEADER(t) READ_SHOW_FLAG(t, SHOW_HEADER)
+#define SHOULD_SHOW_FANCY(t) READ_SHOW_FLAG(t, SHOW_FANCY)
+#define SHOULD_SHOW_SQL(t) READ_SHOW_FLAG(t, SHOW_SQL)
+#define SHOULD_SHOW_JSON(t) READ_SHOW_FLAG(t, SHOW_JSON)
+#define SHOULD_SHOW_CSV(t) READ_SHOW_FLAG(t, SHOW_CSV)
+#define SHOULD_SHOW_TSV(t) READ_SHOW_FLAG(t, SHOW_TSV)
+#define SHOULD_SHOW_HTML(t) READ_SHOW_FLAG(t, SHOW_HTML)
+#define SHOULD_SHOW_R2(t) READ_SHOW_FLAG(t, SHOW_R2)
+#define SHOULD_SHOW_SUM(t) READ_SHOW_FLAG(t, SHOW_SUM)
+
+#define SET_SHOW_HEADER(t, condition) WRITE_SHOW_FLAG(t, SHOW_HEADER, condition)
+#define SET_SHOW_FANCY(t, condition) WRITE_SHOW_FLAG(t, SHOW_FANCY, condition)
+#define SET_SHOW_SQL(t, condition) WRITE_SHOW_FLAG(t, SHOW_SQL, condition)
+#define SET_SHOW_JSON(t, condition) WRITE_SHOW_FLAG(t, SHOW_JSON, condition)
+#define SET_SHOW_CSV(t, condition) WRITE_SHOW_FLAG(t, SHOW_CSV, condition)
+#define SET_SHOW_TSV(t, condition) WRITE_SHOW_FLAG(t, SHOW_TSV, condition)
+#define SET_SHOW_HTML(t, condition) WRITE_SHOW_FLAG(t, SHOW_HTML, condition)
+#define SET_SHOW_R2(t, condition) WRITE_SHOW_FLAG(t, SHOW_R2, condition)
+#define SET_SHOW_SUM(t, condition) WRITE_SHOW_FLAG(t, SHOW_SUM, condition)
+
+typedef struct {
+	int nth;
+	RListComparator cmp;
+} RTableSortCtx;
+
+
+R_API RListInfo *r_listinfo_new(const char *name, RInterval pitv, RInterval vitv, int perm, const char *extra) {
+	RListInfo *info = R_NEW0 (RListInfo);
+	info->name = name ? strdup (name) : NULL;
+	info->pitv = pitv;
+	info->vitv = vitv;
+	info->perm = perm;
+	info->extra = extra ? strdup (extra) : NULL;
+	return info;
+}
+
+static void r_listinfo_fini(RListInfo *info) {
+	free (info->name);
+	free (info->extra);
+	free (info->color);
+}
+
+R_API void r_listinfo_free(RListInfo *info) {
+	if (info) {
+		r_listinfo_fini (info);
+		free (info);
+	}
+}
 static int sortString(const void *a, const void *b) {
 	return strcmp (a, b);
 }
@@ -15,16 +67,20 @@ static int sortNumber(const void *a, const void *b) {
 	return r_num_get (NULL, a) - r_num_get (NULL, b);
 }
 
+static int sortFloat(const void *a, const void *b) {
+	double fa = strtod ((const char *) a, NULL);
+	double fb = strtod ((const char *) b, NULL);
+	return (fa > fb) - (fa < fb);
+}
+
 // maybe just index by name instead of exposing those symbols as global
 static RTableColumnType r_table_type_string = { "string", sortString };
 static RTableColumnType r_table_type_number = { "number", sortNumber };
 static RTableColumnType r_table_type_bool = { "bool", sortNumber };
+static RTableColumnType r_table_type_float = { "float", sortFloat };
 
-R_API RTableColumnType *r_table_type (const char *name) {
-	if (!strcmp (name, "bool")) {
-		return &r_table_type_bool;
-	}
-	if (!strcmp (name, "boolean")) {
+R_API RTableColumnType *r_table_type(const char *name) {
+	if (r_str_startswith (name, "bool")) {
 		return &r_table_type_bool;
 	}
 	if (!strcmp (name, "string")) {
@@ -33,11 +89,16 @@ R_API RTableColumnType *r_table_type (const char *name) {
 	if (!strcmp (name, "number")) {
 		return &r_table_type_number;
 	}
+	if (!strcmp (name, "float")) {
+		return &r_table_type_float;
+	}
 	return NULL;
 }
 
-// TODO: unused for now, maybe good to call after filter :?
 static void __table_adjust(RTable *t) {
+	if (!t->widthsDirty) {
+		return;
+	}
 	RListIter *iter, *iter2;
 	RTableColumn *col;
 	RTableRow  *row;
@@ -53,10 +114,17 @@ static void __table_adjust(RTable *t) {
 			RTableColumn *c = r_list_get_n (t->cols, ncol);
 			if (c) {
 				c->width = R_MAX (c->width, itemLength);
+				if (c->maxWidth > 0) {
+					c->width = R_MIN (c->maxWidth, c->width);
+				}
+				if (t->maxColumnWidth > 0) {
+					c->width = R_MIN (t->maxColumnWidth, c->width);
+				}
 			}
 			ncol ++;
 		}
 	}
+	t->widthsDirty = false;
 }
 
 R_API void r_table_row_free(void *_row) {
@@ -66,9 +134,11 @@ R_API void r_table_row_free(void *_row) {
 }
 
 R_API void r_table_column_free(void *_col) {
-	RTableColumn *col = _col;
-	free (col->name);
-	free (col);
+	if (_col) {
+		RTableColumn *col = _col;
+		free (col->name);
+		free (col);
+	}
 }
 
 R_API RTableRow *r_table_row_clone(RTableRow *row) {
@@ -82,51 +152,58 @@ R_API RTableRow *r_table_row_clone(RTableRow *row) {
 }
 
 R_API RTableColumn *r_table_column_clone(RTableColumn *col) {
+	R_RETURN_VAL_IF_FAIL (col, NULL);
 	RTableColumn *c = R_NEW0 (RTableColumn);
-	if (!c) {
-		return NULL;
-	}
 	memcpy (c, col, sizeof (*c));
 	c->name = strdup (c->name);
 	return c;
 }
 
-R_API RTable *r_table_new(const char *name) {
+R_API RTable *r_table_new(const char *name, const RTableOptions *options) {
 	RTable *t = R_NEW0 (RTable);
-	if (t) {
-		t->showHeader = true;
-		t->name = strdup (name);
-		t->cols = r_list_newf (r_table_column_free);
-		t->rows = r_list_newf (r_table_row_free);
-		t->showSum = false;
+	t->name = strdup (name);
+	t->cols = r_list_newf (r_table_column_free);
+	t->rows = r_list_newf (r_table_row_free);
+	t->maxColumnWidth = 32;
+	t->wrapColumns = false;
+	t->widthsDirty = true;
+	if (options) {
+		t->options = *options;
 	}
+	SET_SHOW_HEADER (t, true);
+	SET_SHOW_SUM (t, false);
 	return t;
 }
 
+R_API void r_table_set_width(RTable *t, int maxColumnWidth, bool wrap) {
+	R_RETURN_IF_FAIL (t);
+	t->maxColumnWidth = maxColumnWidth;
+	t->wrapColumns = wrap;
+}
+
 R_API void r_table_free(RTable *t) {
-	if (!t) {
-		return;
+	if (R_LIKELY (t)) {
+		r_list_free (t->cols);
+		r_list_free (t->rows);
+		free (t->name);
+		free (t);
 	}
-	r_list_free (t->cols);
-	r_list_free (t->rows);
-	free (t->name);
-	free (t);
 }
 
 R_API void r_table_add_column(RTable *t, RTableColumnType *type, const char *name, int maxWidth) {
 	RTableColumn *c = R_NEW0 (RTableColumn);
-	if (c) {
-		c->name = strdup (name);
-		c->maxWidth = maxWidth;
-		c->type = type;
-		int itemLength = r_str_len_utf8_ansi (name) + 1;
-		c->width = itemLength;
-		r_list_append (t->cols, c);
-		c->total = -1;
-	}
+	c->name = strdup (name);
+	c->maxWidth = maxWidth;
+	c->type = type;
+	int itemLength = r_str_len_utf8_ansi (name) + 1;
+	c->width = itemLength;
+	r_list_append (t->cols, c);
+	c->total = -1;
+	t->widthsDirty = true;
 }
 
 R_API RTableRow *r_table_row_new(RList *items) {
+	R_RETURN_VAL_IF_FAIL (items, NULL);
 	RTableRow *row = R_NEW (RTableRow);
 	row->items = items;
 	return row;
@@ -143,23 +220,76 @@ static bool __addRow(RTable *t, RList *items, const char *arg, int col) {
 	return false;
 }
 
+static char *r_table_trim_text(const char *str, int width, bool utf8) {
+	if (width < 1) {
+		return strdup ("");
+	}
+	if (r_str_len_utf8_ansi (str) <= width) {
+		return NULL;
+	}
+	char dots[4] = "...";
+	const char *ellipsis = dots;
+	int ellipsis_width = 3;
+	if (utf8) {
+		ellipsis = "\xe2\x80\xa6";
+		ellipsis_width = 1;
+	} else if (width < ellipsis_width) {
+		dots[width] = 0;
+		ellipsis_width = width;
+	}
+	int prefix_width = width - ellipsis_width;
+	char *prefix = prefix_width > 0? r_str_ansi_crop (str, 0, 0, prefix_width, 1): strdup ("");
+	if (!prefix) {
+		return NULL;
+	}
+	const char *reset = strchr (prefix, 0x1b)? Color_RESET: "";
+	char *res = r_str_newf ("%s%s%s", prefix, ellipsis, reset);
+	free (prefix);
+	return res;
+}
+
+static char *r_table_trim_cell(const RTable *t, const char *str, int width) {
+	const bool utf8 = t->options.utf8 || t->options.utf8_curvy;
+	return t->options.trim? r_table_trim_text (str, width, utf8): NULL;
+}
+
+static void wrap_items(RTable *t, RList *items) {
+	if (t->wrapColumns && !t->options.wrap && !t->options.trim && t->maxColumnWidth > 0) {
+		char *item;
+		RListIter *iter;
+		const bool utf8 = t->options.utf8 || t->options.utf8_curvy;
+		const int width = R_MAX (1, t->maxColumnWidth - 1);
+		r_list_foreach (items, iter, item) {
+			char *trimmed = r_table_trim_text (item, width, utf8);
+			if (trimmed) {
+				free (item);
+				iter->data = trimmed;
+			}
+		}
+	}
+}
+
 R_API void r_table_add_row_list(RTable *t, RList *items) {
-	r_return_if_fail (t && items);
+	R_RETURN_IF_FAIL (t && items);
 	RTableRow *row = r_table_row_new (items);
+	wrap_items (t, items);
 	r_list_append (t->rows, row);
 	// throw warning if not enough columns defined in header
 	t->totalCols = R_MAX (t->totalCols, r_list_length (items));
+	t->widthsDirty = true;
 }
 
 R_API void r_table_set_columnsf(RTable *t, const char *fmt, ...) {
+	R_RETURN_IF_FAIL (t && fmt);
 	va_list ap;
 	va_start (ap, fmt);
 	RTableColumnType *typeString = r_table_type ("string");
 	RTableColumnType *typeNumber = r_table_type ("number");
+	RTableColumnType *typeFloat = r_table_type ("float");
 	RTableColumnType *typeBool = r_table_type ("bool");
 	const char *name;
 	const char *f = fmt;
-	for (;*f;f++) {
+	for (; *f; f++) {
 		name = va_arg (ap, const char *);
 		if (!name) {
 			break;
@@ -172,6 +302,9 @@ R_API void r_table_set_columnsf(RTable *t, const char *fmt, ...) {
 		case 'z':
 			r_table_add_column (t, typeString, name, 0);
 			break;
+		case 'f':
+			r_table_add_column (t, typeFloat, name, 0);
+			break;
 		case 'i':
 		case 'd':
 		case 'n':
@@ -180,11 +313,11 @@ R_API void r_table_set_columnsf(RTable *t, const char *fmt, ...) {
 			r_table_add_column (t, typeNumber, name, 0);
 			break;
 		default:
-			eprintf ("Invalid format string char '%c', use 's' or 'n'\n", *f);
+			R_LOG_ERROR ("Invalid format string char '%c', use 's' or 'n'", *f);
 			break;
 		}
 	}
-	va_end(ap);
+	va_end (ap);
 }
 
 R_API void r_table_add_rowf(RTable *t, const char *fmt, ...) {
@@ -200,8 +333,11 @@ R_API void r_table_add_rowf(RTable *t, const char *fmt, ...) {
 			arg = va_arg (ap, const char *);
 			r_list_append (list, strdup (r_str_get (arg)));
 			break;
+		case 'f':
+			r_list_append (list, r_str_newf ("%.03lf", va_arg (ap, double)));
+			break;
 		case 'b':
-			r_list_append (list, r_str_new (r_str_bool (va_arg (ap, int))));
+			r_list_append (list, strdup (r_str_bool (va_arg (ap, int))));
 			break;
 		case 'i':
 		case 'd':
@@ -233,7 +369,7 @@ R_API void r_table_add_rowf(RTable *t, const char *fmt, ...) {
 			}
 			break;
 		default:
-			eprintf ("Invalid format string char '%c', use 's' or 'n'\n", *f);
+			R_LOG_ERROR ("Invalid format string char '%c', use 's' or 'n'", *f);
 			break;
 		}
 	}
@@ -253,40 +389,120 @@ R_API void r_table_add_row(RTable *t, const char *name, ...) {
 			break;
 		}
 		__addRow (t, items, arg, col);
-		// TODO: assert if number of columns doesnt match t->cols
 		col++;
 	}
 	va_end (ap);
+#if R_CHECKS_LEVEL >= 1
+	if (r_list_length (t->cols) != 0 && r_list_length (t->cols) != r_list_length (items)) {
+		R_LOG_WARN ("%s: column count mismatch (line %d)", R_FUNCTION, __LINE__);
+		r_list_free (items);
+		return;
+	}
+#endif
+	wrap_items (t, items);
 	RTableRow *row = r_table_row_new (items);
 	r_list_append (t->rows, row);
 	// throw warning if not enough columns defined in header
 	t->totalCols = R_MAX (t->totalCols, r_list_length (items));
+	t->widthsDirty = true;
 }
 
 // import / export
 
-static int __strbuf_append_col_aligned_fancy(RTable *t, RStrBuf *sb, RTableColumn *col, char *str) {
-	RCons *cons = (RCons *) t->cons;
-	const char *v_line = (cons && (cons->use_utf8 ||  cons->use_utf8_curvy)) ? RUNE_LINE_VERT : "|";
-	int ll = r_strbuf_length (sb);
+static int __strbuf_append_col_aligned_fancy(RTable *t, RStrBuf *sb, RTableColumn *col, const char *str) {
+	const bool use_utf8 = t->options.utf8;
+	const bool use_utf8_curvy = t->options.utf8_curvy;
+	const char *v_line = (use_utf8 || use_utf8_curvy) ? RUNE_LINE_VERT : "|";
+	char *trimmed = r_table_trim_cell (t, str, col->width);
+	if (trimmed) {
+		str = trimmed;
+	}
+	const size_t ll = sb->len;
+	int len = r_str_len_utf8_ansi (str);
+	int pad = R_MAX (0, col->width - len);
+	int left = 0;
+	int right = pad;
 	switch (col->align) {
 	case R_TABLE_ALIGN_LEFT:
-		r_strbuf_appendf (sb, "%s %-*s ", v_line, col->width, str);
 		break;
 	case R_TABLE_ALIGN_RIGHT:
-		r_strbuf_appendf (sb, "%s %*s ", v_line, col->width, str);
+		left = pad;
+		right = 0;
 		break;
 	case R_TABLE_ALIGN_CENTER:
-		{
-			int len = r_str_len_utf8 (str);
-			int pad = (col->width - len) / 2;
-			int left = col->width - (pad * 2 + len);
-			r_strbuf_appendf (sb, "%s %-*s ", v_line, pad, " ");
-			r_strbuf_appendf (sb, "%-*s ", pad + left, str);
-			break;
-		}
+		left = pad / 2;
+		right = pad - left;
+		break;
 	}
-	return r_strbuf_length (sb) - ll;
+	r_strbuf_appendf (sb, "%s %*s%s%*s ", v_line, left, "", str, right, "");
+	int res = r_str_len_utf8_ansi (r_strbuf_get (sb) + ll);
+	free (trimmed);
+	return res;
+}
+
+static void row_fancy(RTable *t, RStrBuf *sb, RTableRow *row, const char *v_line) {
+	RListIter *iter;
+	char *item;
+	int c = 0;
+	r_list_foreach (row->items, iter, item) {
+		RTableColumn *col = r_list_get_n (t->cols, c);
+		if (col) {
+			__strbuf_append_col_aligned_fancy (t, sb, col, item);
+		}
+		c++;
+	}
+	r_strbuf_appendf (sb, "%s\n", v_line);
+}
+
+static void lines_free(void *lines) {
+	r_list_free (lines);
+}
+
+static RList *cell_wrap(const char *s, int width) {
+	char *wrapped = r_str_wrap (s, width);
+	if (!wrapped) {
+		return NULL;
+	}
+	RList *lines = r_str_split_duplist (wrapped, "\n", false);
+	free (wrapped);
+	return lines;
+}
+
+static bool wraprow(RTable *t, RStrBuf *sb, RTableRow *row, const char *v_line) {
+	RList *line_cols = r_list_newf (lines_free);
+	RListIter *iter;
+	char *item;
+	int height = 1;
+	int c = 0;
+	r_list_foreach (row->items, iter, item) {
+		RTableColumn *col = r_list_get_n (t->cols, c);
+		if (col) {
+			RList *lines = cell_wrap (item, col->width);
+			if (!lines) {
+				r_list_free (line_cols);
+				return false;
+			}
+			height = R_MAX (height, r_list_length (lines));
+			r_list_append (line_cols, lines);
+		}
+		c++;
+	}
+	int i;
+	for (i = 0; i < height; i++) {
+		c = 0;
+		RList *lines;
+		r_list_foreach (line_cols, iter, lines) {
+			RTableColumn *col = r_list_get_n (t->cols, c);
+			if (col) {
+				const char *line = r_list_get_n (lines, i);
+				__strbuf_append_col_aligned_fancy (t, sb, col, line? line: "");
+			}
+			c++;
+		}
+		r_strbuf_appendf (sb, "%s\n", v_line);
+	}
+	r_list_free (line_cols);
+	return true;
 }
 
 static void __computeTotal(RTable *t) {
@@ -297,7 +513,7 @@ static void __computeTotal(RTable *t) {
 		int c = 0;
 		r_list_foreach (row->items, iter2, item) {
 			RTableColumn *col = r_list_get_n (t->cols, c);
-			if (!r_str_cmp (col->type->name, "number", r_str_ansi_len ("number")) && r_str_isnumber (item)) {
+			if (r_str_startswith (col->type->name, "number") && r_str_isnumber (item)) {
 				if (col->total < 0) {
 					col->total = 0;
 				}
@@ -315,10 +531,9 @@ R_API char *r_table_tofancystring(RTable *t) {
 	RStrBuf *sb = r_strbuf_new ("");
 	RTableRow *row;
 	RTableColumn *col;
-	RCons *cons = (RCons *)t->cons;
-	RListIter *iter, *iter2;
-	bool useUtf8 = (cons && cons->use_utf8);
-	bool useUtf8Curvy = (cons && cons->use_utf8_curvy);
+	RListIter *iter;
+	bool useUtf8 = t->options.utf8;
+	bool useUtf8Curvy = t->options.utf8_curvy;
 	const char *v_line = useUtf8 || useUtf8Curvy ? RUNE_LINE_VERT : "|";
 	const char *h_line = useUtf8 || useUtf8Curvy ? RUNE_LINE_HORIZ : "-";
 	const char *l_intersect = useUtf8 || useUtf8Curvy ? RUNE_LINE_VERT : ")";
@@ -329,11 +544,18 @@ R_API char *r_table_tofancystring(RTable *t) {
 	const char *br_corner = useUtf8 ? (useUtf8Curvy ? RUNE_CURVE_CORNER_BR : RUNE_CORNER_BR) : "'";
 	__table_adjust (t);
 
+	RList *headers = r_list_new ();
+	int maxlen = -1;
 	r_list_foreach (t->cols, iter, col) {
-		__strbuf_append_col_aligned_fancy (t, sb, col, col->name);
+		r_list_append (headers, col->name);
+		maxlen += col->width + 3;
 	}
-	int len = r_str_len_utf8_ansi (r_strbuf_get (sb)) - 1;
-	int maxlen = len;
+	RTableRow header = { .items = headers };
+	if (t->options.trim || !t->options.wrap || !wraprow (t, sb, &header, v_line)) {
+		row_fancy (t, sb, &header, v_line);
+		maxlen = r_str_len_utf8_ansi (r_strbuf_get (sb)) - 3;
+	}
+	r_list_free (headers);
 	char *h_line_str = r_str_repeat (h_line, maxlen);
 	{
 		char *s = r_str_newf ("%s%s%s\n", tl_corner, h_line_str, tr_corner);
@@ -341,29 +563,20 @@ R_API char *r_table_tofancystring(RTable *t) {
 		free (s);
 	}
 
-	r_strbuf_appendf (sb, "%s\n%s%s%s\n", v_line, l_intersect, h_line_str, r_intersect);
+	r_strbuf_appendf (sb, "%s%s%s\n", l_intersect, h_line_str, r_intersect);
 	r_list_foreach (t->rows, iter, row) {
-		char *item;
-		int c = 0;
-		r_list_foreach (row->items, iter2, item) {
-			RTableColumn *col = r_list_get_n (t->cols, c);
-			if (col) {
-				int l = __strbuf_append_col_aligned_fancy (t, sb, col, item);
-				len = R_MAX (len, l);
-			}
-			c++;
+		if (t->options.trim || !t->options.wrap || !wraprow (t, sb, row, v_line)) {
+			row_fancy (t, sb, row, v_line);
 		}
-		r_strbuf_appendf (sb, "%s\n", v_line);
 	}
 
-	if (t->showSum) {
-		char tmp[64];
+	if (SHOULD_SHOW_SUM (t)) {
+		char tmp[SDB_NUM_BUFSZ];
 		__computeTotal (t);
 		r_strbuf_appendf (sb, "%s%s%s\n", l_intersect, h_line_str, r_intersect);
 		r_list_foreach (t->cols, iter, col) {
-			char *num = col->total == -1 ? "" : sdb_itoa (col->total, tmp, 10);
-			int l = __strbuf_append_col_aligned_fancy (t, sb, col, num);
-			len = R_MAX (len, l);
+			char *num = col->total == -1 ? "" : sdb_itoa (col->total, 10, tmp, sizeof (tmp));
+			__strbuf_append_col_aligned_fancy (t, sb, col, num);
 		}
 		r_strbuf_appendf (sb, "%s\n", v_line);
 	}
@@ -372,8 +585,13 @@ R_API char *r_table_tofancystring(RTable *t) {
 	return r_strbuf_drain (sb);
 }
 
-static int __strbuf_append_col_aligned(RStrBuf *sb, RTableColumn *col, const char *str, bool nopad) {
-	int ll = r_strbuf_length (sb);
+static int __strbuf_append_col_aligned(RTable *t, RStrBuf *sb, RTableColumn *col, const char *str, bool nopad) {
+	int trim_width = nopad? col->width: R_MAX (1, col->width - 1);
+	char *trimmed = r_table_trim_cell (t, str, trim_width);
+	if (trimmed) {
+		str = trimmed;
+	}
+	const size_t ll = sb->len;
 	if (nopad) {
 		r_strbuf_appendf (sb, "%s", str);
 	} else {
@@ -382,13 +600,16 @@ static int __strbuf_append_col_aligned(RStrBuf *sb, RTableColumn *col, const cha
 		int padlen = (len < col->width)? col->width - len: 0;
 		switch (col->align) {
 		case R_TABLE_ALIGN_LEFT:
-			pad = r_str_repeat (" ", col->width - len);
-			r_strbuf_appendf (sb, "%s%s", str, pad);
+			pad = r_str_repeat (" ", padlen);
+			r_strbuf_append (sb, str);
+			r_strbuf_append (sb, pad);
 			free (pad);
 			break;
 		case R_TABLE_ALIGN_RIGHT:
 			pad = r_str_repeat (" ", padlen);
-			r_strbuf_appendf (sb, "%s%s ", pad, str);
+			r_strbuf_append (sb, pad);
+			r_strbuf_append (sb, str);
+			r_strbuf_append (sb, " ");
 			free (pad);
 			break;
 		case R_TABLE_ALIGN_CENTER:
@@ -402,32 +623,49 @@ static int __strbuf_append_col_aligned(RStrBuf *sb, RTableColumn *col, const cha
 			}
 		}
 	}
-	return r_strbuf_length (sb) - ll;
+	int res = r_str_len_utf8_ansi (r_strbuf_get (sb) + ll);
+	free (trimmed);
+	return res;
 }
 
 R_API char *r_table_tostring(RTable *t) {
-	if (!t) { // guard
-		return strdup ("");
-	}
-	if (t->showR2) {
+	R_RETURN_VAL_IF_FAIL (t, NULL);
+	if (SHOULD_SHOW_R2 (t)) {
 		return r_table_tor2cmds (t);
 	}
-	if (t->showSQL) {
+	if (SHOULD_SHOW_SQL (t)) {
 		return r_table_tosql (t);
 	}
-	if (t->showCSV) {
+	if (SHOULD_SHOW_TSV (t)) {
+		return r_table_totsv (t);
+	}
+	if (SHOULD_SHOW_CSV (t)) {
 		return r_table_tocsv (t);
 	}
-	if (t->showJSON) {
+	if (SHOULD_SHOW_HTML (t)) {
+		return r_table_tohtml (t);
+	}
+	if (SHOULD_SHOW_JSON (t)) {
 		char *s = r_table_tojson (t);
-		char *q = r_str_newf ("%s\n", s);;
+		char *q = r_str_newf ("%s\n", s);
 		free (s);
 		return q;
 	}
-	if (t->showFancy) {
+	if (SHOULD_SHOW_FANCY (t)) {
 		return r_table_tofancystring (t);
 	}
 	return r_table_tosimplestring (t);
+}
+
+static bool nopad_trailing(RListIter *iter) {
+	while (iter->n) {
+		iter = iter->n;
+		char *next_item = iter->data;
+		if (R_STR_ISNOTEMPTY (next_item)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 R_API char *r_table_tosimplestring(RTable *t) {
@@ -435,19 +673,20 @@ R_API char *r_table_tosimplestring(RTable *t) {
 	RTableRow *row;
 	RTableColumn *col;
 	RListIter *iter, *iter2;
-	RCons *cons = (RCons *) t->cons;
-	const char *h_line = (cons && (cons->use_utf8 || cons->use_utf8_curvy)) ? RUNE_LONG_LINE_HORIZ : "-";
+	const bool use_utf8 = t->options.utf8;
+	const bool use_utf8_curvy = t->options.utf8_curvy;
+	const char *h_line = (use_utf8 || use_utf8_curvy) ? RUNE_LONG_LINE_HORIZ : "-";
 	__table_adjust (t);
 	int maxlen = 0;
-	if (t->showHeader) {
+	if (SHOULD_SHOW_HEADER (t)) {
 		r_list_foreach (t->cols, iter, col) {
 			bool nopad = !iter->n;
-			int ll = __strbuf_append_col_aligned (sb, col, col->name, nopad);
+			int ll = __strbuf_append_col_aligned (t, sb, col, col->name, nopad);
 			maxlen = R_MAX (maxlen, ll);
 		}
 		int len = r_str_len_utf8_ansi (r_strbuf_get (sb));
 		char *l = r_str_repeat (h_line, R_MAX (maxlen, len));
-		if (l) {
+		if (R_LIKELY (l)) {
 			r_strbuf_appendf (sb, "\n%s\n", l);
 			free (l);
 		}
@@ -456,17 +695,17 @@ R_API char *r_table_tosimplestring(RTable *t) {
 		char *item;
 		int c = 0;
 		r_list_foreach (row->items, iter2, item) {
-			bool nopad = !iter2->n;
+			bool nopad = nopad_trailing (iter2);
 			RTableColumn *col = r_list_get_n (t->cols, c);
-			if (col) {
-				(void)__strbuf_append_col_aligned (sb, col, item, nopad);
+			if (R_LIKELY (col)) {
+				(void)__strbuf_append_col_aligned (t, sb, col, item, nopad);
 			}
 			c++;
 		}
 		r_strbuf_append (sb, "\n");
 	}
-	if (t->showSum) {
-		char tmp[64];
+	if (SHOULD_SHOW_SUM (t)) {
+		char tmp[SDB_NUM_BUFSZ];
 		__computeTotal (t);
 		if (maxlen > 0) {
 			char *l = r_str_repeat (h_line, maxlen);
@@ -477,7 +716,8 @@ R_API char *r_table_tosimplestring(RTable *t) {
 		}
 		r_list_foreach (t->cols, iter, col) {
 			bool nopad = !iter->n;
-			(void)__strbuf_append_col_aligned (sb, col, sdb_itoa (col->total, tmp, 10), nopad);
+			char *num = col->total == -1 ? "" : sdb_itoa (col->total, 10, tmp, sizeof (tmp));
+			(void)__strbuf_append_col_aligned (t, sb, col, num, nopad);
 		}
 	}
 	return r_strbuf_drain (sb);
@@ -489,7 +729,7 @@ R_API char *r_table_tor2cmds(RTable *t) {
 	RTableColumn *col;
 	RListIter *iter, *iter2;
 
-	r_strbuf_appendf (sb, ",h ");
+	r_strbuf_append (sb, ",h ");
 	r_list_foreach (t->cols, iter, col) {
 		char fmt = col->type == &r_table_type_string? 's': 'x';
 		r_strbuf_appendf (sb, "%c", fmt);
@@ -502,11 +742,12 @@ R_API char *r_table_tor2cmds(RTable *t) {
 	r_list_foreach (t->rows, iter, row) {
 		char *item;
 		int c = 0;
-		r_strbuf_appendf (sb, ",r");
+		r_strbuf_append (sb, ",r");
 		r_list_foreach (row->items, iter2, item) {
 			RTableColumn *col = r_list_get_n (t->cols, c);
 			if (col) {
-				r_strbuf_appendf (sb, " %s", item);
+				r_strbuf_append (sb, " ");
+				r_strbuf_append (sb, item);
 			}
 			c++;
 		}
@@ -516,7 +757,7 @@ R_API char *r_table_tor2cmds(RTable *t) {
 }
 
 R_API char *r_table_tosql(RTable *t) {
-	r_return_val_if_fail (t, NULL);
+	R_RETURN_VAL_IF_FAIL (t, NULL);
 	RStrBuf *sb = r_strbuf_new ("");
 	RTableRow *row;
 	RTableColumn *col;
@@ -534,16 +775,18 @@ R_API char *r_table_tosql(RTable *t) {
 		free (s);
 		primary_key = false;
 	}
-	r_strbuf_appendf (sb, ");\n");
+	r_strbuf_append (sb, ");\n");
 
 	r_list_foreach (t->rows, iter, row) {
 		const char *item;
 		int c = 0;
 		r_strbuf_appendf (sb, "INSERT INTO %s (", table_name);
 		r_list_foreach (t->cols, iter2, col) {
-			const char *comma = iter2->n? ", ": "";
 			char *s = r_str_escape_sql (col->name);
-			r_strbuf_appendf (sb, "%s%s", s, comma);
+			r_strbuf_append (sb, s);
+			if (iter2->n) {
+				r_strbuf_append (sb, ", ");
+			}
 			free (s);
 		}
 		r_strbuf_append (sb, ") VALUES (");
@@ -566,21 +809,28 @@ R_API char *r_table_tosql(RTable *t) {
 	return r_strbuf_drain (sb);
 }
 
-R_API char *r_table_tocsv(RTable *t) {
+static void csv_append_field(RStrBuf *sb, const char *prefix, const char *field, char sep) {
+	char *escaped = r_str_escape (field);
+	if (escaped) {
+		if (strchr (escaped, sep)) {
+			r_strbuf_appendf (sb, "%s\"%s\"", prefix, escaped);
+		} else {
+			r_strbuf_appendf (sb, "%s%s", prefix, escaped);
+		}
+		free (escaped);
+	}
+}
+
+static char *tocsv(RTable *t, const char *sep) {
 	RStrBuf *sb = r_strbuf_new ("");
 	RTableRow *row;
 	RTableColumn *col;
 	RListIter *iter, *iter2;
-	if (t->showHeader) {
+	if (SHOULD_SHOW_HEADER (t)) {
 		const char *comma = "";
 		r_list_foreach (t->cols, iter, col) {
-			if (strchr (col->name, ',')) {
-				// TODO. escaped string?
-				r_strbuf_appendf (sb, "%s\"%s\"", comma, col->name);
-			} else {
-				r_strbuf_appendf (sb, "%s%s", comma, col->name);
-			}
-			comma = ",";
+			csv_append_field (sb, comma, col->name, *sep);
+			comma = sep;
 		}
 		r_strbuf_append (sb, "\n");
 	}
@@ -591,17 +841,48 @@ R_API char *r_table_tocsv(RTable *t) {
 		r_list_foreach (row->items, iter2, item) {
 			RTableColumn *col = r_list_get_n (t->cols, c);
 			if (col) {
-				if (strchr (col->name, ',')) {
-					r_strbuf_appendf (sb, "%s\"%s\"", comma, col->name);
-				} else {
-					r_strbuf_appendf (sb, "%s%s", comma, item);
-				}
-				comma = ",";
+				csv_append_field (sb, comma, item, *sep);
+				comma = sep;
 			}
 			c++;
 		}
 		r_strbuf_append (sb, "\n");
 	}
+	return r_strbuf_drain (sb);
+}
+
+R_API char *r_table_totsv(RTable *t) {
+	return tocsv (t, "\t");
+}
+
+R_API char *r_table_tocsv(RTable *t) {
+	return tocsv (t, ",");
+}
+
+R_API char *r_table_tohtml(RTable *t) {
+	RTableRow *row;
+	RListIter *iter, *iter2;
+	RStrBuf *sb = r_strbuf_new ("");
+	r_strbuf_append (sb, "<table>\n");
+	if (r_list_length (t->cols) > 0) {
+		RTableColumn *col;
+		r_strbuf_append (sb, "  <thead><tr>\n");
+		r_list_foreach (t->cols, iter, col) {
+			r_strbuf_appendf (sb, "    <th>%s</th>\n", col->name);
+		}
+		r_strbuf_append (sb, "  </tr></thead>\n");
+	}
+	r_strbuf_append (sb, "  <tbody>\n");
+	r_list_foreach (t->rows, iter, row) {
+		char *item;
+		r_strbuf_append (sb, "  <tr>\n");
+		r_list_foreach (row->items, iter2, item) {
+			r_strbuf_appendf (sb, "    <td>%s</td>\n", item);
+		}
+		r_strbuf_append (sb, "  </tr>\n");
+	}
+	r_strbuf_append (sb, "  </tbody>\n");
+	r_strbuf_append (sb, "</table>\n");
 	return r_strbuf_drain (sb);
 }
 
@@ -639,12 +920,12 @@ R_API char *r_table_tojson(RTable *t) {
 }
 
 R_API void r_table_filter(RTable *t, int nth, int op, const char *un) {
-	r_return_if_fail (t && un);
+	R_RETURN_IF_FAIL (t && un);
 	RTableRow *row;
 	RListIter *iter, *iter2;
 	ut64 uv = r_num_math (NULL, un);
 	ut64 sum = 0;
-	size_t page = 0, page_items = 0;
+	int page = 0, page_items = 0;
 	size_t lrow = 0;
 	if (op == 't') {
 		size_t ll = r_list_length (t->rows);
@@ -653,13 +934,20 @@ R_API void r_table_filter(RTable *t, int nth, int op, const char *un) {
 		}
 	}
 	if (op == 'p') {
-		sscanf (un, "%zd/%zd", &page, &page_items);
-		if (page < 1) {
-			page = 1;
-		}
-		if (!ST32_MUL_OVFCHK (page, page_items)) {
-			lrow = page_items * (page - 1);
-			uv = page_items * (page);
+		if (sscanf ((char *)un, "%d/%d", &page, &page_items) == 2) {
+			if (page < 1) {
+				page = 1;
+			}
+			st32 page_offset;
+			if (!r_mul_overflow (page_items, page - 1, &page_offset)) {
+				lrow = page_offset;
+				uv = (ut64)page_offset + (ut64)page_items;
+			} else {
+				uv = 0;
+			}
+		} else {
+			uv = 0;
+			R_LOG_ERROR ("Invalid page format for table filter");
 		}
 	}
 	size_t nrow = 0;
@@ -706,38 +994,39 @@ R_API void r_table_filter(RTable *t, int nth, int op, const char *un) {
 			break;
 		case '=':
 			if (nv == 0) {
-				match = !strcmp (nn, un);
+				match = (nn && un && !strcmp (nn, un));
 			} else {
 				match = (nv == uv);
 			}
 			break;
 		case '!':
 			if (nv == 0) {
-				match = strcmp (nn, un);
+				match = (!nn || !un || strcmp (nn, un));
 			} else {
 				match = (nv != uv);
 			}
 			break;
 		case '$':
-			match = strstr (nn, un) == NULL;
+			match = !nn || !un || strstr (nn, un) == NULL;
 			break;
 		case '~':
-			match = strstr (nn, un) != NULL;
+			match = nn&&un&&strstr (nn, un);
 			break;
 		case 's':
-			match = strlen (nn) == atoi (un);
+			match = nn && strlen (nn) == atoi (un);
 			break;
 		case 'l':
-			match = strlen (nn) > atoi (un);
+			match = nn && strlen (nn) > atoi (un);
 			break;
 		case 'L':
-			match = strlen (nn) < atoi (un);
+			match = nn && strlen (nn) < atoi (un);
 			break;
 		case '\0':
 			break;
 		}
 		if (!match) {
 			r_list_delete (t->rows, iter);
+			t->widthsDirty = true;
 		}
 	}
 	if (op == '+') {
@@ -745,37 +1034,36 @@ R_API void r_table_filter(RTable *t, int nth, int op, const char *un) {
 	}
 }
 
-static int cmp(const void *_a, const void *_b) {
+static int cmp_with_user(const void *_a, const void *_b, void *user) {
 	RTableRow *a = (RTableRow*)_a;
 	RTableRow *b = (RTableRow*)_b;
-	const char *wa = r_list_get_n (a->items, Gnth);
-	const char *wb = r_list_get_n (b->items, Gnth);
-	int res = Gcmp (wa, wb);
+	RTableSortCtx *ctx = (RTableSortCtx *)user;
+	const char *wa = r_list_get_n (a->items, ctx->nth);
+	const char *wb = r_list_get_n (b->items, ctx->nth);
+	int res = ctx->cmp (wa, wb);
 	return res;
 }
 
 R_API void r_table_sort(RTable *t, int nth, bool dec) {
 	RTableColumn *col = r_list_get_n (t->cols, nth);
 	if (col) {
-		Gnth = nth;
 		if (col->type && col->type->cmp) {
-			Gcmp = col->type->cmp;
-			t->rows->sorted = false; //force sorting
-			r_list_sort (t->rows, cmp);
+			RTableSortCtx ctx = { nth, col->type->cmp };
+			t->rows->sorted = false; // force sorting
+			r_list_sort_with_user (t->rows, cmp_with_user, &ctx);
 			if (dec) {
 				r_list_reverse (t->rows);
 			}
 		}
-		Gnth = 0;
-		Gcmp = NULL;
 	}
 }
 
-static int cmplen(const void *_a, const void *_b) {
+static int cmplen_with_user(const void *_a, const void *_b, void *user) {
 	RTableRow *a = (RTableRow*)_a;
 	RTableRow *b = (RTableRow*)_b;
-	const char *wa = r_list_get_n (a->items, Gnth);
-	const char *wb = r_list_get_n (b->items, Gnth);
+	RTableSortCtx *ctx = (RTableSortCtx *)user;
+	const char *wa = r_list_get_n (a->items, ctx->nth);
+	const char *wb = r_list_get_n (b->items, ctx->nth);
 	int res = strlen (wa) - strlen (wb);
 	return res;
 }
@@ -783,13 +1071,12 @@ static int cmplen(const void *_a, const void *_b) {
 R_API void r_table_sortlen(RTable *t, int nth, bool dec) {
 	RTableColumn *col = r_list_get_n (t->cols, nth);
 	if (col) {
-		Gnth = nth;
+		RTableSortCtx ctx = { nth, NULL };
 		t->rows->sorted = false; //force sorting
-		r_list_sort (t->rows, cmplen);
+		r_list_sort_with_user (t->rows, cmplen_with_user, &ctx);
 		if (dec) {
 			r_list_reverse (t->rows);
 		}
-		Gnth = 0;
 	}
 }
 
@@ -860,6 +1147,7 @@ R_API void r_table_group(RTable *t, int nth, RTableSelector fcn) {
 					fcn (uniq_row, row, nth);
 				}
 				r_list_delete (rows, iter);
+				t->widthsDirty = true;
 				break;
 			}
 		}
@@ -901,66 +1189,63 @@ static void __table_column_free(void *_col) {
 }
 
 R_API void r_table_columns(RTable *t, RList *col_names) {
-	// 1 bool per OLD column to indicate whether it should be freed (masked out)
-	bool *free_cols = malloc (sizeof (bool) * r_list_length (t->cols));
-	if (!free_cols) {
+	size_t old_col_count = r_list_length (t->cols);
+	bool *used_cols = calloc (old_col_count, sizeof (bool));
+	if (!used_cols) {
 		return;
 	}
-	size_t i;
-	for (i = 0; i < r_list_length (t->cols); i++) {
-		free_cols[i] = true;
-	}
 
-	// 1 value per NEW column to indicate from which OLD column to take the info from and whether to dup it
+	size_t max_new = r_list_length (col_names);
 	struct col_source {
 		int oldcol;
 		bool dup;
-	} *col_sources = calloc (r_list_length (col_names), sizeof (struct col_source));
-	if (!col_sources) {
-		free (free_cols);
+	} *plan = calloc (max_new, sizeof (struct col_source));
+	if (!plan) {
+		free (used_cols);
 		return;
 	}
 
-	// First create the plan which new columns to take from which old, which ones to dup or free.
-	RListIter *it;
+	RListIter *iter;
 	const char *col_name;
-	size_t new_count = 0;
-	r_list_foreach (col_names, it, col_name) {
-		int fc = r_table_column_nth (t, col_name);
-		if (fc < 0) {
+	size_t plan_size = 0;
+	size_t plan_idx;
+	size_t idx;
+	size_t col_idx;
+	r_list_foreach (col_names, iter, col_name) {
+		int oldcol = r_table_column_nth (t, col_name);
+		if (oldcol < 0) {
 			continue;
 		}
-		col_sources[new_count].oldcol = fc;
-		col_sources[new_count].dup = !free_cols[fc]; // if we already used the same old column for another new column before, we must dup it for all following!
-		free_cols[fc] = false;
-		new_count++;
+		plan[plan_size].oldcol = oldcol;
+		plan[plan_size].dup = used_cols[oldcol];
+		used_cols[oldcol] = true;
+		plan_size++;
 	}
 
 	RTableRow *row;
-	r_list_foreach (t->rows, it, row) {
+	r_list_foreach (t->rows, iter, row) {
 		RList *old_items = row->items;
 		RList *new_items = r_list_newf (free);
-		for (i = 0; i < new_count; i++) {
-			char *item = r_list_get_n (old_items, col_sources[i].oldcol);
+		for (plan_idx = 0; plan_idx < plan_size; plan_idx++) {
+			char *item = r_list_get_n (old_items, plan[plan_idx].oldcol);
 			if (!item) {
 				continue;
 			}
-			if (col_sources[i].dup) {
+			if (plan[plan_idx].dup) {
 				item = strdup (item);
 			}
 			r_list_append (new_items, item);
 		}
 		row->items = new_items;
 
-		// Free dropped items
 		char *item;
-		i = 0;
+		idx = 0;
 		RListIter *fit;
 		r_list_foreach (old_items, fit, item) {
-			if (free_cols[i]) {
+			if (idx >= old_col_count || !used_cols[idx]) {
 				free (item);
 			}
-			i++;
+			idx++;
 		}
 		old_items->free = NULL;
 		r_list_free (old_items);
@@ -968,32 +1253,32 @@ R_API void r_table_columns(RTable *t, RList *col_names) {
 
 	RList *old_cols = t->cols;
 	RList *new_cols = r_list_newf (r_table_column_free);
-	for (i = 0; i < new_count; i++) {
-		RTableColumn *col = r_list_get_n (old_cols, col_sources[i].oldcol);
+	for (plan_idx = 0; plan_idx < plan_size; plan_idx++) {
+		RTableColumn *col = r_list_get_n (old_cols, plan[plan_idx].oldcol);
 		if (!col) {
 			continue;
 		}
-		if (col_sources[i].dup) {
+		if (plan[plan_idx].dup) {
 			col = r_table_column_clone (col);
 		}
 		r_list_append (new_cols, col);
 	}
 	t->cols = new_cols;
 
-	// Free dropped columns
 	RTableColumn *col;
-	i = 0;
-	r_list_foreach (old_cols, it, col) {
-		if (free_cols[i]) {
+	col_idx = 0;
+	r_list_foreach (old_cols, iter, col) {
+		if (!used_cols[col_idx]) {
 			r_table_column_free (col);
 		}
-		i++;
+		col_idx++;
 	}
 	old_cols->free = NULL;
 	r_list_free (old_cols);
 
-	free (col_sources);
-	free (free_cols);
+	free (plan);
+	free (used_cols);
+	t->widthsDirty = true;
 }
 
 R_API void r_table_filter_columns(RTable *t, RList *list) {
@@ -1035,10 +1320,13 @@ R_API const char *r_table_help(void) {
 		" c/sum          sum all the values of given column\n"
 		" :r2            .tostring() == .tor2()         # supports import/export\n"
 		" :csv           .tostring() == .tocsv()        # supports import/export\n"
+		" :tsv           .tostring() == .totsv()        # supports import/export\n"
 		" :fancy         .tostring() == .tofancystring()\n"
+		" :html          .tostring() == .tohtml()\n"
 		" :json          .tostring() == .tojson()\n"
 		" :simple        simple table output without lines\n"
 		" :sql           .tostring() == .tosql() # export table contents in SQL statements\n"
+		" :header        show column headers (see :quiet and :noheader)\n"
 		" :quiet         do not print column names header\n";
 }
 
@@ -1047,19 +1335,31 @@ static bool __table_special(RTable *t, const char *columnName) {
 		return false;
 	}
 	if (!strcmp (columnName, ":quiet")) {
-		t->showHeader = true;
+		SET_SHOW_HEADER (t, false);
+		SET_SHOW_FANCY (t, false);
+	} else if (r_str_startswith (columnName, ":nohead")) {
+		SET_SHOW_HEADER (t, false);
+	} else if (r_str_startswith (columnName, ":head")) {
+		SET_SHOW_HEADER (t, true);
 	} else if (!strcmp (columnName, ":fancy")) {
-		t->showFancy = true;
+		SET_SHOW_HEADER (t, true);
+		SET_SHOW_FANCY (t, true);
 	} else if (!strcmp (columnName, ":sql")) {
-		t->showSQL = true;
+		SET_SHOW_SQL (t, true);
+		SET_SHOW_HEADER (t, false);
 	} else if (!strcmp (columnName, ":simple")) {
-		t->showFancy = false;
+		SET_SHOW_HEADER (t, false);
+		SET_SHOW_FANCY (t, true);
 	} else if (!strcmp (columnName, ":r2")) {
-		t->showR2 = true;
+		SET_SHOW_R2 (t, true);
 	} else if (!strcmp (columnName, ":csv")) {
-		t->showCSV = true;
+		SET_SHOW_CSV (t, true);
+	} else if (!strcmp (columnName, ":html")) {
+		SET_SHOW_HTML (t, true);
+	} else if (!strcmp (columnName, ":tsv")) {
+		SET_SHOW_TSV (t, true);
 	} else if (!strcmp (columnName, ":json")) {
-		t->showJSON = true;
+		SET_SHOW_JSON (t, true);
 	} else {
 		return false;
 	}
@@ -1067,7 +1367,7 @@ static bool __table_special(RTable *t, const char *columnName) {
 }
 
 R_API bool r_table_query(RTable *t, const char *q) {
-	r_return_val_if_fail (t, false);
+	R_RETURN_VAL_IF_FAIL (t, false);
 	q = r_str_trim_head_ro (q);
 	// TODO support parenthesis and (or)||
 	// split by "&&" (or comma) -> run .filter on each
@@ -1076,7 +1376,7 @@ R_API bool r_table_query(RTable *t, const char *q) {
 		__table_adjust (t);
 		return true;
 	}
-	if (*q == '?') {
+	if (*q == '?' || r_str_endswith (q, ":help")) {
 		const char *th = r_table_help ();
 		eprintf ("%s\n", th);
 		return false;
@@ -1087,17 +1387,18 @@ R_API bool r_table_query(RTable *t, const char *q) {
 	RList *queries = r_str_split_list (qq, ",",  0);
 	char *query;
 	r_list_foreach (queries, iter, query) {
-		RList *q = r_str_split_list (query, "/", 2);
+		RList *q = r_str_split_list (query, "/", 3);
 		const char *columnName = r_list_get_n (q, 0);
 		const char *operation = r_list_get_n (q, 1);
 		const char *operand = r_list_get_n (q, 2);
 		if (__table_special (t, columnName)) {
+			r_list_free (q);
 			continue;
 		}
 		int col = r_table_column_nth (t, columnName);
 		if (col == -1) {
 			if (columnName == NULL && strcmp (operation, "uniq")) {
-				eprintf ("Invalid column name (%s) for (%s)\n", columnName, query);
+				R_LOG_ERROR ("Invalid column name (%s) for (%s)", columnName, query);
 			} else if (columnName) {
 				if (*columnName == '[') {
 					col = atoi (columnName + 1);
@@ -1105,6 +1406,7 @@ R_API bool r_table_query(RTable *t, const char *q) {
 			}
 		}
 		if (!operation) {
+			r_list_free (q);
 			break;
 		}
 		if (!strcmp (operation, "sort")) {
@@ -1162,7 +1464,7 @@ R_API bool r_table_query(RTable *t, const char *q) {
 		} else if (!strcmp (operation, "cols")) {
 			char *op = strdup (r_str_get (operand));
 			RList *list = r_str_split_list (op, "/", 0);
-			r_list_prepend (list, strdup (columnName));
+			r_list_prepend (list, (char *)columnName);
 			r_table_columns (t, list); // select/reorder columns
 			r_list_free (list);
 			free (op);
@@ -1170,7 +1472,7 @@ R_API bool r_table_query(RTable *t, const char *q) {
 		} else {
 			int op = __resolveOperation (operation);
 			if (op == -1) {
-				eprintf ("Invalid operation (%s)\n", operation);
+				R_LOG_ERROR ("Invalid table operation (%s)", operation);
 			} else {
 				r_table_filter (t, col, op, operand);
 			}
@@ -1192,25 +1494,123 @@ R_API bool r_table_align(RTable *t, int nth, int align) {
 	return false;
 }
 
-R_API void r_table_hide_header (RTable *t) {
-	t->showHeader = false;
+R_API void r_table_hide_header(RTable *t) {
+	SET_SHOW_HEADER (t, false);
+}
+
+typedef struct r_table_visual_state_t TableVisualState;
+typedef int (*RenderTableRows)(RTable *table, TableVisualState *state);
+
+typedef struct r_table_visual_state_t {
+	ut64 min;
+	ut64 mul;
+	int width;
+	ut64 seek;
+	ut64 len;
+	bool va;
+	RenderTableRows render_fn;
+	void *user;
+} TableVisualState;
+
+static void r_table_visual_row(RTable *table, const RListInfo *info, int i, TableVisualState *state) {
+	const ut64 min = state->min;
+	const ut64 mul = state->mul;
+	const ut64 seek = state->seek;
+	const int width = state->width;
+	const bool va = state->va;
+	const char *block = table->options.utf8 ? R_UTF8_BLOCK : "#";
+	const char *h_line = table->options.utf8 ? RUNE_LONG_LINE_HORIZ : "-";
+	RStrBuf *buf = r_strbuf_new ("");
+	int j;
+	for (j = 0; j < width; j++) {
+		ut64 pos = min + j * mul;
+		ut64 npos = min + (j + 1) * mul;
+		bool in_range = (info->pitv.addr < npos && (info->pitv.addr + info->pitv.size) > pos);
+		if (in_range && info->color) {
+			r_strbuf_append (buf, info->color);
+			r_strbuf_append (buf, block);
+			r_strbuf_append (buf, Color_RESET);
+		} else {
+			r_strbuf_append (buf, in_range ? block : h_line);
+		}
+	}
+	r_strf_var (a0, 64, "%d%c", i, (va
+		? r_itv_contain (info->vitv, seek)
+		: r_itv_contain (info->pitv, seek))? '*' : ' ');
+	r_strf_var (a1, 64, "0x%08"PFMT64x, va
+		? info->vitv.addr: info->pitv.addr);
+	r_strf_var (a2, 64, "0x%08"PFMT64x, va
+		? r_itv_end (info->vitv): r_itv_end (info->pitv));
+	char *b = r_strbuf_drain (buf);
+
+	r_table_add_rowf (table, "sssssss",
+		a0, a1, b, a2,
+		(info->perm != -1)? r_str_rwx_i (info->perm) : "",
+		(info->extra)?info->extra : "",
+		(info->name)?info->name :"");
+
+	free (b);
+}
+
+static void r_table_visual_current_seek(RTable *table, TableVisualState *state) {
+	const int width = state->width;
+	const ut64 mul = state->mul;
+	const ut64 min = state->min;
+	const ut64 seek = state->seek;
+	const ut64 len = state->len;
+	const char *h_line = table->options.utf8 ? RUNE_LONG_LINE_HORIZ : "-";
+	RStrBuf *buf = r_strbuf_new ("");
+	int j;
+	for (j = 0; j < width; j++) {
+		r_strbuf_append (buf,((j * mul) + min >= seek && (j * mul) + min <= seek + len) ? "^" : h_line);
+	}
+	r_strf_var (a0, 64, "0x%08"PFMT64x, seek);
+	r_strf_var (a1, 64, "0x%08"PFMT64x, seek + len);
+	char *b = r_strbuf_drain (buf);
+	r_table_add_rowf (table, "sssssss", "=>", a0, b, a1, "", "", "");
+	free (b);
+}
+
+static void r_table_visual(RTable *table, TableVisualState *state) {
+	const ut64 min = state->min;
+	const ut64 mul = state->mul;
+	const ut64 len = state->len;
+
+	SET_SHOW_HEADER (table, false);
+	r_table_set_columnsf (table, "sssssss", "No.", "offset", "blocks", "offset", "perms", "extra", "name");
+	if (min != -1 && mul > 0) {
+		int i = state->render_fn (table, state);
+		/* current seek */
+		if (i > 0 && len != 0) {
+			r_table_visual_current_seek (table, state);
+		}
+	}
+}
+
+static inline int render_table_rows_from_list(RTable *table, TableVisualState *state) {
+	int i = 0;
+
+	RList *list = state->user;
+	RListIter *iter;
+	RListInfo *info;
+	r_list_foreach (list, iter, info) {
+		r_table_visual_row (table, info, i, state);
+		i++;
+	}
+
+	return i;
 }
 
 R_API void r_table_visual_list(RTable *table, RList *list, ut64 seek, ut64 len, int width, bool va) {
-	ut64 mul, min = -1, max = -1;
-	RListIter *iter;
-	RListInfo *info;
-	RCons *cons = (RCons *) table->cons;
-	table->showHeader = false;
-	const char *h_line = cons->use_utf8 ? RUNE_LONG_LINE_HORIZ : "-";
-	const char *block = cons->use_utf8 ? R_UTF8_BLOCK : "#";
-	int j, i;
 	width -= 80;
 	if (width < 1) {
 		width = 30;
 	}
 
-	r_table_set_columnsf (table, "sssssss", "No.", "offset", "blocks", "offset", "perms", "extra", "name");
+	ut64 min = -1;
+	ut64 max = -1;
+	RListIter *iter;
+	RListInfo *info;
 	r_list_foreach (list, iter, info) {
 		if (min == -1 || info->pitv.addr < min) {
 			min = info->pitv.addr;
@@ -1219,62 +1619,75 @@ R_API void r_table_visual_list(RTable *table, RList *list, ut64 seek, ut64 len, 
 			max = info->pitv.addr + info->pitv.size;
 		}
 	}
-	mul = (max - min) / width;
-	if (min != -1 && mul > 0) {
-		i = 0;
-		r_list_foreach (list, iter, info) {
-			RStrBuf *buf = r_strbuf_new ("");
-			for (j = 0; j < width; j++) {
-				ut64 pos = min + j * mul;
-				ut64 npos = min + (j + 1) * mul;
-				const char *arg = (info->pitv.addr < npos && (info->pitv.addr + info->pitv.size) > pos)
-					? block: h_line;
-				r_strbuf_append (buf, arg);
-			}
-			char *b = r_strbuf_drain (buf);
-			if (va) {
-				r_table_add_rowf (table, "sssssss",
-					sdb_fmt ("%d%c", i, r_itv_contain (info->vitv, seek) ? '*' : ' '),
-					sdb_fmt ("0x%"PFMT64x, info->vitv.addr),
-					b,
-					sdb_fmt ("0x%"PFMT64x, r_itv_end (info->vitv)),
-					(info->perm != -1)? r_str_rwx_i (info->perm) : "",
-					(info->extra)?info->extra : "",
-					(info->name)?info->name :"");
-			} else {
-				r_table_add_rowf (table, "sssssss", sdb_fmt ("%d%c", i, r_itv_contain (info->pitv, seek) ? '*' : ' '),
-					sdb_fmt ("0x%"PFMT64x, info->pitv.addr), b,
-					sdb_fmt ("0x%"PFMT64x, r_itv_end (info->pitv)),
-					(info->perm != -1)? r_str_rwx_i (info->perm) : "",(info->extra)?info->extra : "", (info->name)?info->name :"");
-			}
-			free (b);
-			i++;
+
+	const ut64 mul = (max - min) / width;
+	TableVisualState state = {
+		.min = min,
+		.mul = mul,
+		.width = width,
+		.seek = seek == UT64_MAX ? 0 : seek,
+		.len = len,
+		.va = va,
+		.render_fn = render_table_rows_from_list,
+		.user = list,
+	};
+	r_table_visual (table, &state);
+}
+
+R_VEC_TYPE_WITH_FINI(RVecListInfo, RListInfo, r_listinfo_fini);
+
+static inline int render_table_rows_from_vec(RTable *table, TableVisualState *state) {
+	int i = 0;
+
+	RVecListInfo *vec = state->user;
+	RListInfo *info;
+	R_VEC_FOREACH (vec, info) {
+		r_table_visual_row (table, info, i, state);
+		i++;
+	}
+
+	return i;
+}
+
+R_API void r_table_visual_vec(RTable *table, RVecListInfo* vec, ut64 seek, ut64 len, int width, bool va) {
+	width -= 80;
+	if (width < 1) {
+		width = 30;
+	}
+
+	ut64 min = -1;
+	ut64 max = -1;
+	RListInfo *info;
+	R_VEC_FOREACH (vec, info) {
+		if (min == -1 || info->pitv.addr < min) {
+			min = info->pitv.addr;
 		}
-		RStrBuf *buf = r_strbuf_new ("");
-		/* current seek */
-		if (i > 0 && len != 0) {
-			if (seek == UT64_MAX) {
-				seek = 0;
-			}
-			for (j = 0; j < width; j++) {
-				r_strbuf_append (buf,((j * mul) + min >= seek &&
-						     (j * mul) + min <= seek + len) ? "^" : h_line);
-			}
-			r_table_add_rowf (table, "sssssss", "=>", sdb_fmt ("0x%08"PFMT64x, seek),
-					r_strbuf_drain (buf), sdb_fmt ("0x%08"PFMT64x, seek + len), "", "", "");
-		} else {
-			r_strbuf_free (buf);
+		if (max == -1 || info->pitv.addr + info->pitv.size > max) {
+			max = info->pitv.addr + info->pitv.size;
 		}
 	}
+
+	const ut64 mul = (max - min) / width;
+	TableVisualState state = {
+		.min = min,
+		.mul = mul,
+		.width = width,
+		.seek = seek == UT64_MAX ? 0 : seek,
+		.len = len,
+		.va = va,
+		.render_fn = render_table_rows_from_vec,
+		.user = vec,
+	};
+	r_table_visual (table, &state);
 }
 
 R_API RTable *r_table_clone(const RTable *t) {
-	RTable *o = r_table_new (t->name);
+	RTable *o = r_table_new (t->name, &t->options);
 	RTableColumn *col;
 	RTableRow *row;
 	RListIter *iter;
 	r_list_foreach (t->cols, iter, col) {
-		r_list_append (o->rows, r_table_column_clone (col));
+		r_list_append (o->cols, r_table_column_clone (col));
 	}
 	r_list_foreach (t->rows, iter, row) {
 		r_list_append (o->rows, r_table_row_clone (row));
@@ -1299,13 +1712,11 @@ R_API void r_table_fromjson(RTable *t, const char *csv) {
 	//  TODO
 }
 
-R_API void r_table_fromcsv(RTable *t, const char *csv) {
-	//  TODO
+R_API void r_table_fromtsv(RTable *t, const char *csv) {
 }
 
-R_API char *r_table_tohtml(RTable *t) {
-	// TODO
-	return NULL;
+R_API void r_table_fromcsv(RTable *t, const char *csv) {
+	//  TODO
 }
 
 R_API void r_table_transpose(RTable *t) {

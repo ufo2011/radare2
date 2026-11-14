@@ -20,6 +20,7 @@ FILE=-
 CMDS=<<EOF
 wx b841424300
 e asm.arch=x86
+e asm.bits=32
 ahi s
 e cfg.bigendian=false
 pi 1
@@ -57,8 +58,8 @@ ahi 10
 pd 1
 EOF
 EXPECT=<<EOF
-            [32m[7m0x00000000[0m      [33m48[37m81[37mec[33m48[37m06[32m00[37m.[0m  [33msub[36m rsp[0m,[36m[36m [33m0x648[0m[0m[0m
-            [32m[7m0x00000000[0m      [33m48[37m81[37mec[33m48[37m06[32m00[37m.[0m  [33msub[36m rsp[0m,[36m[36m [33m1608[0m[0m[0m
+            [32m[7m0x00000000[0m      [33m48[36m81[36mec[33m48[36m06[32m..[0m   [33msub[37m rsp[0m,[33m[33m [32m0x648[0m[0m
+            [32m[7m0x00000000[0m      [33m48[36m81[36mec[33m48[36m06[32m..[0m   [33msub[37m rsp[0m,[33m[33m [32m1608[0m[0m
 EOF
 RUN
 
@@ -122,7 +123,7 @@ wx 4881ec48060000
 pd 1
 EOF
 EXPECT=<<EOF
-            0x00000000      4881ec480600.  sub rsp, 0x648
+            0x00000000      4881ec4806..   sub rsp, 0x648
 EOF
 RUN
 
@@ -136,7 +137,7 @@ wx 4881ec48060000
 pd 1
 EOF
 EXPECT=<<EOF
-            0x00000000      4881ec480600.  sub rsp, 0x648
+            0x00000000      4881ec4806..   sub rsp, 0x648
 EOF
 RUN
 
@@ -150,7 +151,7 @@ ahi 10
 pd 1
 EOF
 EXPECT=<<EOF
-            0x00000000      4881ec480600.  sub rsp, 1608
+            0x00000000      4881ec4806..   sub rsp, 1608
 EOF
 RUN
 
@@ -164,7 +165,7 @@ ahi 8
 pd 1
 EOF
 EXPECT=<<EOF
-            0x00000000      4881ec480600.  sub rsp, 03110
+            0x00000000      4881ec4806..   sub rsp, 03110
 EOF
 RUN
 
@@ -178,7 +179,7 @@ ahi 2
 pd 1
 EOF
 EXPECT=<<EOF
-            0x00000000      4881ec480600.  sub rsp, 11001001000b
+            0x00000000      4881ec4806..   sub rsp, 11001001000b
 EOF
 RUN
 
@@ -248,7 +249,7 @@ ahi 10 @ 0x00404879
 ah*
 EOF
 EXPECT=<<EOF
-ahi 10 @ 0x404879
+'@0x404879'ahi 10
 EOF
 RUN
 
@@ -270,7 +271,7 @@ ARGS=-m 0x100001000
 CMDS=<<EOF
 e io.va
 e asm.sub.rel=false
-e asm.leahints=false
+e asm.hint.lea=false
 e asm.arch=x86
 e asm.bits=64
 e io.va=true
@@ -281,9 +282,9 @@ ahi 10; pd 1
 EOF
 EXPECT=<<EOF
 true
-            0x100001000      c7055f440000.  mov dword [rip + 0x445f], 0 ; [0x100005469:4]=-1
-            0x100001000      c7055f440000.  mov dword [0x100005469], 0 ; [0x100005469:4]=-1
-            0x100001000      c7055f440000.  mov dword [4294988905], 0  ; [0x100005469:4]=-1
+            0x100001000      c7055f4400..   mov dword [rip + 0x445f], 0 ; [0x100005469:4]=-1
+            0x100001000      c7055f4400..   mov dword [0x100005469], 0 ; [0x100005469:4]=-1
+            0x100001000      c7055f4400..   mov dword [4294988905], 0  ; [0x100005469:4]=-1
 EOF
 RUN
 
@@ -333,7 +334,7 @@ pd 1
 EOF
 EXPECT=<<EOF
             0x00000000      mov dword [esp + 0x68], 'm0[\x1b'
-            [32m[7m0x00000000[0m      [37mmov dword [0m[[36mesp [0m+[36m[36m [33m0x68[0m][36m[0m,[36m[36m 'm0[0m[[36m\x1b'[0m[0m
+            [32m[7m0x00000000[0m      [36mmov dword [0m[[37mesp [0m+[33m[33m [32m0x68[0m][37m[0m,[37m 'm0[0m[[37m\x1b'[0m
 EOF
 RUN
 
@@ -406,4 +407,113 @@ EXPECT=<<EOF
             0x00000000      cmp rax, -1
             0x00000000      cmp rax, 18446744073709551615
 EOF
+RUN
+
+NAME=ahi 31 small integer
+ARGS=-a arm -b 64
+FILE=-
+CMDS=<<EOF
+wx fd430191
+pd 1
+ahi 31
+pd 1
+EOF
+EXPECT=<<EOF
+            0x00000000      fd430191       add x29, sp, 0x50
+            0x00000000      fd430191       add x29, sp, 0x28
+EOF
+RUN
+
+NAME=ahie enum immediate
+ARGS=-a x86 -b 64
+FILE=-
+CMDS=<<EOF
+e asm.bytes=false
+'td enum E { SEVEN=7, EIGHT=8, WORD=0xffc643 };
+wx 4180fc07
+pi 1
+ahie E
+pi 1
+ahie
+ah.
+ahj.
+ahie-
+pi 1
+wx 4883f803
+ahie E
+pi 1
+s 0x10
+wx c7458843c6ff00
+ahie E 1
+pd 1
+ah*
+ahj
+EOF
+EXPECT=<<EOF
+cmp r12b, 7
+cmp r12b, E.SEVEN
+E
+ 0x00000000 => enum='E'
+[{"addr":0,"enum":"E"}]
+cmp r12b, 7
+cmp rax, 3
+            0x00000010      mov dword [rbp - 0x78], E.WORD             ; 0xffc643
+'@0x0'ahie E
+'@0x10'ahie E
+[{"addr":0,"enum":"E"},{"addr":16,"enum":"E","nword":1}]
+EOF
+RUN
+
+NAME=Immediate base hints are exposed in instruction JSON without changing ESIL
+ARGS=-a x86 -b 64
+FILE=-
+CMDS=<<EOF
+wx bfffffffffc3
+af
+ahi 10
+pi 1
+aoj 1~{0.immbase}
+pdj 1~{0.immbase}
+agfj~{0.blocks[0].ops[0].immbase}
+aoj 1~{0.esil}
+ahi 10u
+aoj 1~{0.immbase}
+ahi1 16
+aoj 1~{0.nword}
+ahi-
+aoj 1~immbase~?
+pdj 1~immbase~?
+EOF
+EXPECT=<<EOF
+mov edi, -1
+10
+10
+10
+4294967295,rdi,=
+11
+1
+0
+0
+EOF
+RUN
+
+NAME=ahi numeric IPv4 base matches its letter alias
+FILE=-
+CMDS=<<EOF
+ahi 32
+ahi
+ahi i
+ahi
+ahi 31
+ahi
+ahi 36
+ahi
+EOF
+EXPECT=<<EOF
+32
+32
+31
+36
+EOF
+EXPECT_ERR=
 RUN

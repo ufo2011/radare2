@@ -1,4 +1,4 @@
-/* radare - MIT - Copyright 2019-2020 - pancake */
+/* radare - MIT - Copyright 2019-2024 - pancake */
 /*
  * Copyright (c) 1987, 1993, 1994
  * The Regents of the University of California.  All rights reserved.
@@ -13,34 +13,39 @@
 
 R_API void r_getopt_init(RGetopt *opt, int argc, const char **argv, const char *ostr) {
 	memset (opt, 0, sizeof (RGetopt));
-	opt->err = 1;
+	opt->err = true;
 	opt->ind = 1;
 	opt->opt = 0;
-	opt->reset = 0;
 	opt->arg = NULL;
+	opt->place = EMSG;
 	opt->argc = argc;
 	opt->argv = argv;
 	opt->ostr = ostr;
 }
 
 R_API int r_getopt_next(RGetopt *opt) {
-	static const char *place = EMSG; // option letter processing
-	const char *oli; // option letter list index
+	const char *oli;
 
-	if (opt->reset || !*place) { // update scanning pointer
-		opt->reset = 0;
-		if (opt->ind >= opt->argc || *(place = opt->argv[opt->ind]) != '-') {
-			place = EMSG;
+	if (!opt->place) {
+		opt->place = EMSG;
+	}
+	if (!*opt->place) {
+		if (opt->ind >= opt->argc || *(opt->place = opt->argv[opt->ind]) != '-') {
+			opt->place = EMSG;
 			return -1;
 		}
-		if (place[1] && *++place == '-') { // found "--"
+		if (opt->place[1] && *++opt->place == '-') { // found "--"
 			opt->ind++;
-			place = EMSG;
+			if (opt->place[1]) {
+				// any --WHATEVER will be an alias to -h
+				return 0;
+			}
+			opt->place = EMSG;
 			return -1;
 		}
 	}
 	/* option letter okay? */
-	if ((opt->opt = (int)*place++) == (int)':' || !(oli = strchr (opt->ostr, opt->opt))) {
+	if ((opt->opt = (int)*opt->place++) == (int)':' || !(oli = strchr (opt->ostr, opt->opt))) {
 		/*
 		 * if the user didn't specify '-' as an option,
 		 * assume it means -1.
@@ -48,7 +53,7 @@ R_API int r_getopt_next(RGetopt *opt) {
 		if (opt->opt == '-') {
 			return -1;
 		}
-		if (!*place) {
+		if (!*opt->place) {
 			opt->ind++;
 		}
 		if (opt->err && *opt->ostr != ':') {
@@ -56,29 +61,31 @@ R_API int r_getopt_next(RGetopt *opt) {
 		}
 		return BADCH;
 	}
-	if (*++oli == ':') { /* need argument */
-		if (*place) { /* no white space */
-			opt->arg = place;
-		} else if (opt->argc <= ++opt->ind) {  /* no arg */
-			place = EMSG;
-			if (*opt->ostr == ':') {
-				return BADARG;
+	if (*++oli == ':') {
+		if (*opt->place) {
+			opt->arg = opt->place;
+			opt->place = EMSG;
+			opt->ind++;
+		} else {
+			if (opt->argc <= ++opt->ind) {  /* no arg */
+				opt->place = EMSG;
+				if (*opt->ostr == ':') {
+					return BADARG;
+				}
+				if (opt->err) {
+					(void)eprintf ("%s: option requires an argument -- %c\n", opt->argv[0], opt->opt);
+				}
+				return BADCH;
 			}
-			if (opt->err) {
-				(void)eprintf ("%s: option requires an argument -- %c\n", opt->argv[0], opt->opt);
-			}
-			return BADCH;
-		} else { /* white space */
 			opt->arg = opt->argv[opt->ind];
+			opt->place = EMSG;
+			opt->ind++;
 		}
-		place = EMSG;
-		opt->ind++;
 	} else {
 		opt->arg = NULL;
-		if (!*place) {
+		if (!*opt->place) {
 			opt->ind++;
 		}
 	}
-	// dump back option letter
 	return opt->opt;
 }

@@ -1,20 +1,17 @@
-/* radare2 - LGPL - Copyright 2015-2020 pancake */
+/* radare2 - LGPL - Copyright 2015-2026 pancake */
 
-#include "r_lib.h"
-#include "r_core.h"
-#include "r_lang.h"
-#if __WINDOWS__
+#include <r_core.h>
+#if R2__WINDOWS__
 #include <windows.h>
-#endif
 #ifdef _MSC_VER
 #include <process.h>
 #endif
+#endif
 
-#if __WINDOWS__
-static HANDLE myCreateChildProcess(const char * szCmdline) {
+#if R2__WINDOWS__
+static HANDLE myCreateChildProcess(const char *szCmdline) {
 	PROCESS_INFORMATION piProcInfo = {0};
 	STARTUPINFO siStartInfo = {0};
-	BOOL bSuccess = FALSE;
 	siStartInfo.cb = sizeof (STARTUPINFO);
 	siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
 	siStartInfo.hStdInput = GetStdHandle (STD_INPUT_HANDLE);
@@ -22,7 +19,7 @@ static HANDLE myCreateChildProcess(const char * szCmdline) {
 	siStartInfo.hStdError = GetStdHandle (STD_ERROR_HANDLE);
 
 	LPTSTR cmdline_ = r_sys_conv_utf8_to_win (szCmdline);
-	bSuccess = CreateProcess (NULL, cmdline_, NULL, NULL,
+	BOOL bSuccess = CreateProcess (NULL, cmdline_, NULL, NULL,
 		TRUE, 0, NULL, NULL, &siStartInfo, &piProcInfo);
 	free (cmdline_);
 	return bSuccess ? piProcInfo.hProcess : NULL;
@@ -32,10 +29,9 @@ static HANDLE hPipeInOut = NULL;
 static HANDLE hproc = NULL;
 #define PIPE_BUF_SIZE 8192
 
-static void lang_pipe_run_win(RLang *lang) {
+static void lang_pipe_run_win(RLangSession *s) {
 	CHAR buf[PIPE_BUF_SIZE];
-	BOOL bSuccess = TRUE;
-	int i, res = 0;
+	int i;
 	DWORD dwRead = 0, dwWritten = 0, dwEvent;
 	HANDLE hRead = CreateEvent (NULL, TRUE, FALSE, NULL);
 	if (!hRead) {
@@ -48,34 +44,36 @@ static void lang_pipe_run_win(RLang *lang) {
 		CloseHandle (hRead);
 		return;
 	}
-	r_cons_break_push (NULL, NULL);
+	RCore *core = R_UNWRAP3 (s, lang, user);
+	RCons *cons = core->cons;
+	r_cons_break_push (cons, NULL, NULL);
 	do {
-		if (r_cons_is_breaked ()) {
+		if (r_cons_is_breaked (cons)) {
 			TerminateProcess (hproc, 0);
 			break;
 		}
-		OVERLAPPED oRead = { 0 };
+		OVERLAPPED oRead = {0};
 		oRead.hEvent = hRead;
 		memset (buf, 0, PIPE_BUF_SIZE);
 		ReadFile (hPipeInOut, buf, PIPE_BUF_SIZE, NULL, &oRead);
 		HANDLE hReadEvents[] = { hRead, hproc };
 		dwEvent = WaitForMultipleObjects (R_ARRAY_SIZE (hReadEvents), hReadEvents,
-		                                  FALSE, INFINITE);
+				FALSE, INFINITE);
 		if (dwEvent == WAIT_OBJECT_0 + 1) { // hproc
 			break;
 		} else if (dwEvent == WAIT_FAILED) {
 			r_sys_perror ("lang_pipe_run_win/WaitForMultipleObjects read");
 			break;
 		}
-		bSuccess = GetOverlappedResult (hPipeInOut, &oRead, &dwRead, TRUE);
+		BOOL bSuccess = GetOverlappedResult (hPipeInOut, &oRead, &dwRead, TRUE);
 		if (!bSuccess) {
 			break;
 		}
-		if (bSuccess && dwRead > 0) {
+		if (dwRead > 0) {
 			buf[sizeof (buf) - 1] = 0;
-			OVERLAPPED oWrite = { 0 };
+			OVERLAPPED oWrite = {0};
 			oWrite.hEvent = hWritten;
-			char *res = lang->cmd_str ((RCore*)lang->user, buf);
+			char *res = s->lang->cmd_str (core, buf);
 			if (res) {
 				int res_len = strlen (res) + 1;
 				for (i = 0; i < res_len; i++) {
@@ -83,11 +81,11 @@ static void lang_pipe_run_win(RLang *lang) {
 					dwWritten = 0;
 					int writelen = res_len - i;
 					WriteFile (hPipeInOut, res + i,
-					           writelen > PIPE_BUF_SIZE ? PIPE_BUF_SIZE : writelen,
-					           NULL, &oWrite);
+							writelen > PIPE_BUF_SIZE? PIPE_BUF_SIZE: writelen,
+							NULL, &oWrite);
 					HANDLE hWriteEvents[] = { hWritten, hproc };
 					dwEvent = WaitForMultipleObjects (R_ARRAY_SIZE (hWriteEvents), hWriteEvents,
-					                                  FALSE, INFINITE);
+							FALSE, INFINITE);
 					if (dwEvent == WAIT_OBJECT_0 + 1) { // hproc
 						break;
 					} else if (dwEvent == WAIT_FAILED) {
@@ -115,7 +113,7 @@ static void lang_pipe_run_win(RLang *lang) {
 			}
 		}
 	} while (true);
-	r_cons_break_pop ();
+	r_cons_break_pop (cons);
 	CloseHandle (hWritten);
 	CloseHandle (hRead);
 }
@@ -123,67 +121,73 @@ static void lang_pipe_run_win(RLang *lang) {
 static void env(const char *s, int f) {
 	char *a = r_str_newf ("%d", f);
 	r_sys_setenv (s, a);
-//	eprintf ("%s %s\n", s, a);
 	free (a);
 }
 #endif
 
-static bool lang_pipe_run(RLang *lang, const char *code, int len) {
-#if __UNIX__
+static bool lang_pipe_run(RLangSession *s, const char *code, int len) {
+#if R2__UNIX__
 	int safe_in = dup (0);
 	int child, ret;
 	int input[2];
 	int output[2];
 
 	if (pipe (input) != 0) {
-		eprintf ("r_lang_pipe: pipe failed on input\n");
+		R_LOG_WARN ("pipe failed on input");
 		if (safe_in != -1) {
 			close (safe_in);
 		}
 		return false;
 	}
 	if (pipe (output) != 0) {
-		eprintf ("r_lang_pipe: pipe failed on output\n");
+		R_LOG_WARN ("pipe failed on output");
+		close (input[0]);
+		close (input[1]);
 		if (safe_in != -1) {
 			close (safe_in);
 		}
 		return false;
 	}
-	
+
 	env ("R2PIPE_IN", input[0]);
 	env ("R2PIPE_OUT", output[1]);
 
 	child = r_sys_fork ();
 	if (child == -1) {
 		/* error */
-		perror ("pipe run");
+		r_sys_perror ("pipe run");
 	} else if (!child) {
 		/* children */
+		int rc = 0;
 		r_sandbox_system (code, 1);
-		write (input[1], "", 1);
+		if (write (input[1], "", 1) != 1) {
+			rc = 1;
+		}
 		close (input[0]);
 		close (input[1]);
 		close (output[0]);
 		close (output[1]);
 		fflush (stdout);
 		fflush (stderr);
-		r_sys_exit (0, true);
+		r_sys_exit (rc, true);
 		return false;
 	} else {
+		RCore *core = R_UNWRAP3 (s, lang, user);
 		/* parent */
 		char *res, buf[8192]; // TODO: use the heap?
 		/* Close pipe ends not required in the parent */
 		close (output[1]);
 		close (input[0]);
-		r_cons_break_push (NULL, NULL);
+		RCons *cons = core->cons;
+		r_cons_break_push (cons, NULL, NULL);
 		for (;;) {
-			if (r_cons_is_breaked ()) {
+			if (r_cons_is_breaked (cons)) {
 				break;
 			}
 			memset (buf, 0, sizeof (buf));
-			void *bed = r_cons_sleep_begin ();
+			void *bed = r_cons_sleep_begin (cons);
 			ret = read (output[0], buf, sizeof (buf) - 1);
-			r_cons_sleep_end (bed);
+			r_cons_sleep_end (cons, bed);
 			if (ret < 1) {
 				break;
 			}
@@ -191,17 +195,21 @@ static bool lang_pipe_run(RLang *lang, const char *code, int len) {
 				continue;
 			}
 			buf[sizeof (buf) - 1] = 0;
-			res = lang->cmd_str ((RCore*)lang->user, buf);
+			res = s->lang->cmd_str (core, buf);
 			if (res) {
-				// r_cons_print (res);
-				(void) write (input[1], res, strlen (res) + 1);
+				size_t res_len = strlen (res) + 1;
+				if (write (input[1], res, res_len) != res_len) {
+					break;
+				}
 				free (res);
 			} else {
-				eprintf ("r_lang_pipe: NULL reply for (%s)\n", buf);
-				(void) write (input[1], "", 1); // NULL byte
+				R_LOG_WARN ("NULL reply for (%s)", buf);
+				if (write (input[1], "", 1) != 1) {
+					break;
+				}
 			}
 		}
-		r_cons_break_pop ();
+		r_cons_break_pop (cons);
 		/* workaround to avoid stdin closed */
 		if (safe_in != -1) {
 			close (safe_in);
@@ -213,7 +221,7 @@ static bool lang_pipe_run(RLang *lang, const char *code, int len) {
 			if (safe_in != -1) {
 				dup2 (safe_in, 0);
 			} else {
-				eprintf ("Cannot open ttyname(0) %s\n", term_in);
+				R_LOG_ERROR ("Cannot open ttyname(0) %s", term_in);
 			}
 		}
 	}
@@ -226,11 +234,11 @@ static bool lang_pipe_run(RLang *lang, const char *code, int len) {
 		close (safe_in);
 	}
 #ifndef __wasi__
-	waitpid (child, NULL, WNOHANG);
+	waitpid (child, NULL, WUNTRACED);
 #endif
 	return true;
 #else
-#if __WINDOWS__
+#if R2__WINDOWS__
 	char *r2pipe_var = r_str_newf ("R2PIPE_IN%x", _getpid ());
 	char *r2pipe_paz = r_str_newf ("\\\\.\\pipe\\%s", r2pipe_var);
 	LPTSTR r2pipe_paz_ = r_sys_conv_utf8_to_win (r2pipe_paz);
@@ -251,7 +259,7 @@ static bool lang_pipe_run(RLang *lang, const char *code, int len) {
 		r_sys_perror ("lang_pipe_run/CreateEvent hConnected");
 		goto pipe_cleanup;
 	}
-	OVERLAPPED oConnect = { 0 };
+	OVERLAPPED oConnect = {0};
 	oConnect.hEvent = hConnected;
 	hproc = myCreateChildProcess (code);
 	BOOL connected = FALSE;
@@ -262,10 +270,11 @@ static bool lang_pipe_run(RLang *lang, const char *code, int len) {
 			if (err == ERROR_IO_PENDING) {
 				HANDLE hEvents[] = { hConnected, hproc };
 				DWORD dwEvent = WaitForMultipleObjects (R_ARRAY_SIZE (hEvents), hEvents,
-				                                        FALSE, INFINITE);
-				if (dwEvent == WAIT_OBJECT_0 + 1) { // hproc
+						FALSE, INFINITE);
+				switch (dwEvent) {
+				case WAIT_OBJECT_0 + 1: // hproc
 					goto cleanup;
-				} else if (dwEvent == WAIT_FAILED) {
+				case WAIT_FAILED:
 					r_sys_perror ("lang_pipe_run/WaitForMultipleObjects connect");
 					goto cleanup;
 				}
@@ -278,7 +287,7 @@ static bool lang_pipe_run(RLang *lang, const char *code, int len) {
 				goto cleanup;
 			}
 		}
-		lang_pipe_run_win (lang);
+		lang_pipe_run_win (s);
 	}
 cleanup:
 	CloseHandle (hConnected);
@@ -289,20 +298,23 @@ beach:
 	free (r2pipe_var);
 	free (r2pipe_paz);
 	free (r2pipe_paz_);
-	return hproc != NULL;
+	return hproc;
 #endif
 #endif
 }
 
-static bool lang_pipe_file(RLang *lang, const char *file) {
-	return lang_pipe_run (lang, file, -1);
+static bool lang_pipe_file(RLangSession *s, const char *file) {
+	return lang_pipe_run (s, file, -1);
 }
 
 static RLangPlugin r_lang_plugin_pipe = {
-	.name = "pipe",
+	.meta = {
+		.name = "pipe",
+		.author = "pancake",
+		.license = "MIT",
+		.desc = "Use #!pipe node script.js",
+	},
 	.ext = "pipe",
-	.license = "LGPL",
-	.desc = "Use #!pipe node script.js",
 	.run = lang_pipe_run,
 	.run_file = (void*)lang_pipe_file,
 };

@@ -11,7 +11,6 @@ extern "C" {
 // Precondition: 0 <= size < 2**64 and addr + size <= 2**64
 // range is [], [10, 5) => 10 <= x < (10 + 5)
 typedef struct r_interval_t {
-	// public:
 	ut64 addr;
 	ut64 size;
 } RInterval;
@@ -20,10 +19,8 @@ typedef RInterval r_itv_t;
 
 static inline RInterval *r_itv_new(ut64 addr, ut64 size) {
 	RInterval *itv = R_NEW (RInterval);
-	if (itv) {
-		itv->addr = addr;
-		itv->size = size;
-	}
+	itv->addr = addr;
+	itv->size = size;
 	return itv;
 }
 
@@ -48,10 +45,14 @@ static inline bool r_itv_eq(RInterval itv, RInterval itv2) {
 	return itv.addr == itv2.addr && itv.size == itv2.size;
 }
 
-// Returns true if itv contained addr
+// Returns true if itv contains addr
 static inline bool r_itv_contain(RInterval itv, ut64 addr) {
 	const ut64 end = itv.addr + itv.size;
-	return itv.addr <= addr && (!end || addr < end);
+	if (R_UNLIKELY (end < itv.addr)) {
+		RInterval _itv = {end, itv.addr - end};
+		return !r_itv_contain (_itv, addr);
+	}
+	return itv.addr <= addr && addr < end;
 }
 
 // Returns true if x is a subset of itv

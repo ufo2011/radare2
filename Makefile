@@ -7,14 +7,16 @@ B=$(DESTDIR)$(BINDIR)
 L=$(DESTDIR)$(LIBDIR)
 MESON?=meson
 PYTHON?=python
-R2BINS=$(shell cd binr ; echo r*2 r2agent r2pm r2-indent r2r)
+R2BINS=$(shell cd binr ; echo r*2 r2agent r2pm clang-format-radare2 r2r r2sdb)
 ifdef SOURCE_DATE_EPOCH
 BUILDSEC=$(shell date -u -d "@$(SOURCE_DATE_EPOCH)" "+__%H:%M:%S" 2>/dev/null || date -u -r "$(SOURCE_DATE_EPOCH)" "+__%H:%M:%S" 2>/dev/null || date -u "+__%H:%M:%S")
 else
 BUILDSEC=$(shell date "+__%H:%M:%S")
 endif
-DATADIRS=libr/cons/d libr/flag/d libr/bin/d libr/asm/d libr/syscall/d libr/magic/d libr/anal/d libr/util/d
-USE_ZIP=YES
+DATADIRS=libr/cons/d libr/flag/d libr/bin/d libr/asm/d libr/syscall/d libr/magic/d libr/anal/d libr/arch/d
+WWW_UI_DIRS=m p t
+WWW_UI_INDEXES=$(addsuffix /index.html,$(addprefix shlr/www/,$(WWW_UI_DIRS)))
+ZIPWINDIST=YES
 ZIP=zip
 
 R2VC=$(shell git rev-list --all --count 2>/dev/null)
@@ -34,6 +36,7 @@ TAREXT=tar.gz
 CZ=gzip -f
 endif
 PWD=$(shell pwd)
+JOBS?=
 
 ifeq ($(BUILD_OS),windows)
 ifeq ($(OSTYPE),mingw32)
@@ -46,20 +49,39 @@ endif
 endif
 endif
 
-all: plugins.cfg libr/include/r_version.h
+# which target to run inside libr/ (all, static, sublibs). see libr/Makefile
+LIBS_TARGET?=all
+
+all: libs
+	${MAKE} -C binr
+
+# everything but the binr/ programs
+libs: plugins.cfg libr/include/r_version.h
 	@libr/count.sh reset
+	${MAKE} -C subprojects
 	${MAKE} -C shlr sdbs
 	${MAKE} -C shlr/zip
 	${MAKE} -C libr/util
 	${MAKE} -C libr/socket
 	${MAKE} -C shlr
-	${MAKE} -C libr
-	${MAKE} -C binr
+	${MAKE} -C libr $(LIBS_TARGET)
 
-# GIT_TAP=$(shell (git tag -l --sort=refname 2> /dev/null || echo $(R2_VERSION)) | grep '^[0-9]\.[0-9]' | tail -n1 )
-GIT_TAP=$(shell git log --decorate=short|grep tag:|head -n1|cut -d : -f 2|cut -c 2-|head -c 5)
+# just the busybox-style single-binary build: skips the 16 binr/ programs,
+# libr.a/libr.so and every shared library, because r2blob links the static
+# per-directory libr_*.a archives and nothing else
+blob:
+	${MAKE} libs LIBS_TARGET=sublibs WITH_LIBS=0 WITH_LIBR=1
+	${MAKE} -C binr/blob symlinks WITH_LIBS=0 WITH_LIBR=1
+
+GIT_TAP=$(shell git describe --tags --match '[0-9]*' 2>/dev/null)
 GIT_TIP=$(shell git rev-parse HEAD 2>/dev/null || echo $(R2_VERSION))
 R2_VER=$(shell ./configure -qV)
+ifeq ($(GIT_TAP),)
+GIT_TAP=$(R2_VER)
+endif
+ifeq ($(GIT_TIP),)
+GIT_TIP=$(R2_VER)
+endif
 ifdef SOURCE_DATE_EPOCH
 GIT_NOW=$(shell date -u -d "@$(SOURCE_DATE_EPOCH)" "+%Y-%m-%d" 2>/dev/null || date -u -r "$(SOURCE_DATE_EPOCH)" "+%Y-%m-%d" 2>/dev/null || date -u "+%Y-%m-%d")
 else
@@ -141,19 +163,26 @@ windist:
 	cp -f libr/sysregs/d/*.sdb "${WINDIST}/share/radare2/${VERSION}/sysregs"
 	mkdir -p "${WINDIST}/share/radare2/${VERSION}/fcnsign"
 	cp -f libr/anal/d/*.sdb "${WINDIST}/share/radare2/${VERSION}/fcnsign"
+	mkdir -p "${WINDIST}/share/radare2/${VERSION}/platform"
+	cp -f libr/arch/d/*.r2 "${WINDIST}/share/radare2/${VERSION}/platform"
 	mkdir -p "${WINDIST}/share/radare2/${VERSION}/opcodes"
 	cp -f libr/asm/d/*.sdb "${WINDIST}/share/radare2/${VERSION}/opcodes"
+	mkdir -p "${WINDIST}/share/radare2/${VERSION}/scripts"
+	cp -f scripts/*.js scripts/*.py "${WINDIST}/share/radare2/${VERSION}/scripts"
 	mkdir -p "${WINDIST}/share/radare2/${VERSION}/flag"
 	cp -f libr/flag/d/*.r2 "${WINDIST}/share/radare2/${VERSION}/flag"
 	mkdir -p "${WINDIST}/share/doc/radare2"
 	mkdir -p "${WINDIST}/include/libr/sdb"
 	mkdir -p "${WINDIST}/include/libr/r_util"
+	mkdir -p "${WINDIST}/include/libr/r_anal"
 	@echo "${C}[WINDIST] Copying development files${R}"
-	cp -f shlr/sdb/src/*.h "${WINDIST}/include/libr/sdb/"
+	cp -f subprojects/sdb/include/*.h "${WINDIST}/include/libr/sdb/"
 	cp -f libr/include/r_util/*.h "${WINDIST}/include/libr/r_util/"
+	cp -f libr/include/r_anal/*.h "${WINDIST}/include/libr/r_anal/"
 	cp -f libr/include/*.h "${WINDIST}/include/libr"
 	#mkdir -p "${WINDIST}/include/libr/sflib"
-	@cp -f doc/fortunes.* "${WINDIST}/share/doc/radare2"
+	@mkdir -p "${WINDIST}/share/radare2/${VERSION}/fortunes"
+	@cp -f doc/fortunes.* "${WINDIST}/share/radare2/${VERSION}/fortunes"
 	@mkdir -p "${WINDIST}/share/radare2/${VERSION}/format/dll"
 	@cp -f libr/bin/d/elf32 "${WINDIST}/share/radare2/${VERSION}/format"
 	@cp -f libr/bin/d/elf64 "${WINDIST}/share/radare2/${VERSION}/format"
@@ -167,22 +196,26 @@ windist:
 	@cp -f doc/hud "${WINDIST}/share/radare2/${VERSION}/hud/main"
 	@mv "${WINDIST}" "radare2-${WINBITS}-${VERSION}"
 	@rm -f "radare2-${WINBITS}-${VERSION}.zip"
-ifneq ($(USE_ZIP),NO)
+ifneq ($(ZIPWINDIST),NO)
 	$(ZIP) -r "${ZIPNAME}" "radare2-${WINBITS}-${VERSION}"
 endif
 
-clean: 
-	rm -f libr/libr.a libr/libr.dylib libr/include/r_version.h
+clean:
+	rm -f libr/libr.a libr/libr.dylib
+	rm -f libr/include/r_userconf.h libr/include/r_version.h
 	rm -rf libr/.libr
+	-rm -f `find * | grep arm | grep dis.a$$`
 	for DIR in shlr libr binr ; do $(MAKE) -C "$$DIR" clean ; done
-	-rm -f `find . -type f -name '*.d'`
-	rm -f `find . -type f -name '*.o'`
+	rm -f `find . -path ./dist -prune -o -path ./test/bins -prune -o -type f -name '*.d' -print` || for a in `find . -path ./dist -prune -o -path ./test/bins -prune -o -type f -name '*.d' -print` ; do rm -f "$$a" ; done
+	rm -f `find . -path ./dist -prune -o -path ./test/bins -prune -o -type f -name '*.o' -print` || for a in `find . -path ./dist -prune -o -path ./test/bins -prune -o -type f -name '*.o' -print` ; do rm -f "$$a" ; done
 	rm -f config-user.mk plugins.cfg libr/config.h
 	rm -f libr/include/r_userconf.h libr/config.mk
 	rm -f pkgcfg/*.pc
 
 distclean mrproper: clean
-	rm -f `find . -type f -iname '*.d'`
+	rm -rf libr/arch/p/arm/v35/arch-arm*
+	rm -rf shlr/*.a shlr/**/*.a
+	$(MAKE) -C subprojects mrproper
 
 pkgcfg:
 	cd libr && ${MAKE} pkgcfg
@@ -190,19 +223,23 @@ pkgcfg:
 install-man:
 	mkdir -p "${DESTDIR}${MANDIR}/man1"
 	mkdir -p "${DESTDIR}${MANDIR}/man7"
+	mkdir -p "${DESTDIR}${MANDIR}/man3"
 	for FILE in man/*.1 ; do ${INSTALL_MAN} "$$FILE" "${DESTDIR}${MANDIR}/man1" ; done
 	cd "${DESTDIR}${MANDIR}/man1" && ln -fs radare2.1 r2.1
 	for FILE in man/*.7 ; do ${INSTALL_MAN} "$$FILE" "${DESTDIR}${MANDIR}/man7" ; done
+	for FILE in man/3/*.3 ; do ${INSTALL_MAN} "$$FILE" "${DESTDIR}${MANDIR}/man3" ; done
 
 install-man-symlink:
 	mkdir -p "${DESTDIR}${MANDIR}/man1"
 	mkdir -p "${DESTDIR}${MANDIR}/man7"
+	mkdir -p "${DESTDIR}${MANDIR}/man3"
 	for FILE in $(shell cd man && ls *.1) ; do \
 		ln -fs "${PWD}/man/$$FILE" "${DESTDIR}${MANDIR}/man1/$$FILE" ; done
 	cd "${DESTDIR}${MANDIR}/man1" && ln -fs radare2.1 r2.1
-	for FILE in *.7 ; do \
+	for FILE in $(shell cd man && ls *.7) ; do \
 		ln -fs "${PWD}/man/$$FILE" "${DESTDIR}${MANDIR}/man7/$$FILE" ; done
-	cd "${DESTDIR}${MANDIR}/man1" && ln -fs radare2.1 r2.1
+	for FILE in $(shell cd man/3 && ls *.3) ; do \
+		ln -fs "${PWD}/man/3/$$FILE" "${DESTDIR}${MANDIR}/man3/$$FILE" ; done
 
 install-doc:
 	mkdir -p "${DESTDIR}${DOCDIR}"
@@ -218,31 +255,53 @@ install-doc-symlink:
 	for FILE in $(shell cd doc ; ls) ; do \
 		ln -fs "$(PWD)/doc/$$FILE" "${DESTDIR}${DOCDIR}" ; done
 
-install: install-doc install-man install-www install-pkgconfig
+install: install-doc install-man install-panels install-www install-pkgconfig
 	$(MAKE) -C libr install
 	$(MAKE) -C binr install
 	$(MAKE) -C shlr install
 	for DIR in ${DATADIRS} ; do $(MAKE) -C "$$DIR" install ; done
-	cd "$(DESTDIR)$(LIBDIR)/radare2/" ;\
-		rm -f last ; ln -fs $(VERSION) last
-	cd "$(DESTDIR)$(DATADIR)/radare2/" ;\
-		rm -f last ; ln -fs $(VERSION) last
+	cd "$(DESTDIR)$(LIBDIR)/radare2/" && rm -f last && ln -fs $(VERSION) last
+	cd "$(DESTDIR)$(DATADIR)/radare2/" && rm -f last && ln -fs $(VERSION) last
+	rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/scripts"
+	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/scripts"
+	cp -rf scripts/*.js scripts/*.py "${DESTDIR}${DATADIR}/radare2/${VERSION}/scripts"
 	rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud"
 	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud"
+	rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/fortunes"
+	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/fortunes"
+	cp -rf doc/fortunes/*.txt "${DESTDIR}${DATADIR}/radare2/${VERSION}/fortunes"
 	mkdir -p "${DESTDIR}${BINDIR}"
-	#${INSTALL_SCRIPT} "${PWD}/sys/indent.sh" "${DESTDIR}${BINDIR}/r2-indent"
-	#${INSTALL_SCRIPT} "${PWD}/sys/r1-docker.sh" "${DESTDIR}${BINDIR}/r2-docker"
+	rm -f "${DESTDIR}${BINDIR}/clang-format-radare2"
+	rm -f "${DESTDIR}${BINDIR}/r2-indent"
+	${INSTALL_SCRIPT} "${PWD}/sys/clang-format-radare2" "${DESTDIR}${BINDIR}/clang-format-radare2"
 	cp -f doc/hud "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud/main"
 	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/"
 	$(SHELL) ./configure-plugins --rm-static $(DESTDIR)$(LIBDIR)/radare2/last/
+	# symstall leaves a symlink here; install(1) refuses to copy a file onto itself
+	rm -f "${DESTDIR}${BINDIR}/r2sdb${BUILD_EXT_EXE}"
+	${INSTALL_PROGRAM} "subprojects/sdb/sdb${BUILD_EXT_EXE}" "${DESTDIR}${BINDIR}/r2sdb${BUILD_EXT_EXE}"
 
-install-www:
+install-panels:
+	rm -rf "${DESTDIR}${PANELS}"
+	mkdir -p "${DESTDIR}${PANELS}"
+	for FILE in $(shell cd shlr/panels ; ls | grep json) ; do \
+		FILE2=$$(echo $$FILE | cut -d . -f 1); \
+		cp -f "$(PWD)/shlr/panels/$$FILE" "$(DESTDIR)$(PANELS)/$$FILE2" ; done
+
+symstall-panels:
+	rm -rf "${DESTDIR}${PANELS}"
+	mkdir -p "${DESTDIR}${PANELS}"
+	for FILE in $(shell cd shlr/panels ; ls | grep json) ; do \
+		FILE2=$$(echo $$FILE | cut -d . -f 1); \
+		ln -fs "$(PWD)/shlr/panels/$$FILE" "$(DESTDIR)$(PANELS)/$$FILE2" ; done
+
+install-www: $(WWW_UI_INDEXES)
 	rm -rf "${DESTDIR}${WWWROOT}"
 	rm -rf "${DESTDIR}${LIBDIR}/radare2/${VERSION}/www" # old dir
 	mkdir -p "${DESTDIR}${WWWROOT}"
 	cp -rf shlr/www/* "${DESTDIR}${WWWROOT}"
 
-symstall-www:
+symstall-www: $(WWW_UI_INDEXES)
 	rm -rf "${DESTDIR}${WWWROOT}"
 	rm -rf "${DESTDIR}${LIBDIR}/radare2/${VERSION}/www" # old dir
 	mkdir -p "${DESTDIR}${WWWROOT}"
@@ -252,6 +311,7 @@ symstall-www:
 install-pkgconfig pkgconfig-install:
 	@${INSTALL_DIR} "${DESTDIR}${LIBDIR}/pkgconfig"
 	for FILE in $(shell cd pkgcfg ; ls *.pc) ; do \
+		rm -f "${DESTDIR}${LIBDIR}/pkgconfig/$$FILE" ; \
 		cp -f "$(PWD)/pkgcfg/$$FILE" "${DESTDIR}${LIBDIR}/pkgconfig/$$FILE" ; done
 
 install-pkgconfig-symlink pkgconfig-symstall symstall-pkgconfig:
@@ -262,38 +322,43 @@ install-pkgconfig-symlink pkgconfig-symstall symstall-pkgconfig:
 
 symstall-sdb:
 	for DIR in ${DATADIRS} ; do (\
-		cd "$$DIR" ; \
+		cd "$$DIR" || exit 1 ; \
 		echo "$$DIR" ; \
 		${MAKE} install-symlink ); \
 	done
 
-symstall install-symlink: install-man-symlink install-doc-symlink install-pkgconfig-symlink symstall-www symstall-sdb
+symstall install-symlink: install-man-symlink install-doc-symlink install-pkgconfig-symlink symstall-www symstall-panels symstall-sdb
 	cd libr && ${MAKE} install-symlink
 	cd binr && ${MAKE} install-symlink
 	cd shlr && ${MAKE} install-symlink
 	mkdir -p "${DESTDIR}${BINDIR}"
-	ln -fs "${PWD}/sys/indent.sh" "${DESTDIR}${BINDIR}/r2-indent"
-	ln -fs "${PWD}/sys/r2-docker.sh" "${DESTDIR}${BINDIR}/r2-docker"
+	rm -f "${DESTDIR}${BINDIR}/clang-format-radare2"
+	rm -f "${DESTDIR}${BINDIR}/r2-indent"
+	ln -fs "${PWD}/sys/clang-format-radare2" "${DESTDIR}${BINDIR}/clang-format-radare2"
+	rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/scripts"
+	ln -fs scripts "${DESTDIR}${DATADIR}/radare2/${VERSION}/scripts"
 	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud"
 	ln -fs "${PWD}/doc/hud" "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud/main"
+	rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/fortunes"
+	ln -fs "${PWD}/doc/fortunes" "${DESTDIR}${DATADIR}/radare2/${VERSION}/fortunes"
 	#mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/flag"
 	#ln -fs $(PWD)/libr/flag/d/tags.r2 "${DESTDIR}${DATADIR}/radare2/${VERSION}/flag/tags.r2"
-	cd "$(DESTDIR)$(LIBDIR)/radare2/" ;\
-		rm -f last ; ln -fs $(VERSION) last
-	cd "$(DESTDIR)$(DATADIR)/radare2/" ;\
-		rm -f last ; ln -fs $(VERSION) last
+	cd "$(DESTDIR)$(LIBDIR)/radare2/" && rm -f last && ln -fs $(VERSION) last
+	cd "$(DESTDIR)$(DATADIR)/radare2/" && rm -f last && ln -fs $(VERSION) last
 	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/"
 	$(SHELL) ./configure-plugins --rm-static $(DESTDIR)/$(LIBDIR)/radare2/last/
+	rm -f "${DESTDIR}${BINDIR}/r2sdb${BUILD_EXT_EXE}"
+	ln -fs "${PWD}/subprojects/sdb/sdb${BUILD_EXT_EXE}" "${DESTDIR}${BINDIR}/r2sdb${BUILD_EXT_EXE}"
 
 deinstall uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/r2-indent
-	rm -f $(DESTDIR)$(BINDIR)/r2-docker
+	rm -f $(DESTDIR)$(BINDIR)/clang-format-radare2
+	rm -f "$(DESTDIR)$(BINDIR)/r2sdb${BUILD_EXT_EXE}"
 	cd libr && ${MAKE} uninstall
 	cd binr && ${MAKE} uninstall
 	cd shlr && ${MAKE} uninstall
-	cd libr/util/d && ${MAKE} uninstall
 	cd libr/syscall/d && ${MAKE} uninstall
 	cd libr/anal/d && ${MAKE} uninstall
+	cd libr/arch/d && ${MAKE} uninstall
 	@echo
 	@echo "Run 'make purge' to also remove installed files from previous versions of r2"
 	@echo
@@ -301,21 +366,13 @@ deinstall uninstall:
 purge-doc:
 	rm -rf "${DESTDIR}${DOCDIR}"
 	cd man ; for FILE in *.1 ; do rm -f "${DESTDIR}${MANDIR}/man1/$$FILE" ; done
+	cd man ; for FILE in *.7 ; do rm -f "${DESTDIR}${MANDIR}/man7/$$FILE" ; done
+	cd man/3 ; for FILE in *.3 ; do rm -f "${DESTDIR}${MANDIR}/man3/$$FILE" ; done
 	rm -f "${DESTDIR}${MANDIR}/man1/r2.1"
 
 user-wrap=echo "\#!/bin/sh" > ~/bin/"$1" \
 ; echo "${PWD}/env.sh '${PREFIX}' '$1' \"\$$@\"" >> ~/bin/"$1" \
 ; chmod +x ~/bin/"$1" ;
-
-user-install:
-	mkdir -p ~/bin
-	$(foreach mod,$(R2BINS),$(call user-wrap,$(mod)))
-	cd ~/bin ; ln -fs radare2 r2
-
-user-uninstall:
-	$(foreach mod,$(R2BINS),rm -f ~/bin/"$(mod)")
-	rm -f ~/bin/r2
-	-rmdir ~/bin
 
 purge-dev:
 	rm -f "${DESTDIR}${LIBDIR}/libr_"*".${EXT_AR}"
@@ -334,7 +391,7 @@ else
 	-${STRIP} -s "${DESTDIR}${LIBDIR}/libr_"*".${EXT_SO}"
 endif
 
-purge: purge-doc purge-dev user-uninstall
+purge: purge-doc purge-dev uninstall
 	for FILE in ${R2BINS} ; do rm -f "${DESTDIR}${BINDIR}/$$FILE" ; done
 	rm -f "${DESTDIR}${BINDIR}/ragg2-cc"
 	rm -f "${DESTDIR}${BINDIR}/r2"
@@ -347,49 +404,19 @@ purge: purge-doc purge-dev user-uninstall
 system-purge: purge
 	sys/purge.sh
 
-R2V=radare2-${VERSION}
-
-v ver version:
-	@echo CURRENT=${VERSION}
-	@echo PREVIOUS=${PREVIOUS_RELEASE}
+user-purge:
+	rm -rf $(HOME)/.local/share/radare2
 
 dist:
-	rm -rf $(R2V)
-	git clone . $(R2V)
-	-cd $(R2V) && [ ! -f config-user.mk -o configure -nt config-user.mk ] && ./configure "--prefix=${PREFIX}"
-	cd $(R2V) ; git log $$(git show-ref | grep ${PREVIOUS_RELEASE} | awk '{print $$1}')..HEAD > ChangeLog
-	$(MAKE) -C $(R2V)/shlr capstone-sync
-	FILES=`cd $(R2V); git ls-files | sed -e "s,^,$(R2V)/,"` ; \
-	CS_FILES=`cd $(R2V)/shlr/capstone ; git ls-files | grep -v pdf | grep -v xcode | grep -v msvc | grep -v suite | grep -v bindings | grep -v tests | sed -e "s,^,$(R2V)/shlr/capstone/,"` ; \
-	${TAR} "radare2-${VERSION}.tar" $${FILES} $${CS_FILES} "$(R2V)/ChangeLog" ; \
-	${CZ} "radare2-${VERSION}.tar"
-
-olddist:
-	-[ configure -nt config-user.mk ] && ./configure "--prefix=${PREFIX}"
-	#git log $$(git show-ref `git tag |tail -n1`)..HEAD > ChangeLog
-	git log $$(git show-ref | grep ${PREVIOUS_RELEASE} | awk '{print $$1}')..HEAD > ChangeLog
-	cd shlr && ${MAKE} capstone-sync
-	$(MAKE) -R capstone.ps
-	DIR=`basename "$$PWD"` ; \
-	FILES=`git ls-files | sed -e "s,^,radare2-${VERSION}/,"` ; \
-	CS_FILES=`cd shlr/capstone ; git ls-files | grep -v pdf | grep -v xcode | grep -v msvc | grep -v suite | grep -v bindings | grep -v tests | sed -e "s,^,radare2-${VERSION}/shlr/capstone/,"` ; \
-	cd .. && mv "$${DIR}" "radare2-${VERSION}" && \
-	${TAR} "radare2-${VERSION}.tar" $${FILES} $${CS_FILES} "radare2-${VERSION}/ChangeLog" ; \
-	${CZ} "radare2-${VERSION}.tar" ; \
-	mv "radare2-${VERSION}" "$${DIR}"
+	$(MAKE) -C dist/tarball
+	cp -f dist/tarball/*.$(TAREXT) .
+	cp -f dist/tarball/*.zip .
 
 shot:
-	DATE=`date '+%Y%m%d'` ; \
-	FILES=`git ls-files | sed -e "s,^,radare2-${DATE}/,"` ; \
-	cd .. && mv radare2 "radare2-$${DATE}" && \
-	${TAR} "radare2-$${DATE}.tar" $${FILES} ;\
-	${CZ} "radare2-$${DATE}.tar" ;\
-	mv "radare2-$${DATE}" radare2 && \
-	scp "radare2-$${DATE}.${TAREXT}" \
-		radare.org:/srv/http/radareorg/get/shot
+	$(MAKE) -C dist/tarball VERSION=`date '+%Y%m%d'`
 
 tests test:
-	$(MAKE) -C test
+	$(MAKE) -j${JOBS} -C test
 
 macos-sign:
 	$(MAKE) -C binr/radare2 macos-sign
@@ -403,67 +430,15 @@ osx-pkg:
 quality:
 	./sys/shellcheck.sh
 
+ctags:
+	@ctags **/*.c **/*.h > /dev/null
+
 menu nconfig:
 	./sys/menu.sh || true
 
-meson:
-	@echo "[ Meson R2 Building ]"
-	$(PYTHON) sys/meson.py --prefix="${PREFIX}" --shared
-
-meson-install:
-	DESTDIR="$(DESTDIR)" ninja -C build install
-
-meson-symstall: symstall-sdb
-	@echo "[ Meson symstall (not stable) ]"
-	ln -fs $(PWD)/binr/r2pm/r2pm ${B}/r2pm
-	ln -fs $(PWD)/build/binr/rasm2/rasm2 ${B}/rasm2
-	ln -fs $(PWD)/build/binr/rarun2/rarun2 ${B}/rarun2
-	ln -fs $(PWD)/build/binr/radare2/radare2 ${B}/radare2
-	ln -fs $(PWD)/build/binr/rahash2/rahash2 ${B}/rahash2
-	ln -fs $(PWD)/build/binr/rabin2/rabin2 ${B}/rabin2
-	ln -fs $(PWD)/build/binr/radare2/radare2 ${B}/radare2
-	ln -fs $(PWD)/build/binr/ragg2/ragg2 ${B}/ragg2
-	cd $(B) && ln -fs radare2 r2
-	ln -fs $(PWD)/build/libr/util/libr_util.$(EXT_SO) ${L}/libr_util.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/bp/libr_bp.$(EXT_SO) ${L}/libr_bp.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/syscall/libr_syscall.$(EXT_SO) ${L}/libr_syscall.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/cons/libr_cons.$(EXT_SO) ${L}/libr_cons.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/search/libr_search.$(EXT_SO) ${L}/libr_search.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/magic/libr_magic.$(EXT_SO) ${L}/libr_magic.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/flag/libr_flag.$(EXT_SO) ${L}/libr_flag.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/reg/libr_reg.$(EXT_SO) ${L}/libr_reg.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/bin/libr_bin.$(EXT_SO) ${L}/libr_bin.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/config/libr_config.$(EXT_SO) ${L}/libr_config.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/parse/libr_parse.$(EXT_SO) ${L}/libr_parse.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/lang/libr_lang.$(EXT_SO) ${L}/libr_lang.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/asm/libr_asm.$(EXT_SO) ${L}/libr_asm.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/anal/libr_anal.$(EXT_SO) ${L}/libr_anal.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/egg/libr_egg.$(EXT_SO) ${L}/libr_egg.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/fs/libr_fs.$(EXT_SO) ${L}/libr_fs.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/debug/libr_debug.$(EXT_SO) ${L}/libr_debug.$(EXT_SO)
-	ln -fs $(PWD)/build/libr/core/libr_core.$(EXT_SO) ${L}/libr_core.$(EXT_SO)
-
-meson-uninstall:
-	ninja -C build uninstall
-	$(MAKE) uninstall
-
-meson-clean:
-	rm -rf build
-	rm -rf build_sdb
-
-MESON_FILES=$(shell find build/libr build/binr -type f | grep -v @)
-meson-symstall-experimental:
-	for a in $(MESON_FILES) ; do echo ln -fs "$(PWD)/$$a" "$(PWD)/$$(echo $$a|sed -e s,build/,,)" ; done
-	$(MAKE) symstall
-
-shlr/capstone:
-	$(MAKE) -C shlr capstone
-
-.PHONY: meson meson-install
-
+include mk/meson.mk
 include ${MKPLUGINS}
 
-.PHONY: all clean install symstall uninstall deinstall strip
+.PHONY: all libs blob clean install symstall uninstall deinstall strip
 .PHONY: libr binr install-man w32dist tests dist shot pkgcfg depgraph.png love
 .PHONY: purge system-purge
-.PHONY: shlr/capstone

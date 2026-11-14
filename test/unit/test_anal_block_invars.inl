@@ -1,4 +1,8 @@
 
+static int find_bb_cmp(RAnalBlock *const *a, const void *b) {
+	return *a != b;
+}
+
 static bool block_check_invariants(RAnal *anal) {
 	RBIter iter;
 	RAnalBlock *block;
@@ -10,8 +14,8 @@ static bool block_check_invariants(RAnal *anal) {
 		}
 		last_start = block->addr;
 
-		mu_assert ("block->ref < 1, but it is still in the tree", block->ref >= 1);
-		mu_assert ("block->ref < r_list_length (block->fcns)", block->ref >= r_list_length (block->fcns));
+		mu_assert ("block->refcount < 1, but it is still in the tree", r_ref_count (block) >= 1);
+		mu_assert ("block->refcount < r_list_length (block->fcns)", r_ref_count (block) >= r_list_length (block->fcns));
 
 		RListIter *fcniter;
 		RAnalFunction *fcn;
@@ -21,19 +25,23 @@ static bool block_check_invariants(RAnal *anal) {
 			for (fcniter2 = fcniter->n; fcniter2 && (fcn2 = fcniter2->data, 1); fcniter2 = fcniter2->n) {
 				mu_assert_ptrneq (fcn, fcn2, "duplicate function in basic block");
 			}
-			mu_assert ("block references function, but function does not reference block", r_list_contains (fcn->bbs, block));
+			mu_assert ("block references function, but function does not reference block", RVecAnalBlockPtr_find (&fcn->bbs, block, find_bb_cmp));
 		}
 	}
 
 	RListIter *fcniter;
 	RAnalFunction *fcn;
 	r_list_foreach (anal->fcns, fcniter, fcn) {
-		RListIter *blockiter;
+		RAnalBlock **blockiter;
 		ut64 min = UT64_MAX;
 		ut64 max = UT64_MIN;
 		ut64 realsz = 0;
-		r_list_foreach (fcn->bbs, blockiter, block) {
-			RListIter *blockiter2;
+		R_VEC_FOREACH (&fcn->bbs, blockiter) {
+			block = *blockiter;
+			if (fcn->bbs_sorted && blockiter != R_VEC_START_ITER (&fcn->bbs)) {
+				mu_assert ("function blocks out of address order", blockiter[-1]->addr < block->addr);
+			}
+			RAnalBlock **blockiter2;
 			RAnalBlock *block2;
 			if (block->addr < min) {
 				min = block->addr;
@@ -42,7 +50,7 @@ static bool block_check_invariants(RAnal *anal) {
 				max = block->addr + block->size;
 			}
 			realsz += block->size;
-			for (blockiter2 = blockiter->n; blockiter2 && (block2 = blockiter2->data, 1); blockiter2 = blockiter2->n) {
+			for (blockiter2 = blockiter + 1; blockiter2 != R_VEC_END_ITER (&fcn->bbs) && (block2 = *blockiter2, 1); blockiter2++) {
 				mu_assert_ptrneq (block, block2, "duplicate basic block in function");
 			}
 			mu_assert ("function references block, but block does not reference function", r_list_contains (block->fcns, fcn));
@@ -62,7 +70,7 @@ static bool block_check_leaks(RAnal *anal) {
 	RBIter iter;
 	RAnalBlock *block;
 	r_rbtree_foreach (anal->bb_tree, iter, block, RAnalBlock, _rb) {
-		if (block->ref != r_list_length (block->fcns))  {
+		if (r_ref_count (block) != r_list_length (block->fcns))  {
 			mu_assert ("leaked basic block", false);
 		}
 	}

@@ -10,15 +10,27 @@ r_socket_sources = [
   'run.c',
 ]
 
-dependencies = [utl, r_util_dep, platform_deps]
+r_socket_deps = [r_util_dep, platform_deps, platform_socket_deps]
+if get_option('blob')
+  r_socket_static_deps = [r_util_static_dep, platform_deps, platform_socket_deps]
+  if use_sys_openssl
+    r_socket_static_deps += [sys_openssl]
+  endif
+endif
+
+if host_machine.system() == 'haiku'
+  r_socket_deps += [
+    cc.find_library('network')
+  ]
+endif
 
 if use_sys_openssl
-  dependencies += [sys_openssl]
+  r_socket_deps += [sys_openssl]
 endif
 
 r_socket = library('r_socket', r_socket_sources,
   include_directories: [platform_inc],
-  dependencies: dependencies,
+  dependencies: r_socket_deps,
   c_args: library_cflags,
   install: true,
   implicit_include_directories: false,
@@ -26,9 +38,20 @@ r_socket = library('r_socket', r_socket_sources,
   soversion: r2_libversion
 )
 
-r_socket_dep = declare_dependency(link_with: r_socket,
-  dependencies: [r_util_dep],
-  include_directories: [platform_inc])
+r_socket_dep = declare_dependency(link_with: r_socket, dependencies: r_socket_deps, include_directories: [platform_inc])
+
+if get_option('blob')
+r_socket_static = static_library('r_socket_static', r_socket_sources,
+  include_directories: [platform_inc],
+  dependencies: r_socket_static_deps,
+  c_args: library_cflags,
+  install: true,
+  implicit_include_directories: false,
+  install_rpath: rpath_lib,
+)
+
+r_socket_static_dep = declare_dependency(link_with: r_socket_static, include_directories: [platform_inc])
+endif
 
 pkgconfig_mod.generate(r_socket,
   subdirs: 'libr',

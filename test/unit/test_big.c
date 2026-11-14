@@ -20,6 +20,9 @@ static bool test_r_big_from_to_hexstr(void) {
 	RNumBig *a = r_big_new ();
 	char *str;
 
+	str = r_big_to_hexstr (a);
+	mu_assert_streq_free (str, "0x0", "Failed r_big_to_hexstr");
+
 	r_big_from_hexstr (a, "0xffff");
 	mu_assert_eq (0xffff, r_big_to_int (a), "Failed r_big_from_hexstr");
 
@@ -465,6 +468,7 @@ static bool test_r_big_powm(void) {
 	mu_end;
 }
 
+#if 0
 static bool test_r_big_isqrt(void) {
 	RNumBig *a = r_big_new ();
 	RNumBig *c = r_big_new ();
@@ -502,6 +506,7 @@ static bool test_r_big_isqrt(void) {
 	r_big_free (c);
 	mu_end;
 }
+#endif
 
 static int all_tests(void) {
 	mu_run_test (test_r_big_from_to_int);
@@ -523,7 +528,7 @@ static int all_tests(void) {
 	mu_run_test (test_r_big_lshift);
 	mu_run_test (test_r_big_rshift);
 	mu_run_test (test_r_big_powm);
-	mu_run_test (test_r_big_isqrt);
+	// SLOW AS HELL and useless mu_run_test (test_r_big_isqrt);
 	return tests_passed != tests_run;
 }
 

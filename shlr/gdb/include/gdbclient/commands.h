@@ -31,9 +31,9 @@ int gdbr_connect(libgdbr_t *g, const char *server, int port);
 int gdbr_disconnect(libgdbr_t *g);
 
 /*!
- * \brief invalidates the reg cache
+ * \brief forgets the register values read since the thread last ran
  */
-void gdbr_invalidate_reg_cache(void);
+void gdbr_invalidate_reg_cache(libgdbr_t *g);
 
 /*!
  * \brief gets reason why remote target stopped
@@ -56,7 +56,8 @@ int gdbr_check_vcont(libgdbr_t *g);
  * remote target's interpreter.
  * \returns 0 on success and -1 on failure
  */
-int gdbr_send_qRcmd(libgdbr_t *g, const char *cmd, PrintfCallback cb_printf);
+// Appends monitor output, including output received before an error.
+int gdbr_send_qRcmd(libgdbr_t *g, const char *cmd, RStrBuf *output);
 
 /*!
  * \brief attaches to a process
@@ -96,11 +97,10 @@ int gdbr_read_registers(libgdbr_t *g);
  */
 int gdbr_write_bin_registers(libgdbr_t *g, const char *regs, int len);
 int gdbr_write_reg(libgdbr_t *g, const char *name, char *value, int len);
-int gdbr_write_register(libgdbr_t *g, int index, char *value, int len);
+int gdbr_write_register(libgdbr_t *g, int regnum, char *value, int len);
 int gdbr_write_registers(libgdbr_t *g, char *registers);
 int gdbr_read_memory(libgdbr_t *g, ut64 address, ut8 *buf, int len);
 int gdbr_write_memory(libgdbr_t *g, ut64 address, const uint8_t *data, ut64 len);
-int test_command(libgdbr_t *g, const char *command);
 
 /*!
  * \brief Function sets normal breakpoint (0xcc, int3)

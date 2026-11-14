@@ -3,6 +3,10 @@
 BUILD=1
 FLAGS=""
 PREFIX="/data/data/org.radare.radare2installer/radare2"
+BINDIR="${PREFIX}/bin"
+LIBDIR="${PREFIX}/lib"
+DATADIR="${PREFIX}/share"
+export PAGER=cat
 MAKE=make
 gmake --help >/dev/null 2>&1
 [ $? = 0 ] && MAKE=gmake
@@ -43,6 +47,7 @@ arm64|aarch64)
 	NDK_ARCH=aarch64
 	STATIC_BUILD=0
 	STRIP=aarch64-linux-android-strip
+	export LDFLAGS="${LDFLAGS} -Wl,-z,max-page-size=16384"
 	;;
 x64|x86_64)
 	NDK_ARCH=x86_64
@@ -59,9 +64,10 @@ x64-static|static-x64)
 	NDK_ARCH=x86
 	STATIC_BUILD=1
 	;;
-arm64-static|static-arm64)
+aarch64-static|static-aarch64|arm64-static|static-arm64)
 	NDK_ARCH=aarch64
 	STATIC_BUILD=1
+	export LDFLAGS="${LDFLAGS} -Wl,-z,max-page-size=16384"
 	;;
 arm-static|static-arm)
 	NDK_ARCH=arm
@@ -108,7 +114,7 @@ echo NDK_ARCH: ${NDK_ARCH}
 echo "Using NDK_ARCH: ${NDK_ARCH}"
 echo "Using STATIC_BUILD: ${STATIC_BUILD}"
 
-export CFLAGS="-fPIC -fPIE ${FLAGS}"
+export CFLAGS="-fPIC ${FLAGS}"
 
 if [ "${BUILD}" = 1 ]; then
 	if [ -z "${NDK}" ]; then
@@ -126,11 +132,9 @@ if [ "${BUILD}" = 1 ]; then
 		# dup
 		echo ./configure --with-compiler=android \
 			--with-ostype=android \
-			--without-libuv \
 			--prefix=${PREFIX} ${CFGFLAGS}
-		cp -f plugins.android.cfg plugins.cfg
-		./configure --with-compiler=android --without-libuv \
-			--with-ostype=android \
+		cp -f dist/plugins-cfg/plugins.android.cfg plugins.cfg
+		./configure --with-compiler=android --with-ostype=android \
 			--prefix=${PREFIX} ${CFGFLAGS} || exit 1
 		${MAKE} -s -j 4 || exit 1
 	fi
@@ -161,9 +165,12 @@ rm -rf "${HERE}/${D}/${PREFIX}/bin/r2pm"
 
 # use busybox style symlinkz
 cd binr/blob
-#${MAKE} || exit 1
-#CFLAGS=-static LDFLAGS=-static ${MAKE} -j4 || exit 1
-${MAKE} -j4 || exit 1
+if [ "${STATIC_BUILD}" = 1 ]; then
+	rm -f "${HERE}/${D}/${BINDIR}/"*
+	LDFLAGS="-static ${LDFLAGS}" ${MAKE} -j4 || exit 1
+else
+	${MAKE} -j4 || exit 1
+fi
 ${MAKE} install PREFIX="${PREFIX}" DESTDIR="${HERE}/${D}" || exit 1
 mkdir -p ${HERE}/${D}/${PREFIX}/projects
 :> ${HERE}/${D}/${PREFIX}/projects/.empty
@@ -176,6 +183,9 @@ find ${D}/${DATADIR}/radare2/*/www
 # Remove development files
 rm -f ${HERE}/${D}/${LIBDIR}/radare2/*/*.so
 rm -f ${HERE}/${D}/${LIBDIR}/*.a
+if [ "${STATIC_BUILD}" = 1 ]; then
+	rm -f ${HERE}/${D}/${LIBDIR}/libr*.so*
+fi
 rm -rf ${HERE}/${D}/${DATADIR}/radare2/*/www/*/node_modules
 rm -rf ${HERE}/${D}/${PREFIX}/include
 eval `grep ^VERSION= ${HERE}/config-user.mk`

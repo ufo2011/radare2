@@ -1,13 +1,10 @@
-/* radare - LGPL - Copyright 2017-2019 - pancake */
+/* radare - LGPL - Copyright 2017-2026 - pancake */
 
-#include "r_types_base.h"
-#include "r_io.h"
-#include "r_lib.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
+#include <r_io.h>
 
-static RSocket *gs = NULL;
+typedef struct {
+	RSocket *sock;
+} RIOWinedbg;
 
 R_PACKED (struct winedbg_x86_32 {
 	ut16 cs;
@@ -29,17 +26,17 @@ R_PACKED (struct winedbg_x86_32 {
 });
 
 // TODO: make it vargarg...
-static char *runcmd(const char *cmd) {
+static char *runcmd(RIOWinedbg *wd, const char *cmd) {
 	char buf[4096] = {0};
 	if (cmd) {
-		r_socket_printf (gs, "%s\n", cmd);
+		r_socket_printf (wd->sock, "%s\n", cmd);
 	}
 	int timeout = 1000000;
 	char *str = NULL;
-	r_socket_block_time (gs, 1, timeout, 0);
+	r_socket_block_time (wd->sock, 1, timeout, 0);
 	while (true) {
 		memset (buf, 0, sizeof (buf));
-		int rc = r_socket_read (gs, (ut8*)buf, sizeof (buf) - 1); // NULL-terminate the string always
+		int rc = r_socket_read (wd->sock, (ut8*)buf, sizeof (buf) - 1); // NULL-terminate the string always
 		if (rc == -1) {
 			break;
 		}
@@ -59,6 +56,7 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	if (!fd || !fd->data) {
 		return -1;
 	}
+	RIOWinedbg *wd = fd->data;
 	int wordSize = 4;
 	ut32 *w = (ut32*)buf;
 	int i;
@@ -66,7 +64,7 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	for (i = 0; i < words ; i++) {
 		ut64 addr = io->off + (i * wordSize);
 		char *cmd = r_str_newf ("set *0x%"PFMT64x" = 0x%x", addr, w[i]);
-		free (runcmd (cmd));
+		free (runcmd (wd, cmd));
 		free (cmd);
 	}
 
@@ -76,7 +74,7 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 		memcpy (&leftW, w + words, left);
 		ut64 addr = io->off + (words * wordSize);
 		char *cmd = r_str_newf ("set *0x%"PFMT64x" = 0x%x", addr, leftW);
-		free (runcmd (cmd));
+		free (runcmd (wd, cmd));
 		free (cmd);
 	}
 	return count;
@@ -86,6 +84,7 @@ static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	if (!fd || !fd->data) {
 		return -1;
 	}
+	RIOWinedbg *wd = fd->data;
 	if (count > (1024*128)) {
 		// cannot read that much
 		return -1;
@@ -106,12 +105,12 @@ Wine-dbg>
 	int wordSize = 4;
 	ut32 *w = (ut32*)buf;
 	int i;
-	memset (buf, 0xff, count);
+	memset (buf, io->Oxff, count);
 	int words = count / wordSize; // XXX must pad align to 4
 	for (i = 0; i < words ; i++) {
 		ut64 addr = io->off + (i * wordSize);
 		char *cmd = r_str_newf ("x 0x%"PFMT64x, addr);
-		char *res = runcmd (cmd);
+		char *res = runcmd (wd, cmd);
 		if (res) {
 			sscanf (res, "%x", &w[i]);
 			free (res);
@@ -121,11 +120,11 @@ Wine-dbg>
 
 	int left = count % wordSize;
 	if (left > 0) {
-		ut32 n = 0xff;
+		ut32 n = UT32_MAX;
 		ut8 *wn = (ut8*)&n;
 		ut64 addr = io->off + (i * wordSize);
 		char *cmd = r_str_newf ("x 0x%"PFMT64x, addr);
-		char *res = runcmd (cmd);
+		char *res = runcmd (wd, cmd);
 		sscanf (res, "%x", &n);
 		free (res);
 		free (cmd);
@@ -138,7 +137,14 @@ static bool __close(RIODesc *fd) {
 	if (!fd || !fd->data) {
 		return false;
 	}
-#if __UNIX__
+	RIOWinedbg *wd = fd->data;
+	if (wd) {
+		if (wd->sock) {
+			r_socket_free (wd->sock);
+		}
+		free (wd);
+	}
+#if R2__UNIX__
 	r_sys_cmdf ("pkill rarun2 2>/dev/null");
 #endif
 	return true;
@@ -153,49 +159,57 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 		io->off += offset;
 		break;
 	case R_IO_SEEK_END:
-		io->off = ST64_MAX;
+		io->off = UT64_MAX;
+		break;
 	}
-	io->off = offset;
 	return offset;
 }
 
 static bool __plugin_open(RIO *io, const char *pathname, bool many) {
-	return (!strncmp (pathname, "winedbg://", 10));
+	return r_str_startswith (pathname, "winedbg://");
 }
 
 static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 	if (__plugin_open (io, pathname, 0)) {
-		if (gs) {
-			return NULL;
-		}
-		gs = r_socket_new (0);
+		RIOWinedbg *wd = R_NEW0 (RIOWinedbg);
+		wd->sock = r_socket_new (0);
 		char *cmd = r_str_newf ("winedbg '%s'", pathname + 10);
-		int res = r_socket_spawn (gs, cmd, 1000);
+		int res = r_socket_spawn (wd->sock, cmd, 1000);
 		free (cmd);
 		if (!res) {
+			r_socket_free (wd->sock);
+			free (wd);
 			return NULL;
 		}
-		char *reply = runcmd (NULL);
+		char *reply = runcmd (wd, NULL);
 		if (reply) {
 			int rw = 7;
 			free (reply);
-			eprintf ("Wine-dbg is ready to go!\n");
-			return r_io_desc_new (io, &r_io_plugin_winedbg, pathname, rw, mode, gs);
+			R_LOG_INFO ("Wine-dbg is ready to go");
+			return r_io_desc_new (io, &r_io_plugin_winedbg, pathname, rw, mode, wd);
 		}
-		eprintf ("Can't find the Wine-dbg prompt\n");
+		R_LOG_ERROR ("Can't find the Wine-dbg prompt");
+		r_socket_free (wd->sock);
+		free (wd);
 	}
 	return NULL;
 }
 
-static void printcmd (RIO *io, const char *cmd) {
-	char *res = runcmd (cmd);
-	io->cb_printf ("%s\n", res);
-	free (res);
+static char *cmdresult(RIODesc *fd, const char *cmd) {
+	if (!fd || !fd->data) {
+		return NULL;
+	}
+	RIOWinedbg *wd = fd->data;
+	return runcmd (wd, cmd);
 }
 
-static struct winedbg_x86_32 regState(void) {
+static struct winedbg_x86_32 regState(RIODesc *fd) {
 	struct winedbg_x86_32 r = {0};
-	char *res = runcmd ("info reg");
+	if (!fd || !fd->data) {
+		return r;
+	}
+	RIOWinedbg *wd = fd->data;
+	char *res = runcmd (wd, "info reg");
 	if (res) {
 		char *line = strstr (res, "EIP:");
 		if (line) {
@@ -230,10 +244,11 @@ static struct winedbg_x86_32 regState(void) {
 }
 
 static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
-	if (!strcmp (cmd, "")) {
+	if (!fd || R_STR_ISEMPTY (cmd)) {
 		return NULL;
 	}
-	if (!strncmp (cmd, "?", 1)) {
+	RIOWinedbg *wd = fd->data;
+	if (*cmd == '?') {
 		eprintf ("dr  : show registers\n");
 		eprintf ("dr* : show registers as flags\n");
 		eprintf ("drp : show reg profile\n");
@@ -243,14 +258,14 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 		eprintf ("dc  : continue\n");
 		eprintf ("dm  : show maps\n");
 		eprintf ("pid : show current process id\n");
-	} else if (!strncmp (cmd, "dr8", 3)) {
-		struct winedbg_x86_32 r = regState ();
+	} else if (r_str_startswith (cmd, "dr8")) {
+		struct winedbg_x86_32 r = regState (fd);
 		ut8 *arena = (ut8*)calloc (3, sizeof (struct winedbg_x86_32));
 		if (arena) {
 			r_hex_bin2str ((ut8*)&r, sizeof (r), (char *)arena);
 			return (char *)arena;
 		}
-	} else if (!strncmp (cmd, "drp", 3)) {
+	} else if (r_str_startswith (cmd, "drp")) {
 const char *msg =
 "=PC	eip\n"\
 "=SP	esp\n"\
@@ -296,38 +311,49 @@ const char *msg =
 "flg	rf	.1	.202	0\n"\
 "flg	vm	.1	.203	0\n";
 		return strdup (msg);
-	} else if (!strncmp (cmd, "dr*", 3)) {
-		struct winedbg_x86_32 r = regState ();
-		io->cb_printf ("f eip = 0x%08x\n", r.eip);
-		io->cb_printf ("f esp = 0x%08x\n", r.esp);
-		io->cb_printf ("f ebp = 0x%08x\n", r.ebp);
-		io->cb_printf ("f eax = 0x%08x\n", r.eax);
-		io->cb_printf ("f ebx = 0x%08x\n", r.ebx);
-		io->cb_printf ("f ecx = 0x%08x\n", r.ecx);
-		io->cb_printf ("f edx = 0x%08x\n", r.edx);
-		io->cb_printf ("f esi = 0x%08x\n", r.esi);
-		io->cb_printf ("f edi = 0x%08x\n", r.edi);
-		io->cb_printf ("f eflags = 0x%08x\n", r.eflags);
-		io->cb_printf ("f cs = 0x%08x\n", r.cs);
-		io->cb_printf ("f ss = 0x%08x\n", r.ss);
-		io->cb_printf ("f ds = 0x%08x\n", r.ds);
-		io->cb_printf ("f es = 0x%08x\n", r.es);
-		io->cb_printf ("f fs = 0x%08x\n", r.fs);
-		io->cb_printf ("f gs = 0x%08x\n", r.gs);
-	} else if (!strncmp (cmd, "dr", 2)) {
-		printcmd (io, "info reg");
-	} else if (!strncmp (cmd, "db ", 3)) {
-		free (runcmd (sdb_fmt ("break *%x", r_num_get (NULL, cmd + 3) || io->off)));
-	} else if (!strncmp (cmd, "ds", 2)) {
-		free (runcmd ("stepi"));
-	} else if (!strncmp (cmd, "dc", 2)) {
-		free (runcmd ("cont"));
-	} else if (!strncmp (cmd, "dso", 3)) {
-		eprintf ("TODO: dso\n");
-	} else if (!strncmp (cmd, "dp", 3)) {
-		printcmd (io, "info thread");
-	} else if (!strncmp (cmd, "dm", 3)) {
-		char *wineDbgMaps = runcmd ("info maps");
+	} else if (r_str_startswith (cmd, "dr*")) {
+		struct winedbg_x86_32 r = regState (fd);
+		return r_str_newf (
+			"f eip = 0x%08x\n"
+			"f esp = 0x%08x\n"
+			"f ebp = 0x%08x\n"
+			"f eax = 0x%08x\n"
+			"f ebx = 0x%08x\n"
+			"f ecx = 0x%08x\n"
+			"f edx = 0x%08x\n"
+			"f esi = 0x%08x\n"
+			"f edi = 0x%08x\n"
+			"f eflags = 0x%08x\n"
+			"f cs = 0x%08x\n"
+			"f ss = 0x%08x\n"
+			"f ds = 0x%08x\n"
+			"f es = 0x%08x\n"
+			"f fs = 0x%08x\n"
+			"f gs = 0x%08x\n",
+			r.eip, r.esp, r.ebp, r.eax, r.ebx, r.ecx, r.edx,
+			r.esi, r.edi, r.eflags, r.cs, r.ss, r.ds, r.es, r.fs, r.gs);
+	} else if (r_str_startswith (cmd, "dr")) {
+		return cmdresult (fd, "info reg");
+	} else if (r_str_startswith (cmd, "db ")) {
+		int n = r_num_get (NULL, cmd + 3) || io->off;
+		r_strf_var (brkcmd, 32, "break *%x", n);
+		if (wd) {
+			free (runcmd (wd, brkcmd));
+		}
+	} else if (r_str_startswith (cmd, "ds")) {
+		if (wd) {
+			free (runcmd (wd, "stepi"));
+		}
+	} else if (r_str_startswith (cmd, "dc")) {
+		if (wd) {
+			free (runcmd (wd, "cont"));
+		}
+	} else if (r_str_startswith (cmd, "dso")) {
+		R_LOG_TODO ("dso");
+	} else if (r_str_startswith (cmd, "dp")) {
+		return cmdresult (fd, "info thread");
+	} else if (r_str_startswith (cmd, "dm")) {
+		char *wineDbgMaps = wd? runcmd (wd, "info maps"): NULL;
 		char *res = NULL;
 		if (wineDbgMaps) {
 			const char *perm;
@@ -356,19 +382,20 @@ const char *msg =
 			free (wineDbgMaps);
 			return res;
 		}
-	} else if (!strncmp (cmd, "pid", 3)) {
+	} else if (r_str_startswith (cmd, "pid")) {
 		return r_str_newf ("%d", fd->fd);
-	} else {
-		printcmd (io, cmd);
 	}
-	return NULL;
+	return cmdresult (fd, cmd);
 }
 
 RIOPlugin r_io_plugin_winedbg = {
-	.name = "winedbg",
-	.desc = "Wine-dbg io and debug.io plugin",
+	.meta = {
+		.name = "winedbg",
+		.author = "pancake",
+		.desc = "Wine-dbg io and debug.io plugin",
+		.license = "MIT",
+	},
 	.uris = "winedbg://",
-	.license = "MIT",
 	.open = __open,
 	.close = __close,
 	.read = __read,

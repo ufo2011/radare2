@@ -9,13 +9,13 @@ bool test_r_flag_get_set(void) {
 	mu_assert_notnull (flags, "r_flag_new () failed");
 
 	r_flag_set (flags, "foo", 1024, 50);
-	fi = r_flag_get_i (flags, 1024);
+	fi = r_flag_get_in (flags, 1024);
 	mu_assert_notnull (fi, "cannot find 'foo' flag at 1024");
 
 	r_flag_set (flags, "foo", 300LL, 0);
-	fi = r_flag_get_i (flags, 0);
+	fi = r_flag_get_in (flags, 0);
 	mu_assert_null (fi, "found a flag at 0 while there is none");
-	fi = r_flag_get_i (flags, 300LL);
+	fi = r_flag_get_in (flags, 300LL);
 	mu_assert_notnull (fi, "cannot find 'foo' flag at 300LL");
 
 	fi = r_flag_get (flags, "foo");
@@ -42,23 +42,70 @@ bool test_r_flag_by_spaces(void) {
 	r_flag_space_set (flags, "sp4");
 	r_flag_set (flags, "foo7", 1024, 50);
 
-	fi = r_flag_get_by_spaces (flags, 1024, "sp2", "sp4", NULL);
+	fi = r_flag_get_by_spaces (flags, false, 1024, "sp2", "sp4", NULL);
 	mu_assert_notnull (fi, "should be retrieved");
 	mu_assert_streq (fi->name, "foo3", "first defined in sp2 should be get");
 
-	fi = r_flag_get_by_spaces (flags, 1024, NULL);
+	fi = r_flag_get_by_spaces (flags, false, 1024, NULL);
 	mu_assert_notnull (fi, "something should be retrieved");
 	mu_assert_streq (fi->name, "foo1", "a random one should be get (the first)");
 
-	fi = r_flag_get_by_spaces (flags, 1024, "sp5", "sp8", "sp1", "sp3", "sp10", NULL);
+	fi = r_flag_get_by_spaces (flags, false, 1024, "sp5", "sp8", "sp1", "sp3", "sp10", NULL);
 	mu_assert_notnull (fi, "something should be retrieved");
 	mu_assert_streq (fi->name, "foo1", "first defined in sp1 should be get");
+
+	// asking for spaces that hold no flag at this address must not fall
+	// back to whatever else is flagged there
+	fi = r_flag_get_by_spaces (flags, false, 1024, "sp5", "sp8", NULL);
+	mu_assert_null (fi, "no flag in the requested spaces");
+
+	r_flag_space_set (flags, "sp1");
+	r_flag_set (flags, "bar1", 2048, 0);
+	fi = r_flag_get_by_spaces (flags, false, 2048, "sp2", NULL);
+	mu_assert_null (fi, "a lone flag in another space must not be returned");
+	fi = r_flag_get_by_spaces (flags, false, 2048, "sp1", NULL);
+	mu_assert_notnull (fi, "lone flag in the requested space should be retrieved");
+	mu_assert_streq (fi->name, "bar1", "lone flag in sp1 should be get");
+	fi = r_flag_get_by_spaces (flags, false, 2048, NULL);
+	mu_assert_notnull (fi, "any flag is fine when no space is requested");
+	mu_assert_streq (fi->name, "bar1", "lone flag should be get without spaces");
+
+	// a flag without space only wins when explicitly asked for
+	r_flag_space_set (flags, NULL);
+	r_flag_set (flags, "nospace", 4096, 0);
+	r_flag_space_set (flags, "sp1");
+	r_flag_set (flags, "insp1", 4096, 0);
+	fi = r_flag_get_by_spaces (flags, false, 4096, "sp1", NULL);
+	mu_assert_notnull (fi, "flag in sp1 should be retrieved");
+	mu_assert_streq (fi->name, "insp1", "sp1 wins over a flag without space");
+	fi = r_flag_get_by_spaces (flags, true, 4096, "sp1", NULL);
+	mu_assert_notnull (fi, "flag without space should be retrieved");
+	mu_assert_streq (fi->name, "nospace", "prionospace prefers the flag without space");
+	fi = r_flag_get_by_spaces (flags, false, 4096, "sp2", NULL);
+	mu_assert_null (fi, "neither flag lives in sp2");
+	fi = r_flag_get_by_spaces (flags, true, 4096, "nosuchspace", NULL);
+	mu_assert_notnull (fi, "flag without space should be retrieved");
+	mu_assert_streq (fi->name, "nospace", "prionospace works even for unknown spaces");
+
+	// same again with the flag without space defined after the other one
+	r_flag_set (flags, "insp1b", 8192, 0);
+	r_flag_space_set (flags, NULL);
+	r_flag_set (flags, "nospaceb", 8192, 0);
+	fi = r_flag_get_by_spaces (flags, true, 8192, "nosuchspace", NULL);
+	mu_assert_notnull (fi, "flag without space should be retrieved");
+	mu_assert_streq (fi->name, "nospaceb", "prionospace keeps looking past unknown spaces");
+	fi = r_flag_get_by_spaces (flags, true, 8192, "sp1", NULL);
+	mu_assert_notnull (fi, "flag without space should be retrieved");
+	mu_assert_streq (fi->name, "nospaceb", "prionospace wins over a flag in sp1 defined earlier");
+	fi = r_flag_get_by_spaces (flags, false, 8192, "sp1", NULL);
+	mu_assert_notnull (fi, "flag in sp1 should be retrieved");
+	mu_assert_streq (fi->name, "insp1b", "sp1 flag is found without prionospace");
 
 	r_flag_free (flags);
 	mu_end;
 }
 
-bool test_r_flag_get_at() {
+bool test_r_flag_get_at(void) {
 	RFlag *flag = r_flag_new ();
 
 	r_flag_space_set (flag, "sp1");
@@ -128,10 +175,108 @@ bool test_r_flag_get_at() {
 	mu_end;
 }
 
-int all_tests() {
+bool test_r_flag_rename_unset_all(void) {
+	RFlag *flags = r_flag_new ();
+	mu_assert_notnull (flags, "r_flag_new () failed");
+
+	RFlagItem *fi = r_flag_set (flags, "foo", 1024, 4);
+	mu_assert_notnull (fi, "cannot set foo flag");
+	r_flag_item_set_realname (flags, fi, "real.foo");
+	mu_assert_streq (fi->realname, "real.foo", "realname set");
+	mu_assert_true (r_flag_rename (flags, fi, "bar"), "rename foo to bar");
+	mu_assert_null (r_flag_get (flags, "foo"), "old flag name must be gone");
+	mu_assert_ptreq (r_flag_get (flags, "bar"), fi, "new flag name must resolve");
+	mu_assert_streq (fi->realname, "bar", "rename resets realname");
+
+	r_flag_unset_all (flags);
+	mu_assert_eq (r_flag_count (flags, NULL), 0, "unset all clears flags");
+	fi = r_flag_set (flags, "baz", 2048, 8);
+	mu_assert_notnull (fi, "cannot set flag after unset all");
+	mu_assert_ptreq (r_flag_get (flags, "baz"), fi, "flag set after unset all resolves");
+
+	r_flag_free (flags);
+	mu_end;
+}
+
+bool test_r_flag_metadata_lifetime(void) {
+	RFlag *flags = r_flag_new ();
+	mu_assert_notnull (flags, "r_flag_new () failed");
+
+	RFlagItem *fi = r_flag_set (flags, "with_metadata", 1024, 4);
+	mu_assert_notnull (fi, "cannot set flag");
+	mu_assert_streq (r_flag_item_set_type (flags, fi, "function"),
+		"function", "flag type set");
+	mu_assert_streq (r_flag_item_set_alias (flags, fi, "entry0 + 4"),
+		"entry0 + 4", "flag alias set");
+
+	r_flag_free (flags);
+	mu_end;
+}
+
+bool test_r_flag_utf8(void) {
+	RFlag *flags = r_flag_new ();
+	mu_assert_false (flags->utf8, "ASCII names by default");
+	RFlagItem *ascii = r_flag_set (flags, "sym.名字", 0, 1);
+	mu_assert_notnull (ascii, "create filtered flag");
+	mu_assert_streq (ascii->name, "sym.", "filter UTF-8 by default");
+	flags->utf8 = true;
+	RFlagItem *crab = r_flag_set (flags, "🦀", 0x10, 1);
+	RFlagItem *rocket = r_flag_set (flags, "🚀", 0x20, 1);
+	mu_assert_notnull (crab, "create emoji flag");
+	mu_assert_notnull (rocket, "create distinct emoji flag");
+	mu_assert_streq (crab->name, "🦀", "preserve first name");
+	mu_assert_streq (rocket->name, "🚀", "preserve second name");
+	mu_assert_ptreq (r_flag_get (flags, "🦀"), crab, "lookup first name");
+	mu_assert_ptreq (r_flag_get (flags, "🚀"), rocket, "lookup second name");
+	mu_assert_true (r_flag_rename (flags, crab, "👩‍💻"), "rename to joined emoji");
+	mu_assert_ptreq (r_flag_get (flags, "👩‍💻"), crab, "lookup joined emoji");
+	flags->utf8 = false;
+	mu_assert_ptreq (r_flag_get (flags, "👩‍💻"), crab, "toggle preserves existing names");
+	mu_assert_true (r_flag_rename (flags, rocket, "rocket.火箭"), "rename with UTF-8 disabled");
+	mu_assert_streq (rocket->name, "rocket.", "rename respects ASCII mode");
+	r_flag_free (flags);
+	mu_end;
+}
+
+bool test_r_flag_hash_reserve(void) {
+	RFlag *flags = r_flag_new ();
+	mu_assert_notnull (flags, "new flag table");
+	char names[256][128];
+	const size_t lengths[] = {3, 8, 31, 32, 33, 127};
+	size_t i;
+	for (i = 0; i < R_ARRAY_SIZE (names); i++) {
+		size_t len = lengths[i % R_ARRAY_SIZE (lengths)];
+		memset (names[i], 'a', len);
+		snprintf (names[i] + len - 2, 3, "%02x", (unsigned int)i);
+		mu_assert_notnull (r_flag_set (flags, names[i], 0x1000 + i * 16, 16), "insert flag");
+	}
+	r_flag_reserve (flags, 2048);
+	for (i = 0; i < R_ARRAY_SIZE (names); i++) {
+		RFlagItem *item = r_flag_get (flags, names[i]);
+		mu_assert_notnull (item, "flag survives reserve");
+		mu_assert_eq (item->addr, 0x1000 + i * 16, "flag address survives reserve");
+	}
+	const char *long_name = "sym.long.flag.name.crossing.the.hash.threshold";
+	RFlagItem *item = r_flag_get (flags, names[0]);
+	mu_assert_true (r_flag_rename (flags, item, long_name), "rename short flag to long");
+	mu_assert_ptreq (r_flag_get (flags, long_name), item, "find renamed long flag");
+	mu_assert_null (r_flag_get (flags, names[0]), "old short name is gone");
+	mu_assert_true (r_flag_rename (flags, item, "short"), "rename long flag to short");
+	mu_assert_ptreq (r_flag_get (flags, "short"), item, "find renamed short flag");
+	mu_assert_true (r_flag_unset_name (flags, "short"), "unset renamed flag");
+	mu_assert_null (r_flag_get (flags, "short"), "renamed flag is gone");
+	r_flag_free (flags);
+	mu_end;
+}
+
+int all_tests(void) {
 	mu_run_test (test_r_flag_get_set);
+	mu_run_test (test_r_flag_hash_reserve);
 	mu_run_test (test_r_flag_by_spaces);
 	mu_run_test (test_r_flag_get_at);
+	mu_run_test (test_r_flag_rename_unset_all);
+	mu_run_test (test_r_flag_metadata_lifetime);
+	mu_run_test (test_r_flag_utf8);
 	return tests_passed != tests_run;
 }
 

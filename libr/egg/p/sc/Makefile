@@ -1,0 +1,31 @@
+SRCS  := $(shell cd src ; ls *.c)
+SCS := $(subst .c,,$(notdir $(SRCS)))
+PYTHON3?=python3
+HAVE_PYTHON=$(shell $(PYTHON3) --version > /dev/null 2>&1 && echo 1)
+
+all: out
+	@echo HAVE_PYTHON=$(HAVE_PYTHON)
+
+out:
+	-xattr -cr src/ 2>/dev/null
+ifeq ($(HAVE_PYTHON),1)
+	$(PYTHON3) scmangle.py --out-dir out/ src/*
+else
+	rm -rf out
+	mkdir -p out
+	cp -rf src/*.c out
+	echo 'static inline ut8 *sc_decrypt(const ut8 *buf, size_t len) { return r_mem_dup (buf, len); }' > out/decrypt.inc.c
+endif
+
+clean:
+	rm -rf out
+	rm -f *.c
+
+# Test target: verify rasm2 output matches original shellcodes
+test: test-shellcodes
+
+test-shellcodes:
+	@echo "Testing shellcode assembly..."
+	@$(SHELL) ../../../../sys/test-egg-shellcodes.sh .
+
+.PHONY: all clean test test-shellcodes

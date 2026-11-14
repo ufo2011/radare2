@@ -3,7 +3,7 @@
  * Copyright (c) Ian F. Darwin 1986-1995.
  * Software written by Ian F. Darwin and others;
  * maintained 1995-present by Christos Zoulas and others.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -13,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *  
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -98,7 +98,7 @@ static const struct {
  * Unfortunately, Ada95 uses "package", and Modula-3 uses "import",
  * although I infer from the language spec at
  *
- *	http://www.research.digital.com/SRC/m3defn/html/m3.html
+ *	https://www.research.digital.com/SRC/m3defn/html/m3.html
  *
  * that Modula-3 uses "IMPORT" rather than "import", i.e. it must be
  * in all caps.
@@ -120,55 +120,55 @@ static const struct names {
 } names[] = {
 	/* These must be sorted by eye for optimal hit rate */
 	/* Add to this list only after substantial meditation */
-	{"msgid",	L_PO},
-	{"dnl",		L_M4},
-	{"import",	L_JAVA},
-	{"\"libhdr\"",	L_BCPL},
-	{"\"LIBHDR\"",	L_BCPL},
-	{"//",		L_CC},
-	{"template",	L_CC},
-	{"virtual",	L_CC},
-	{"class",	L_CC},
-	{"public:",	L_CC},
-	{"private:",	L_CC},
-	{"/*",		L_C},	/* must precede "The", "the", etc. */
-	{"#include",	L_C},
-	{"char",	L_C},
-	{"The",		L_ENG},
-	{"the",		L_ENG},
-	{"double",	L_C},
-	{"extern",	L_C},
-	{"float",	L_C},
-	{"struct",	L_C},
-	{"union",	L_C},
-	{"CFLAGS",	L_MAKE},
-	{"LDFLAGS",	L_MAKE},
-	{"all:",	L_MAKE},
-	{".PRECIOUS",	L_MAKE},
-	{".ascii",	L_MACH},
-	{".asciiz",	L_MACH},
-	{".byte",	L_MACH},
-	{".even",	L_MACH},
-	{".globl",	L_MACH},
-	{".text",	L_MACH},
-	{"clr",		L_MACH},
-	{"(input,",	L_PAS},
-	{"program",	L_PAS},
-	{"record",	L_PAS},
-	{"dcl",		L_PLI},
-	{"Received:",	L_MAIL},
-	{">From",	L_MAIL},
-	{"Return-Path:",L_MAIL},
-	{"Cc:",		L_MAIL},
-	{"Newsgroups:",	L_NEWS},
-	{"Path:",	L_NEWS},
-	{"Organization:",L_NEWS},
-	{"href=",	L_HTML},
-	{"HREF=",	L_HTML},
-	{"<body",	L_HTML},
-	{"<BODY",	L_HTML},
-	{"<html",	L_HTML},
-	{"<HTML",	L_HTML},
-	{"<!--",	L_HTML},
+	{ "msgid",	L_PO},
+	{ "dnl",		L_M4},
+	{ "import",	L_JAVA},
+	{ "\"libhdr\"",	L_BCPL},
+	{ "\"LIBHDR\"",	L_BCPL},
+	{ "//",		L_CC},
+	{ "template",	L_CC},
+	{ "virtual",	L_CC},
+	{ "class",	L_CC},
+	{ "public:",	L_CC},
+	{ "private:",	L_CC},
+	{ "/*",		L_C},	/* must precede "The", "the", etc. */
+	{ "#include",	L_C},
+	{ "char",	L_C},
+	{ "The",		L_ENG},
+	{ "the",		L_ENG},
+	{ "double",	L_C},
+	{ "extern",	L_C},
+	{ "float",	L_C},
+	{ "struct",	L_C},
+	{ "union",	L_C},
+	{ "CFLAGS",	L_MAKE},
+	{ "LDFLAGS",	L_MAKE},
+	{ "all:",	L_MAKE},
+	{ ".PRECIOUS",	L_MAKE},
+	{ ".ascii",	L_MACH},
+	{ ".asciiz",	L_MACH},
+	{ ".byte",	L_MACH},
+	{ ".even",	L_MACH},
+	{ ".globl",	L_MACH},
+	{ ".text",	L_MACH},
+	{ "clr",		L_MACH},
+	{ "(input,",	L_PAS},
+	{ "program",	L_PAS},
+	{ "record",	L_PAS},
+	{ "dcl",		L_PLI},
+	{ "Received:",	L_MAIL},
+	{ ">From",	L_MAIL},
+	{ "Return-Path:",L_MAIL},
+	{ "Cc:",		L_MAIL},
+	{ "Newsgroups:",	L_NEWS},
+	{ "Path:",	L_NEWS},
+	{ "Organization:",L_NEWS},
+	{ "href=",	L_HTML},
+	{ "HREF=",	L_HTML},
+	{ "<body",	L_HTML},
+	{ "<BODY",	L_HTML},
+	{ "<html",	L_HTML},
+	{ "<HTML",	L_HTML},
+	{ "<!--",	L_HTML},
 };
-#define NNAMES (sizeof(names)/sizeof(struct names))
+#define NNAMES (sizeof (names)/sizeof (struct names))

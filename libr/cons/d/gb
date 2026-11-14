@@ -1,3 +1,4 @@
+ecd
 ec comment rgb:86c06c
 ec usrcmt rgb:86c06c
 ec mov rgb:a0c090
@@ -12,7 +13,7 @@ ec label rgb:86c06c
 ec flow rgb:86c06c
 ec flow2 rgb:86c06c
 ec prompt rgb:e0f8cf
-ec offset rgb:306850
+ec addr rgb:306850
 ec other rgb:306850
 ec b0x00 rgb:306850
 ec b0x7f rgb:86c06c
@@ -45,6 +46,7 @@ ec graph.box rgb:86c06c
 ec graph.box2 rgb:86c06c
 ec graph.box3 rgb:86c06c
 ec graph.box4 rgb:86c06c
+ec diff.match rgb:86c06c
 ec graph.true rgb:86c06c
 ec graph.false rgb:e0f8cf
 ec graph.trufae rgb:86c06c
@@ -54,18 +56,19 @@ ec graph.traced rgb:86c06c
 ec gui.cflow rgb:e0f8cf
 ec gui.dataoffset rgb:e0f8cf
 ec gui.background rgb:e0f8cf
-ec gui.alt_background rgb:e0f8cf
+ec gui.background2 rgb:e0f8cf
 ec gui.border rgb:e0f8cf
 
 ec ai.read rgb:e0f8cf
 ec ai.write rgb:86c06c
 ec ai.exec rgb:86c06c
 ec ai.seq rgb:86c06c
-ec ai.ascii rgb:86c06c
+ec str rgb:86c06c
 
-ec func_var rgb:86c06c
-ec func_var_type rgb:86c06c
-ec func_var_addr rgb:e0f8cf
+ec var rgb:86c06c
+ec var.type rgb:86c06c
+ec var.addr rgb:e0f8cf
+ec var.name rgb:86c06c
 
-ec widget_bg rgb:86c06c rgb:000
-ec widget_sel rgb:e0f8cf rgb:000
+ec widget.bg rgb:86c06c rgb:000
+ec widget.sel rgb:e0f8cf rgb:000

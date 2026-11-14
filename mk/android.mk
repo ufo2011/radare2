@@ -37,6 +37,7 @@ ifeq (${NDK_ARCH},aarch64)
 # aarch64
 ARCH=aarch64
 CROSS=${ARCH}-linux-android-
+LDFLAGS+=-Wl,-z,max-page-size=16384
 endif
 
 ifeq (${NDK_ARCH},)
@@ -45,9 +46,16 @@ all::
 	exit 1
 endif
 
+ifeq ($(shell type llvm-ar > /dev/null && echo ok),ok)
+AR=llvm-ar
+RANLIB=llvm-ranlib
+CC_AR=llvm-ar -rc ${LIBAR}
+else
 RANLIB=${CROSS}ranlib
 AR=${CROSS}ar
-CC_AR=${CROSS}ar -r ${LIBAR}
+CC_AR=${CROSS}ar -rc ${LIBAR}
+endif
+
 PARTIALLD=${CROSS}ld -r
 # -all_load
 ONELIB=0

@@ -1,9 +1,43 @@
+NAME=rabin2 import signatures use the target types
+FILE=bins/pe/imports.exe
+CMDS=!!rabin2 -ij ${R2_FILE}~{imports[0].sig}
+EXPECT=<<EOF
+true
+EOF
+RUN
+
 NAME=baddr ==
 FILE=bins/elf/analysis/hello-linux-x86_64
 CMDS=!rabin2 -qe ${R2_FILE};!rabin2 -B 0x400000 -qe ${R2_FILE}
 EXPECT=<<EOF
 0x00400410
 0x00400410
+EOF
+RUN
+
+NAME=qpe
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=<<EOF
+!!rabin2 -qe ${R2_FILE}
+!!rabin2 -qpe ${R2_FILE}
+EOF
+EXPECT=<<EOF
+0x00400410
+0x00000410
+EOF
+RUN
+
+NAME=qps
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=<<EOF
+!!rabin2 -qs ${R2_FILE}~main
+!!rabin2 -qps ${R2_FILE}~main
+EOF
+EXPECT=<<EOF
+0x004004fc 21 main
+0x004003f0 16 imp.__libc_start_main
+0x000004fc 21 main
+0x000003f0 16 imp.__libc_start_main
 EOF
 RUN
 
@@ -29,10 +63,9 @@ NAME=laddr 0
 FILE=bins/elf/analysis/hello-linux-x86_64
 CMDS=!rabin2 -G 0 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00400410 paddr=0x00000410 haddr=0x00000018 hvaddr=0x00400018 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00000410 0x00400410 0x00000018 0x00400018 program
 EOF
 RUN
 
@@ -40,20 +73,18 @@ NAME=laddr 0 && baddr 0
 FILE=bins/elf/analysis/hello-linux-x86_64
 CMDS=!rabin2 -G 0 -B 0 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00000410 paddr=0x00000410 haddr=0x00000018 hvaddr=0x00000018 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00000410 0x00000410 0x00000018 0x00000018 program
 EOF
 RUN
 
 NAME=rabin -k file
 FILE=bins/elf/analysis/hello-linux-x86_64
 CMDS=!rabin2 -k ${R2_FILE}
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-Missing file.
+ERROR: Missing file
 EOF
 RUN
 
@@ -61,111 +92,102 @@ NAME=rabin2 -K md5 -S file
 FILE=bins/pe/a.exe
 CMDS=!rabin2 -K md5 -S ${R2_FILE}
 EXPECT=<<EOF
-[Sections]
-
-nth paddr        size vaddr        vsize perm md5                              name
------------------------------------------------------------------------------------
-0   0x00000400  0xa00 0x00401000  0x1000 -r-x 3d6a5b8dc5e41b09659638ad5735e5b5 .text
-1   0x00000e00  0x200 0x00402000  0x1000 -rw- b3c542ba67f2d1a949fa1a25ce22f7e3 .data
-2   0x00001000  0x200 0x00403000  0x1000 -r-- c9a877a4e945b087b8323830442c88d6 .rdata
-3   0x00000000    0x0 0x00404000  0x1000 -rw-                                  .bss
-4   0x00001200  0x400 0x00405000  0x1000 -rw- 963212dc58a74f32e0f6ffce84dcf7ea .idata
-
+nth paddr        size vaddr        vsize perm flags      md5                              type name
+---------------------------------------------------------------------------------------------------
+0   0x00000400  0xa00 0x00401000  0x1000 -r-x 0x60500060 3d6a5b8dc5e41b09659638ad5735e5b5 ---- .text
+1   0x00000e00  0x200 0x00402000  0x1000 -rw- 0xc0300040 b3c542ba67f2d1a949fa1a25ce22f7e3 ---- .data
+2   0x00001000  0x200 0x00403000  0x1000 -r-- 0x40300040 c9a877a4e945b087b8323830442c88d6 ---- .rdata
+3   0x00000000    0x0 0x00404000  0x1000 -rw- 0xc0400080                                  ---- .bss
+4   0x00001200  0x400 0x00405000  0x1000 -rw- 0xc0300040 963212dc58a74f32e0f6ffce84dcf7ea ---- .idata
 EOF
 RUN
 
 NAME=rabin2 -s file pe
 FILE=bins/pe/a.exe
-CMDS=!rabin2 -s ${R2_FILE}|wc -l|awk "{print \$1}"
+CMDS=!!rabin2 -s ${R2_FILE}~?
 EXPECT=<<EOF
-24
+22
 EOF
 RUN
 
 NAME=rabin2 -s file elf
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=!rabin2 -s ${R2_FILE}|wc -l|awk "{print \$1}"
+CMDS=!!rabin2 -s ${R2_FILE}~?
 EXPECT=<<EOF
-69
+68
 EOF
 RUN
 
 NAME=rabin2 -S, -SS, -rS and -rSS file elf
 FILE=bins/elf/analysis/x86-helloworld-gcc
 CMDS=<<EOF
-!rabin2 -S ${R2_FILE}|wc -l|awk "{print \$1}"
-!rabin2 -SS ${R2_FILE}|wc -l|awk "{print \$1}"
+!!rabin2 -S ${R2_FILE}~?
+!!rabin2 -SS ${R2_FILE}~?
 !env RABIN2_PREFIX=prixfixe rabin2 -S ${R2_FILE}
 !env RABIN2_PREFIX=prixfixe rabin2 -SS ${R2_FILE}
 EOF
 EXPECT=<<EOF
-35
-14
-[Sections]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000000    0x0 0x00000000    0x0 ---- prixfixe.
-1   0x00000134   0x13 0x08048134   0x13 -r-- prixfixe..interp
-2   0x00000148   0x20 0x08048148   0x20 -r-- prixfixe..note.ABI-tag
-3   0x00000168   0x24 0x08048168   0x24 -r-- prixfixe..note.gnu.build-id
-4   0x0000018c   0x20 0x0804818c   0x20 -r-- prixfixe..gnu.hash
-5   0x000001ac   0x50 0x080481ac   0x50 -r-- prixfixe..dynsym
-6   0x000001fc   0x4a 0x080481fc   0x4a -r-- prixfixe..dynstr
-7   0x00000246    0xa 0x08048246    0xa -r-- prixfixe..gnu.version
-8   0x00000250   0x20 0x08048250   0x20 -r-- prixfixe..gnu.version_r
-9   0x00000270    0x8 0x08048270    0x8 -r-- prixfixe..rel.dyn
-10  0x00000278   0x18 0x08048278   0x18 -r-- prixfixe..rel.plt
-11  0x00000290   0x23 0x08048290   0x23 -r-x prixfixe..init
-12  0x000002c0   0x40 0x080482c0   0x40 -r-x prixfixe..plt
-13  0x00000300  0x194 0x08048300  0x194 -r-x prixfixe..text
-14  0x00000494   0x14 0x08048494   0x14 -r-x prixfixe..fini
-15  0x000004a8   0x15 0x080484a8   0x15 -r-- prixfixe..rodata
-16  0x000004c0   0x2c 0x080484c0   0x2c -r-- prixfixe..eh_frame_hdr
-17  0x000004ec   0xb0 0x080484ec   0xb0 -r-- prixfixe..eh_frame
-18  0x0000059c    0x4 0x0804959c    0x4 -rw- prixfixe..init_array
-19  0x000005a0    0x4 0x080495a0    0x4 -rw- prixfixe..fini_array
-20  0x000005a4    0x4 0x080495a4    0x4 -rw- prixfixe..jcr
-21  0x000005a8   0xe8 0x080495a8   0xe8 -rw- prixfixe..dynamic
-22  0x00000690    0x4 0x08049690    0x4 -rw- prixfixe..got
-23  0x00000694   0x18 0x08049694   0x18 -rw- prixfixe..got.plt
-24  0x000006ac    0x8 0x080496ac    0x8 -rw- prixfixe..data
-25  0x000006b4    0x0 0x080496b4    0x4 -rw- prixfixe..bss
-26  0x000006b4   0x11 0x00000000   0x11 ---- prixfixe..comment
-27  0x000006c5  0x106 0x00000000  0x106 ---- prixfixe..shstrtab
-28  0x00000c7c  0x450 0x00000000  0x450 ---- prixfixe..symtab
-29  0x000010cc  0x257 0x00000000  0x257 ---- prixfixe..strtab
-
-[Segments]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000034  0x100 0x08048034  0x100 -r-x prixfixe.PHDR
-1   0x00000134   0x13 0x08048134   0x13 -r-- prixfixe.INTERP
-2   0x00000000  0x59c 0x08048000  0x59c -r-x prixfixe.LOAD0
-3   0x0000059c  0x118 0x0804959c  0x11c -rw- prixfixe.LOAD1
-4   0x000005a8   0xe8 0x080495a8   0xe8 -rw- prixfixe.DYNAMIC
-5   0x00000148   0x44 0x08048148   0x44 -r-- prixfixe.NOTE
-6   0x000004c0   0x2c 0x080484c0   0x2c -r-- prixfixe.GNU_EH_FRAME
-7   0x00000000    0x0 0x00000000    0x0 -rw- prixfixe.GNU_STACK
-8   0x00000000   0x34 0x08048000   0x34 -rw- prixfixe.ehdr
-
+32
+11
+nth paddr        size vaddr       vsize perm flags type        name
+-------------------------------------------------------------------
+0   0x00000000    0x0 0x00000000    0x0 ---- 0x0   NULL        prixfixe.
+1   0x00000134   0x13 0x08048134   0x13 -r-- 0x2   PROGBITS    prixfixe..interp
+2   0x00000148   0x20 0x08048148   0x20 -r-- 0x2   NOTE        prixfixe..note.ABI-tag
+3   0x00000168   0x24 0x08048168   0x24 -r-- 0x2   NOTE        prixfixe..note.gnu.build-id
+4   0x0000018c   0x20 0x0804818c   0x20 -r-- 0x2   GNU_HASH    prixfixe..gnu.hash
+5   0x000001ac   0x50 0x080481ac   0x50 -r-- 0x2   DYNSYM      prixfixe..dynsym
+6   0x000001fc   0x4a 0x080481fc   0x4a -r-- 0x2   STRTAB      prixfixe..dynstr
+7   0x00000246    0xa 0x08048246    0xa -r-- 0x2   GNU_VERSYM  prixfixe..gnu.version
+8   0x00000250   0x20 0x08048250   0x20 -r-- 0x2   GNU_VERNEED prixfixe..gnu.version_r
+9   0x00000270    0x8 0x08048270    0x8 -r-- 0x2   REL         prixfixe..rel.dyn
+10  0x00000278   0x18 0x08048278   0x18 -r-- 0x2   REL         prixfixe..rel.plt
+11  0x00000290   0x23 0x08048290   0x23 -r-x 0x6   PROGBITS    prixfixe..init
+12  0x000002c0   0x40 0x080482c0   0x40 -r-x 0x6   PROGBITS    prixfixe..plt
+13  0x00000300  0x194 0x08048300  0x194 -r-x 0x6   PROGBITS    prixfixe..text
+14  0x00000494   0x14 0x08048494   0x14 -r-x 0x6   PROGBITS    prixfixe..fini
+15  0x000004a8   0x15 0x080484a8   0x15 -r-- 0x2   PROGBITS    prixfixe..rodata
+16  0x000004c0   0x2c 0x080484c0   0x2c -r-- 0x2   PROGBITS    prixfixe..eh_frame_hdr
+17  0x000004ec   0xb0 0x080484ec   0xb0 -r-- 0x2   PROGBITS    prixfixe..eh_frame
+18  0x0000059c    0x4 0x0804959c    0x4 -rw- 0x3   INIT_ARRAY  prixfixe..init_array
+19  0x000005a0    0x4 0x080495a0    0x4 -rw- 0x3   FINI_ARRAY  prixfixe..fini_array
+20  0x000005a4    0x4 0x080495a4    0x4 -rw- 0x3   PROGBITS    prixfixe..jcr
+21  0x000005a8   0xe8 0x080495a8   0xe8 -rw- 0x3   DYNAMIC     prixfixe..dynamic
+22  0x00000690    0x4 0x08049690    0x4 -rw- 0x3   PROGBITS    prixfixe..got
+23  0x00000694   0x18 0x08049694   0x18 -rw- 0x3   PROGBITS    prixfixe..got.plt
+24  0x000006ac    0x8 0x080496ac    0x8 -rw- 0x3   PROGBITS    prixfixe..data
+25  0x000006b4    0x0 0x080496b4    0x4 -rw- 0x3   NOBITS      prixfixe..bss
+26  0x000006b4   0x11 0x00000000   0x11 ---- 0x30  PROGBITS    prixfixe..comment
+27  0x000006c5  0x106 0x00000000  0x106 ---- 0x0   STRTAB      prixfixe..shstrtab
+28  0x00000c7c  0x450 0x00000000  0x450 ---- 0x0   SYMTAB      prixfixe..symtab
+29  0x000010cc  0x257 0x00000000  0x257 ---- 0x0   STRTAB      prixfixe..strtab
+nth paddr        size vaddr       vsize perm flags type name
+------------------------------------------------------------
+0   0x00000034  0x100 0x08048034  0x100 -r-x 0x0   MAP  prixfixe.PHDR
+1   0x00000134   0x13 0x08048134   0x13 -r-- 0x0   MAP  prixfixe.INTERP
+2   0x00000000  0x59c 0x08048000  0x59c -r-x 0x0   MAP  prixfixe.LOAD0
+3   0x0000059c  0x118 0x0804959c  0x11c -rw- 0x0   MAP  prixfixe.LOAD1
+4   0x000005a8   0xe8 0x080495a8   0xe8 -rw- 0x0   MAP  prixfixe.DYNAMIC
+5   0x00000148   0x44 0x08048148   0x44 -r-- 0x0   MAP  prixfixe.NOTE
+6   0x000004c0   0x2c 0x080484c0   0x2c -r-- 0x0   MAP  prixfixe.GNU_EH_FRAME
+7   0x00000000    0x0 0x00000000    0x0 -rw- 0x0   MAP  prixfixe.GNU_STACK
+8   0x00000000   0x34 0x08048000   0x34 -rw- 0x0   MAP  prixfixe.ehdr
 EOF
 RUN
 
 NAME=rabin2 -SSS
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=!rabin2 -SSS ${R2_FILE}|wc -l|awk "{print \$1}"
+CMDS=!!rabin2 -SSS ${R2_FILE}~?
 EXPECT=<<EOF
-13
+12
 EOF
 RUN
 
 NAME=rabin2 -z pe
 FILE=bins/pe/a.exe
-CMDS=!rabin2 -z ${R2_FILE}|wc -l|awk "{print \$1}"
+CMDS=!!rabin2 -z ${R2_FILE}~?
 EXPECT=<<EOF
-7
+6
 EOF
 RUN
 
@@ -173,7 +195,7 @@ NAME=rabin2 -zz pe
 FILE=bins/pe/ioli/w32/crackme0x00.exe
 CMDS=!rabin2 -zz ${R2_FILE} | grep "Password:"
 EXPECT=<<EOF
-86  0x00002619 0x00404019 10  11   .rdata  ascii   Password: 
+81  0x00002619 0x00404019 9   11   .rdata  ascii Password:
 EOF
 RUN
 
@@ -181,7 +203,7 @@ NAME=rabin2 -zzz pe
 FILE=bins/pe/ioli/w32/crackme0x00.exe
 CMDS=!rabin2 -zzz ${R2_FILE} | grep "Password:"
 EXPECT=<<EOF
-086 0x00002619 0x00404019  10  11 (.rdata) ascii Password: 
+081 0x00002619 0x00404019   9  11 (.rdata) ascii Password:
 EOF
 RUN
 
@@ -189,7 +211,7 @@ NAME=rabin2 -zzq pe
 FILE=bins/pe/ioli/w32/crackme0x00.exe
 CMDS=!rabin2 -zzq ${R2_FILE} | grep "Password:"
 EXPECT=<<EOF
-0x404019 11 10 Password: 
+0x404019 11 9 Password:
 EOF
 RUN
 
@@ -197,7 +219,7 @@ NAME=rabin2 -zzzq pe
 FILE=bins/pe/ioli/w32/crackme0x00.exe
 CMDS=!rabin2 -zzzq ${R2_FILE} | grep "Password:"
 EXPECT=<<EOF
-0x00404019 Password: 
+0x00404019 Password:
 EOF
 RUN
 
@@ -205,7 +227,7 @@ NAME=rabin2 -zzqq pe
 FILE=bins/pe/ioli/w32/crackme0x00.exe
 CMDS=!rabin2 -zzqq ${R2_FILE} | grep "Password:"
 EXPECT=<<EOF
-Password: 
+Password:
 EOF
 RUN
 
@@ -213,29 +235,69 @@ NAME=rabin2 -zzzqq pe
 FILE=bins/pe/ioli/w32/crackme0x00.exe
 CMDS=!rabin2 -zzzqq ${R2_FILE} | grep "Password:"
 EXPECT=<<EOF
-Password: 
+Password:
+EOF
+RUN
+
+NAME=rabin2 -B -zzq raw strings
+FILE=bins/other/hello.txt
+CMDS=!rabin2 -B 0x1000 -zzq ${R2_FILE}
+EXPECT=<<EOF
+0x1000 24 24 hello world\nSecond Line\n
+EOF
+RUN
+
+NAME=rabin2 -B -zzq elf strings
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=!rabin2 -B 0x1000 -zzq ${R2_FILE} | grep puts
+EXPECT=<<EOF
+0x12fa 5 4 puts
+0x1953 18 17 puts@@GLIBC_2.2.5
+EOF
+RUN
+
+NAME=rabin2 -p -B -zzzq elf strings
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=!rabin2 -p -B 0x1000 -zzzq ${R2_FILE} | grep puts
+EXPECT=<<EOF
+0x000002fa puts
+0x00001953 puts@@GLIBC_2.2.5
+EOF
+RUN
+
+NAME=rabin2 -B high -zzq elf strings
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=<<EOF
+!rabin2 -B 0xfffffffffffffffe -zzq ${R2_FILE} | grep puts
+!rabin2 -B 0xfffffffffffffffe -zzzq ${R2_FILE} | grep puts
+EOF
+EXPECT=<<EOF
+0x2fa 5 4 puts
+0x1953 18 17 puts@@GLIBC_2.2.5
+0x000002fa puts
+0x00001953 puts@@GLIBC_2.2.5
 EOF
 RUN
 
 NAME=rabin2 -z elf
 FILE=bins/elf/analysis/x86-helloworld-gcc
-CMDS=!rabin2 -z ${R2_FILE}|wc -l|awk "{print \$1}"
-EXPECT=<<EOF
-4
-EOF
-RUN
-
-NAME=rabin2 -G 0x1000 -rs fatmach0
-FILE=bins/mach0/fatmach0-3true
-CMDS=!rabin2 -G 0x1000 -rs ${R2_FILE}|grep "f " | wc -l|awk "{print \$1}"
+CMDS=!!rabin2 -z ${R2_FILE}~?
 EXPECT=<<EOF
 3
 EOF
 RUN
 
+NAME=rabin2 -G 0x1000 -rs fatmach0
+FILE=bins/mach0/fatmach0-3true
+CMDS=!!rabin2 -G 0x1000 -rs ${R2_FILE}~f ~?
+EXPECT=<<EOF
+2
+EOF
+RUN
+
 NAME=rabin2 -G 0x1300 -rs fatmach0
 FILE=bins/mach0/fatmach0-3true
-CMDS=!rabin2 -G 0x1300 -rs ${R2_FILE}|wc -l|awk "{print \$1}"
+CMDS=!!rabin2 -G 0x1300 -rs ${R2_FILE}~?
 EXPECT=<<EOF
 1
 EOF
@@ -245,22 +307,19 @@ NAME=rabin2 -G 0x1000 -e fatmach0
 FILE=bins/mach0/fatmach0-3true
 CMDS=!rabin2 -G 0x1000 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x100000ef8 paddr=0x00001ef8 haddr=0x00000570 type=program
-
-1 entrypoints
+paddr      vaddr       phaddr     vhaddr      type
+--------------------------------------------------
+0x00001ef8 0x100000ef8 0x00000570 0x100000570 program
 EOF
 RUN
 
 NAME=rabin2 -e fatmach0
-BROKEN=1
 FILE=bins/mach0/fatmach0-3true
 CMDS=!rabin2 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x100000ef8 paddr=0x00001ef8 baddr=0x100000000 laddr=0x00001000 haddr=0x00000570 type=program
-
-1 entrypoints
+paddr      vaddr       phaddr     vhaddr      type
+--------------------------------------------------
+0x00001ef8 0x100000ef8 0x00001570 0x100000570 program
 EOF
 RUN
 
@@ -268,22 +327,19 @@ NAME=rabin2 -G 0x5000 -e fatmach0
 FILE=bins/mach0/fatmach0-3true
 CMDS=!rabin2 -G 0x5000 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00001f44 paddr=0x00005f44 haddr=0x00000420 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00005f44 0x00001f44 0x00000420 0x00001420 program
 EOF
 RUN
 
 NAME=rabin2 -a x86 -b 32 -e fatmach0
-BROKEN=1
 FILE=bins/mach0/fatmach0-3true
 CMDS=!rabin2 -a x86 -b 32 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00001f44 paddr=0x00005f44 baddr=0x00001000 laddr=0x00005000 haddr=0x00000420 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00005f44 0x00001f44 0x00005420 0x00001420 program
 EOF
 RUN
 
@@ -291,19 +347,19 @@ NAME=rabin2 -B 0x2000000 -G 0x1000 -e fatmach0
 FILE=bins/mach0/fatmach0-3true
 CMDS=!rabin2 -B 0x2000000 -G 0x1000 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x02000ef8 paddr=0x00001ef8 haddr=0x00000570 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00001ef8 0x02000ef8 0x00000570 0x02000570 program
 EOF
 RUN
 
-NAME=TODO: test on pie fatmach0
-BROKEN=1
+NAME=rabin2 -B 0x2000000 -e fatmach0 without load address
 FILE=bins/mach0/fatmach0-3true
-CMDS=!rabin2 -B 0x2000000 -G 0x1000 -e ${R2_FILE}
+CMDS=!rabin2 -B 0x2000000 -e ${R2_FILE}
 EXPECT=<<EOF
-???
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00001ef8 0x02000ef8 0x00001570 0x02000570 program
 EOF
 RUN
 
@@ -311,23 +367,31 @@ NAME=rabin2 -B 0x2000000 -e arm64
 FILE=bins/mach0/hello-ios-arm64
 CMDS=!rabin2 -B 0x2000000 -e ${R2_FILE}
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x02007f34 paddr=0x00007f34 haddr=0x00000468 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00007f34 0x02007f34 0x00000468 0x02000468 program
 EOF
 RUN
 
+# rabin2 reads x86_32 here, r2 x86_64: the two tables differ on purpose
 NAME=rabin2 -a x86 -b 32 -i fatmach0
 FILE=bins/mach0/fatmach0-3true
-CMDS=!rabin2 -a x86 -b 32 -i ${R2_FILE}
+ARGS=-a x86 -b 64
+CMDS=<<EOF
+!rabin2 -a x86 -b 32 -i ${R2_FILE}
+ii
+iij
+EOF
 EXPECT=<<EOF
-[Imports]
 nth vaddr      bind type lib name
 ---------------------------------
 0   0x00001f94 NONE FUNC     exit
-1   0x00000000 NONE FUNC     dyld_stub_binder
-
+1   ---------- NONE FUNC     dyld_stub_binder
+nth vaddr       bind type lib name
+----------------------------------
+0   0x100000f40 NONE FUNC     exit
+1   ----------  NONE FUNC     dyld_stub_binder
+[{"ordinal":0,"bind":"NONE","type":"FUNC","sig":true,"name":"exit","plt":4294971200},{"ordinal":1,"bind":"NONE","type":"FUNC","sig":false,"name":"dyld_stub_binder"}]
 EOF
 RUN
 
@@ -335,12 +399,10 @@ NAME=rabin2 -G 0x5000 -i fatmach0
 FILE=bins/mach0/fatmach0-3true
 CMDS=!rabin2 -G 0x5000 -i ${R2_FILE}
 EXPECT=<<EOF
-[Imports]
 nth vaddr      bind type lib name
 ---------------------------------
 0   0x00001f94 NONE FUNC     exit
-1   0x00000000 NONE FUNC     dyld_stub_binder
-
+1   ---------- NONE FUNC     dyld_stub_binder
 EOF
 RUN
 
@@ -397,16 +459,13 @@ rm .tmp/rabin2testpe1.exe
 EOF
 EXPECT=<<EOF
 wx e0000040 @ 0x244
-[Sections]
-
-nth paddr         size vaddr        vsize perm name
----------------------------------------------------
-0   0x00000400  0x8a00 0x00401000  0x9000 -r-x .text
-1   0x00008e00  0x2400 0x0040a000  0x3000 -r-- .rdata
-2   0x0000b200  0x1000 0x0040d000  0x3000 -rwx .data
-3   0x0000c200   0x200 0x00410000  0x1000 -r-- .rsrc
-4   0x0000c400   0xe00 0x00411000  0x1000 -r-- .reloc
-
+nth paddr         size vaddr        vsize perm flags      type name
+-------------------------------------------------------------------
+0   0x00000400  0x8a00 0x00401000  0x9000 -r-x 0x60000020 ---- .text
+1   0x00008e00  0x2400 0x0040a000  0x3000 -r-- 0x40000040 ---- .rdata
+2   0x0000b200  0x1000 0x0040d000  0x3000 -rwx 0xe0000040 ---- .data
+3   0x0000c200   0x200 0x00410000  0x1000 -r-- 0x40000040 ---- .rsrc
+4   0x0000c400   0xe00 0x00411000  0x1000 -r-- 0x42000040 ---- .reloc
 EOF
 RUN
 
@@ -421,12 +480,9 @@ rm .tmp/rabin2testpe2.exe
 EOF
 EXPECT=<<EOF
 wx 10000000 @ 0x16c
-[Sections]
-
-nth paddr        size vaddr        vsize perm name
---------------------------------------------------
-0   0x00000200  0x200 0x00401000  0x1000 s--- sect_0
-
+nth paddr        size vaddr        vsize perm flags      type name
+------------------------------------------------------------------
+0   0x00000200  0x200 0x00401000  0x1000 s--- 0x10000000 ---- sect_0
 EOF
 RUN
 
@@ -437,8 +493,8 @@ EXPECT=<<EOF
 {
   "initfini": [
     {
-      "vaddr": 134513616,
       "paddr": 976,
+      "vaddr": 134513616,
       "baddr": 134512640,
       "laddr": 0,
       "hvaddr": 134518172,
@@ -446,8 +502,8 @@ EXPECT=<<EOF
       "type": "init"
     },
     {
-      "vaddr": 134513584,
       "paddr": 944,
+      "vaddr": 134513584,
       "baddr": 134512640,
       "laddr": 0,
       "hvaddr": 134518176,
@@ -463,11 +519,10 @@ NAME=-ee baddr 0
 FILE=bins/elf/analysis/x86-helloworld-gcc
 CMDS=!rabin2 -ee -B 0 ${R2_FILE}
 EXPECT=<<EOF
-[Constructors]
-vaddr=0x000003d0 paddr=0x000003d0 hvaddr=0x0000159c hpaddr=0x0000059c type=init
-vaddr=0x000003b0 paddr=0x000003b0 hvaddr=0x000015a0 hpaddr=0x000005a0 type=fini
-
-2 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x000003d0 0x000003d0 0x0000059c 0x0000159c init
+0x000003b0 0x000003b0 0x000005a0 0x000015a0 fini
 EOF
 RUN
 
@@ -475,77 +530,64 @@ NAME=rabin2 -g
 FILE=bins/elf/analysis/x86-helloworld-gcc
 CMDS=!rabin2 -g ${R2_FILE}
 EXPECT=<<EOF
-[Sections]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000000    0x0 0x00000000    0x0 ---- 
-1   0x00000134   0x13 0x08048134   0x13 -r-- .interp
-2   0x00000148   0x20 0x08048148   0x20 -r-- .note.ABI-tag
-3   0x00000168   0x24 0x08048168   0x24 -r-- .note.gnu.build-id
-4   0x0000018c   0x20 0x0804818c   0x20 -r-- .gnu.hash
-5   0x000001ac   0x50 0x080481ac   0x50 -r-- .dynsym
-6   0x000001fc   0x4a 0x080481fc   0x4a -r-- .dynstr
-7   0x00000246    0xa 0x08048246    0xa -r-- .gnu.version
-8   0x00000250   0x20 0x08048250   0x20 -r-- .gnu.version_r
-9   0x00000270    0x8 0x08048270    0x8 -r-- .rel.dyn
-10  0x00000278   0x18 0x08048278   0x18 -r-- .rel.plt
-11  0x00000290   0x23 0x08048290   0x23 -r-x .init
-12  0x000002c0   0x40 0x080482c0   0x40 -r-x .plt
-13  0x00000300  0x194 0x08048300  0x194 -r-x .text
-14  0x00000494   0x14 0x08048494   0x14 -r-x .fini
-15  0x000004a8   0x15 0x080484a8   0x15 -r-- .rodata
-16  0x000004c0   0x2c 0x080484c0   0x2c -r-- .eh_frame_hdr
-17  0x000004ec   0xb0 0x080484ec   0xb0 -r-- .eh_frame
-18  0x0000059c    0x4 0x0804959c    0x4 -rw- .init_array
-19  0x000005a0    0x4 0x080495a0    0x4 -rw- .fini_array
-20  0x000005a4    0x4 0x080495a4    0x4 -rw- .jcr
-21  0x000005a8   0xe8 0x080495a8   0xe8 -rw- .dynamic
-22  0x00000690    0x4 0x08049690    0x4 -rw- .got
-23  0x00000694   0x18 0x08049694   0x18 -rw- .got.plt
-24  0x000006ac    0x8 0x080496ac    0x8 -rw- .data
-25  0x000006b4    0x0 0x080496b4    0x4 -rw- .bss
-26  0x000006b4   0x11 0x00000000   0x11 ---- .comment
-27  0x000006c5  0x106 0x00000000  0x106 ---- .shstrtab
-28  0x00000c7c  0x450 0x00000000  0x450 ---- .symtab
-29  0x000010cc  0x257 0x00000000  0x257 ---- .strtab
-
-[Segments]
-
-nth paddr        size vaddr       vsize perm name
--------------------------------------------------
-0   0x00000034  0x100 0x08048034  0x100 -r-x PHDR
-1   0x00000134   0x13 0x08048134   0x13 -r-- INTERP
-2   0x00000000  0x59c 0x08048000  0x59c -r-x LOAD0
-3   0x0000059c  0x118 0x0804959c  0x11c -rw- LOAD1
-4   0x000005a8   0xe8 0x080495a8   0xe8 -rw- DYNAMIC
-5   0x00000148   0x44 0x08048148   0x44 -r-- NOTE
-6   0x000004c0   0x2c 0x080484c0   0x2c -r-- GNU_EH_FRAME
-7   0x00000000    0x0 0x00000000    0x0 -rw- GNU_STACK
-8   0x00000000   0x34 0x08048000   0x34 -rw- ehdr
-
-[Entrypoints]
-vaddr=0x08048300 paddr=0x00000300 haddr=0x00000018 hvaddr=0x08048018 type=program
-
-1 entrypoints
-[Constructors]
-vaddr=0x080483d0 paddr=0x000003d0 hvaddr=0x0804959c hpaddr=0x0000059c type=init
-vaddr=0x080483b0 paddr=0x000003b0 hvaddr=0x080495a0 hpaddr=0x000005a0 type=fini
-
-2 entrypoints
-[Main]
+nth paddr        size vaddr       vsize perm flags type        name
+-------------------------------------------------------------------
+0   0x00000000    0x0 0x00000000    0x0 ---- 0x0   NULL
+1   0x00000134   0x13 0x08048134   0x13 -r-- 0x2   PROGBITS    .interp
+2   0x00000148   0x20 0x08048148   0x20 -r-- 0x2   NOTE        .note.ABI-tag
+3   0x00000168   0x24 0x08048168   0x24 -r-- 0x2   NOTE        .note.gnu.build-id
+4   0x0000018c   0x20 0x0804818c   0x20 -r-- 0x2   GNU_HASH    .gnu.hash
+5   0x000001ac   0x50 0x080481ac   0x50 -r-- 0x2   DYNSYM      .dynsym
+6   0x000001fc   0x4a 0x080481fc   0x4a -r-- 0x2   STRTAB      .dynstr
+7   0x00000246    0xa 0x08048246    0xa -r-- 0x2   GNU_VERSYM  .gnu.version
+8   0x00000250   0x20 0x08048250   0x20 -r-- 0x2   GNU_VERNEED .gnu.version_r
+9   0x00000270    0x8 0x08048270    0x8 -r-- 0x2   REL         .rel.dyn
+10  0x00000278   0x18 0x08048278   0x18 -r-- 0x2   REL         .rel.plt
+11  0x00000290   0x23 0x08048290   0x23 -r-x 0x6   PROGBITS    .init
+12  0x000002c0   0x40 0x080482c0   0x40 -r-x 0x6   PROGBITS    .plt
+13  0x00000300  0x194 0x08048300  0x194 -r-x 0x6   PROGBITS    .text
+14  0x00000494   0x14 0x08048494   0x14 -r-x 0x6   PROGBITS    .fini
+15  0x000004a8   0x15 0x080484a8   0x15 -r-- 0x2   PROGBITS    .rodata
+16  0x000004c0   0x2c 0x080484c0   0x2c -r-- 0x2   PROGBITS    .eh_frame_hdr
+17  0x000004ec   0xb0 0x080484ec   0xb0 -r-- 0x2   PROGBITS    .eh_frame
+18  0x0000059c    0x4 0x0804959c    0x4 -rw- 0x3   INIT_ARRAY  .init_array
+19  0x000005a0    0x4 0x080495a0    0x4 -rw- 0x3   FINI_ARRAY  .fini_array
+20  0x000005a4    0x4 0x080495a4    0x4 -rw- 0x3   PROGBITS    .jcr
+21  0x000005a8   0xe8 0x080495a8   0xe8 -rw- 0x3   DYNAMIC     .dynamic
+22  0x00000690    0x4 0x08049690    0x4 -rw- 0x3   PROGBITS    .got
+23  0x00000694   0x18 0x08049694   0x18 -rw- 0x3   PROGBITS    .got.plt
+24  0x000006ac    0x8 0x080496ac    0x8 -rw- 0x3   PROGBITS    .data
+25  0x000006b4    0x0 0x080496b4    0x4 -rw- 0x3   NOBITS      .bss
+26  0x000006b4   0x11 0x00000000   0x11 ---- 0x30  PROGBITS    .comment
+27  0x000006c5  0x106 0x00000000  0x106 ---- 0x0   STRTAB      .shstrtab
+28  0x00000c7c  0x450 0x00000000  0x450 ---- 0x0   SYMTAB      .symtab
+29  0x000010cc  0x257 0x00000000  0x257 ---- 0x0   STRTAB      .strtab
+nth paddr        size vaddr       vsize perm flags type name
+------------------------------------------------------------
+0   0x00000034  0x100 0x08048034  0x100 -r-x 0x0   MAP  PHDR
+1   0x00000134   0x13 0x08048134   0x13 -r-- 0x0   MAP  INTERP
+2   0x00000000  0x59c 0x08048000  0x59c -r-x 0x0   MAP  LOAD0
+3   0x0000059c  0x118 0x0804959c  0x11c -rw- 0x0   MAP  LOAD1
+4   0x000005a8   0xe8 0x080495a8   0xe8 -rw- 0x0   MAP  DYNAMIC
+5   0x00000148   0x44 0x08048148   0x44 -r-- 0x0   MAP  NOTE
+6   0x000004c0   0x2c 0x080484c0   0x2c -r-- 0x0   MAP  GNU_EH_FRAME
+7   0x00000000    0x0 0x00000000    0x0 -rw- 0x0   MAP  GNU_STACK
+8   0x00000000   0x34 0x08048000   0x34 -rw- 0x0   MAP  ehdr
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00000300 0x08048300 0x00000018 0x08048018 program
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x000003d0 0x080483d0 0x0000059c 0x0804959c init
+0x000003b0 0x080483b0 0x000005a0 0x080495a0 fini
 vaddr=0x08048400 paddr=0x00000400
-[Imports]
 nth vaddr      bind   type   lib name
 -------------------------------------
 1   0x080482d0 GLOBAL FUNC       puts
 2   0x080482e0 WEAK   NOTYPE     __gmon_start__
 3   0x080482f0 GLOBAL FUNC       __libc_start_main
-
-[Symbols]
-
-nth paddr      vaddr      bind   type   size lib name
------------------------------------------------------
+nth paddr      vaddr      bind   type   size lib name                                   demangled
+-------------------------------------------------------------------------------------------------
 4   0x000004ac 0x080484ac GLOBAL OBJ    4        _IO_stdin_used
 1   0x00000134 0x08048134 LOCAL  SECT   0        .interp
 2   0x00000148 0x08048148 LOCAL  SECT   0        .note.ABI-tag
@@ -574,7 +616,7 @@ nth paddr      vaddr      bind   type   size lib name
 25  ---------- 0x080496b4 LOCAL  SECT   0        .bss
 26  ---------- 0x00000000 LOCAL  SECT   0        .comment
 27  ---------- 0x00000000 LOCAL  FILE   0        init.c
-28  ---------- 0x00000000 LOCAL  FILE   0        
+28  ---------- 0x00000000 LOCAL  FILE   0
 29  ---------- 0x00000000 LOCAL  FILE   0        crtstuff.c
 30  0x000005a4 0x080495a4 LOCAL  OBJ    0        __JCR_LIST__
 31  0x00000340 0x08048340 LOCAL  FUNC   0        deregister_tm_clones
@@ -588,7 +630,7 @@ nth paddr      vaddr      bind   type   size lib name
 39  ---------- 0x00000000 LOCAL  FILE   0        crtstuff.c
 40  0x00000598 0x08048598 LOCAL  OBJ    0        __FRAME_END__
 41  0x000005a4 0x080495a4 LOCAL  OBJ    0        __JCR_END__
-42  ---------- 0x00000000 LOCAL  FILE   0        
+42  ---------- 0x00000000 LOCAL  FILE   0
 43  0x000005a0 0x080495a0 LOCAL  NOTYPE 0        __init_array_end
 44  0x000005a8 0x080495a8 LOCAL  OBJ    0        _DYNAMIC
 45  0x0000059c 0x0804959c LOCAL  NOTYPE 0        __init_array_start
@@ -600,6 +642,7 @@ nth paddr      vaddr      bind   type   size lib name
 52  0x00000494 0x08048494 GLOBAL FUNC   0        _fini
 53  0x000006ac 0x080496ac GLOBAL NOTYPE 0        __data_start
 56  0x000006b0 0x080496b0 GLOBAL OBJ    0        __dso_handle
+57  0x000004ac 0x080484ac GLOBAL OBJ    4        _IO_stdin_used
 59  0x00000420 0x08048420 GLOBAL FUNC   97       __libc_csu_init
 60  ---------- 0x080496b8 GLOBAL NOTYPE 0        _end
 61  0x00000300 0x08048300 GLOBAL FUNC   0        _start
@@ -611,7 +654,6 @@ nth paddr      vaddr      bind   type   size lib name
 1   0x000002d0 0x080482d0 GLOBAL FUNC   16       imp.puts
 2   0x000002e0 0x080482e0 WEAK   NOTYPE 16       imp.__gmon_start__
 3   0x000002f0 0x080482f0 GLOBAL FUNC   16       imp.__libc_start_main
-[Strings]
 nth paddr      vaddr      len size section type  string
 -------------------------------------------------------
 0   0x000004b0 0x080484b0 12  13   .rodata ascii Hello world!
@@ -621,6 +663,7 @@ binsz    4899
 bintype  elf
 bits     32
 canary   false
+injprot  false
 class    ELF32
 compiler GCC: (GNU) 4.8.2
 crypto   false
@@ -629,7 +672,7 @@ havecode true
 intrp    /lib/ld-linux.so.2
 laddr    0x0
 lang     c
-linenum  true
+linenum  false
 lsyms    true
 machine  Intel 80386
 nx       true
@@ -641,37 +684,30 @@ rpath    NONE
 sanitize false
 static   false
 stripped false
+uncaps   true
 subsys   linux
 va       true
-0x00000000  ELF MAGIC   0x464c457f
-0x00000010  Type        0x0002
-0x00000012  Machine     0x0003
-0x00000014  Version     0x00000001
-0x00000018  Entrypoint  0x08048300
-0x0000001c  PhOff       0x00000034
-0x00000020  ShOff       0x000007cc
-0x00000024  Flags       0x00000000
-0x00000028  EhSize      52
-0x0000002a  PhentSize   32
-0x0000002c  PhNum       8
-0x0000002e  ShentSize   40
-0x00000030  ShNum       30
-0x00000032  ShrStrndx   27
-[Linked libraries]
+0x00000000 0x00000000 0x464c457f ELF
+0x00000010 0x00000010 0x00000002 Type
+0x00000012 0x00000012 0x00000003 Machine
+0x00000014 0x00000014 0x00000001 Version
+0x00000018 0x00000018 0x08048300 EntryPoint
+0x0000001c 0x0000001c 0x00000034 PhOff
+0x00000020 0x00000020 0x000007cc ShOff
+0x00000024 0x00000024 0x00000000 Flags
+0x00000028 0x00000028 0x00000034 EhSize
+0x0000002a 0x0000002a 0x00000020 PhentSize
+0x0000002c 0x0000002c 0x00000008 PhNum
+0x0000002e 0x0000002e 0x00000028 ShentSize
+0x00000030 0x00000030 0x0000001e ShNum
+0x00000032 0x00000032 0x0000001b ShrStrndx
 libc.so.6
-
-1 library
-[Relocations]
-
-vaddr      paddr      type   name
----------------------------------
-0x08049690 0x00000690 SET_32 __gmon_start__
-0x080496a0 0x000006a0 SET_32 puts
-0x080496a4 0x000006a4 SET_32 __gmon_start__
-0x080496a8 0x000006a8 SET_32 __libc_start_main
-
-
-4 relocations
+vaddr      paddr      type   ntype name
+---------------------------------------
+0x08049690 0x00000690 SET_32 6     __gmon_start__
+0x080496a0 0x000006a0 SET_32 7     puts
+0x080496a4 0x000006a4 SET_32 7     __gmon_start__
+0x080496a8 0x000006a8 SET_32 7     __libc_start_main
 4899
 Version symbols section '.gnu.version' contains 5 entries:
  Addr: 0x08048246  Offset: 0x00000246  Link: 5 (.dynsym)
@@ -689,16 +725,15 @@ Version need section '.gnu.version_r' contains 1 entries:
 Section to Segment mapping:
 Segment      Section
 --------------------
-PHDR         
+PHDR
 INTERP       .interp 
 LOAD0        .interp .note.ABI-tag .note.gnu.build-id .gnu.hash .dynsym .dynstr .gnu.version .gnu.version_r .rel.dyn .rel.plt .init .plt .text .fini .rodata .eh_frame_hdr .eh_frame 
 LOAD1        .init_array .fini_array .jcr .dynamic .got .got.plt .data .bss 
 DYNAMIC      .dynamic 
 NOTE         .note.ABI-tag .note.gnu.build-id 
 GNU_EH_FRAME .eh_frame_hdr 
-GNU_STACK    
-ehdr         
-
+GNU_STACK
+ehdr
 EOF
 RUN
 
@@ -726,6 +761,7 @@ binsz    7051
 bintype  elf
 bits     64
 canary   false
+injprot  false
 class    ELF64
 compiler GCC: (Ubuntu 7.3.0-16ubuntu3) 7.3.0
 crypto   false
@@ -734,7 +770,7 @@ havecode true
 intrp    /lib64/ld-linux-x86-64.so.2
 laddr    0x0
 lang     c++
-linenum  true
+linenum  false
 lsyms    true
 machine  AMD x86-64 architecture
 nx       true
@@ -746,6 +782,7 @@ rpath    NONE
 sanitize false
 static   false
 stripped false
+uncaps   true
 subsys   linux
 va       true
 EOF
@@ -761,6 +798,7 @@ binsz    1603255
 bintype  elf
 bits     64
 canary   false
+injprot  false
 class    ELF64
 compiler GCC: (Debian 8.2.0-5) 8.2.0 clang version 6.0.1-6 (tags/RELEASE_601/final)
 crypto   false
@@ -769,7 +807,7 @@ havecode true
 intrp    /lib64/ld-linux-x86-64.so.2
 laddr    0x0
 lang     c++
-linenum  true
+linenum  false
 lsyms    true
 machine  AMD x86-64 architecture
 nx       true
@@ -781,6 +819,7 @@ rpath    NONE
 sanitize true
 static   false
 stripped false
+uncaps   true
 subsys   linux
 va       true
 EOF
@@ -796,7 +835,9 @@ binsz    9828
 bintype  mach0
 bits     64
 canary   false
+injprot  false
 class    MACH064
+compiler clang
 crypto   false
 endian   little
 havecode true
@@ -806,13 +847,14 @@ lang     c++ with blocks
 linenum  false
 lsyms    false
 machine  x86 64 all
-nx       false
-os       darwin
+nx       true
+os       macos
 pic      true
-relocs   false
+relocs   true
 sanitize false
 static   false
 stripped false
+uncaps   true
 subsys   darwin
 va       true
 EOF
@@ -855,15 +897,18 @@ NAME=rabin2 -c
 FILE=bins/java/test.class
 CMDS=!rabin2 -c ${R2_FILE}
 EXPECT=<<EOF
-0x00000000 [0x000008f9 - 0x00000b99]    672 class 0 test :: groovy/lang/Script
-0x000008f9 method 0      <init>
-0x0000092e method 1      <init>
-0x0000096e method 2      main
-0x000009ae method 3      run
-0x00000aba method 4      $getStaticMetaClass
-0x00000afb method 5      $createCallSiteArray_1
-0x00000b6a method 6      $createCallSiteArray
-0x00000b99 method 7      $getCallSiteArray
+0x00000000 [0x000008f9 - 0x00000bc1]    712 java class 0 test :: groovy/lang/Script
+0x000008f9 java   method   0 pC   <init>
+0x0000092e java   method   1 pC   <init>
+0x0000096e java   method   2 psg  main
+0x000009ae java   method   3 p    run
+0x00000aba java   method   4 rh   $getStaticMetaClass
+0x00000afb java   method   5 Psh  $createCallSiteArray_1
+0x00000b6a java   method   6 Psh  $createCallSiteArray
+0x00000b99 java   method   7 Psh  $getCallSiteArray
+0x000008c9 java    field   0 Psh  $staticClassInfo
+0x000008d1 java    field   1 psh  __$stMC
+0x000008d9 java    field   2 Psh  $callSiteArray
 EOF
 RUN
 
@@ -871,15 +916,47 @@ NAME=rabin2 -cq
 FILE=bins/java/test.class
 CMDS=!rabin2 -cq ${R2_FILE}
 EXPECT=<<EOF
-0x00000000 [0x000008f9 - 0x00000b99] test groovy/lang/Script
+0x00000000 [0x000008f9 - 0x00000bc1] java test groovy/lang/Script
+EOF
+RUN
+
+NAME=rabin2 -D swift TODO
+FILE=--
+CMDS=!rabin2 -D swift  's9Alamofire10HTTPMethodO8rawValueACSgSS_tcfC'
+EXPECT=<<EOF
+Alamofire.HTTPMethod.rawValue.SgSS_tcfC
+EOF
+RUN
+
+NAME=rabin2 -D swift deinit
+FILE=--
+CMDS=!rabin2 -D swift  's16IOSSecuritySuiteAACfD'
+EXPECT=<<EOF
+IOSSecuritySuite...deinit.deallocating
+EOF
+RUN
+
+NAME=rabin2 -D swift conforms
+FILE=--
+CMDS=!rabin2 -D swift  '_$s16IOSSecuritySuite11FailedCheckOSQAAMc'
+EXPECT=<<EOF
+IOSSecuritySuite.FailedCheck.conformsto.Equatable(...QAAMc)
 EOF
 RUN
 
 NAME=rabin2 -D swift
-FILE=bins/elf/libc.so.0
+FILE=--
 CMDS=!rabin2 -D swift  _TFSSCfT21_builtinStringLiteralBp8byteSizeBw7isASCIIBi1__SS
 EXPECT=<<EOF
 Swift.String.init(_builtinStringLiteral: Builtin.RawPointer, byteSize: Builtin.Word, isASCII: Builtin.Int1) -> Swift.String
+EOF
+RUN
+
+NAME=rabin2 -D swift O attribute
+FILE=--
+CMDS=!rabin2 -D swift '_$s16IOSSecuritySuite11FailedCheckO13symbolicLinksyA2CmFWC'
+EXPECT=<<EOF
+IOSSecuritySuite.FailedCheck.symbolicLinks(...A2CmFWC)
 EOF
 RUN
 
@@ -887,7 +964,7 @@ NAME=rabin2 -D Unsupported
 FILE=--
 CMDS=!rabin2 -D XXX LOLILOL
 EXPECT_ERR=<<EOF
-Unsupported demangler
+ERROR: Unsupported demangler
 EOF
 RUN
 
@@ -927,13 +1004,13 @@ NAME=rabin2 -O bad op
 FILE=-
 CMDS=!rabin2 -O bad_op -
 EXPECT_ERR=<<EOF
-Unknown operation. use -O help
+ERROR: Unknown operation. use -O help
 EOF
 RUN
 
 NAME=rabin2 -v
 FILE=-
-CMDS=!rabin2 -v | grep -c build
+CMDS=!rabin2 -v | grep -c birth
 EXPECT=<<EOF
 1
 EOF
@@ -941,7 +1018,7 @@ RUN
 
 NAME=rabin2 -L
 FILE=-
-CMDS=!rabin2 -L | grep -c any
+CMDS=!rabin2 -L | grep -c null
 EXPECT=<<EOF
 1
 EOF
@@ -949,7 +1026,7 @@ RUN
 
 NAME=rabin2 -Lq
 FILE=-
-CMDS=!rabin2 -Lq | grep -c any
+CMDS=!rabin2 -Lq | grep -c null
 EXPECT=<<EOF
 1
 EOF
@@ -957,25 +1034,165 @@ RUN
 
 NAME=rabin2 -Lj
 FILE=-
-CMDS=!rabin2 -Lj | grep -c any
+CMDS=!rabin2 -Lj | grep -c null
 EXPECT=<<EOF
 1
 EOF
 RUN
 
-NAME=rabin2 -Lj any
+NAME=rabin2 -L lists demanglers
 FILE=-
-CMDS=!rabin2 -Lj Dummy | grep -c Dummy
+CMDS=!rabin2 -L | grep -c '^dem  c++'
 EXPECT=<<EOF
 1
 EOF
 RUN
 
-NAME=rabin2 -U
-FILE=bins/pe/resource.exe
-CMDS=!rabin2 -U ${R2_FILE} | grep -c Resource
+NAME=rabin2 -Lj lists demanglers
+FILE=-
+CMDS=!rabin2 -Lj | grep -c '"dem":'
 EXPECT=<<EOF
 1
+EOF
+RUN
+
+NAME=rabin2 -Lj null
+FILE=-
+CMDS=!rabin2 -Lj null | grep -c Dummy
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=rabin2 -L elf
+FILE=-
+CMDS=!rabin2 -L elf
+EXPECT=<<EOF
+Name: elf
+Description: Executable and Link Format (ELF) for 32 bit
+License: LGPL-3.0-only
+Author: nibble
+EOF
+RUN
+
+NAME=rabin2 -L elf64
+FILE=-
+CMDS=!rabin2 -L elf64
+EXPECT=<<EOF
+Name: elf64
+Description: Executable Link Format for 64bit
+License: LGPL-3.0-only
+Author: nibble
+EOF
+RUN
+
+NAME=rabin2 -u
+FILE=bins/pe/resource.exe
+CMDS=!rabin2 -u ${R2_FILE} | grep -c Resource
+EXPECT=<<EOF
+1
+EOF
+RUN
+
+NAME=rabin2 -uj PE
+FILE=bins/pe/standard.exe
+CMDS=!rabin2 -j -u ${R2_FILE}
+EXPECT=<<EOF
+{"resources":[{"name":"1576","index":0,"type":"ICON","vaddr":4198784,"paddr":896,"size":5672,"id":1576,"type_id":3,"lang":"LANG_NEUTRAL","language_id":0,"codepage":0,"named":false,"timestamp":"Thu Jan  1 00:00:00 1970"},{"name":"10","index":1,"type":"STRING","vaddr":4205072,"paddr":7184,"size":76,"id":10,"type_id":6,"lang":"LANG_NEUTRAL","language_id":0,"codepage":0,"named":false,"timestamp":"Thu Jan  1 00:00:00 1970"},{"name":"788","index":2,"type":"GROUP_ICON","vaddr":4204464,"paddr":6576,"size":20,"id":788,"type_id":14,"lang":"LANG_NEUTRAL","language_id":0,"codepage":0,"named":false,"timestamp":"Thu Jan  1 00:00:00 1970"},{"name":"1","index":3,"type":"VERSION","vaddr":4204496,"paddr":6608,"size":452,"id":1,"type_id":16,"lang":"LANG_NEUTRAL","language_id":0,"codepage":0,"named":false,"timestamp":"Thu Jan  1 00:00:00 1970"},{"name":"1","index":4,"type":"MANIFEST","vaddr":4204960,"paddr":7072,"size":74,"id":1,"type_id":24,"lang":"LANG_NEUTRAL","language_id":0,"codepage":0,"named":false,"timestamp":"Thu Jan  1 00:00:00 1970"}]}
+EOF
+RUN
+
+NAME=rabin2 -uj NE
+FILE=bins/ne/anim8.exe
+CMDS=<<EOF
+!rabin2 -j -u ${R2_FILE} | grep -o '"name":"ICONX","index":0,"type":"GROUP_ICON","vaddr":47104,"paddr":47104,"size":512,"id":null,"type_id":14,"lang":null,"language_id":0,"codepage":0,"named":true,"timestamp":null'
+!rabin2 -j -u ${R2_FILE} | grep -o '"name":"1","index":38,"type":"ICON","vaddr":312832,"paddr":312832,"size":1024,"id":1,"type_id":3,"lang":null,"language_id":0,"codepage":0,"named":false,"timestamp":null'
+!rabin2 -j -u ${R2_FILE} | grep -o '"index":' | wc -l | tr -d ' '
+EOF
+EXPECT=<<EOF
+"name":"ICONX","index":0,"type":"GROUP_ICON","vaddr":47104,"paddr":47104,"size":512,"id":null,"type_id":14,"lang":null,"language_id":0,"codepage":0,"named":true,"timestamp":null
+"name":"1","index":38,"type":"ICON","vaddr":312832,"paddr":312832,"size":1024,"id":1,"type_id":3,"lang":null,"language_id":0,"codepage":0,"named":false,"timestamp":null
+39
+EOF
+RUN
+
+NAME=rabin2 resource quiet and physical modes
+FILE=bins/pe/standard.exe
+CMDS=<<EOF
+!rabin2 -q -u ${R2_FILE}
+!rabin2 -qq -u ${R2_FILE}
+!rabin2 -p -q -u ${R2_FILE}
+EOF
+EXPECT=<<EOF
+0x00401180 5672 ICON 1576
+0x00402a10 76 STRING 10
+0x004027b0 20 GROUP_ICON 788
+0x004027d0 452 VERSION 1
+0x004029a0 74 MANIFEST 1
+1576
+10
+788
+1
+1
+0x00000380 5672 ICON 1576
+0x00001c10 76 STRING 10
+0x000019b0 20 GROUP_ICON 788
+0x000019d0 452 VERSION 1
+0x00001ba0 74 MANIFEST 1
+EOF
+RUN
+
+NAME=rabin2 raw resource extraction
+FILE=bins/pe/standard.exe
+CMDS=<<EOF
+rmrf .tmp/rabin2-resource-extract
+!!rabin2 -xu -o .tmp/rabin2-resource-extract ${R2_FILE}
+!!rabin2 -Z .tmp/rabin2-resource-extract/resource_ICON_1576_0.bin
+!!rabin2 -Z .tmp/rabin2-resource-extract/resource_STRING_10_1.bin
+!!rabin2 -Z .tmp/rabin2-resource-extract/resource_GROUP_ICON_788_2.bin
+!!rabin2 -Z .tmp/rabin2-resource-extract/resource_VERSION_1_3.bin
+!!rabin2 -Z .tmp/rabin2-resource-extract/resource_MANIFEST_1_4.bin
+rmrf .tmp/rabin2-resource-extract
+EOF
+EXPECT=<<EOF
+5672
+76
+20
+452
+74
+EOF
+RUN
+
+NAME=rabin2 section and segment extraction
+FILE=bins/elf/analysis/hello-linux-x86_64
+CMDS=<<EOF
+rmrf .tmp/rabin2-sections-extract
+rmrf .tmp/rabin2-segments-extract
+!!rabin2 -xS -o .tmp/rabin2-sections-extract ${R2_FILE}
+!!rabin2 -xSS -o .tmp/rabin2-segments-extract ${R2_FILE}
+!!rahash2 -qq -a sha256 .tmp/rabin2-sections-extract/section_.text_13.bin
+!!rahash2 -qq -a sha256 .tmp/rabin2-segments-extract/segment_LOAD0_2.bin
+rmrf .tmp/rabin2-sections-extract
+rmrf .tmp/rabin2-segments-extract
+EOF
+EXPECT=<<EOF
+dcb90dd685b3db105be06c136ec2d1d5416e00906e28cc71eebb131cd7b6c206
+fb026f99dd41eb994947dc2314fb40e7c016ebbdb7533a2efd51629f3bf234db
+EOF
+RUN
+
+NAME=rabin2 raw named resource extraction
+FILE=bins/ne/anim8.exe
+CMDS=<<EOF
+rmrf .tmp/rabin2-named-resource-extract
+!!rabin2 -xu -o .tmp/rabin2-named-resource-extract ${R2_FILE}
+!!rabin2 -Z .tmp/rabin2-named-resource-extract/resource_GROUP_ICON_named_0.bin
+!!rabin2 -Z .tmp/rabin2-named-resource-extract/resource_ICON_1_38.bin
+rmrf .tmp/rabin2-named-resource-extract
+EOF
+EXPECT=<<EOF
+512
+1024
 EOF
 RUN
 
@@ -983,10 +1200,8 @@ NAME=rabin2 -E
 FILE=bins/pe/dll.dll
 CMDS=!rabin2 -E ${R2_FILE}
 EXPECT=<<EOF
-[Exports]
-
-nth paddr      vaddr      bind   type size lib     name
--------------------------------------------------------
+nth paddr      vaddr      bind   type size lib     name   demangled
+-------------------------------------------------------------------
 0   0x00000224 0x01001024 GLOBAL FUNC 0    dll.dll export
 EOF
 RUN
@@ -1025,7 +1240,7 @@ RUN
 
 NAME=rabin2 -H
 FILE=bins/pe/base.exe
-CMDS=!rabin2 -H ${R2_FILE} | grep -c "Machine : 0x14c"
+CMDS=!rabin2 -H ${R2_FILE} | grep -c "Machine"
 EXPECT=<<EOF
 1
 EOF
@@ -1033,7 +1248,7 @@ RUN
 
 NAME=rabin2 -d
 FILE=bins/elf/analysis/dwarftest
-CMDS=!rabin2 -d ${R2_FILE} | grep -c "0x00400535	/tmp/r2-regressions/.//dwarftest.c"
+CMDS=!rabin2 -d ${R2_FILE} | grep -c "0x00400535	/tmp/r2-regressions/./dwarftest.c"
 EXPECT=<<EOF
 1
 EOF
@@ -1043,7 +1258,7 @@ NAME=rabin2 -dj
 FILE=bins/elf/analysis/dwarftest
 CMDS=!rabin2 -dj ${R2_FILE}
 EXPECT=<<EOF
-{"dwarf":[[{"name":"CC","file":"dwarftest.c","line_num":7,"addr":4195637},{"name":"CL","file":"dwarftest.c","line_num":7,"line":"","addr":4195637}],[{"name":"CC","file":"dwarftest.c","line_num":4,"addr":4195629},{"name":"CL","file":"dwarftest.c","line_num":4,"line":"","addr":4195629}],[{"name":"CC","file":"dwarftest.c","line_num":12,"addr":4195673},{"name":"CL","file":"dwarftest.c","line_num":12,"line":"","addr":4195673}],[{"name":"CC","file":"dwarftest.c","line_num":8,"addr":4195646},{"name":"CL","file":"dwarftest.c","line_num":8,"line":"","addr":4195646}],[{"name":"CC","file":"dwarftest.c","line_num":7,"addr":4195660},{"name":"CL","file":"dwarftest.c","line_num":7,"line":"","addr":4195660}],[{"name":"CC","file":"dwarftest.c","line_num":7,"addr":4195656},{"name":"CL","file":"dwarftest.c","line_num":7,"line":"","addr":4195656}],[{"name":"CC","file":"dwarftest.c","line_num":11,"addr":4195666},{"name":"CL","file":"dwarftest.c","line_num":11,"line":"","addr":4195666}],[{"name":"CC","file":"dwarftest.c","line_num":12,"addr":4195671},{"name":"CL","file":"dwarftest.c","line_num":12,"line":"","addr":4195671}]]}
+{"addrline":[[{"name":"CC","file":"dwarftest.c","line_num":4,"addr":4195629},{"name":"CL","file":"dwarftest.c","line_num":4,"addr":4195629}],[{"name":"CC","file":"dwarftest.c","line_num":7,"addr":4195637},{"name":"CL","file":"dwarftest.c","line_num":7,"addr":4195637}],[{"name":"CC","file":"dwarftest.c","line_num":8,"addr":4195646},{"name":"CL","file":"dwarftest.c","line_num":8,"addr":4195646}],[{"name":"CC","file":"dwarftest.c","line_num":7,"addr":4195656},{"name":"CL","file":"dwarftest.c","line_num":7,"addr":4195656}],[{"name":"CC","file":"dwarftest.c","line_num":7,"addr":4195660},{"name":"CL","file":"dwarftest.c","line_num":7,"addr":4195660}],[{"name":"CC","file":"dwarftest.c","line_num":11,"addr":4195666},{"name":"CL","file":"dwarftest.c","line_num":11,"addr":4195666}],[{"name":"CC","file":"dwarftest.c","line_num":12,"addr":4195671},{"name":"CL","file":"dwarftest.c","line_num":12,"addr":4195671}],[{"name":"CC","file":"dwarftest.c","line_num":12,"addr":4195673},{"name":"CL","file":"dwarftest.c","line_num":12,"addr":4195673}]]}
 EOF
 RUN
 
@@ -1073,7 +1288,7 @@ EXPECT=<<EOF
             "offset": 0
           },
           {
-            "member_type": "uint16_t",
+            "member_type": "int16_t",
             "member_name": "b",
             "offset": 1
           },
@@ -1151,7 +1366,7 @@ EXPECT=<<EOF
             "offset": 0
           },
           {
-            "member_type": "uint16_t",
+            "member_type": "int16_t",
             "member_name": "b",
             "offset": 0
           },
@@ -1204,6 +1419,67 @@ NAME=rabin2 -S ""
 FILE=-
 CMDS=!rabin2 -S ""
 EXPECT_ERR=<<EOF
-Cannot open empty path
+ERROR: Cannot open empty path
 EOF
 RUN
+
+NAME=rabin2 lists RABIN2_RESRAW
+FILE=-
+CMDS=!rabin2 -J | grep '^RABIN2_RESRAW='
+EXPECT=<<EOF
+RABIN2_RESRAW=
+EOF
+RUN
+
+NAME=rabin2 -O invalid arguments (#15449)
+FILE=bins/elf/analysis/x86-helloworld-gcc
+CMDS=<<EOF
+!rabin2 -O r ${R2_FILE}
+!rabin2 -O r/.data ${R2_FILE}
+!rabin2 -O p ${R2_FILE}
+!rabin2 -O p/.data ${R2_FILE}
+!rabin2 -O p/.data/foo -o /dev/null ${R2_FILE}
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Unknown operation. use -O help
+ERROR: Unknown operation. use -O help
+ERROR: Unknown operation. use -O help
+ERROR: Unknown operation. use -O help
+ERROR: Invalid permissions string (foo)
+EOF
+RUN
+
+NAME=rabin2 -O section resize and permissions (#15449)
+FILE=bins/elf/analysis/x86-helloworld-gcc
+CMDS=<<EOF
+mkdir .tmp
+rmrf .tmp/rabin2-mod
+!rabin2 -O r/.data/1024 -o .tmp/rabin2-mod ${R2_FILE} 2>/dev/null
+!rabin2 -S .tmp/rabin2-mod | grep '\.data$'
+!rabin2 -O p/.data/rwx -o .tmp/rabin2-mod ${R2_FILE}
+!rabin2 -S .tmp/rabin2-mod | grep '\.data$'
+rmrf .tmp/rabin2-mod
+EOF
+EXPECT=<<EOF
+24  0x000006ac  0x400 0x080496ac  0x400 -rw- 0x3   PROGBITS    .data
+24  0x000006ac    0x8 0x080496ac    0x8 -rwx 0x7   PROGBITS    .data
+EOF
+RUN
+
+NAME=rabin2 -O cross-endian ELF rejection (#15449)
+FILE=bins/elf/hello.ppc
+CMDS=<<EOF
+!rabin2 -O r/.data/8 -o /dev/null ${R2_FILE}
+!rabin2 -O p/.data/rwx -o /dev/null ${R2_FILE}
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Cross-endian ELF section resizing is not supported
+ERROR: Cannot perform operation
+ERROR: Cross-endian ELF section permission patching is not supported
+ERROR: Cannot patch section '.data' permissions (unsupported or not found)
+ERROR: Cannot perform operation
+EOF
+RUN
+
+
+

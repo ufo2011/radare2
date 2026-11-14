@@ -30,45 +30,34 @@ static ut64 baddr(RBinFile *bf) {
 	return bf? r_buf_read_le32_at (bf->buf, NRO_OFFSET_MODMEMOFF): 0;
 }
 
-static bool check_buffer(RBinFile *bf, RBuffer *b) {
+static bool check(RBinFile *bf, RBuffer *b) {
 	ut8 magic[4];
 	if (r_buf_read_at (b, NRO_OFF (magic), magic, sizeof (magic)) == 4) {
-		return fileType (magic) != NULL;
+		return fileType (magic);
 	}
 	return false;
 }
 
-static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb) {
+static bool load(RBinFile *bf, RBuffer *b, ut64 loadaddr) {
 	// XX bf->buf vs b :D this load_b
 	RBinNXOObj *bin = R_NEW0 (RBinNXOObj);
-	if (bin) {
-		ut64 ba = baddr (bf);
-		bin->methods_list = r_list_newf ((RListFree)free);
-		bin->imports_list = r_list_newf ((RListFree)r_bin_import_free);
-		bin->classes_list = r_list_newf ((RListFree)free);
-		ut32 mod0 = r_buf_read_le32_at (b, NRO_OFFSET_MODMEMOFF);
-		parseMod (b, bin, mod0, ba);
-		*bin_obj = bin;
-	}
+	ut64 ba = baddr (bf);
+	RVecRBinSymbol_init (&bin->methods_list);
+	RVecRBinImport_init (&bin->imports_list);
+	bin->classes_list = r_list_newf ((RListFree)free);
+	ut32 mod0 = r_buf_read_le32_at (b, NRO_OFFSET_MODMEMOFF);
+	parseMod (b, bin, mod0, ba);
+	bf->bo->bin_obj = bin;
 	return true;
 }
 
-static RBinAddr *binsym(RBinFile *bf, int type) {
-	return NULL; // TODO
-}
-
 static RList *entries(RBinFile *bf) {
-	RList *ret;
-	RBinAddr *ptr = NULL;
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
+	RList *ret = r_list_new ();
 	ret->free = free;
-	if ((ptr = R_NEW0 (RBinAddr))) {
-		ptr->paddr = 0x80;
-		ptr->vaddr = ptr->paddr + baddr (bf);
-		r_list_append (ret, ptr);
-	}
+	RBinAddr *ptr = R_NEW0 (RBinAddr);
+	ptr->paddr = 0x80;
+	ptr->vaddr = ptr->paddr + baddr (bf);
+	r_list_append (ret, ptr);
 	return ret;
 }
 
@@ -84,23 +73,16 @@ static Sdb *get_sdb(RBinFile *bf) {
 	return kv;
 }
 
-static RList *sections(RBinFile *bf) {
-	RList *ret = NULL;
-	RBinSection *ptr = NULL;
+static bool sections_vec(RBinFile *bf) {
 	RBuffer *b = bf->buf;
-	if (!bf->o->info) {
-		return NULL;
+	if (!bf->bo->info) {
+		return false;
 	}
-	if (!(ret = r_list_new ())) {
-		return NULL;
-	}
-	ret->free = free;
+	RVecRBinSection_clear (&bf->bo->sections_vec);
 
 	ut64 ba = baddr (bf);
 
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	RBinSection *ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("header");
 	ptr->size = 0x80;
 	ptr->vsize = 0x80;
@@ -108,15 +90,12 @@ static RList *sections(RBinFile *bf) {
 	ptr->vaddr = 0;
 	ptr->perm = R_PERM_R;
 	ptr->add = false;
-	r_list_append (ret, ptr);
 
 	int bufsz = r_buf_size (bf->buf);
 
 	ut32 mod0 = r_buf_read_le32_at (bf->buf, NRO_OFFSET_MODMEMOFF);
 	if (mod0 && mod0 + 8 < bufsz) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
+		ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ut32 mod0sz = r_buf_read_le32_at (bf->buf, mod0 + 4);
 		ptr->name = strdup ("mod0");
 		ptr->size = mod0sz;
@@ -125,16 +104,13 @@ static RList *sections(RBinFile *bf) {
 		ptr->vaddr = mod0 + ba;
 		ptr->perm = R_PERM_R; // rw-
 		ptr->add = false;
-		r_list_append (ret, ptr);
 	} else {
-		eprintf ("Invalid MOD0 address\n");
+		R_LOG_ERROR ("Invalid MOD0 address");
 	}
 
 	ut32 sig0 = r_buf_read_le32_at (bf->buf, 0x18);
 	if (sig0 && sig0 + 8 < bufsz) {
-		if (!(ptr = R_NEW0 (RBinSection))) {
-			return ret;
-		}
+		ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 		ut32 sig0sz = r_buf_read_le32_at (bf->buf, sig0 + 4);
 		ptr->name = strdup ("sig0");
 		ptr->size = sig0sz;
@@ -143,15 +119,12 @@ static RList *sections(RBinFile *bf) {
 		ptr->vaddr = sig0 + ba;
 		ptr->perm = R_PERM_R; // r--
 		ptr->add = true;
-		r_list_append (ret, ptr);
 	} else {
-		eprintf ("Invalid SIG0 address\n");
+		R_LOG_ERROR ("Invalid SIG0 address");
 	}
 
 	// add text segment
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("text");
 	ptr->vsize = r_buf_read_le32_at (b, NRO_OFF (text_size));
 	ptr->size = ptr->vsize;
@@ -159,12 +132,9 @@ static RList *sections(RBinFile *bf) {
 	ptr->vaddr = ptr->paddr + ba;
 	ptr->perm = R_PERM_RX; // r-x
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
 	// add ro segment
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("ro");
 	ptr->vsize = r_buf_read_le32_at (b, NRO_OFF (ro_size));
 	ptr->size = ptr->vsize;
@@ -172,12 +142,9 @@ static RList *sections(RBinFile *bf) {
 	ptr->vaddr = ptr->paddr + ba;
 	ptr->perm = R_PERM_R; // r-x
 	ptr->add = true;
-	r_list_append (ret, ptr);
 
 	// add data segment
-	if (!(ptr = R_NEW0 (RBinSection))) {
-		return ret;
-	}
+	ptr = RVecRBinSection_emplace_back (&bf->bo->sections_vec);
 	ptr->name = strdup ("data");
 	ptr->vsize = r_buf_read_le32_at (b, NRO_OFF (data_size));
 	ptr->size = ptr->vsize;
@@ -185,40 +152,32 @@ static RList *sections(RBinFile *bf) {
 	ptr->vaddr = ptr->paddr + ba;
 	ptr->perm = R_PERM_RW;
 	ptr->add = true;
-	eprintf ("Base Address 0x%08"PFMT64x "\n", ba);
-	eprintf ("BSS Size 0x%08"PFMT64x "\n", (ut64)
+	R_LOG_INFO ("Base Address 0x%08"PFMT64x, ba);
+	R_LOG_INFO ("BSS Size 0x%08"PFMT64x, (ut64)
 			r_buf_read_le32_at (bf->buf, NRO_OFF (bss_size)));
-	r_list_append (ret, ptr);
-	return ret;
+	return true;
 }
 
-static RList *symbols(RBinFile *bf) {
-	RBinNXOObj *bin;
-	if (!bf || !bf->o || !bf->o->bin_obj) {
-		return NULL;
+static bool symbols_vec(RBinFile *bf) {
+	if (!bf || !bf->bo || !bf->bo->bin_obj) {
+		return false;
 	}
-	bin = (RBinNXOObj*) bf->o->bin_obj;
-	return bin->methods_list;
+	RBinNXOObj *bin = (RBinNXOObj*) bf->bo->bin_obj;
+	RVecRBinSymbol_swap (&bf->bo->symbols_vec, &bin->methods_list);
+	return true;
 }
 
-static RList *imports(RBinFile *bf) {
-	RBinNXOObj *bin;
-	if (!bf || !bf->o || !bf->o->bin_obj) {
-		return NULL;
+static bool imports_vec(RBinFile *bf) {
+	if (!bf || !bf->bo || !bf->bo->bin_obj) {
+		return false;
 	}
-	bin = (RBinNXOObj*) bf->o->bin_obj;
-	return bin->imports_list;
-}
-
-static RList *libs(RBinFile *bf) {
-	return NULL;
+	RBinNXOObj *bin = (RBinNXOObj*) bf->bo->bin_obj;
+	RVecRBinImport_swap (&bf->bo->imports_vec, &bin->imports_list);
+	return true;
 }
 
 static RBinInfo *info(RBinFile *bf) {
 	RBinInfo *ret = R_NEW0 (RBinInfo);
-	if (!ret) {
-		return NULL;
-	}
 	ut8 magic[4];
 	r_buf_read_at (bf->buf, NRO_OFF (magic), magic, sizeof (magic));
 	const char *ft = fileType (magic);
@@ -245,28 +204,27 @@ static RBinInfo *info(RBinFile *bf) {
 	ret->has_va = true;
 	ret->has_lit = true;
 	ret->big_endian = false;
-	ret->dbg_info = 0;
-	ret->dbg_info = 0;
 	return ret;
 }
 
 #if !R_BIN_NRO
 
 RBinPlugin r_bin_plugin_nro = {
-	.name = "nro",
-	.desc = "Nintendo Switch NRO0 binaries",
-	.license = "MIT",
-	.load_buffer = &load_buffer,
-	.check_buffer = &check_buffer,
+	.meta = {
+		.name = "nro",
+		.author = "pancake",
+		.desc = "Nintendo Switch NRO0 ROMs",
+		.license = "MIT",
+	},
+	.load = &load,
+	.check = &check,
 	.baddr = &baddr,
-	.binsym = &binsym,
 	.entries = &entries,
-	.sections = &sections,
+	.sections_vec = &sections_vec,
 	.get_sdb = &get_sdb,
-	.symbols = &symbols,
-	.imports = &imports,
+	.symbols_vec = &symbols_vec,
+	.imports_vec = &imports_vec,
 	.info = &info,
-	.libs = &libs,
 };
 
 #ifndef R2_PLUGIN_INCORE

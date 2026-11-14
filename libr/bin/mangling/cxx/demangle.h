@@ -501,6 +501,7 @@ struct demangle_component
      Initialize to zero.  Private to d_print_comp.
      All other fields are final after initialization.  */
   int d_printing;
+  int d_counting;
 
   union
   {
@@ -714,10 +715,12 @@ cplus_demangle_print (int options,
    by malloc()), and so is normally safe for use where the heap has been
    corrupted.  On success, this function returns 1; on failure, 0.  */
 
+#if 0
 extern int
 cplus_demangle_print_callback (int options,
                                struct demangle_component *tree,
                                demangle_callbackref callback, void *opaque);
+#endif
 
 #ifdef __cplusplus
 }

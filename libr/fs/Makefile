@@ -1,44 +1,41 @@
 NAME=r_fs
-R2DEPS=r_util r_io r_socket r_hash r_cons r_crypto
+PCLIBS_PRIVATE=@PKGCFG_LIBZIPLIBS@
+R2DEPS=r_util r_io r_socket r_cons r_muta
 CFLAGS:=-DR2_PLUGIN_INCORE -Iarch/include -Iarch $(CFLAGS)
 
-SHLR=../../shlr/
-
 include ../config.mk
-CFLAGS:=-I$(SHLR)/grub/include $(CFLAGS)
-ifeq ($(WITH_GPL),1)
-LDFLAGS+=$(SHLR)/grub/libgrubfs.a
+
+OBJS=fs.o fs_file.o fs_shell.o
+include p/grub/deps.mk
+
+ifeq ($(R2_USE_SQSH),1)
+CFLAGS+=$(SQSH_CFLAGS)
+LDFLAGS+=$(SQSH_LDFLAGS)
 endif
 
 EXTRA_TARGETS=plugins
+
 foo:
 	for TARGET in pre plugins ${LIBSO} ${LIBAR} ; do ${MAKE} $$TARGET ; done
 
 include ${STATIC_FS_PLUGINS}
-STATIC_OBJS=$(subst ..,p/..,$(subst fs_,p/fs_,$(STATIC_OBJ)))
-OBJS=${STATIC_OBJS} fs.o fs_file.o shell.o
-#p/grub/main.o
-
-#p/grub/libgrubfs.a:
-#	cd p/grub && ${MAKE} libgrubfs.a CC="${CC}"
+OBJS+=$(subst ..,p/..,$(subst fs_,p/fs_,$(STATIC_OBJ)))
 
 pre:
-	cd d && ${MAKE}
-#	@if [ ! -e libr_fs.${EXT_SO} ]; then if [ ! -e libr_fs.${EXT_AR} ]; then rm -f ${STATIC_OBJS} ; fi ; fi
+	$(MAKE) -C d
 
 re:
 	rm -f fs.o libr_fs.so
-	${MAKE}
+	$(MAKE)
 	rm -f t/fastcall.o
-	sudo ${MAKE} install
-	cd t && ${MAKE}
-
-test:
-	#valgrind r2 -i test.rsc /tmp/test.fs.img
-	gdb --args r2 -i test.rsc /tmp/test.fs.img
+	sudo $(MAKE) install
+	$(MAKE) -C t
 
 plugins:
-	#cd p/grub && ${MAKE} libgrubfs.a CC="${CC}"
-	cd p && ${MAKE} all
+	$(MAKE) -C p all
 
 include ../rules.mk
+
+# Ensure zip library is linked when building shared library
+include $(SHLR)/zip/deps.mk
+LINK+=$(OTEZIP_LIBA)

@@ -10,7 +10,7 @@ static bool ios_hwstep_enable64(RDebug *dbg, bool enable) {
 
 	mach_msg_type_number_t count = ARM_DEBUG_STATE64_COUNT;
 	if (thread_get_state (th, ARM_DEBUG_STATE64, (thread_state_t)&ds, &count)) {
-		perror ("thread-get-state");
+		r_sys_perror ("thread-get-state");
 		return false;
 	}
 	// The use of __arm64__ here is not ideal.  If debugserver is running on
@@ -25,7 +25,7 @@ static bool ios_hwstep_enable64(RDebug *dbg, bool enable) {
 		ds.mdscr_el1 &= ~(1ULL);
 	}
 	if (thread_set_state (th, ARM_DEBUG_STATE64, (thread_state_t)&ds, count)) {
-		perror ("thread-set-state");
+		r_sys_perror ("thread-set-state");
 	}
 	return true;
 }
@@ -41,13 +41,13 @@ static bool ios_hwstep_enable32(RDebug *dbg, bool enable) {
 	count = ARM_DEBUG_STATE32_COUNT;
 	ret = thread_get_state (th, ARM_DEBUG_STATE32, (thread_state_t)&ds, &count);
 	if (ret != KERN_SUCCESS) {
-		perror ("thread_get_state(debug)");
+		r_sys_perror ("thread_get_state(debug)");
 	}
 
 	count = ARM_UNIFIED_THREAD_STATE_COUNT;
 	ret = thread_get_state (th, ARM_UNIFIED_THREAD_STATE, (thread_state_t)&state, &count);
 	if (ret != KERN_SUCCESS) {
-		perror ("thread_get_state(unified)");
+		r_sys_perror ("thread_get_state(unified)");
 	}
 	//eprintf ("PC = 0x%08x\n", state.ts_32.__pc);
 	if (enable) {
@@ -69,7 +69,9 @@ static bool ios_hwstep_enable32(RDebug *dbg, bool enable) {
 				ds.__bcr[i] |= BAS_IMVA_0_1;
 			}
 			/* check for thumb */
-			bio->read_at (bio->io, pc, (void *)&op, 2);
+			if (bio->read_at (bio->io, pc, (void *)&op, sizeof (op)) != sizeof (op)) {
+				return false;
+			}
 			if (isThumb32 (op)) {
 				eprintf ("Thumb32 chain stepping not supported yet\n");
 			} else {
@@ -80,14 +82,14 @@ static bool ios_hwstep_enable32(RDebug *dbg, bool enable) {
 		}
 	}
 	if (thread_set_state (th, ARM_DEBUG_STATE32, (thread_state_t)&ds, ARM_DEBUG_STATE32_COUNT)) {
-		perror ("ios_hwstep_enable32");
+		r_sys_perror ("ios_hwstep_enable32");
 		return false;
 	}
 	return true;
 }
 
 bool xnu_native_hwstep_enable(RDebug *dbg, bool enable) {
-	if (dbg->bits == R_SYS_BITS_64 || dbg->bits == 64) {
+	if (R_SYS_BITS_CHECK (dbg->bits, 64)) {
 		return ios_hwstep_enable64 (dbg, enable);
 	}
 	return ios_hwstep_enable32 (dbg, enable);

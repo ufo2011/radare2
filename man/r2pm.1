@@ -1,83 +1,383 @@
-.Dd Jun 30, 2021
+.Dd October 16, 2026
 .Dt R2PM 1
 .Sh NAME
-.Nm R2PM
-.Nd radare2 package manager
+.Nm r2pm
+.Nd Radare2 Package Manager
 .Sh SYNOPSIS
 .Nm r2pm
-.Op init|update|cmd
-.Op ...
+.Op Fl AabcdeHhijlpqrRstuUvw
+.Op Ar pkgs...
 .Sh DESCRIPTION
-Allows to install, update, uninstall and discover plugins and tools that can be used with radare2.
+The package manager for Radare2, allowing installation, update, uninstallation, and discovery of plugins and tools.
 .Bl -tag -width Fl
-.It Fl a, Cm repo
-Adds an external r2pm repository, no arguments to -a will list all the registered repos, use '-a - repo' to unregister/remove those repos.
-.It Fl I, Cm info
-Show information about repository and installed packages
-.It Fl i, Cm install Ar pkgname
-Install a package
-.It Fl gi, Cm global-install Ar pkgname
-Install a package in the system directory
-.It Fl u, Cm uninstall Ar pkgname
-Uninstall a package
-.It Fl U, Cm Upgrade all the outdated packages
-Runs the suggested lines when loading outdated plugins by r2
-.It Fl gu, Cm global-install Ar pkgname
-Uninstall a package from the system directory
-.It Fl l, Cm list
+.It Fl A
+Include packages unsupported by the local platform or build in
+.Fl s
+results.
+Text output marks them as
+.Ql [unsupported] .
+.It Fl a Ar repository
+Add or delete external repository. Using '-a repository' adds a repository, and '-a -repository' deletes it. Use with no arguments to list all registered repos.
+.It Fl b
+Require a binary package for the target architecture, operating system and
+package release.
+Use with
+.Fl i .
+Skip source checkout and build dependencies.
+If no binary installer exists or installation fails, return an error and
+request re-running without
+.Fl b ;
+never fall back to building from source.
+.It Fl c Ar pkgname
+Clear cached sources for the given package. Use
+.Fl cp
+to clean the user plugin directory
+.It Fl d, Cm doc Ar pkgname
+Show documentation and source for given package script
+.It Fl e Ar pkgname
+Edit using $EDITOR the given package script
+.It Fl f
+Force operation. Requires
+.Fl U ,
+.Fl i
+or
+.Fl u
+.It Fl gi Ar pkg
+Global install (system-wide)
+.It Fl h
+Display help message
+.It Fl H Op variable
+List all or selected r2pm environment variables
+.It Fl i Ar pkgname
+Install/update package and its dependencies
+.It Fl I
+Information about the repository and installed packages
+.It Fl j
+JSON output. Requires
+.Fl l ,
+.Fl s
+or
+.Fl v .
+Search objects include a
+.Va platforms
+array of strings, a
+.Va binary
+boolean indicating whether a binary installer is available, and a
+.Va supported
+boolean.
+Binary installers can distribute ready-to-use scripts as well as native binaries.
+The platforms are taken from the package's space-separated
+.Ic R2PM_PLATFORMS
+list, or inferred from install hooks when it is absent or empty.
+.It Fl l
 List installed packages
-.It Fl s, Cm search Ar keyword
-Search in database for packages matching keyword
-.It Fl r, Cm run Ar command ...args
-Run command with R2PM_BINDIR in PATH
-.It Fl v, Cm version
-Show version information
-.It Fl h, Cm help
-Show usage help message
-.It Fl c, Cm clean
-Clean the source cache
-.It Fl w, Cm when
-Show when a package was installed or exit 1 if pkg does not exist
+.It Fl q
+Be quiet. Requires an action
+.It Fl r Ar cmd ...args
+Run a command with R2PM_BINDIR in PATH, preserving separate arguments.
+Pass a shell command, including pipelines or redirections, as a single argument.
+On Windows, pass batch scripts as a shell command string or invoke cmd.exe explicitly.
+.It Fl R Ar pkgname
+Reload plugin (See R2PM_RELOAD code block package)
+.It Fl s Op keyword
+Search available packages in the database matching a string.
+By default, filter to packages supported by the local platform and build.
+Return an error code if no package was found
+.It Fl t Ar YYYY-MM-DD
+Set the package checkout date. Requires an action
+.It Fl u Ar pkgname
+Uninstall package (see -f to force uninstall)
+.It Fl uci Ar pkgname
+Uninstall + clean + install
+.It Fl ui Ar pkgname
+Uninstall + install
+.It Fl U
+Download/initialize or update database (-f for a clean clone)
+.It Fl UU
+Same as -U but upgrade all installed packages
+.It Fl v
+Show version
 .El
+.Sh ENVIRONMENT
+.Pp
+.Bl -tag -width Fl
+.It Ev SUDO
+Command to use for system-wide installs (default: sudo)
+.It Ev R2PM_SUDO
+Value of
+.Ev SUDO
+when using
+.Fl g ,
+empty otherwise.
+Exported to package scripts.
+.It Ev R2PM_GLOBAL , GLOBAL
+Set to 1 when using
+.Fl g ,
+0 otherwise.
+Exported to package scripts.
+.It Ev R2PM_GITURL
+Git repository for the package database
+(default: https://github.com/radareorg/radare2-pm)
+.It Ev R2PM_PLUGDIR
+Directory for user plugins (default: ~/.local/share/radare2/plugins)
+.It Ev R2PM_BINDIR
+Directory for user binaries (default: ~/.local/share/radare2/prefix/bin)
+.It Ev R2PM_MANDIR
+Directory for user man pages (default: ~/.local/share/radare2/prefix/man)
+.It Ev R2PM_DOCDIR
+Directory for user documentation (default: ~/.local/share/radare2/prefix/doc)
+.It Ev R2PM_OFFLINE
+Disable online operations (default: 0)
+.It Ev R2V
+Radare2 version available to binary installers (defaults to the installed
+.Cm radare2 -qv
+version).
+Existing recipes may also use it as their package release.
+.It Ev R2PM_VERSION
+Package release requested by binary installers.
+An explicit environment value overrides the package's
+.Ic R2PM_VERSION_MAP
+table; otherwise the entry matching
+.Ev R2V
+is used.
+Without a table, the package release is the same as
+.Ev R2V .
+Resolved separately for each package without changing
+.Ev R2V .
+.It Ev R2PM_OS
+Target operating system exported to package scripts
+(for example linux, darwin or windows).
+.It Ev R2PM_ARCH
+Target architecture exported to package scripts (for example x86 or arm).
+.It Ev R2PM_BITS
+Target pointer size exported to package scripts (32 or 64).
+.It Ev R2PM_TRIPLET
+Target platform triplet exported to package scripts as
+.Ar os-arch-bits
+(for example linux-x86-64 or darwin-arm-64).
+.It Ev R2PM_PLATFORM
+Override the platform used to filter
+.Fl s
+results. Values include
+.Cm linux ,
+.Cm darwin ,
+.Cm windows ,
+.Cm termux ,
+.Cm r2js ,
+.Cm r2 ,
+.Cm unix ,
+.Cm qjs
+and
+.Cm any ;
+multiple values may be space-separated.
+Exact
+.Ar os-arch-bits
+triplets such as
+.Cm linux-x86-32
+are also accepted.
+The default includes the host OS, its exact
+.Ev R2PM_TRIPLET ,
+runtime capabilities and
+.Cm termux
+for Termux builds.
+.Cm r2js
+and
+.Cm qjs
+are aliases for the QuickJS runtime.
+A package is supported when any declared platform matches;
+.Cm any
+matches all platforms.
+Packages with an
+.Ic R2PM_INSTALL_R2()
+block are portable radare2-command packages; the automatically detected platform
+always includes
+.Cm r2 .
+The block is executed by radare2 during installation; a matching
+.Ic R2PM_UNINSTALL_R2()
+block handles uninstallation.
+.It Ev R2PM_DBDIR
+Directory for r2pm database (default: ~/.local/share/radare2/r2pm/db)
+.It Ev R2PM_GITDIR
+Directory for git repositories (default: ~/.local/share/radare2/r2pm/git)
+.It Ev R2PM_GITSKIP
+Skip git pull operations when set
+.It Ev R2PM_TIME
+Point in time to use for git checkout (format: YYYY-MM-DD)
+.It Ev R2_LOG_LEVEL
+Control verbosity of log messages
+.It Ev R2PM_INCDIR
+Directory for include files
+.It Ev R2PM_LIBDIR
+Directory for libraries
+.It Ev R2PM_PREFIX
+Installation prefix
+.It Ev R2_CFLAGS
+Compiler flags to build against radare2 libraries
+.It Ev R2_LDFLAGS
+Linker search path flags to build against radare2 libraries
+.It Ev R2_LIBS
+Library flags to link against radare2 libraries
+.It Ev R2_LIBEXT
+Shared library extension for plugins (so, dylib or dll)
+.It Ev R2_USER_PLUGINS
+User plugin directory, regardless of
+.Fl g
+.El
+.Sh PACKAGE PLATFORMS
+Packages can declare their supported operating systems or runtimes with a
+space-separated list, optionally enclosed in double quotes:
+.Bd -literal -offset indent
+R2PM_PLATFORMS "linux darwin windows"
+R2PM_PLATFORMS "r2js"
+R2PM_PLATFORMS "linux-x86-32"
+.Ed
+.Pp
+The declaration is optional. Packages without it, or with an empty value,
+retain platform inference from their install hooks and existing install behavior.
+When present, it overrides that inference for search filtering and JSON output.
+Use runtime tags for portable scripts, OS tags for all architectures on that OS,
+or an exact
+.Ar os-arch-bits
+triplet to restrict availability to one OS, architecture and bitness.
+For example,
+.Cm linux-x86-32
+matches 32-bit x86 Linux, but not 64-bit x86 Linux or 32-bit ARM Linux.
+Multiple entries are alternatives: any matching entry makes the package visible.
+An OS tag such as
+.Cm linux
+alongside a triplet allows all architectures on that OS.
+Platform tags do not guarantee a binary for every release.
+.Sh BINARY PACKAGES
+Packages implement
+.Ic R2PM_BINSTALL()
+as a shell script on Unix, or
+.Ic R2PM_BINSTALL_WINDOWS()
+as Windows commands.
+These blocks run without a source checkout; they must select an exact release
+using
+.Ev R2PM_VERSION , R2PM_OS , R2PM_ARCH
+and
+.Ev R2PM_BITS ,
+download and install its files, and return a nonzero status on failure.
+Packages with their own release numbering can declare a compatibility table:
+.Bd -literal -offset indent
+R2PM_VERSION_MAP "6.2.2:1.1.0 6.2.4:1.2.3"
+.Ed
+Each entry contains an exact radare2 version, a colon and the associated package
+release.
+Separate entries with spaces, tabs or newlines.
+An assignment with
+.Ql =
+is also accepted.
+Multiline quoted values and heredocs share the metadata value reader.
+For example:
+.Bd -literal -offset indent
+R2PM_VERSION_MAP=<<EOF
+6.2.2:1.1.2
+6.2.4:1.1.5
+EOF
+.Ed
+The closing delimiter must appear alone on a line and match exactly.
+An empty or unterminated heredoc delimiter is an error.
+Values are read as text without shell expansion.
+The first matching entry selects the package release.
+If a table is defined but has no matching entry, binary installation fails
+before running the installer.
+Without a table, both versions are the same.
+Use
+.Ev R2PM_VERSION
+for the package release tag and asset names, and
+.Ev R2V
+for the radare2 version when selecting a compatible build.
+Unix scripts run with
+.Ql set -e
+and can call
+.Ic R2PM_FAIL Ar message
+to abort with an error.
+On Windows the block runs as a native batch script, so
+.Ic set
+variables persist across lines.
+There is no equivalent of
+.Ql set -e ,
+so each command that can fail must be checked with
+.Ql command || exit /b 1
+and other batch files must be invoked with
+.Ql call file.bat || exit /b 1 .
+The binary installer handles its own tools and runtime dependencies;
+.Ic R2PM_NEEDS
+and
+.Ic R2PM_DEPS
+are used only for source installs.
+Normal installation directories,
+.Ev GLOBAL
+and
+.Ev R2PM_SUDO
+are available.
+Installations are registered only on success, and marked as binary.
+.Pp
+Packages installed this way are uninstalled with
+.Ic R2PM_BUNINSTALL()
+or
+.Ic R2PM_BUNINSTALL_WINDOWS() ,
+which run the same way and must remove the files the binary installer added;
+.Fl u
+selects them automatically, without
+.Fl b .
+If the package has no such block,
+.Ic R2PM_UNINSTALL()
+is used.
 .Sh EXAMPLES
 .Pp
-Initialize and update the package database
-.Pp
-  $ r2pm init
-  $ r2pm update
-.Pp
 Install a package
 .Pp
-  $ r2pm install yara3
+  $ r2pm -i yara3
 .Pp
-Install a test package (don't git pull on $R2PM_GITDIR/yara3)
+Install the r2frida binary matching the installed radare2 version
 .Pp
-  $ R2PM_GITSKIP=1 r2pm install yara3
+  $ r2pm -bi r2frida
+.Pp
+Select the radare2 version for an existing binary recipe (for example in CI)
+.Pp
+  $ R2V=6.2.2 r2pm -bi r2frida
+.Pp
+Override an independently versioned package release
+.Pp
+  $ R2PM_VERSION=1.2.3 r2pm -bi mypackage
+.Pp
+Clean cache and then install (don't git pull on $R2PM_GITDIR/yara3)
+.Pp
+  $ r2pm -ci yara3
 .Pp
 Avoid init/update calls (don't git pull on $R2PM_DBDIR)
 .Pp
- $ R2PM_OFFLINE=1 r2pm -i yara
+  $ R2PM_OFFLINE=1 r2pm -i yara
 .Pp
 Uninstall a package
 .Pp
-  $ r2pm uninstall yara3
+  $ r2pm -u yara3
+.Pp
+Force uninstall a package
+.Pp
+  $ r2pm -fu yara3
 .Pp
 Search a package
 .Pp
-  $ r2pm search yara
+  $ r2pm -s yara
 .Pp
-List available packages
+Search all packages, including unsupported ones
 .Pp
-  $ r2pm -s
-.Sh ENVIRONMENT
+  $ r2pm -As
 .Pp
- SUDO=sudo
- R2PM_PLUGDIR=~/.local/share/radare2/plugins
- R2PM_BINDIR=~/.local/share/radare2/prefix/bin
- R2PM_OFFLINE=0
- R2PM_DBDIR=~/.local/share/radare2/r2pm/db
- R2PM_GITDIR=~/.local/share/radare2/r2pm/git
- R2PM_GITSKIP=
+List installed packages
+.Pp
+  $ r2pm -l
+.Pp
+Update database and upgrade all installed packages
+.Pp
+  $ r2pm -UU
 .Sh SEE ALSO
 .Pp
 .Xr radare2(1)
+.Sh AUTHORS
+.Pp
+Written by pancake <pancake@nopcode.org>.

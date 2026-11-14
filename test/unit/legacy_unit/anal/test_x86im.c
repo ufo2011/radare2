@@ -4,11 +4,11 @@
 #include <r_types.h>
 #include "x86/x86im/x86im.h"
 
-static int anal_op (char *buf, int bits) {
+static int anal_op(char *buf, int bits) {
 	x86im_instr_object io;
 	ut8 data[1024];
 	int ret;
-	
+
 	r_hex_str2bin (buf, data);
 
 	if ((ret = x86im_dec (&io, bits == 32 ? X86IM_IO_MODE_32BIT : X86IM_IO_MODE_64BIT,
@@ -57,7 +57,9 @@ static int anal_op (char *buf, int bits) {
 		printf ("rop: 0x%lx 0x%lx 0x%lx 0x%lx \n",
 				io.rop[0], io.rop[1], io.rop[2], io.rop[3]);
 		printf ("rop_count: 0x%x\n", io.rop_count);
-	} else eprintf ("Error: Unknown opcode\n");
+	} else {
+		R_LOG_ERROR ("Unknown opcode");
+	}
 	return ret;
 }
 

@@ -16,7 +16,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # Modified for radare2 purposes
 
 
@@ -122,7 +122,7 @@ EOF
     -O2)
         clopt="${clopt},${slash}O2"
         ;;
-        
+
     -I*)
         path=$(echo "$1" | sed 's,-I,,')
         path=$(cygpath -aw "$path")
@@ -228,7 +228,7 @@ EOF
         ;;
 
     *.cc | *.cxx | *.C)
-        # C++ source file with non .cpp extension, make sure cl understand 
+        # C++ source file with non .cpp extension, make sure cl understand
         # that it is C++
         clopt="${clopt},${slash}Tp$1"
         ;;

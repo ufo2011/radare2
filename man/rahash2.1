@@ -1,86 +1,150 @@
-.Dd Feb 6, 2015
+.Dd Jul 10, 2025
 .Dt RAHASH2 1
 .Sh NAME
 .Nm rahash2
-.Nd block based hashing utility
+.Nd Block-Based Hashing, Encoding, and Encryption Utility
 .Sh SYNOPSIS
 .Nm rahash2
-.Op Fl BbdDehjrknvq
-.Op Fl a Ar algorithm
-.Op Fl b Ar size
-.Op Fl D Ar algo
-.Op Fl E Ar algo
-.Op Fl f Ar from
-.Op Fl i Ar iterations
-.Op Fl I Ar IV
-.Op Fl n Ar blocks
-.Op Fl s Ar string
+.Op Fl BehjkLqRrvX
+.Op Fl b Ar S
+.Op Fl a Ar A
+.Op Fl c Ar H
+.Op Fl E Ar A
+.Op Fl D Ar A
+.Op Fl s Ar S
+.Op Fl f Ar O
+.Op Fl t Ar O
+.Op Fl i Ar num
+.Op Fl I Ar iv
 .Op Fl S Ar seed
-.Op Fl p Ar type
 .Op Fl x Ar hexstr
-.Op Fl t Ar to
-.Op Fl c Ar hash
-.Op [file] ...
+.Op Fl p Ar type
+.Op Ar file ...
 .Sh DESCRIPTION
-This program is part of the radare project.
+A utility for computing, verifying, and displaying hash values for each block of a file, with a default block size of 32768 bytes. Reads from standard input using '-' and supports comparison against known hashes via exit status codes.
 .Pp
-Rahash2 allows you to calculate, check and show the hash values of each block of a target file. The block size is 32768 bytes by default. It's allowed to hash from stdin using '-' as a target file. You can compare against a known hash and get the result in the exit status.
+Commonly used for forensic analysis, detecting file modifications, and efficient processing of large files.
 .Pp
-You can hash big files by hashing each block and later determine what part of it has been modified. Useful for filesystem analysis.
-.Pp
-This command can be used to calculate hashes of a certain part of a file or a command line passed string.
-.Pp
-This is the command used by the 'ph' command of radare.
+Supports entropy calculation, targeted hashing of file segments or strings, and encoding, decoding, encryption, and decryption using various cryptographic algorithms.
 .Bl -tag -width Fl
 .It Fl a Ar algo
-Select an algorithm for the hashing. Valid values are listed in: rahash2 -L
-.It Fl b Ar blocksize
-Define the block size
-.It Fl c Ar hash
-Compare the computed hash with this one. Allowed only when a single hash is computed.
-.It Fl D Ar algo
-Decrypt instead of hash using the given algorithm (base64, base91, rc4, aes, xor, blowfish, rot, rol, ror, rc2, rc6, punycode)
-.It Fl e
-Use little endian to display checksums
-.It Fl E Ar algo
-Encrypt instead of hash using the given algorithm (base64, base91, rc4, aes, xor, blowfish, rot, rol, ror, rc2, rc6, punycode)
-.It Fl i Ar iters
-Apply the hash Iters times to itself+seed
-.It Fl I Ar [^]s:string|hexstr
-Set initialization vector (IV) for the cryptographic functions.
-.It Fl j
-Show output in JSON (see -r)
+Comma separated list of algorithms (default is 'sha256')
+.It Fl b Ar bsize
+Specify the size of the block (instead of full file)
 .It Fl B
 Show per-block hash
-.It Fl k
-Show result using OpenSSH's VisualHostKey randomart algorithm
-.It Fl n
-Amount of blocks to hash
-.It Fl s Ar string
-Hash this string instead of using the 'source' and 'hash-file' arguments.
-.It Fl S Ar [^]s:string|hexstr
-Set seed to hash with, use ^to prefix seed, otherwise its suffixed. If the seed is just a dash '-' it will read from stdin, this is useful to provide huge XOR payloads or other crypto keys bigger than few bytes.
+.It Fl c Ar hash
+Compare with this hash
+.It Fl e
+Swap endian (use little endian)
+.It Fl E Ar algo
+Encrypt. Use -S to set key and -I to set IV
+.It Fl D Ar algo
+Decrypt. Use -S to set key and -I to set IV
 .It Fl f Ar from
 Start hashing at given address
+.It Fl i Ar num
+Repeat hash N iterations (f.ex: 3DES)
+.It Fl I Ar iv
+Use give initialization vector (IV) (hexa or s:string)
+.It Fl j
+Output in json
+.It Fl J
+New simplified json output (same as -jj)
+.It Fl S Ar seed
+Use given seed (hexa or s:string) use ^ to prefix (key for -E)
+(- will slurp the key from stdin, the @ prefix points to a file
+.It Fl k
+Show hash using the openssh's randomkey algorithm
+.It Fl q
+Run in quiet mode (-qq to show only the hash)
+.It Fl L
+List muta plugins (combines with -q, used by -a, -E and -D)
+.It Fl p Ar type
+Plot file statistics using the p== command. Use -p ? to list plot types.
+.It Fl r
+.No Output radare commands (comments), for example:
+.Bd -literal -offset indent
+$ rahash2 -a sha1 -r file | r2 -qni file
+.Ed
+.It Fl R
+.No Output radare2 sdb commands to store hashes under
+.No file.<algo> keys (works with any algorithm name), for example:
+.Bd -literal -offset indent
+$ rahash2 -a sha1 -R file | r2 -qni file
+.Ed
+.Pp
+.Nm
+.Fl R
+is incompatible with
+.Fl B
+(per-block hashing).
+.It Fl s Ar string
+Hash this string instead of files
 .It Fl t Ar to
 Stop hashing at given address
-.It Fl p Ar arg
-Show vertical entropy/statistical entropy graphs
-.It Fl q
-Quiet mode (-qq for even quieter!)
-.It Fl r
-Show output in radare commands
 .It Fl x Ar hexstr
-Hash the given hexpair string instead of using the 'source' and 'hash-file' arguments.
+Hash this hexpair string instead of files
+.It Fl X
+Output in hexpairs instead of binary/plain
 .It Fl v
 Show version information
-.It Fl h
-Show usage help message.
 .El
+.Sh ENVIRONMENT
+.Pp
+Rahash2 does not use any environment variables.
+.Sh EXAMPLES
+.Pp
+Calculate the MD5 hash of the 'ls' binary:
+.Pp
+  $ rahash2 -qqa md5 /bin/ls
+.Pp
+Calculate the SHA256 hash of string from stdin:
+.Pp
+  $ echo -n "Hello, World" | rahash2 -a sha256 -
+  $ rahash2 -a sha256 -s "Hello, World"
+.Pp
+Compare CRC32 of the given file didnt changed:
+.Pp
+  $ rahash2 -qqa crc32 /bin/ls
+  63212007
+  $ rahash2 -a crc32 -c 63212007 /bin/ls
+  INFO: Computed hash matches the expected one
+  $ echo $?
+  0
+.Pp
+List all muta (hash, crypto, encoder, charset) plugins:
+.Pp
+  $ rahash2 -L
+.Pp
+Encode the string "Hello World" with base64:
+.Pp
+  $ rahash2 -E base64 -s "Hello World"
+.Pp
+Calculate SHA256 hash of a specific part of a file:
+.Pp
+  $ rahash2 -qqa sha256 -f 0x1000 -t 0x2000 file_to_hash
+.Pp
+Encrypt and decrypt the "hello" string using the ror and rol plugins:
+.Pp
+  $ rahash2 -S 12333 -E ror -s hello && echo
+  Cell{
+  $ rahash2 -S 12333 -E rol -s Cell{ && echo
+  hello
+.Pp
+Encrypting and decrypting using AES-CBC:
+.Pp
+  $ export AES_KEY="11111111111111111111111111113211"
+  $ rahash2 -E aes-ecb -S "$AES_KEY" -s "hello world you bastard" > .file
+  $ cat .file | rahash2 -D aes-ecb -S "$AES_KEY" -s - && echo
+.Pp
+Encrypting a file using Blowfish and encode it into a json:
+.Pp
+  $ rahash2 -E blowfish -S "11111111111111111111111111113211" -j /bin/ls > ls.json
 .Sh DIAGNOSTICS
 .Ex -std
 .Pp
-When -c is used, exit status 0 indicates a match between the expected and computed hashes.
+When using the -c flag, an exit status of 0 indicates a match between the expected and computed hashes.
 .Sh SEE ALSO
 .Pp
 .Xr radare2(1)

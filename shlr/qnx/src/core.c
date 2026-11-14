@@ -9,6 +9,7 @@
 #include "packet.h"
 
 #define MAX_TRAN_TRIES 3
+#define MAX_PIDLIST_ENTRIES 65536
 #define HOST_QNX_PROTOVER_MAJOR 0
 #define HOST_QNX_PROTOVER_MINOR 3
 
@@ -97,14 +98,16 @@ static registers_t arm32[] = {
 	{"", 0, 0}};
 
 int qnxr_init(libqnxr_t *g) {
-	r_return_val_if_fail (g, -1);
+	R_RETURN_VAL_IF_FAIL (g, -1);
 	memset (g, 0, sizeof (libqnxr_t));
 	g->send_len = 0;
-	g->send_buff = (char *)calloc (DS_DATA_MAX_SIZE * 2, 1);
+	/* worst case: every payload byte is escaped (2x), plus frame/csum overhead. */
+	const size_t bufsz = sizeof (g->tran) * 2 + 16;
+	g->send_buff = (char *)calloc (bufsz, 1);
 	if (!g->send_buff) {
 		return -1;
 	}
-	g->read_buff = (char *)calloc (DS_DATA_MAX_SIZE * 2, 1);
+	g->read_buff = (char *)calloc (bufsz, 1);
 	if (!g->read_buff) {
 		R_FREE (g->send_buff);
 		return -1;
@@ -132,7 +135,7 @@ int qnxr_set_architecture(libqnxr_t *g, ut8 architecture) {
 }
 
 int qnxr_cleanup(libqnxr_t *g) {
-	r_return_val_if_fail (g, -1);
+	R_RETURN_VAL_IF_FAIL (g, -1);
 	free (g->send_buff);
 	g->send_len = 0;
 	free (g->read_buff);
@@ -151,7 +154,6 @@ int qnxr_connect(libqnxr_t *g, const char *host, int port) {
 	g->connected = 0;
 	g->mid = 0;
 
-
 	memmove (g->host, host, strlen (host) + 1);
 	g->port = port;
 
@@ -168,7 +170,7 @@ int qnxr_connect(libqnxr_t *g, const char *host, int port) {
 	nto_send (g, sizeof (g->tran.pkt.connect), 0);
 
 	if (g->recv.pkt.hdr.cmd == DSrMsg_err) {
-		eprintf ("%s: connection failed: %lld\n", __func__,
+		eprintf ("%s: connection failed: %"PFMT64d"\n", __func__,
 			 EXTRACT_SIGNED_INTEGER (&g->recv.pkt.err.err, 4));
 		return -1;
 	}
@@ -188,7 +190,7 @@ int qnxr_connect(libqnxr_t *g, const char *host, int port) {
 		g->target_proto_major = (g->target_proto_major >> 8) & DSMSG_PROTOVER_MAJOR;
 		g->target_proto_minor = g->target_proto_minor & DSMSG_PROTOVER_MINOR;
 	} else {
-		eprintf ("Connection failed (Protocol Version Query): %lld\n",
+		eprintf ("Connection failed (Protocol Version Query): %"PFMT64d"\n",
 			 EXTRACT_SIGNED_INTEGER (&g->recv.pkt.err.err, 4));
 		return -1;
 	}
@@ -197,7 +199,7 @@ int qnxr_connect(libqnxr_t *g, const char *host, int port) {
 }
 
 int qnxr_disconnect(libqnxr_t *g) {
-	r_return_val_if_fail (g, -1);
+	R_RETURN_VAL_IF_FAIL (g, -1);
 
 	if (g->connected) {
 		nto_send_init (g, DStMsg_disconnect, 0, SET_CHANNEL_DEBUG);
@@ -213,7 +215,7 @@ int qnxr_disconnect(libqnxr_t *g) {
 }
 
 ptid_t qnxr_attach (libqnxr_t *g, pid_t pid) {
-	r_return_val_if_fail (g, null_ptid);
+	R_RETURN_VAL_IF_FAIL (g, null_ptid);
 
 	if (g->inferior_ptid.pid != pid) {
 		qnxr_disconnect (g);
@@ -227,7 +229,7 @@ ptid_t qnxr_attach (libqnxr_t *g, pid_t pid) {
 
 	nto_send (g, sizeof (g->tran.pkt.attach), 0);
 	if (g->recv.pkt.hdr.cmd != DSrMsg_okdata) {
-		eprintf ("%s: failed to attach to %d\n", __func__, pid);
+		eprintf ("%s: failed to attach to %d\n", __func__, (int)pid);
 		return null_ptid;
 	}
 
@@ -245,7 +247,7 @@ ptid_t qnxr_run(libqnxr_t *g, const char *file, char **args, char **env) {
 	char **argv, *p;
 	int errors = 0;
 
-	r_return_val_if_fail (g, null_ptid);
+	R_RETURN_VAL_IF_FAIL (g, null_ptid);
 
 	nto_send_init (g, DStMsg_env, DSMSG_ENV_CLEARENV, SET_CHANNEL_DEBUG);
 	nto_send (g, sizeof (DStMsg_env_t), 1);
@@ -303,7 +305,7 @@ ptid_t qnxr_run(libqnxr_t *g, const char *file, char **args, char **env) {
 
 	if (g->recv.pkt.hdr.cmd == DSrMsg_okdata) {
 		ptid_t ptid = nto_parse_notify (g);
-		eprintf ("%s: inferior pid: %d\n", __func__, ptid.pid);
+		eprintf ("%s: inferior pid: %d\n", __func__, (int)ptid.pid);
 		g->inferior_ptid = ptid;
 
 		return ptid;
@@ -322,86 +324,119 @@ int qnxr_read_registers(libqnxr_t *g) {
 	if (!g) return -1;
 
 	while (g->registers[i].size > 0) {
+		const ut32 roff = g->registers[i].offset;
 		regset = i386nto_regset_id (i);
 		len = i386nto_register_area (i, regset, &off);
 		if (len < 1) {
-			eprintf ("%s: unknown register %d\n", __func__, i);
+			eprintf ("%s: unknown register %d\n", __func__, (int)i);
 			len = g->registers[i].size;
+		}
+		if (len < 0 || roff >= sizeof (buf) || (size_t)len > sizeof (buf) - roff) {
+			eprintf ("%s: register %d out of bounds\n", __func__, i);
+			return -1;
 		}
 		nto_send_init (g, DStMsg_regrd, regset, SET_CHANNEL_DEBUG);
 		g->tran.pkt.regrd.offset = EXTRACT_SIGNED_INTEGER (&off, 2);
 		g->tran.pkt.regrd.size = EXTRACT_SIGNED_INTEGER (&len, 2);
 		rlen = nto_send (g, sizeof (g->tran.pkt.regrd), 1);
 
-		if (rlen > 0) {
-			if (g->recv.pkt.hdr.cmd == DSrMsg_okdata) {
-				memcpy (buf + g->registers[i].offset,
-					g->recv.pkt.okdata.data, len);
-				n += len;
-			} else {
-				memset (buf + g->registers[i].offset,
-					0, len);
-			}
-		} else {
-			eprintf ("%s: couldn't read register %d\n", __func__, i);
+		if (rlen <= 0) {
+			eprintf ("%s: couldn't read register %d\n", __func__, (int)i);
 			return -1;
+		}
+		if (g->recv.pkt.hdr.cmd == DSrMsg_okdata) {
+			const int hdrsz = (int)sizeof (g->recv.pkt.hdr);
+			int payload = rlen - hdrsz;
+			if (payload < 0) {
+				payload = 0;
+			}
+			if (len > payload) {
+				len = payload;
+			}
+			memcpy (buf + roff, g->recv.pkt.okdata.data, len);
+			n += len;
+		} else {
+			memset (buf + roff, 0, len);
 		}
 		i++;
 	}
 
+	if ((size_t)n > sizeof (g->recv.data)) {
+		n = sizeof (g->recv.data);
+	}
 	memcpy (g->recv.data, buf, n);
 	return n;
 }
 
 int qnxr_read_memory (libqnxr_t *g, ut64 address, ut8 *data, ut64 len) {
-	int rcv_len, tot_len, ask_len;
+	ut64 tot_len = 0;
 	ut64 addr;
+	int rcv_len, ask_len;
 
 	if (!g || !data) return -1;
 
-	tot_len = rcv_len = ask_len = 0;
-
-	do {
+	while (tot_len < len) {
+		const ut64 remaining = len - tot_len;
+		ask_len = (remaining > DS_DATA_MAX_SIZE) ? DS_DATA_MAX_SIZE : (int)remaining;
 		nto_send_init (g, DStMsg_memrd, 0, SET_CHANNEL_DEBUG);
 		addr = address + tot_len;
 		g->tran.pkt.memrd.addr = EXTRACT_UNSIGNED_INTEGER (&addr, 8);
-		ask_len = ((len - tot_len) > DS_DATA_MAX_SIZE) ?
-				  DS_DATA_MAX_SIZE :
-				  (len - tot_len);
-
 		g->tran.pkt.memrd.size = EXTRACT_SIGNED_INTEGER (&ask_len, 2);
 		rcv_len = nto_send (g, sizeof (g->tran.pkt.memrd), 0) -
 			  sizeof (g->recv.pkt.hdr);
-		if (rcv_len <= 0) break;
-		if (g->recv.pkt.hdr.cmd == DSrMsg_okdata) {
-			memcpy (data + tot_len, g->recv.pkt.okdata.data, rcv_len);
-			tot_len += rcv_len;
-		} else
+		if (rcv_len <= 0) {
 			break;
-	} while (tot_len != len);
+		}
+		if (g->recv.pkt.hdr.cmd != DSrMsg_okdata) {
+			break;
+		}
+		if ((ut64)rcv_len > remaining) {
+			rcv_len = (int)remaining;
+		}
+		memcpy (data + tot_len, g->recv.pkt.okdata.data, rcv_len);
+		tot_len += rcv_len;
+	}
 
-	return tot_len;
+	return (int)tot_len;
 }
 
 int qnxr_write_memory (libqnxr_t *g, ut64 address, const ut8 *data, ut64 len) {
+	ut64 tot_len = 0;
 	ut64 addr;
 
 	if (!g || !data) return -1;
 
-	nto_send_init (g, DStMsg_memwr, 0, SET_CHANNEL_DEBUG);
-	addr = address;
-	g->tran.pkt.memwr.addr = EXTRACT_UNSIGNED_INTEGER (&addr, 8);
-	memcpy (g->tran.pkt.memwr.data, data, len);
-	nto_send (g, offsetof (DStMsg_memwr_t, data) + len, 0);
-
-	switch (g->recv.pkt.hdr.cmd) {
-	case DSrMsg_ok:
-		return len;
-	case DSrMsg_okstatus:
-		return EXTRACT_SIGNED_INTEGER (&g->recv.pkt.okstatus.status, 4);
+	while (tot_len < len) {
+		const ut64 remaining = len - tot_len;
+		const ut32 chunk = (remaining > DS_DATA_MAX_SIZE) ? DS_DATA_MAX_SIZE : (ut32)remaining;
+		nto_send_init (g, DStMsg_memwr, 0, SET_CHANNEL_DEBUG);
+		addr = address + tot_len;
+		g->tran.pkt.memwr.addr = EXTRACT_UNSIGNED_INTEGER (&addr, 8);
+		memcpy (g->tran.pkt.memwr.data, data + tot_len, chunk);
+		if (nto_send (g, offsetof (DStMsg_memwr_t, data) + chunk, 0) < 0) {
+			return (int)tot_len;
+		}
+		switch (g->recv.pkt.hdr.cmd) {
+		case DSrMsg_ok:
+			tot_len += chunk;
+			continue;
+		case DSrMsg_okstatus: {
+			const int status = EXTRACT_SIGNED_INTEGER (&g->recv.pkt.okstatus.status, 4);
+			if (status <= 0) {
+				return (int)tot_len;
+			}
+			tot_len += (ut64)status;
+			if ((ut64)status < chunk) {
+				return (int)tot_len;
+			}
+			continue;
+		}
+		default:
+			return (int)tot_len;
+		}
 	}
 
-	return 0;
+	return (int)tot_len;
 }
 
 void qnxr_pidlist (libqnxr_t *g, void *ctx, pidlist_cb_t *cb) {
@@ -415,20 +450,25 @@ void qnxr_pidlist (libqnxr_t *g, void *ctx, pidlist_cb_t *cb) {
 	pid = 1;
 	subcmd = DSMSG_PIDLIST_BEGIN;
 
-	while (1) {
+	int count;
+	for (count = 0; count < MAX_PIDLIST_ENTRIES; count++) {
 		nto_send_init (g, DStMsg_pidlist, subcmd, SET_CHANNEL_DEBUG);
 		g->tran.pkt.pidlist.pid = EXTRACT_SIGNED_INTEGER (&pid, 4);
 		g->tran.pkt.pidlist.tid = EXTRACT_SIGNED_INTEGER (&start_tid, 4);
-		nto_send (g, sizeof (g->tran.pkt.pidlist), 0);
-
-		if (g->recv.pkt.hdr.cmd == DSrMsg_err || g->recv.pkt.hdr.cmd != DSrMsg_okdata)
+		// on failure g->recv still holds the previous reply
+		if (nto_send (g, sizeof (g->tran.pkt.pidlist), 0) <= (int)sizeof (g->recv.pkt.hdr)) {
 			return;
+		}
+		if (g->recv.pkt.hdr.cmd != DSrMsg_okdata) {
+			return;
+		}
 
 		pid = EXTRACT_SIGNED_INTEGER (&pidlist->pid, 4);
 		if (cb != NULL)
 			cb (ctx, pid, pidlist->name);
 		subcmd = DSMSG_PIDLIST_NEXT;
 	}
+	eprintf ("%s: too many processes, aborting\n", __func__);
 }
 
 bool qnxr_select (libqnxr_t *g, pid_t pid, int tid) {
@@ -444,7 +484,7 @@ bool qnxr_select (libqnxr_t *g, pid_t pid, int tid) {
 	nto_send (g, sizeof (g->tran.pkt.select), 1);
 
 	if (g->recv.pkt.hdr.cmd == DSrMsg_err) {
-		eprintf ("%s: failed to select %d\n", __func__, pid);
+		eprintf ("%s: failed to select %d\n", __func__, (int)pid);
 		return false;
 	}
 
@@ -467,7 +507,7 @@ int qnxr_write_register (libqnxr_t *g, int index, char *value, int len) {
 
 	regset = i386nto_regset_id (index);
 	tdep_len = i386nto_register_area (index, regset, &off);
-	if (len < 0 || tdep_len != len) {
+	if (len < 0 || tdep_len != len || (size_t)len > sizeof (g->tran.pkt.regwr.data)) {
 		eprintf ("%s: invalid length\n", __func__);
 		return -1;
 	}
@@ -636,7 +676,7 @@ ptid_t nto_parse_notify (libqnxr_t *g) {
 	tid = EXTRACT_SIGNED_INTEGER (&g->recv.pkt.notify.tid, 4);
 
 	if (tid == 0) tid = 1;
-	eprintf ("%s: parse notify %d\n", __func__, g->recv.pkt.hdr.subcmd);
+	eprintf ("%s: parse notify %d\n", __func__, (int)g->recv.pkt.hdr.subcmd);
 
 	switch (g->recv.pkt.hdr.subcmd) {
 	case DSMSG_NOTIFY_PIDUNLOAD:
@@ -669,8 +709,7 @@ ptid_t nto_parse_notify (libqnxr_t *g) {
 		g->notify_type = R_DEBUG_REASON_SWI;
 		break;
 	default:
-		eprintf ("%s: Unexpected notify type %d\n", __func__,
-			 g->recv.pkt.hdr.subcmd);
+		eprintf ("%s: Unexpected notify type %d\n", __func__, (int)g->recv.pkt.hdr.subcmd);
 		g->notify_type = R_DEBUG_REASON_UNKNOWN;
 	}
 
@@ -702,7 +741,7 @@ int nto_send_env (libqnxr_t *g, const char *env) {
 	} else if (len > DS_DATA_MAX_SIZE) {
 		/* Not supported by this protocol version.  */
 		eprintf ("Protovers < 0.2 do not handle env vars longer than %d\n",
-			 DS_DATA_MAX_SIZE - 1);
+			 (int)(DS_DATA_MAX_SIZE - 1));
 		return 0;
 	}
 	nto_send_init (g, DStMsg_env, DSMSG_ENV_SETENV, SET_CHANNEL_DEBUG);
@@ -751,8 +790,8 @@ int nto_send (libqnxr_t *g, ut32 len, st32 report_errors) {
 		}
 		if ((rlen >= 0) && (g->recv.pkt.hdr.mid == g->tran.pkt.hdr.mid))
 			break;
-		eprintf ("%s: mid mismatch: %d/%d\n", __func__, g->recv.pkt.hdr.mid,
-			 g->tran.pkt.hdr.mid);
+		eprintf ("%s: mid mismatch: %d/%d\n", __func__, (int)g->recv.pkt.hdr.mid,
+			 (int)g->tran.pkt.hdr.mid);
 	}
 
 	switch (g->channelrd) {
@@ -764,7 +803,7 @@ int nto_send (libqnxr_t *g, ut32 len, st32 report_errors) {
 					EXTRACT_SIGNED_INTEGER (&g->recv.pkt.err.err, 4));
 				switch (g->recv.pkt.hdr.subcmd) {
 				case PDEBUG_ENOERR:
-					eprintf ("remote: error packet with errno %d\n", nerrno);
+					eprintf ("remote: error packet with errno %d\n", (int)nerrno);
 					break;
 				case PDEBUG_ENOPTY:
 					eprintf ("remote: no ptys available\n");

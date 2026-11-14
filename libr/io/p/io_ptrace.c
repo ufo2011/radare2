@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008-2021 - pancake */
+/* radare - LGPL - Copyright 2008-2026 - pancake */
 
 #include <r_userconf.h>
 #include <r_util.h>
@@ -7,7 +7,7 @@
 #include <r_cons.h>
 #include <r_debug.h>
 
-#if DEBUGGER && (__linux__ || __BSD__)
+#if DEBUGGER && (__linux__ || R2__BSD__ || defined(__serenity__))
 
 #include <sys/ptrace.h>
 #include <sys/types.h>
@@ -23,7 +23,7 @@ typedef struct {
 #define RIOPTRACE_OPID(x) (((RIOPtrace*)(x)->data)->opid)
 #define RIOPTRACE_PID(x) (((RIOPtrace*)(x)->data)->pid)
 #define RIOPTRACE_FD(x) (((RIOPtrace*)(x)->data)->fd)
-static void open_pidmem (RIOPtrace *iop);
+static void open_pidmem(RIOPtrace *iop);
 
 #undef R_IO_NFDS
 #define R_IO_NFDS 2
@@ -54,27 +54,33 @@ static int __waitpid(int pid) {
 
 #define debug_read_raw(io,x,y) r_io_ptrace((io), PTRACE_PEEKTEXT, (x), (void *)(y), R_PTRACE_NODATA)
 #define debug_write_raw(io,x,y,z) r_io_ptrace((io), PTRACE_POKEDATA, (x), (void *)(y), (r_ptrace_data_t)(z))
-#if __OpenBSD__ || __NetBSD__ || __KFBSD__
+#if __OpenBSD__ || __NetBSD__ || __KFBSD__ || defined(__serenity__)
 typedef int ptrace_word;   // int ptrace(int request, pid_t pid, caddr_t addr, int data);
 #else
-typedef size_t ptrace_word; // long ptrace(enum __ptrace_request request, pid_t pid, void *addr, void *data);
-// XXX. using int read fails on some addresses
-// XXX. using long here breaks 'w AAAABBBBCCCCDDDD' in r2 -d
+typedef long ptrace_word; // long ptrace(enum __ptrace_request request, pid_t pid, void *addr, void *data);
 #endif
 
-static int debug_os_read_at(RIO *io, int pid, ut32 *buf, int sz, ut64 addr) {
-	ut32 words = sz / sizeof (ut32);
-	ut32 last = sz % sizeof (ut32);
-	ut32 x, lr, *at = (ut32*)(size_t)addr;
+static int debug_os_read_at(RIO *io, int pid, ut8 *buf, int sz, ut64 addr) {
+	ut32 amod = addr % sizeof (ptrace_word);
+	ut64 aaddr = addr - amod;
+	ut32 x, first = amod ? sizeof (ptrace_word) - amod: 0;
+	ptrace_word lr;
 	if (sz < 1 || addr == UT64_MAX) {
 		return -1;
 	}
-	for (x = 0; x < words; x++) {
-		buf[x] = (ut32)debug_read_raw (io, pid, (void *)(at++));
+
+	if (first) {
+		lr = debug_read_raw (io, pid, (size_t)aaddr) >> (amod * 8);
+		memcpy (buf, &lr, first);
+		aaddr += sizeof (ptrace_word);
+		buf += first;
 	}
-	if (last) {
-		lr = (ut32)debug_read_raw (io, pid, at);
-		memcpy (buf+x, &lr, last) ;
+	for (x = first; x < sz; x += sizeof (ptrace_word)) {
+		ut32 size = R_MIN (sz - x, sizeof (ptrace_word));
+		lr = debug_read_raw (io, pid, (size_t)aaddr);
+		memcpy (buf, &lr, size);
+		aaddr += sizeof (ptrace_word);
+		buf += sizeof (ptrace_word);
 	}
 	return sz;
 }
@@ -102,20 +108,24 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 	// /proc/pid/mem fails on latest linux
 	if (fd != -1) {
 		ret = lseek (fd, addr, SEEK_SET);
-		if (ret >=0) {
+		if (ret >= 0) {
 			// Workaround for the buggy Debian Wheeze's /proc/pid/mem
-			if (read (fd, buf, len) != -1) {
-				return ret;
+			ssize_t res = read (fd, buf, len);
+			if (res != -1) {
+				return res;
 			}
 		}
 	}
 #endif
-	ut32 *aligned_buf = (ut32*)r_malloc_aligned (len, sizeof (ut32));
+	ut8 *aligned_buf = (ut8*)r_malloc_aligned (len + sizeof (ptrace_word), sizeof (ptrace_word));
 	if (aligned_buf) {
-		int res = debug_os_read_at (io, RIOPTRACE_PID (desc), (ut32*)aligned_buf, len, addr);
-		memcpy (buf, aligned_buf, len);
+		int aligned_delta = addr % sizeof (ptrace_word);
+		ut64 aligned_addr = addr - aligned_delta;
+		int res = debug_os_read_at (io, RIOPTRACE_PID (desc), aligned_buf,
+				len + sizeof (ptrace_word), aligned_addr);
+		memcpy (buf, aligned_buf + aligned_delta, len);
 		r_free_aligned (aligned_buf);
-		return res;
+		return R_MIN (len, res);
 	}
 	return -1;
 }
@@ -136,7 +146,7 @@ static int ptrace_write_at(RIO *io, int pid, const ut8 *pbuf, int sz, ut64 addr)
 		}
 	}
 	if (last) {
-		lr = debug_read_raw (io, pid, (void*)at);
+		lr = debug_read_raw (io, pid, (void *)at);
 		memcpy (&lr, buf + x, last);
 		if (debug_write_raw (io, pid, (void*)at, lr)) {
 			return sz - last;
@@ -152,7 +162,7 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
 	return ptrace_write_at (io, RIOPTRACE_PID (fd), buf, len, io->off);
 }
 
-static void open_pidmem (RIOPtrace *iop) {
+static void open_pidmem(RIOPtrace *iop) {
 #if USE_PROC_PID_MEM
 	char pidmem[32];
 	snprintf (pidmem, sizeof (pidmem), "/proc/%d/mem", iop->pid);
@@ -160,11 +170,9 @@ static void open_pidmem (RIOPtrace *iop) {
 	if (iop->fd == -1) {
 		iop->fd = open (pidmem, O_RDONLY);
 	}
-#if 0
-	if (iop->fd == -1)
-		eprintf ("Warning: Cannot open /proc/%d/mem. "
-			"Fallback to ptrace io.\n", iop->pid);
-#endif
+	if (iop->fd == -1) {
+		R_LOG_DEBUG ("Cannot open /proc/%d/mem. Fallback to ptrace io", iop->pid);
+	}
 #else
 	iop->fd = -1;
 #endif
@@ -178,10 +186,10 @@ static void close_pidmem(RIOPtrace *iop) {
 }
 
 static bool __plugin_open(RIO *io, const char *file, bool many) {
-	if (!strncmp (file, "ptrace://", 9)) {
+	if (r_str_startswith (file, "ptrace://")) {
 		return true;
 	}
-	if (!strncmp (file, "attach://", 9)) {
+	if (r_str_startswith (file, "attach://")) {
 		return true;
 	}
 	return false;
@@ -189,14 +197,14 @@ static bool __plugin_open(RIO *io, const char *file, bool many) {
 
 static inline bool is_pid_already_attached(RIO *io, int pid) {
 #if defined(__linux__)
-	siginfo_t sig = { 0 };
+	siginfo_t sig = {0};
 	return r_io_ptrace (io, PTRACE_GETSIGINFO, pid, NULL, &sig) != -1;
 #elif defined(__FreeBSD__)
-	struct ptrace_lwpinfo info = { 0 };
+	struct ptrace_lwpinfo info = {0};
 	int len = (int)sizeof (info);
 	return r_io_ptrace (io, PT_LWPINFO, pid, &info, len) != -1;
 #elif defined(__OpenBSD__) || defined(__NetBSD__)
-	ptrace_state_t state = { 0 };
+	ptrace_state_t state = {0};
 	int len = (int)sizeof (state);
 	return r_io_ptrace (io, PT_GET_PROCESS_STATE, pid, &state, len) != -1;
 #else
@@ -220,16 +228,15 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 		ret = r_io_ptrace (io, PTRACE_ATTACH, pid, 0, 0);
 		if (ret == -1) {
 #ifdef __ANDROID__
-			eprintf ("ptrace_attach: Operation not permitted\n");
+			R_LOG_ERROR ("ptrace_attach: Operation not permitted");
 #else
 			switch (errno) {
 			case EPERM:
-				ret = pid;
-				eprintf ("ptrace_attach: Operation not permitted\n");
+				R_LOG_ERROR ("ptrace_attach: Operation not permitted");
 				break;
 			case EINVAL:
-				perror ("ptrace: Cannot attach");
-				eprintf ("ERRNO: %d (EINVAL)\n", errno);
+				r_sys_perror ("ptrace: Cannot attach");
+				R_LOG_ERROR ("errno: %d (EINVAL)", errno);
 				break;
 			default:
 				break;
@@ -237,22 +244,19 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 			return NULL;
 #endif
 		} else if (__waitpid (pid)) {
-			ret = pid;
+			/*Do Nothing*/
 		} else {
-			eprintf ("Error in waitpid\n");
+			R_LOG_ERROR ("waitpid");
 			return NULL;
 		}
 	}
 
 	RIOPtrace *riop = R_NEW0 (RIOPtrace);
-	if (!riop) {
-		return NULL;
-	}
 
 	riop->pid = riop->tid = pid;
 	open_pidmem (riop);
 	desc = r_io_desc_new (io, &r_io_plugin_ptrace, file, rw | R_PERM_X, mode, riop);
-	desc->name = r_sys_pid_to_path (pid);
+	desc->name = r_sys_pidpath (pid);
 
 	return desc;
 }
@@ -266,7 +270,8 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 		io->off += offset;
 		break;
 	case R_IO_SEEK_END:
-		io->off = ST64_MAX;
+		io->off = UT64_MAX;
+		break;
 	}
 	return io->off;
 }
@@ -288,31 +293,34 @@ static bool __close(RIODesc *desc) {
 	return true;
 }
 
-static void show_help(void) {
-	eprintf ("Usage: =!cmd args\n"
-		" =!ptrace   - use ptrace io\n"
-		" =!mem      - use /proc/pid/mem io if possible\n"
-		" =!pid      - show targeted pid\n"
-		" =!pid <#>  - select new pid\n");
+static char *show_help(void) {
+	return strdup ("Usage: :cmd args\n"
+		" :ptrace   - use ptrace io\n"
+		" :mem      - use /proc/pid/mem io if possible\n"
+		" :tls      - find the thread local storage address\n"
+		" :pid      - show targeted pid\n"
+		" :pid <#>  - select new pid\n");
 }
 
 static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	RIOPtrace *iop = (RIOPtrace*)fd->data;
-	//printf("ptrace io command (%s)\n", cmd);
-	/* XXX ugly hack for testing purposes */
 	if (!strcmp (cmd, "")) {
 		return NULL;
 	}
 	if (!strcmp (cmd, "help")) {
-		show_help ();
-	} else
-	if (!strcmp (cmd, "ptrace")) {
+		return show_help ();
+	} else if (!strcmp (cmd, "tls")) {
+#if __x86_64__
+		RCore *core = io->coreb.core;
+		io->coreb.cmd (core, "dxr 64488b042500000000");
+#else
+		R_LOG_TODO ("Not implemented for this architecture");
+#endif
+	} else if (!strcmp (cmd, "ptrace")) {
 		close_pidmem (iop);
-	} else
-	if (!strcmp (cmd, "mem")) {
+	} else if (!strcmp (cmd, "mem")) {
 		open_pidmem (iop);
-	} else
-	if (!strncmp (cmd, "pid", 3)) {
+	} else if (r_str_startswith (cmd, "pid")) {
 		if (iop) {
 			if (cmd[3] == ' ') {
 				int pid = atoi (cmd + 4);
@@ -321,18 +329,17 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 					// TODO: do not set pid if attach fails?
 					iop->pid = iop->tid = pid;
 				}
-			} else {
-				io->cb_printf ("%d\n", iop->pid);
+				return NULL;
 			}
 			return r_str_newf ("%d", iop->pid);
 		}
 	} else {
-		show_help ();
+		return show_help ();
 	}
 	return NULL;
 }
 
-static int __getpid (RIODesc *fd) {
+static int __getpid(RIODesc *fd) {
 	RIOPtrace *iop = (RIOPtrace *)fd->data;
 	if (!iop) {
 		return -1;
@@ -340,11 +347,13 @@ static int __getpid (RIODesc *fd) {
 	return iop->pid;
 }
 
-// TODO: rename ptrace to io_ptrace .. err io.ptrace ??
 RIOPlugin r_io_plugin_ptrace = {
-	.name = "ptrace",
-	.desc = "Ptrace and /proc/pid/mem (if available) io plugin",
-	.license = "LGPL3",
+	.meta = {
+		.name = "ptrace",
+		.author = "pancake",
+		.desc = "Ptrace and /proc/pid/mem (if available) io plugin",
+		.license = "LGPL-3.0-only",
+	},
 	.uris = "ptrace://,attach://",
 	.open = __open,
 	.close = __close,
@@ -358,8 +367,10 @@ RIOPlugin r_io_plugin_ptrace = {
 	.isdbg = true
 };
 #else
-struct r_io_plugin_t r_io_plugin_ptrace = {
-	.name = NULL
+RIOPlugin r_io_plugin_ptrace = {
+	.meta = {
+		.name = NULL
+	},
 };
 #endif
 

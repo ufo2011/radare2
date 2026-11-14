@@ -1,17 +1,18 @@
-OBJ_JAVA=asm_java.o
+OBJ_JAVA_PSEUDO+=$(LIBR)/arch/p/java/pseudo.o
 
-SHARED2_JAVA=$(addprefix ../,${SHARED_JAVA})
-
-STATIC_OBJ+=${OBJ_JAVA}
-SHARED_OBJ+=${SHARED_JAVA}
-TARGET_JAVA=asm_java.${EXT_SO}
+TARGET_JAVA_PSEUDO=parse_java_pseudo.${EXT_SO}
+STATIC_OBJ+=${OBJ_JAVA_PSEUDO}
+ifeq ($(CC),cccl)
+LIBDEPS=-L../../util -llibr_util
+LIBDEPS+=-L../../flag -llibr_flag
+else
+LIBDEPS=-L../../util -lr_util
+LIBDEPS+=-L../../flag -lr_flag
+endif
 
 ifeq ($(WITHPIC),1)
-ALL_TARGETS+=${TARGET_JAVA}
-
-${TARGET_JAVA}: ${OBJ_JAVA} ${SHARED2_JAVA}
-	${CC} $(call libname,asm_java) ${LDFLAGS} ${CFLAGS} \
-		-o asm_java.${EXT_SO} ${OBJ_JAVA} ${SHARED2_JAVA} \
-		$(SHLR)/java/libr_java.$(EXT_AR) \
-		$(SHLR)/sdb/src/libsdb.$(EXT_AR)
+ALL_TARGETS+=${TARGET_JAVA_PSEUDO}
+${TARGET_JAVA_PSEUDO}: ${OBJ_JAVA_PSEUDO}
+	${CC} $(call libname,parse_java_pseudo) ${LIBDEPS} $(LDFLAGS) \
+		$(LDFLAGS_SHARED) ${CFLAGS} -o ${TARGET_JAVA_PSEUDO} ${OBJ_JAVA_PSEUDO}
 endif

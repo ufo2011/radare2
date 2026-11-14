@@ -1,10 +1,45 @@
+NAME=test ascii and asciiz
+FILE=--
+CMDS=<<EOF
+rasm2 -f bins/src/asciistr.asm
+EOF
+EXPECT=<<EOF
+488d3d0d00000048b8d07bc8f7ff7f0000ffd0c32f686f6d652f6e6974616e6d617263656c2f7368656c6c2f6578616d706c652f6c696268656c6c6f2e736f2f686f6d652f6e6974616e6d617263656c2f7368656c6c2f6578616d706c652f6c696268656c6c6f2e736f00
+EOF
+RUN
+
+NAME=test 8051 reassembly
+FILE=--
+CMDS=!scripts/test-8051-reassembly.sh
+EXPECT=<<EOF
+Reassembling 8051... OK
+EOF
+RUN
+
+NAME=rasm2 binary input
+FILE=-
+ARGS=-a arm -b 64
+CMDS=<<EOF
+!!rasm2 -a arm -b 64 -d Bx01000000_00000000_00000010_10001011
+!!rasm2 -a arm -b 64 -d 0b01000000_00000000_00000010_10001011
+!!rasm2 -a arm -b 64 -d 0100_0000_0000_0000_0000_0010_1000_1011b
+!!rasm2 -a arm -b 64 -d 01000001000000000000001110001011b
+EOF
+EXPECT=<<EOF
+add x0, x2, x2
+add x0, x2, x2
+add x0, x2, x2
+add x1, x2, x3
+EOF
+RUN
+
 NAME=rasm2 i4004
 FILE=-
 CMDS=<<EOF
 !!rasm2 -L~4004
 EOF
 EXPECT=<<EOF
-adAe  4          i4004       LGPL3   Intel 4004 microprocessor
+ade_ 4           i4004       The classic Intel 4004
 EOF
 RUN
 
@@ -24,6 +59,26 @@ mov r0, 3
 EOF
 RUN
 
+NAME=rasm2 -x hex dwords
+FILE=-
+CMDS=<<EOF
+!rasm2 -a arm -b32 -x "mov r0, 3"
+!rasm2 -a arm -b32 -e -x "mov r0, 3"
+!rasm2 -a x86 -b 64 -x "mov eax, 1"
+!rasm2 -a x86 -b 64 -x nop
+!rasm2 -a x86 -b 64 -x ".hex 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4041"
+EOF
+EXPECT=<<EOF
+0xe3a00003
+0xe3a00003
+0x000001b8 0x00000000
+0x00000090
+0x03020100 0x07060504 0x0b0a0908 0x0f0e0d0c 0x13121110 0x17161514 0x1b1a1918 0x1f1e1d1c
+0x23222120 0x27262524 0x2b2a2928 0x2f2e2d2c 0x33323130 0x37363534 0x3b3a3938 0x3f3e3d3c
+0x00004140
+EOF
+RUN
+
 NAME=1: rasm2
 FILE=-
 CMDS=!rasm2 -a arm -b32 "mov r0, 3"
@@ -34,7 +89,7 @@ RUN
 
 NAME=rasm2 blx arm/thumb
 FILE=-
-CMDS=!rasm2 -o 0x4000 -a arm -b 16 -d 80f018ea
+CMDS=!rasm2 -s 0x4000 -a arm -b 16 -d 80f018ea
 EXPECT=<<EOF
 blx 0x84434
 EOF
@@ -42,30 +97,29 @@ RUN
 
 NAME=rasm2 blx arm/thumb 2
 FILE=-
-CMDS=!rasm2 -o 0x4000 -a arm -b 16 -d 80f018ea
+CMDS=!rasm2 -s 0x4000 -a arm -b 16 -d 80f018ea
 EXPECT=<<EOF
 blx 0x84434
 EOF
 RUN
 
 NAME=rasm2 arm/thumb branch errors
-BROKEN=1 # Only on Windows
 FILE=-
 CMDS=<<EOF
-!rasm2 -a arm -b 16 'b.n 8'
-!rasm2 -a arm -b 16 'b.w 8'
-!rasm2 -a arm -b 16 'bl 8'
-!rasm2 -a arm -b 16 'blx 8'
-!rasm2 -a arm -b 16 'b.n 9'
-!rasm2 -a arm -b 16 'b.w 9'
-!rasm2 -a arm -b 16 'bl 9'
-!rasm2 -a arm -b 16 'blx 9'
-!rasm2 -a arm -b 16 'b.w 0x1000000'
-!rasm2 -a arm -b 16 'bl 0x1000000'
-!rasm2 -a arm -b 16 'blx 0x1000000'
-!rasm2 -a arm -b 16 'b.w 0x1000004'
-!rasm2 -a arm -b 16 'bl 0x1000004'
-!rasm2 -a arm -b 16 'blx 0x1000004'
+!rasm2 -a arm -b 16 "b.n 8"
+!rasm2 -a arm -b 16 "b.w 8"
+!rasm2 -a arm -b 16 "bl 8"
+!rasm2 -a arm -b 16 "blx 8"
+!rasm2 -a arm -b 16 "b.n 9"
+!rasm2 -a arm -b 16 "b.w 9"
+!rasm2 -a arm -b 16 "bl 9"
+!rasm2 -a arm -b 16 "blx 9"
+!rasm2 -a arm -b 16 "b.w 0x1000000"
+!rasm2 -a arm -b 16 "bl 0x1000000"
+!rasm2 -a arm -b 16 "blx 0x1000000"
+!rasm2 -a arm -b 16 "b.w 0x1000004"
+!rasm2 -a arm -b 16 "bl 0x1000004"
+!rasm2 -a arm -b 16 "blx 0x1000004"
 EOF
 EXPECT=<<EOF
 02e0
@@ -80,7 +134,7 @@ RUN
 
 NAME=2: rasm2
 FILE=-
-CMDS=!rasm2 -a x86 -b 64 -d "5589e583ec2083f8000f8507000000b800000000eb05b80100000083c4205dc3" 
+CMDS=!rasm2 -a x86 -b 64 -d "5589e583ec2083f8000f8507000000b800000000eb05b80100000083c4205dc3"
 EXPECT=<<EOF
 push rbp
 mov ebp, esp
@@ -98,7 +152,7 @@ RUN
 
 NAME=rasm2 #1167
 FILE=-
-CMDS=!rasm2 -a x86 -b 64 "cmp rax,rbx" 
+CMDS=!rasm2 -a x86 -b 64 "cmp rax,rbx"
 EXPECT=<<EOF
 4839d8
 EOF
@@ -106,7 +160,7 @@ RUN
 
 NAME=rasm2 #1167 2
 FILE=-
-CMDS=!rasm2 -a x86 -b 64 "test rax, rbx" 
+CMDS=!rasm2 -a x86 -b 64 "test rax, rbx"
 EXPECT=<<EOF
 4885d8
 EOF
@@ -114,15 +168,26 @@ RUN
 
 NAME=rasm2 #1167 3
 FILE=-
-CMDS=!rasm2 -s att -a x86.as -b 64 "test %rbx, %rax" 
+REQUIRE=gas linux x86
+CMDS=!rasm2 -S att -a any.as -c x86 -b 64 "test %rbx, %rax"
 EXPECT=<<EOF
 4885d8
 EOF
 RUN
 
+NAME=rasm2 -S att -a any.as -c x86 -b 64 movq %rdx, %rax
+FILE=-
+REQUIRE=gas linux x86
+CMDS=!rasm2 -S att -a any.as -c x86 -b 64 "movq %rdx, %rax"
+EXPECT=<<EOF
+4889d0
+EOF
+RUN
+
 NAME=rasm2 #1167 4
 FILE=-
-CMDS=!rasm2 -s intel -a x86.as -b 64 "test rax, rbx" 
+REQUIRE=gas linux x86
+CMDS=!rasm2 -S intel -a any.as -c x86 -b 64 "test rax, rbx"
 EXPECT=<<EOF
 4885d8
 EOF
@@ -130,7 +195,8 @@ RUN
 
 NAME=rasm2 #1167 5
 FILE=-
-CMDS=!rasm2 -s att -a x86.as -b 64 "add \$33, %rbx"
+REQUIRE=gas linux x86
+CMDS=!rasm2 -S att -a any.as -c x86 -b 64 "add \$33, %rbx"
 EXPECT=<<EOF
 4883c321
 EOF
@@ -138,7 +204,8 @@ RUN
 
 NAME=rasm2 #1167 6
 FILE=-
-CMDS=!rasm2 -s intel -a x86.as -b 64 "add rbx, 33" 
+REQUIRE=gas linux x86
+CMDS=!rasm2 -S intel -a any.as -c x86 -b 64 "add rbx, 33"
 EXPECT=<<EOF
 4883c321
 EOF
@@ -161,33 +228,46 @@ RUN
 NAME=rasm2 #1900 (detect syntax error - case 1)
 FILE=-
 CMDS=!rasm2 -a x86 -b 32 "mov hello, eax"
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov hello, eax' at line 3
-invalid
+ERROR: Cannot assemble 'mov hello, eax' at line 1
 EOF
 RUN
 
 NAME=rasm2 #1900 (detect syntax error - case 2)
 FILE=-
 CMDS=!rasm2 -a x86 -b 32 "mov 33, eax"
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov 33, eax' at line 3
-invalid
+ERROR: Cannot assemble 'mov 33, eax' at line 1
 EOF
 RUN
 
 NAME=rasm2 #1900 (detect syntax error - case 3)
 FILE=-
 CMDS=!rasm2 -a x86 -b 32 "mov eax, hello"
-EXPECT=<<EOF
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov eax, hello' at line 3
-invalid
+ERROR: Cannot assemble 'mov eax, hello' at line 1
+EOF
+RUN
+
+NAME=rasm2 arm32 rejects invalid push/pop, cps and mov operands
+FILE=-
+CMDS=<<EOF
+!rasm2 -a arm -b 32 "push {r0, r1}, r2"
+!rasm2 -a arm -b 32 "pop {r0}, lsl"
+!rasm2 -a arm -b 32 "cps {r0}"
+!rasm2 -a arm -b 32 "cpseq 19"
+!rasm2 -a arm -b 32 "mov foo, r1"
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'push {r0, r1}, r2' at line 1
+ERROR: Cannot assemble 'pop {r0}, lsl' at line 1
+ERROR: Cannot assemble 'cps {r0}' at line 1
+ERROR: Cannot assemble 'cpseq 19' at line 1
+ERROR: Cannot assemble 'mov foo, r1' at line 1
 EOF
 RUN
 
@@ -196,8 +276,16 @@ FILE=-
 CMDS=!rasm2 -a x86 -b 32 "mov eax, 0x1122334455"
 EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov eax, 0x1122334455' at line 3
-invalid
+ERROR: Cannot assemble 'mov eax, 0x1122334455' at line 1
+EOF
+RUN
+
+NAME=rasm2 arm32 compare immediate with no rotated 8 bit encoding
+FILE=-
+CMDS=!rasm2 -a arm -b 32 "tst r0, 0x101"
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'tst r0, 0x101' at line 1
 EOF
 RUN
 
@@ -209,16 +297,14 @@ CMDS=<<EOF
 EOF
 EXPECT=
 EXPECT_ERR=<<EOF
-Cannot assemble 'mov rax, 0x112233445566778899' at line 3
-invalid
-Cannot assemble 'mov eax, 0x1122334455' at line 3
-invalid
+ERROR: Cannot assemble 'mov rax, 0x112233445566778899' at line 1
+ERROR: Cannot assemble 'mov eax, 0x1122334455' at line 1
 EOF
 RUN
 
 NAME=rasm2 #9197
 FILE=-
-CMDS=!rasm2 -a arm -b 64 "ldur x1, [x29, -8]" 
+CMDS=!rasm2 -a arm -b 64 "ldur x1, [x29, -8]"
 EXPECT=<<EOF
 a1835ff8
 EOF
@@ -248,6 +334,14 @@ mov eax, 0x21
 EOF
 RUN
 
+NAME=rasm2 tms320 c55x smem extension
+FILE=-
+CMDS=!rasm2 -a tms320 -c c55x -b 32 -d f41134127856 2>/dev/null
+EXPECT=<<EOF
+and 0x3412, abs16(0x7856)
+EOF
+RUN
+
 NAME=rasm2 -D
 FILE=-
 CMDS=!rasm2 -D -a x86 -b 32 "b821000000"
@@ -258,15 +352,15 @@ RUN
 
 NAME=rasm2 -s
 FILE=-
-CMDS=!rasm2 -s att -a x86 -b 32 -D "31ed"
+CMDS=!rasm2 -S att -a x86 -b 32 -D "31ed"
 EXPECT=<<EOF
 0x00000000   2                     31ed  xorl %ebp, %ebp
 EOF
 RUN
 
-NAME=rasm2 -o
+NAME=rasm2 -s
 FILE=-
-CMDS=!rasm2 -s att -o 0xa -a x86 -b 32 -D "31ed"
+CMDS=!rasm2 -S att -s 0xa -a x86 -b 32 -D "31ed"
 EXPECT=<<EOF
 0x0000000a   2                     31ed  xorl %ebp, %ebp
 EOF
@@ -274,7 +368,7 @@ RUN
 
 NAME=rasm2 -F pseudo
 FILE=-
-CMDS=!rasm2 -a x86 -b 32 -o 0xa -F x86.pseudo -D 31ed 
+CMDS=!rasm2 -a x86 -b 32 -s 0xa -F x86.pseudo -D 31ed
 EXPECT=<<EOF
 0x0000000a   2                     31ed  ebp = 0
 EOF
@@ -282,15 +376,15 @@ RUN
 
 NAME=rasm2 -F
 FILE=-
-CMDS=!rasm2 -o 0xa -a x86 -b 32 -D 31ed
+CMDS=!rasm2 -s 0xa -a x86 -b 32 -D 31ed
 EXPECT=<<EOF
 0x0000000a   2                     31ed  xor ebp, ebp
 EOF
 RUN
 
-NAME=rasm2 -F -o order bug
+NAME=rasm2 -F -s order bug
 FILE=-
-CMDS=!rasm2 -a x86 -b 32 -o 0xa -D 31ed
+CMDS=!rasm2 -a x86 -b 32 -s 0xa -D 31ed
 EXPECT=<<EOF
 0x0000000a   2                     31ed  xor ebp, ebp
 EOF
@@ -304,17 +398,10 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=rasm2 -s att -a x86.as -b 64 movq %rdx, %rax
-FILE=-
-CMDS=!rasm2 -s att -a x86.as -b 64 "movq %rdx, %rax"
-EXPECT=<<EOF
-4889d0
-EOF
-RUN
 
-NAME=rasm2 -v~commit?"
+NAME=rasm2 -v~birth?"
 FILE=-
-CMDS=!!rasm2 -v~commit?
+CMDS=!!rasm2 -v~birth?
 EXPECT=<<EOF
 1
 EOF
@@ -330,7 +417,7 @@ RUN
 
 NAME=rasm2  dissassemble ARM32 binary file
 FILE=-
-CMDS=!rasm2 -DB -a arm -o 0x200 -b 32 -f bins/other/rasm2/testARM32.bin
+CMDS=!rasm2 -DB -a arm -s 0x200 -b 32 -f bins/other/rasm2/testARM32.bin
 EXPECT=<<EOF
 0x00000200   4                 4661b0e1  asrs r6, r6, 2
 0x00000204   4                 f087bd08  popeq {r4, r5, r6, r7, r8, sb, sl, pc}
@@ -347,7 +434,7 @@ RUN
 
 NAME=rasm2  dissassemble ARM32 binary file with skip
 FILE=-
-CMDS=!rasm2 -DB -a arm -o 0x200 -b 32 -f bins/other/rasm2/testARM32.bin -i 4
+CMDS=!rasm2 -DB -a arm -s 0x200 -b 32 -f bins/other/rasm2/testARM32.bin -i 4
 EXPECT=<<EOF
 0x00000200   4                 f087bd08  popeq {r4, r5, r6, r7, r8, sb, sl, pc}
 0x00000204   4                 0040a0e3  mov r4, 0
@@ -379,21 +466,89 @@ RUN
 
 NAME=rasm2  SPP include directive
 FILE=-
-CMDS=!rasm2 -a x86 -b 32 -p -f bins/other/rasm2/asm/include.asm
+CMDS=!rasm2 -a x86 -b 32 -p -I . -f bins/other/rasm2/asm/include.asm
 EXPECT=<<EOF
-9083e803bb00000000cd80c3
+9083e80341bb00000000cd80c3
 EOF
 RUN
 
-NAME=rasm2  SPP nested conditionals
+NAME=rasm2 SPP includes relative to source directory
+FILE=--
+CMDS=<<EOF
+rasm2 -p -f scripts/rasm2/include.asm
+rasm2 -p -I scripts/rasm2/extra -f scripts/rasm2/include.asm
+cd scripts/rasm2
+rasm2 -p -f include.asm
+cd ../..
+rasm2 -p -f scripts/rasm2/include.asm
+EOF
+EXPECT=<<EOF
+111133
+111133
+111133
+111133
+EOF
+RUN
+
+NAME=rasm2 SPP include search directories
+FILE=--
+CMDS=<<EOF
+rasm2 -p -I scripts/rasm2/extra -I "scripts/rasm2/other includes" -f scripts/rasm2/search.asm
+rasm2 -p -I "scripts/rasm2/other includes" -I scripts/rasm2/extra -f scripts/rasm2/search.asm
+rasm2 -p -I scripts/rasm2/missing -I scripts/rasm2/extra -f scripts/rasm2/search.asm
+rasm2 -p -Iscripts/rasm2/extra '.include extra.asm'
+EOF
+EXPECT=<<EOF
+114433
+115533
+114433
+44
+EOF
+RUN
+
+NAME=rasm2 SPP absolute paths and standard input
+FILE=--
+CMDS=<<EOF
+rasm2 -p -f `pwd`/scripts/rasm2/include.asm
+rasm2 -p -I scripts/rasm2/extra ".include `pwd`/scripts/rasm2/local.asm"
+!rasm2 -p -I scripts/rasm2 -I scripts/rasm2/extra -f - < scripts/rasm2/search.asm
+cd scripts/rasm2/extra
+rasm2 -p -f ../include.asm
+EOF
+EXPECT=<<EOF
+111133
+11
+114433
+111133
+EOF
+RUN
+
+NAME=rasm2 SPP restores include environment
+FILE=--
+CMDS=<<EOF
+env SPP_INCDIR=scripts/rasm2/extra
+rasm2 -p -f scripts/rasm2/include.asm
+env SPP_INCDIR
+rasm2 -p -I "scripts/rasm2/other includes" '.include extra.asm'
+env SPP_INCDIR
+rasm2 -p '.include extra.asm'
+EOF
+EXPECT=<<EOF
+111133
+scripts/rasm2/extra
+55
+scripts/rasm2/extra
+44
+EOF
+RUN
+
+NAME=rasm2 SPP error stops assembly after nested conditionals
 FILE=-
 CMDS=!rasm2 -a x86 -b 32 -p -f bins/other/rasm2/asm/nest.asm
-EXPECT=<<EOF
-83c10283e90583c301b90200000090
-EOF
+EXPECT=
 EXPECT_ERR=<<EOF
-WARNING: WARN (line=1)
-ERROR: ERR (line=1)
+WARNING: WARN (line=17)
+ERROR: ERR (line=24)
 EOF
 RUN
 
@@ -401,7 +556,7 @@ NAME=rasm2 x86.asm.32
 FILE=-
 CMDS=!rasm2 -f bins/elf/analysis/hello.asm
 EXPECT=<<EOF
-ba0e000000b91d000000bb01000000b804000000cd80b801000000cd8048656c6c6f2c20776f726c64210a00
+ba0e000000b918000000bb01000000b804000000cd80b801000000cd8048656c6c6f2c20776f726c64210a00
 EOF
 RUN
 
@@ -413,11 +568,12 @@ EXPECT=<<EOF
 EOF
 RUN
 
-NAME=rasm2 bswap x64 #8095 (with single quotes)
-BROKEN=1 # Only on Windows
+NAME=rasm2 bswap x64 #8095 (quoted instruction sequence)
 FILE=-
-CMDS=!rasm2 -a x86 -b 64 'bswap rax;bswap rbx;bswap rcx;bswap rdx'
-EXPECT=480fc8480fcb480fc9480fca
+CMDS=!rasm2 -a x86 -b 64 "bswap rax;bswap rbx;bswap rcx;bswap rdx"
+EXPECT=<<EOF
+480fc8480fcb480fc9480fca
+EOF
 RUN
 
 NAME=rasm2 mov eax, [eax * 2 + 8]
@@ -465,6 +621,22 @@ rbp,8,rsp,-,=[8],8,rsp,-=
 EOF
 RUN
 
+NAME=rasm2 -E with hex starting with a letter
+FILE=-
+CMDS=<<EOF
+!rasm2 -a x86 -b 64 -E c3
+!rasm2 -a x86 -b 64 -E -d c3
+!rasm2 -a x86 -b 64 -E 'push rbp'
+!rasm2 -a x86 -b 32 -E aaa
+EOF
+EXPECT=<<EOF
+rsp,[8],rip,=,8,rsp,+=
+rsp,[8],rip,=,8,rsp,+=
+rbp,8,rsp,-,=[8],8,rsp,-=
+0,cf,:=,0,af,:=,9,al,>,?{,10,al,-=,1,ah,+=,1,cf,:=,1,af,:=,}
+EOF
+RUN
+
 NAME=rasm2 -a x86 -b 64 -Aj 0x55
 FILE=-
 CMDS=!rasm2 -a x86 -b 64 -Aj 0x55
@@ -473,25 +645,50 @@ EXPECT=<<EOF
 EOF
 RUN
 
+NAME=rasm2 -LL
+FILE=-
+REQUIRE=unix
+CMDS=<<EOF
+!rasm2 -LL | grep -c null
+EOF
+EXPECT=<<EOF
+1
+EOF
+RUN
+
 NAME=rasm2 -L
 FILE=-
+REQUIRE=unix
 CMDS=!rasm2 -L | grep -c arm.gnu
 EXPECT=<<EOF
 1
 EOF
 RUN
 
+NAME=rasm2 -L internal grep
+FILE=-
+CMDS=<<EOF
+!!rasm2 -L~arm?
+!!rasm2 -L~arm.gnu?
+EOF
+EXPECT=<<EOF
+3
+1
+EOF
+RUN
+
 NAME=rasm2 -qL
 FILE=-
-CMDS=!rasm2 -qL | grep -c arm.gnu
+REQUIRE=unix
+CMDS=!rasm2 -qL | grep -c arm
 EXPECT=<<EOF
-1
+3
 EOF
 RUN
 
 NAME=rasm2 -v
 FILE=-
-CMDS=!rasm2 -v  | grep -c build
+CMDS=!rasm2 -v  | grep -c birth
 EXPECT=<<EOF
 1
 EOF
@@ -539,36 +736,49 @@ RUN
 
 NAME=rasm -a sh -d
 FILE=-
-CMDS=!rasm2 -a sh -d "008d 0b00 2920 fb8f 0900 0b42 e031"
+CMDS=!rasm2 -a sh -d "8d00 000b 2029 8ffb 0009 420b 31e0"
 EXPECT=<<EOF
-bt.s 0x00000004
-rts
-and r2, r0
-bf.s 0x00000000
-nop
-jsr @r2
-cmp/eq r14, r1
+mov.w @(r0,r8), r0
+.word 0x000b0000
+mov.b r2, @r9
+.word 0x0f0b080f
+.word 0x00090000
+stc spc, r11
+mov 0x31, r0
 EOF
 RUN
 
 NAME=rasm -a sh -D
 FILE=-
-CMDS=!rasm2 -a sh -D "008d 0b00 2920 fb8f 0900 0b42 e031"
+CMDS=!rasm2 -a sh -D "8d00 000b 2029 8ffb 0009 420b 31e0"
 EXPECT=<<EOF
-0x00000000   2                     008d  bt.s 0x00000004
-0x00000002   2                     0b00  rts
-0x00000004   2                     2920  and r2, r0
-0x00000006   2                     fb8f  bf.s 0x00000000
-0x00000008   2                     0900  nop
-0x0000000a   2                     0b42  jsr @r2
-0x0000000c   2                     e031  cmp/eq r14, r1
+0x00000000   2                     8d00  mov.w @(r0,r8), r0
+0x00000002   2                     000b  .word 0x000b0000
+0x00000004   2                     2029  mov.b r2, @r9
+0x00000006   2                     8ffb  .word 0x0f0b080f
+0x00000008   2                     0009  .word 0x00090000
+0x0000000a   2                     420b  stc spc, r11
+0x0000000c   2                     31e0  mov 0x31, r0
 EOF
 RUN
 
-NAME=rasm2 -a ppc.as -b 64 "std r31, -8(r1)"
+NAME=rasm -a sh -eD
 FILE=-
-BROKEN=1
-CMDS=!rasm2 -a ppc.as -b 64 "std r31, -8(r1)"
+CMDS=!rasm2 -a sh -eD "8d00 000b 2029 8ffb 0009 420b 31e0"
+EXPECT=<<EOF
+0x00000000   2                     8d00  bt.s 0x00000004
+0x00000002   2                     000b  rts
+0x00000004   2                     2029  and r2, r0
+0x00000006   2                     8ffb  bf.s 0x00000000
+0x00000008   2                     0009  nop
+0x0000000a   2                     420b  jsr @r2
+0x0000000c   2                     31e0  cmp/eq r14, r1
+EOF
+RUN
+
+NAME=rasm2 -a ppc -b 64 "std r31, -8(r1)"
+FILE=-
+CMDS=!rasm2 -a ppc -b 64 "std r31, -8(r1)"
 EXPECT=<<EOF
 f8ffe1fb
 EOF
@@ -582,10 +792,9 @@ std r31, -8(r1)
 EOF
 RUN
 
-NAME=rasm2 -a ppc.as -b 32 -e "mr r10, r4"
+NAME=rasm2 -a ppc -b 32 -e "mr r10, r4"
 FILE=-
-BROKEN=1
-CMDS=!rasm2 -a ppc.as -b 32 -e "mr r10, r4"
+CMDS=!rasm2 -a ppc -b 32 -e "mr r10, r4"
 EXPECT=<<EOF
 7c8a2378
 EOF
@@ -599,38 +808,755 @@ mr r10, r4
 EOF
 RUN
 
-NAME=rasm2 -a arm.as -b 16 "wfe"
+# Coverage: ppc.nz rejects unaligned DS-form displacements (low 2 bits must be 0).
+NAME=rasm2 ppc.nz rejects unaligned ld displacement
 FILE=-
-BROKEN=1
-CMDS=!rasm2 -a arm.as -b 16 "wfe"
+CMDS=!rasm2 -a ppc -b 64 -e 'ld r3, 1(r1)'
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'ld r3, 1(r1)' at line 1
+EOF
+RUN
+
+# Coverage: 64-bit-only instructions reject when -b 32.
+NAME=rasm2 ppc.nz rejects ld when bits=32
+FILE=-
+CMDS=!rasm2 -a ppc -b 32 -e 'ld r3, 0(r1)'
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'ld r3, 0(r1)' at line 1
+EOF
+RUN
+
+NAME=rasm2 -a arm -b 16 "wfe"
+FILE=-
+CMDS=!rasm2 -a arm -b 16 "wfe"
 EXPECT=<<EOF
 20bf
 EOF
 RUN
 
-NAME=rasm2 -a arm.as -b 32 "add fp, sp, 0"
+NAME=rasm2 -a arm -b 32 "add fp, sp, 0"
 FILE=-
-BROKEN=1
-CMDS=!rasm2 -a arm.as -b 32 "add fp, sp, 0"
+CMDS=!rasm2 -a arm -b 32 "add fp, sp, 0"
 EXPECT=<<EOF
 00b08de2
 EOF
 RUN
 
-NAME=rasm2 -a arm.as -b 32 -e "ldr fp, [sp], 4"
+NAME=rasm2 -a arm -b 32 -e "ldr fp, [sp], 4"
 FILE=-
-BROKEN=1
-CMDS=!rasm2 -a arm.as -b 32 -e "ldr fp, [sp], 4"
+CMDS=!rasm2 -a arm -b 32 -e "ldr fp, [sp], 4"
 EXPECT=<<EOF
 e49db004
 EOF
 RUN
 
-NAME=rasm2 -a arm.as -b 64 "sub sp, sp, 16"
+NAME=rasm2 -a arm -b 64 "sub sp, sp, 16"
 FILE=-
-BROKEN=1
-CMDS=!rasm2 -a arm.as -b 64 "sub sp, sp, 16"
+CMDS=!rasm2 -a arm -b 64 "sub sp, sp, 16"
 EXPECT=<<EOF
 ff4300d1
+EOF
+RUN
+
+NAME=rasm2 -a x86 -b 64 -f equ.asm
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 -f bins/src/equ.asm
+EXPECT=<<EOF
+48c7c003000000
+EOF
+RUN
+
+NAME=rasm2 -a x86 -b 64 -D PCHINT
+FILE=-
+CMDS=<<EOF
+'!rasm2 -a x86 -b 64 -D '8b 5f 50 48 85 db 0f 84 c2 00 00 00 e8 93 bc c4 f1 48 c7 c1 38 14 56 c1 48 89 da 48 c7 c7 aa c2 57 c1 48 89 c6 e8 6a 2c 1c f1 <0f> 0b 5b 41 5c 41 5d 41 5e 5d 31 c0 31 d2 31 c9 31 f6 31 ff 45 31'
+EOF
+EXPECT=<<EOF
+0x00000000   3                   8b5f50  mov ebx, dword [rdi + 0x50]
+0x00000003   3                   4885db  test rbx, rbx
+0x00000006   6             0f84c2000000  je 0xce
+0x0000000c   5               e893bcc4f1  call 0xfffffffff1c4bca4
+0x00000011   7           48c7c1381456c1  mov rcx, 0xffffffffc1561438
+0x00000018   3                   4889da  mov rdx, rbx
+0x0000001b   7           48c7c7aac257c1  mov rdi, 0xffffffffc157c2aa
+0x00000022   3                   4889c6  mov rsi, rax
+0x00000025   5               e86a2c1cf1  call 0xfffffffff11c2c94
+=PC:
+0x0000002a   2                     0f0b  ud2
+0x0000002c   1                       5b  pop rbx
+0x0000002d   2                     415c  pop r12
+0x0000002f   2                     415d  pop r13
+0x00000031   2                     415e  pop r14
+0x00000033   1                       5d  pop rbp
+0x00000034   2                     31c0  xor eax, eax
+0x00000036   2                     31d2  xor edx, edx
+0x00000038   2                     31c9  xor ecx, ecx
+0x0000003a   2                     31f6  xor esi, esi
+0x0000003c   2                     31ff  xor edi, edi
+0x0000003e   1                       45  invalid
+0x0000003f   1                       31  invalid
+EOF
+RUN
+
+NAME=rasm2 -H RASM2_ARCH
+FILE=-
+CMDS=%RASM2_ARCH=test;!rasm2 -H RASM2_ARCH
+EXPECT=<<EOF
+test
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=rasm2 -H RASM2_BITS
+FILE=-
+CMDS=%RASM2_BITS=test;!rasm2 -H RASM2_BITS
+EXPECT=<<EOF
+test
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=rasm2 .db directive
+FILE=-
+CMDS=!rasm2 ".db 33"
+EXPECT=<<EOF
+21
+EOF
+RUN
+
+NAME=rasm2 comma-separated byte expressions
+FILE=-
+CMDS=<<EOF
+!rasm2 ".byte 1 + 2, 3"
+!rasm2 ".db (1 + 2) * 3, 4"
+!rasm2 ".int8 1 << 4, (0xf0 >> 4) | 0x80"
+!rasm2 "base:; .byte end - base, end - base + 1; end:; .byte 0"
+EOF
+EXPECT=<<EOF
+0303
+0904
+108f
+020300
+EOF
+EXPECT_ERR=
+RUN
+
+NAME=rasm2 .word directive
+FILE=-
+CMDS=!rasm2 ".word 0x1234"
+EXPECT=<<EOF
+3412
+EOF
+RUN
+
+NAME=rasm2 .dw directive
+FILE=-
+CMDS=!rasm2 ".dw 0x1234"
+EXPECT=<<EOF
+3412
+EOF
+RUN
+
+NAME=rasm2 .dword directive
+FILE=-
+CMDS=!rasm2 ".dword 0x12345678"
+EXPECT=<<EOF
+78563412
+EOF
+RUN
+
+NAME=rasm2 .dd directive
+FILE=-
+CMDS=!rasm2 ".dd 0x12345678"
+EXPECT=<<EOF
+78563412
+EOF
+RUN
+
+NAME=rasm2 .qword directive
+FILE=-
+CMDS=!rasm2 ".qword 0x123456789abcdef0"
+EXPECT=<<EOF
+f0debc9a78563412
+EOF
+RUN
+
+NAME=rasm2 .dq directive
+FILE=-
+CMDS=!rasm2 ".dq 0x123456789abcdef0"
+EXPECT=<<EOF
+f0debc9a78563412
+EOF
+RUN
+
+NAME=rasm2 .uint8 directive
+FILE=-
+CMDS=!rasm2 ".uint8 255"
+EXPECT=<<EOF
+ff
+EOF
+RUN
+
+NAME=rasm2 .uint16 directive
+FILE=-
+CMDS=!rasm2 ".uint16 0x1234"
+EXPECT=<<EOF
+3412
+EOF
+RUN
+
+NAME=rasm2 .uint32 directive
+FILE=-
+CMDS=!rasm2 ".uint32 0x12345678"
+EXPECT=<<EOF
+78563412
+EOF
+RUN
+
+NAME=rasm2 .uint64 directive
+FILE=-
+CMDS=!rasm2 ".uint64 0x123456789abcdef0"
+EXPECT=<<EOF
+f0debc9a78563412
+EOF
+RUN
+
+NAME=rasm2 wider integer directives emit every comma-separated value
+FILE=-
+CMDS=<<EOF
+!rasm2 ".dw 0x1234, 0x5678"
+!rasm2 -e ".dw 0x1234, 0x5678"
+!rasm2 ".dd 1, 2"
+!rasm2 ".dq 1, -1"
+!rasm2 ".int16 -1, 5"
+!rasm2 ".uint8 1, 255"
+!rasm2 ".uint16 1 + 2, (1 + 2) * 3"
+!rasm2 -a z80 -b 8 ".uint16 a, b; a:; b:"
+EOF
+EXPECT=<<EOF
+34127856
+12345678
+0100000002000000
+0100000000000000ffffffffffffffff
+ffff0500
+01ff
+03000900
+04000400
+EOF
+RUN
+
+NAME=rasm2 wider integer list past 64 bytes keeps label offset
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 ".dq 0,0,0,0,0,0,0,0,0; end:; .dw end"
+!rasm2 -e ".dw 0x1234, 0x5678, 0x123"
+EOF
+EXPECT=<<EOF
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004800
+123456780123
+EOF
+RUN
+
+NAME=rasm2 wider integer directives reject bad lists
+FILE=-
+CMDS=<<EOF
+!rasm2 ".dw 1 2"
+!rasm2 ".dw 1,"
+!rasm2 ".dw 0x7fff, 0x8000"
+!rasm2 ".uint16 1, 0x10000"
+EOF
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Invalid number in .intN:  ')' expected
+ERROR: Cannot assemble '.dw 1 2' at line 1
+ERROR: Missing expression in .intN
+ERROR: Cannot assemble '.dw 1,' at line 1
+ERROR: int16 value 32768 out of range (-32768 to 32767)
+ERROR: Cannot assemble '.dw 0x7fff, 0x8000' at line 1
+ERROR: uint16 out of range
+ERROR: Cannot assemble '.uint16 1, 0x10000' at line 1
+EOF
+RUN
+
+NAME=rasm2 .fill directive
+FILE=-
+CMDS=!rasm2 ".fill 5"
+EXPECT=<<EOF
+0000000000
+EOF
+RUN
+
+NAME=rasm2 .fill repeat,size,value directive
+FILE=-
+CMDS=!rasm2 ".fill 2, 2, 0x1122"
+EXPECT=<<EOF
+22112211
+EOF
+RUN
+
+NAME=rasm2 .fill size over 4 bytes
+FILE=-
+CMDS=!rasm2 ".fill 2,8,0x1122334455667788"
+EXPECT=<<EOF
+88776655000000008877665500000000
+EOF
+RUN
+
+NAME=rasm2 .org without fill preserves PC-only behavior
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 ".byte 1; .org 8; here:; jp here"
+!rasm2 -a z80 -b 8 ".byte 1; .org 0; here:; jp here"
+EOF
+EXPECT=<<EOF
+01c30800
+01c30000
+EOF
+RUN
+
+NAME=rasm2 .org padding keeps vector labels and forward branches
+FILE=-
+CMDS=!rasm2 -a z80 -b 8 "jp reset; .org 8, 0xff; reset:; jr next; .org 0x10, 0xff; next:; ret"
+EXPECT=<<EOF
+c30800ffffffffff1806ffffffffffffc9
+EOF
+RUN
+
+NAME=rasm2 .org padding honors the initial PC
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 -s 0x100 "jp reset; .org 0x108, 0xff; reset:; ret"
+!rasm2 -a z80 -b 8 ".org 0x100; jp reset; .org 0x108, 0xff; reset:; ret"
+EOF
+EXPECT=<<EOF
+c30801ffffffffffc9
+c30801ffffffffffc9
+EOF
+RUN
+
+NAME=rasm2 .org padding zero gap and zero fill
+FILE=-
+CMDS=!rasm2 -a z80 -b 8 ".byte 1; .org 1, 0xff; .byte 2; .org 4, 0"
+EXPECT=<<EOF
+01020000
+EOF
+RUN
+
+NAME=rasm2 .org padding rejects backwards targets
+FILE=-
+CMDS=!rasm2 -a z80 -b 8 ".byte 1; .org 0, 0xff"
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+ERROR: .org with fill cannot move backwards
+ERROR: Cannot assemble '.org 0, 0xff' at line 2
+EOF
+RUN
+
+NAME=rasm2 .align pads output and keeps labels in sync
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 ".byte 1; .align 8; x:; .uint16 x"
+!rasm2 -a z80 -b 8 ".align 8; x:; .byte x"
+!rasm2 -a z80 -b 8 "jp next; .align 16, 0xff; next:; ret"
+EOF
+EXPECT=<<EOF
+01000000000000000800
+00
+c31000ffffffffffffffffffffffffffc9
+EOF
+RUN
+
+NAME=rasm2 .align applies once and honors the initial PC
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 ".byte 1; .align 4, 0xff; .byte 2; .align 4; .byte 3; y:; .byte y"
+!rasm2 -a z80 -b 8 -s 0x101 ".align 4, 0xff; x:; .uint16 x"
+!rasm2 -a z80 -b 8 ".byte 1; .align 3, 0xff; .byte 2; .align 0; .align 1; .byte 3"
+EOF
+EXPECT=<<EOF
+01ffffff020000000309
+ffffff0401
+01ffff0203
+EOF
+RUN
+
+NAME=rasm2 .fillvalue sets the default padding byte
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 ".fillvalue 0xcc; .byte 1; .align 4; .align 8, 0x90; .fill 2; .fill 1, 2, 0x1122"
+!rasm2 -a z80 -b 8 ".fillvalue 0xcc; .fill 2, 2; .org 6; .fillvalue 0; .align 8"
+!rasm2 -a z80 -b 8 ".byte 1; .align 4"
+EOF
+EXPECT=<<EOF
+01cccccc90909090cccc2211
+cccccccc0000
+01000000
+EOF
+RUN
+
+NAME=rasm2 alignment and fillvalue accept tabs
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 ".byte 1; .align	4, 0xcc; .byte 2"
+!rasm2 -a z80 -b 8 ".fillvalue	0x7f; .byte 1; .align	4; .fill 2,2"
+EOF
+EXPECT=<<EOF
+01cccccc02
+017f7f7f7f7f7f7f
+EOF
+RUN
+
+NAME=rasm2 assembly PC overflow rejected
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 -s 0xffffffffffffffff ".align 2"
+!rasm2 -a z80 -b 8 -s 0xffffffffffffffff ".fill 2"
+!rasm2 -a z80 -b 8 -s 0xffffffffffffffff ".byte 1"
+EOF
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+ERROR: Assembled PC overflow at line 1
+ERROR: Assembled PC overflow at line 1
+ERROR: Assembled PC overflow at line 1
+EOF
+RUN
+
+NAME=rasm2 .align and .fillvalue reject invalid operands
+FILE=-
+CMDS=<<EOF
+!rasm2 -a z80 -b 8 ".align 4, 256"
+!rasm2 -a z80 -b 8 ".align 4, 1, 2"
+!rasm2 -a z80 -b 8 ".fillvalue 0x100"
+EOF
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+ERROR: .align fill must be a byte (0-255)
+ERROR: Cannot assemble '.align 4, 256' at line 1
+ERROR: Invalid usage of .align boundary[,fill]
+ERROR: Cannot assemble '.align 4, 1, 2' at line 1
+ERROR: .fillvalue fill must be a byte (0-255)
+ERROR: Cannot assemble '.fillvalue 0x100' at line 1
+EOF
+RUN
+
+NAME=rasm2 .db out of range
+FILE=-
+CMDS=!rasm2 ".db 256"
+EXPECT=<<EOF
+EOF
+EXPECT_ERR=<<EOF
+ERROR: byte value 256 out of range (0-255)
+ERROR: Cannot assemble '.db 256' at line 1
+EOF
+RUN
+
+NAME=rasm2 multiple directives
+FILE=-
+CMDS=!rasm2 ".db 33;.db 44"
+EXPECT=<<EOF
+212c
+EOF
+RUN
+
+NAME=rasm2 .float directive
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 ".float 3.14"
+EXPECT=<<EOF
+c3f54840
+EOF
+RUN
+
+NAME=rasm2 .double directive
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 ".double 3.14"
+EXPECT=<<EOF
+1f85eb51b81e0940
+EOF
+RUN
+
+NAME=rasm2 .bf16 directive
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 ".bf16 3.14"
+EXPECT=<<EOF
+4940
+EOF
+RUN
+
+NAME=rasm2 .cfloat directive
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 ".cfloat 1 8 23 127 0 0;.float 3.14"
+EXPECT=<<EOF
+c3f54840
+EOF
+RUN
+
+NAME=rasm2 .cfloat rejects negative sizes
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 ".cfloat -1 8 23 127 0 0;.float 3.14"
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Invalid .cfloat field sizes
+ERROR: Cannot assemble '.cfloat -1 8 23 127 0 0' at line 1
+EOF
+RUN
+
+NAME=rasm2 .cfloat valid profiles
+FILE=-
+CMDS=<<EOF
+!rasm2 -a x86 -b 64 ".cfloat 1 8 23 127 0 0;.float 3.14"
+!rasm2 -a x86 -b 64 ".cfloat 1 11 52 1023 0 0;.float 3.14"
+!rasm2 -a x86 -b 64 ".cfloat 1 15 64 16383 0 1;.float 3.14"
+!rasm2 -a x86 -b 64 ".cfloat 1 10 5 15 0 0;.float 3.14"
+!rasm2 -a x86 -b 64 ".cfloat 1 8 7 127 0 0;.float 3.14"
+!rasm2 -a x86 -b 64 -e ".cfloat 1 8 23 127 0 0;.float 3.14"
+!rasm2 -a x86 -b 64 -e ".cfloat 1 11 52 1023 0 0;.float 3.14"
+!rasm2 -a x86 -b 64 -e ".cfloat 1 8 7 127 0 0;.float 3.14"
+EOF
+EXPECT=<<EOF
+c3f54840
+1f85eb51b81e0940
+00f8285c8fc2f5c80040
+1202
+4940
+4048f5c3
+40091eb851eb851f
+4049
+EOF
+RUN
+
+NAME=rasm2 .cfloat rejects truncated argument list
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 ".cfloat 1 8 23 127 0;.float 3.14"
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: The .cfloat directive expects 6 arguments: (sign_bits, exp_bits, mant_bits, bias, big_endian, explicit_leading_bit)
+INFO: Example (float): .cfloat 1 8 23 127 0 0
+INFO: Example (double): .cfloat 1 11 52 1023 0 0
+INFO: Example (bf16): .cfloat 1 8 7 127 0 0
+INFO: Example (x86-80): .cfloat 1 15 64 16383 0 1
+ERROR: Cannot assemble '.cfloat 1 8 23 127 0' at line 1
+EOF
+RUN
+
+NAME=rasm2 #25036 (reject invalid x86-64 register r1)
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 "add rax, r1"
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'add rax, r1' at line 1
+EOF
+RUN
+
+NAME=rasm2 #25036 (reject invalid x86-64 register r1 in mov)
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 "mov rax, r1"
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'mov rax, r1' at line 1
+EOF
+RUN
+
+NAME=rasm2 #25036 (valid r10 register still works)
+FILE=-
+CMDS=!rasm2 -a x86 -b 64 "add rax, r10"
+EXPECT=<<EOF
+4c01d0
+EOF
+RUN
+
+NAME=rasm2 #25036 (valid r8-r15 registers work)
+FILE=-
+CMDS=<<EOF
+!rasm2 -a x86 -b 64 "push r8"
+!rasm2 -a x86 -b 64 "push r15"
+!rasm2 -a x86 -b 64 "mov rax, r15"
+EOF
+EXPECT=<<EOF
+4150
+4157
+4c89f8
+EOF
+RUN
+
+NAME=rasm2 -d ppc pseudo applied once
+FILE=-
+CMDS=!rasm2 -a ppc -b 64 -e -F ppc.pseudo -d 2c29000041820208
+EXPECT=<<EOF
+cr0 = (r9 == 0)
+if (cr0 & FLG_EQ) goto 0x20c
+EOF
+RUN
+
+NAME=rasm2 -D ppc pseudo applied once
+FILE=-
+CMDS=!rasm2 -a ppc -b 64 -e -F ppc.pseudo -D 2c290000
+EXPECT=<<EOF
+0x00000000   4                 2c290000  cr0 = (r9 == 0)
+EOF
+RUN
+
+NAME=rasm2 -d arm64 pseudo branch applied once
+FILE=-
+CMDS=!rasm2 -a arm -b 64 -F arm.pseudo -d 800000b4
+EXPECT=<<EOF
+if (!x0) goto 0x10
+EOF
+RUN
+
+NAME=rasm2 ignores a stale R2CONS
+FILE=-
+ENV=R2CONS=4416884320
+CMDS=!rasm2 -a x86 -b 32 -d 90
+EXPECT=<<EOF
+nop
+EOF
+RUN
+
+NAME=rasm2 block comments do not leave holes or misplace labels
+FILE=--
+CMDS=<<EOF
+rasm2 -a x86 -b 64 'nop;/* c */;nop'
+rasm2 -a x86 -b 64 'movabs rax, 0x1122334455667788;/**/;/**/;/**/;nop'
+rasm2 -a x86 -b 64 'a:;nop;/**/;jmp a'
+EOF
+EXPECT=<<EOF
+9090
+48b8887766554433221190
+90ebfd
+EOF
+RUN
+
+NAME=rasm2 block comments spanning statements
+FILE=--
+CMDS=<<EOF
+rasm2 -a x86 -b 64 'nop;/* a ;b */;nop'
+rasm2 -a x86 -b 64 'nop;/* a ;b; c */;int3'
+EOF
+EXPECT=<<EOF
+9090
+90cc
+EOF
+RUN
+
+NAME=rasm2 avr reject i/o addresses that do not fit
+FILE=-
+CMDS=<<EOF
+!rasm2 -a avr "out 64, r1"
+!rasm2 -a avr "in r1, 64"
+!rasm2 -a avr "sbi 32, 1"
+!rasm2 -a avr "out 0x100000001, r1"
+!rasm2 -a avr "sbi 0x10000000c, 5"
+!rasm2 -a avr "out 18446744073709551616, r1"
+!rasm2 -a avr "out 1junk, r1"
+!rasm2 -a avr "out 0x, r1"
+!rasm2 -a avr "sbi spl, 1"
+!rasm2 -a avr "cbi sph, 1"
+!rasm2 -a avr "sbic sreg, 1"
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'out 64, r1' at line 1
+ERROR: Cannot assemble 'in r1, 64' at line 1
+ERROR: Cannot assemble 'sbi 32, 1' at line 1
+ERROR: Cannot assemble 'out 0x100000001, r1' at line 1
+ERROR: Cannot assemble 'sbi 0x10000000c, 5' at line 1
+ERROR: Cannot assemble 'out 18446744073709551616, r1' at line 1
+ERROR: Cannot assemble 'out 1junk, r1' at line 1
+ERROR: Cannot assemble 'out 0x, r1' at line 1
+ERROR: Cannot assemble 'sbi spl, 1' at line 1
+ERROR: Cannot assemble 'cbi sph, 1' at line 1
+ERROR: Cannot assemble 'sbic sreg, 1' at line 1
+EOF
+RUN
+
+NAME=rasm2 arm32 reject unencodable and out of range immediates
+FILE=-
+CMDS=<<EOF
+!rasm2 -a arm -b 32 "eor r0, r0, 0x101"
+!rasm2 -a arm -b 32 "add r0, r1, 0x100000000"
+!rasm2 -a arm -b 32 "mov r0, 0x100000000"
+!rasm2 -a arm -b 32 "cmp r3, 0x100000000"
+!rasm2 -a arm -b 32 "add r0, r1, -2147483649"
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'eor r0, r0, 0x101' at line 1
+ERROR: Cannot assemble 'add r0, r1, 0x100000000' at line 1
+ERROR: Cannot assemble 'mov r0, 0x100000000' at line 1
+ERROR: Cannot assemble 'cmp r3, 0x100000000' at line 1
+ERROR: Cannot assemble 'add r0, r1, -2147483649' at line 1
+EOF
+RUN
+
+NAME=rasm2 mips branches to labels before and after them
+FILE=--
+CMDS=<<EOF
+rasm2 -a mips -b 32 'rep:;beq t0, zero, rep;bne t0, zero, rep'
+rasm2 -a mips -b 32 'beq t0, zero, end;nop;end:;nop'
+EOF
+EXPECT=<<EOF
+ffff0810feff0814
+010008100000000000000000
+EOF
+RUN
+
+NAME=rasm2 mips reject branch targets that do not fit
+FILE=--
+CMDS=<<EOF
+rasm2 -a mips -b 32 'beq t0, zero, 0x102'
+rasm2 -a mips -b 32 -s 0x100 'b 0x40000'
+EOF
+EXPECT=
+EXPECT_ERR=<<EOF
+ERROR: Cannot assemble 'beq t0, zero, 0x102' at line 1
+ERROR: Cannot assemble 'b 0x40000' at line 1
+EOF
+RUN
+
+NAME=rasm2 SPP recursive directives and include-local paths
+FILE=--
+CMDS=<<EOF
+rasm2 -p -f scripts/rasm2/nested/main.asm
+rasm2 -p -I scripts/rasm2/nested/child -f scripts/rasm2/nested/main.asm
+rasm2 -p -a arm -b 32 -f scripts/rasm2/nested/immediate.asm
+EOF
+EXPECT=<<EOF
+0102030405
+0102030405
+0100a0e30110a0e301
+EOF
+RUN
+
+NAME=rasm2 SPP cyclic includes fail without partial output
+FILE=--
+CMDS=rasm2 -p -f scripts/rasm2/nested/cycle.asm
+EXPECT=
+EXPECT_ERR=<<EOF
+Include nesting limit exceeded
+EOF
+RUN
+
+NAME=rasm2 SPP restores source lines across includes
+FILE=--
+CMDS=rasm2 -p -I scripts/rasm2/nested ".include diagnostics.asm"
+EXPECT=
+EXPECT_ERR=<<EOF
+WARNING: child (line=3)
+WARNING: parent (line=2)
+ERROR: parent (line=3)
+EOF
+RUN
+
+NAME=rasm2 charset selection is inherited by includes
+FILE=--
+CMDS=rasm2 -p -f scripts/rasm2/charset.asm
+EXPECT=<<EOF
+c88593939600e69699938400c1c200414200
 EOF
 RUN

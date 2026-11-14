@@ -3,7 +3,7 @@
 #include <r_types.h>
 #include <r_util.h>
 
-#if __WINDOWS__
+#if R2__WINDOWS__
 #include <windows.h>
 #include <stdio.h>
 #include <tchar.h>
@@ -14,25 +14,30 @@ void r_sys_perror_str(const char *fun);
 #define ErrorExit(x) { r_sys_perror(x); return false; }
 char *ReadFromPipe(HANDLE fh, int *outlen);
 
-R_API char *r_sys_get_src_dir_w32(void) {
-	TCHAR fullpath[MAX_PATH + 1];
-	TCHAR shortpath[MAX_PATH + 1];
+// The input is fed from a worker thread while the main thread drains the
+// output pipes: a synchronous write blocks as soon as the input fills the
+// pipe and the child is not reading it (for example because the child is
+// blocked writing to a full stdout pipe).
+typedef struct {
+	HANDLE handle;
+	const char *input;
+	DWORD len;
+} StdinWriter;
 
-	if (!GetModuleFileName (NULL, fullpath, MAX_PATH + 1) ||
-		!GetShortPathName (fullpath, shortpath, MAX_PATH + 1)) {
-		return NULL;
-	}
-	char *path = r_sys_conv_win_to_utf8 (shortpath);
-	char *dir = r_file_dirname (path);
-	if (!r_sys_getenv_asbool ("R_ALT_SRC_DIR")) {
-		char *tmp = dir;
-		dir = r_file_dirname (tmp);
-		free (tmp);
-	}
-	return dir;
+static DWORD WINAPI stdin_writer_thread(LPVOID arg) {
+	StdinWriter *w = (StdinWriter *)arg;
+	DWORD written = 0;
+	// a blocking anonymous pipe completes the requested write or fails if
+	// the child closed its end; the thread owns and closes the handle
+	const bool ok = WriteFile (w->handle, w->input, w->len, &written, NULL) && written == w->len;
+	CloseHandle (w->handle);
+	return ok? 0: 1;
 }
 
 R_API bool r_sys_cmd_str_full_w32(const char *cmd, const char *input, int ilen, char **output, int *outlen, char **sterr) {
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+		return false;
+	}
 	HANDLE in = NULL;
 	HANDLE out = NULL;
 	HANDLE err = NULL;
@@ -68,29 +73,71 @@ R_API bool r_sys_cmd_str_full_w32(const char *cmd, const char *input, int ilen, 
 		if (!CreatePipe (&fi, &in, &saAttr, 0)) {
 			ErrorExit ("StdInRd CreatePipe");
 		}
-		DWORD nBytesWritten;
-		WriteFile (in, input, ilen >= 0 ? ilen: strlen (input) + 1, &nBytesWritten, NULL);
+		// The parent write end must not be inherited, otherwise the child
+		// would hold its own stdin pipe open and never see EOF.
 		if (!SetHandleInformation (in, HANDLE_FLAG_INHERIT, 0)) {
 			ErrorExit ("StdIn SetHandleInformation");
 		}
 	}
 
 	if (!r_sys_create_child_proc_w32 (cmd, fi, out, err)) {
+		if (fi) {
+			CloseHandle (fi);
+		}
+		if (in) {
+			CloseHandle (in);
+		}
+		if (fo) {
+			CloseHandle (fo);
+		}
+		if (out) {
+			CloseHandle (out);
+		}
+		if (fe) {
+			CloseHandle (fe);
+		}
+		if (err) {
+			CloseHandle (err);
+		}
 		return false;
 	}
 
-	// Close the write end of the pipe before reading from the
-	// read end of the pipe, to control child process execution.
-	// The pipe is assumed to have enough buffer space to hold the
-	// data the child process has already written to it.
-	if (in && !CloseHandle (in)) {
-		ErrorExit ("StdInWr CloseHandle");
+	// The child owns its ends of the pipes now; close the parent copies before
+	// feeding stdin so a child that exits early breaks the pipe instead of
+	// leaving the writer blocked with the read end still open.
+	if (fi && !CloseHandle (fi)) {
+		ErrorExit ("PipeIn CloseHandle");
 	}
+	fi = NULL;
 	if (out && !CloseHandle (out)) {
 		ErrorExit ("StdOutWr CloseHandle");
 	}
+	out = NULL;
 	if (err && !CloseHandle (err)) {
 		ErrorExit ("StdErrWr CloseHandle");
+	}
+	err = NULL;
+
+	const int inlen = input? (ilen >= 0? ilen: (int)strlen (input) + 1): 0;
+	StdinWriter w = { in, input, (DWORD)inlen };
+	HANDLE writer = NULL;
+	if (input) {
+		writer = CreateThread (NULL, 0, stdin_writer_thread, &w, 0, NULL);
+		if (!writer) {
+			r_sys_perror ("CreateThread");
+			// do not run the command without feeding its input
+			if (in) {
+				CloseHandle (in);
+			}
+			if (fo) {
+				CloseHandle (fo);
+			}
+			if (fe) {
+				CloseHandle (fe);
+			}
+			return false;
+		}
+		in = NULL; // the writer thread owns and closes the handle
 	}
 
 	if (output) {
@@ -100,8 +147,13 @@ R_API bool r_sys_cmd_str_full_w32(const char *cmd, const char *input, int ilen, 
 	if (sterr) {
 		*sterr = ReadFromPipe (fe, NULL);
 	}
-	if (fi && !CloseHandle (fi)) {
-		ErrorExit ("PipeIn CloseHandle");
+	if (writer) {
+		WaitForSingleObject (writer, INFINITE);
+		DWORD wret = 0;
+		if (GetExitCodeThread (writer, &wret) && wret) {
+			R_LOG_DEBUG ("Failed to feed the whole input to the child");
+		}
+		CloseHandle (writer);
 	}
 	if (fo && !CloseHandle (fo)) {
 		ErrorExit ("PipeOut CloseHandle");
@@ -114,6 +166,9 @@ R_API bool r_sys_cmd_str_full_w32(const char *cmd, const char *input, int ilen, 
 }
 
 R_API bool r_sys_create_child_proc_w32(const char *cmdline, HANDLE in, HANDLE out, HANDLE err) {
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+		return false;
+	}
 	PROCESS_INFORMATION pi = {0};
 	STARTUPINFO si = {0};
 	LPTSTR cmdline_;
@@ -133,8 +188,12 @@ R_API bool r_sys_create_child_proc_w32(const char *cmdline, HANDLE in, HANDLE ou
 	si.hStdInput = in;
 	si.dwFlags |= STARTF_USESTDHANDLES;
 	cmdline_ = r_sys_conv_utf8_to_win (cmdline);
-	ExpandEnvironmentStrings (cmdline_, _cmdline_, max_length - 1);
-	if ((ret = CreateProcess (NULL,
+	// the size is in characters, and the result must fit in the buffer
+	const DWORD max_chars = max_length / sizeof (TCHAR);
+	const DWORD len = ExpandEnvironmentStrings (cmdline_, _cmdline_, max_chars);
+	if (!len || len > max_chars) {
+		R_LOG_ERROR ("Cannot expand the command line");
+	} else if ((ret = CreateProcess (NULL,
 			_cmdline_,     // command line
 			NULL,          // process security attributes
 			NULL,          // primary thread security attributes

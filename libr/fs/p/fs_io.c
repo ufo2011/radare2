@@ -1,11 +1,13 @@
-/* radare - LGPL - Copyright 2017-2019 - pancake */
+/* radare - LGPL - Copyright 2017-2025 - pancake */
 
 #include <r_fs.h>
 #include <r_lib.h>
+#include <r_util.h>
+#include <r_util/r_json.h>
 #include <sys/stat.h>
 
 static char *enbase(const char *p) {
-	char *enc_path = r_base64_encode_dyn (p, -1);
+	char *enc_path = r_base64_encode_dyn ((const ut8*)p, -1);
 	char *res = r_str_newf ("base64:%s", enc_path);
 	free (enc_path);
 	return res;
@@ -44,7 +46,7 @@ static int fs_io_read(RFSFile *file, ut64 addr, int len) {
 	if (!abs_path) {
 		return -1;
 	}
-	
+
 	char *enc_uri = enbase (abs_path);
 	free (abs_path);
 	char *cmd = r_str_newf ("mg %s 0x%08"PFMT64x" %d", enc_uri, addr, len);
@@ -57,10 +59,11 @@ static int fs_io_read(RFSFile *file, ut64 addr, int len) {
 	if (res) {
 		int encoded_size = strlen (res);
 		if (encoded_size != len * 2) {
-			eprintf ("Unexpected size (%d vs %d)\n", encoded_size, len*2);
+			R_LOG_ERROR ("Unexpected size (%d vs %d)", encoded_size, len * 2);
 			R_FREE (res);
 			return -1;
 		}
+		free (file->data);
 		file->data = (ut8 *) calloc (1, len);
 		if (!file->data) {
 			R_FREE (res);
@@ -68,7 +71,7 @@ static int fs_io_read(RFSFile *file, ut64 addr, int len) {
 		}
 		int ret = r_hex_str2bin (res, file->data);
 		if (ret != len) {
-			eprintf ("Inconsistent read\n");
+			R_LOG_ERROR ("Inconsistent read");
 			R_FREE (file->data);
 		}
 		R_FREE (res);
@@ -83,13 +86,12 @@ static void fs_io_close(RFSFile *file) {
 
 static void append_file(RList *list, const char *name, int type, int time, ut64 size) {
 	RFSFile *fsf = r_fs_file_new (NULL, name);
-	if (!fsf) {
-		return;
+	if (fsf) {
+		fsf->type = type;
+		fsf->time = time;
+		fsf->size = size;
+		r_list_append (list, fsf);
 	}
-	fsf->type = type;
-	fsf->time = time;
-	fsf->size = size;
-	r_list_append (list, fsf);
 }
 
 static RList *fs_io_dir(RFSRoot *root, const char *path, int view /*ignored*/) {
@@ -98,9 +100,47 @@ static RList *fs_io_dir(RFSRoot *root, const char *path, int view /*ignored*/) {
 		return NULL;
 	}
 	char *uri_path = enbase (path);
-	char *cmd = r_str_newf ("md %s", uri_path);
-	free (uri_path);
+	char *cmd = r_str_newf ("mdj %s", uri_path);
+	if (!cmd) {
+		free (uri_path);
+		return list;
+	}
 	char *res = root->iob.system (root->iob.io, cmd);
+	if (res && *res == '[') {
+		RJson *json = r_json_parse (res);
+		if (json) {
+			if (json->type == R_JSON_ARRAY) {
+				size_t i, count = json->children.count;
+				for (i = 0; i < count; i++) {
+					const RJson *item = r_json_item (json, i);
+					const char *name = r_json_get_str (item, "name");
+					const char *type_str = r_json_get_str (item, "type");
+					st64 nsize = r_json_get_num (item, "size");
+					ut64 fsize = nsize > 0 ? (ut64)nsize : 0;
+					char type = 'f';
+					if (type_str && !strcmp (type_str, "directory")) {
+						type = 'd';
+					}
+					append_file (list, name ? name : "", type, 0, fsize);
+				}
+			}
+			r_json_free (json);
+			free (res);
+			free (cmd);
+			free (uri_path);
+			return list;
+		}
+	}
+
+	// fallback to md
+	free (res);
+	free (cmd);
+	cmd = r_str_newf ("md %s", uri_path);
+	free (uri_path);
+	if (!cmd) {
+		return list;
+	}
+	res = root->iob.system (root->iob.io, cmd);
 	if (res) {
 		size_t i, count = 0;
 		size_t *lines = r_str_split_lines (res, &count);
@@ -117,15 +157,15 @@ static RList *fs_io_dir(RFSRoot *root, const char *path, int view /*ignored*/) {
 				}
 				append_file (list, line, type, 0, 0);
 			}
-			R_FREE (res);
-			R_FREE (lines);
+			free (lines);
 		}
+		free (res);
 	}
-	R_FREE (cmd);
+	free (cmd);
 	return list;
 }
 
-static int fs_io_mount(RFSRoot *root) {
+static bool fs_io_mount(RFSRoot *root) {
 	root->ptr = NULL;
 	return true;
 }
@@ -135,9 +175,11 @@ static void fs_io_umount(RFSRoot *root) {
 }
 
 RFSPlugin r_fs_plugin_io = {
-	.name = "io",
-	.desc = "r_io based filesystem",
-	.license = "MIT",
+	.meta = {
+		.name = "io",
+		.desc = "r_io based filesystem",
+		.license = "MIT",
+	},
 	.open = fs_io_open,
 	.read = fs_io_read,
 	.close = fs_io_close,

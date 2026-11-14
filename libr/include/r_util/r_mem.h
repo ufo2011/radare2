@@ -1,10 +1,13 @@
 #ifndef R_MEM_H
 #define R_MEM_H
 
+#include <string.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+// move into r_file.h
 typedef struct r_mmap_t {
 	ut8 *buf;
 	ut64 base;
@@ -12,7 +15,7 @@ typedef struct r_mmap_t {
 	int fd;
 	int rw;
 	char *filename;
-#if __WINDOWS__
+#if R2__WINDOWS__
 	HANDLE fh;
 	HANDLE fm;
 #endif
@@ -36,26 +39,59 @@ R_API RMemoryPool *r_mem_pool_new(int nodesize, int poolsize, int poolcount);
 R_API RMemoryPool *r_mem_pool_free(RMemoryPool *pool);
 R_API void* r_mem_pool_alloc(RMemoryPool *pool);
 R_API void *r_mem_dup(const void *s, int l);
-R_API void *r_mem_alloc(int sz);
+R_API void *r_mem_set(ut8 ch, int l);
+R_API void *r_mem_alloc(int sz); // mem_new ?
 R_API void r_mem_free(void *);
-R_API void r_mem_memzero(void *, size_t);
+R_API void r_mem_zero(void *, size_t);
 R_API void r_mem_reverse(ut8 *b, int l);
 R_API bool r_mem_protect(void *ptr, int size, const char *prot);
-R_API int r_mem_set_num(ut8 *dest, int dest_size, ut64 num);
-R_API int r_mem_eq(ut8 *a, ut8 *b, int len);
+R_API bool r_mem_set_num(ut8 *dest, int dest_size, ut64 num);
+R_API bool r_mem_eq(ut8 *a, ut8 *b, int len);
 R_API void r_mem_copybits(ut8 *dst, const ut8 *src, int bits);
 R_API void r_mem_copybits_delta(ut8 *dst, int doff, const ut8 *src, int soff, int bits);
+R_API ut64 r_mem_get_bits(const ut8 *buf, ut64 bitoff, int bits, bool be);
+R_API void r_mem_set_bits(ut8 *buf, ut64 bitoff, int bits, ut64 value, bool be);
+R_API void r_mem_unpack_bits(ut8 *dst, const ut8 *src, ut64 count, int bits, bool be);
+R_API bool r_mem_pack_bits(ut8 *dst, const ut8 *src, ut64 count, int bits, bool be);
 R_API void r_mem_copyloop(ut8 *dest, const ut8 *orig, int dsize, int osize);
 R_API void r_mem_swaporcopy(ut8 *dest, const ut8 *src, int len, bool big_endian);
 R_API void r_mem_swapendian(ut8 *dest, const ut8 *orig, int size);
 R_API void r_mem_swap(ut8 *buf, size_t buf_len);
 R_API int r_mem_cmp_mask(const ut8 *dest, const ut8 *orig, const ut8 *mask, int len);
 R_API const ut8 *r_mem_mem(const ut8 *haystack, int hlen, const ut8 *needle, int nlen);
+// Inline only when libc's memmem declaration is visible to this translation unit.
+#if HAVE_MEMMEM && (defined(__APPLE__) || defined(__FreeBSD__) || defined(__USE_GNU))
+R_UNUSED static inline const ut8 *r_mem_mem_inline(const ut8 *haystack, int hlen, const ut8 *needle, int nlen) {
+	if (hlen < 1 || nlen < 1 || nlen > hlen) {
+		return NULL;
+	}
+	return (const ut8 *)memmem (haystack, hlen, needle, nlen);
+}
+#define r_mem_mem(haystack, hlen, needle, nlen) r_mem_mem_inline ((haystack), (hlen), (needle), (nlen))
+#endif
 R_API const ut8 *r_mem_mem_aligned(const ut8 *haystack, int hlen, const ut8 *needle, int nlen, int align);
 R_API int r_mem_count(const ut8 **addr);
-R_API bool r_mem_is_printable (const ut8 *a, int la);
+R_API bool r_mem_is_printable(const ut8 *a, int la);
 R_API bool r_mem_is_zero(const ut8 *b, int l);
-R_API void *r_mem_mmap_resize(RMmap *m, ut64 newsize);
+
+R_API int r_mem_from_binstring(const char* str, ut8 *buf, size_t len);
+R_API char *r_mem_to_binstring(const ut8* str, int len);
+
+// bytes of the smallest integer container holding a bits-wide unit
+static inline int r_mem_bits_unit(int bits) {
+	return bits <= 8? 1: bits <= 16? 2: bits <= 32? 4: 8;
+}
+
+// 27bit middle endian parser
+typedef ut32 ut27;
+static inline ut27 r_read_me27(const ut8 *buf, int boff) {
+	ut27 ret = 0;
+	r_mem_copybits_delta ((ut8 *)&ret, 18, buf, boff, 9);
+	r_mem_copybits_delta ((ut8 *)&ret, 9, buf, boff + 9, 9);
+	r_mem_copybits_delta ((ut8 *)&ret, 0, buf, boff + 18, 9);
+	return ret;
+}
+
 
 #ifdef __cplusplus
 }
